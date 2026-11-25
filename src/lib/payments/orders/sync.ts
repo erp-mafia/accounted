@@ -65,6 +65,7 @@ import type { Transaction } from '@/types'
 import { applyProviderState } from './apply-state'
 import { linkOrderToDebit, settleOrderWithDebit, withFinishedSignings } from './auto-settle'
 import {
+  DEBIT_FEEDS,
   DEBIT_LINKABLE_ORDER_STATUSES,
   DEBIT_WINDOW_DAYS_AFTER,
   DEBIT_WINDOW_DAYS_BEFORE,
@@ -111,8 +112,6 @@ export const SIGNING_PASS_RESERVE_MS = 90_000
 export const CANCEL_FOLLOW_DAYS = 7
 /** An executed order is swept for its debit this long after the bank executed it. */
 export const EXECUTED_ORDER_SWEEP_DAYS = 14
-/** The bank feeds whose unbooked debits the sweep may book. */
-const DEBIT_FEEDS = ['open_payments', 'enable_banking'] as const
 /**
  * The debit read is bounded by booking date; the matcher then applies the
  * exact window to the booking date or the value date, which may lie a few

@@ -47,9 +47,14 @@ vi.mock('@/lib/invoices/duplicate-payment-detection', async (importOriginal) => 
 }))
 
 // The service writer a caller that passes none gets (a bank ingest); the
-// tests that reach it set it.
+// tests that reach it set it, an Error to make creating it throw.
 const mock = vi.hoisted(() => ({ writer: null as unknown }))
-vi.mock('@/lib/supabase/server', () => ({ createServiceClient: () => mock.writer }))
+vi.mock('@/lib/supabase/server', () => ({
+  createServiceClient: () => {
+    if (mock.writer instanceof Error) throw mock.writer
+    return mock.writer
+  },
+}))
 
 import {
   bookRegistrationBeforeSettlement,
@@ -335,15 +340,16 @@ describe('loadOpenPaymentOrders', () => {
 
 describe('the debit of an order in a bank ingest a person started (their session only reads payment orders)', () => {
   // The case production refused: the bank still answered ACSP when the debit
-  // came in, and the debit names neither the order nor the payee, so the
-  // trigger's rule does not reach the order and this code links it.
+  // came in (the bank feed, open_payments), and the debit names neither the
+  // order nor the payee, so the trigger's rule does not reach the order and
+  // this code links it.
   const accepted = { status: 'accepted', executed_at: null, provider_status: 'ACSP' } as const
   const debit = arcimDebit({ description: 'BETALNING', original_description: 'BETALNING', reference: null })
   const raw = { date: debit.date, amount: debit.amount, description: debit.description, currency: 'SEK' } as RawTransaction
   let service: ReturnType<typeof createTableMockSupabase>
 
   /** A poll or a file import: the batch's client is the person's session. */
-  async function ingestDebit() {
+  async function ingestDebit(tx: Transaction = debit) {
     const batch: IngestBatch = {
       supabase: db.supabase as unknown as SupabaseClient,
       companyId: ARCIM.companyId,
@@ -355,7 +361,7 @@ describe('the debit of an order in a bank ingest a person started (their session
       pools: { customerInvoices: vi.fn(), supplierInvoices: [] },
       logMatch: vi.fn(),
     }
-    const outcome = await paymentOrderIngestMatcher.match(batch, { orders: [arcimOrder(accepted)] }, { tx: debit, raw, reread: false })
+    const outcome = await paymentOrderIngestMatcher.match(batch, { orders: [arcimOrder(accepted)] }, { tx, raw, reread: false })
     return { batch, outcome }
   }
 
@@ -365,7 +371,7 @@ describe('the debit of an order in a bank ingest a person started (their session
     mock.writer = service.supabase
   })
 
-  it("books the debit with the session, as before, and links the order with the service writer, filtered to the ingest's company", async () => {
+  it("books the debit with the session, as before, and links the order with the service writer, filtered to the order and the company it was read from", async () => {
     const { batch, outcome } = await ingestDebit()
 
     expect(outcome).toBe('explained')
@@ -428,6 +434,41 @@ describe('the debit of an order in a bank ingest a person started (their session
       'debit-settled payment order could not be linked to its payment row',
       undefined,
       expect.objectContaining({ orderId: ARCIM.orderId, status: 'accepted', code: null }),
+    )
+  })
+
+  it('fails before anything is booked when the service writer cannot be made', async () => {
+    mock.writer = new Error('supabaseKey is required.')
+
+    expect(await settleOrderWithDebit(db.supabase as unknown as SupabaseClient, {
+      order: { id: ARCIM.orderId, company_id: ARCIM.companyId },
+      transaction: { id: ARCIM.transactionId },
+      confidence: 0.95,
+      basis: 'amount_account_date',
+      log,
+    })).toEqual({ ok: false, reason: 'booking_failed', code: 'UNEXPECTED_ERROR' })
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(db.findCalls('supplier_invoices', 'update')).toEqual([])
+    expect(db.findCalls('supplier_invoice_payments', 'insert')).toEqual([])
+  })
+
+  it("never links with the service writer from a bank file the person uploaded: the booking is as before, the link is the person's own and refused", async () => {
+    const fromFile = arcimDebit({ description: 'BETALNING', original_description: 'BETALNING', reference: null, import_source: 'camt053' })
+    seed({ order: accepted, linkedAfter: false, debit: fromFile, session: true })
+
+    const { outcome } = await ingestDebit(fromFile)
+
+    expect(outcome).toBe('explained')
+    expect(mockCreateJournalEntry).toHaveBeenCalledTimes(1)
+    expect(mockCreateJournalEntry.mock.calls[0][0]).toBe(db.supabase)
+    // The status sync trusts only bank-feed debits to move an order: a file's never reaches the service role.
+    expect(service.tables()).toEqual([])
+    expect(db.findCalls('payment_orders', 'update')).toHaveLength(1)
+    expect(db.findCalls('payment_order_events', 'insert')).toEqual([])
+    expect(log.error).toHaveBeenCalledWith(
+      'debit-settled payment order could not be linked to its payment row',
+      undefined,
+      expect.objectContaining({ orderId: ARCIM.orderId, code: '42501' }),
     )
   })
 })

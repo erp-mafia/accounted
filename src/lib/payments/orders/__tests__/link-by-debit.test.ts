@@ -257,7 +257,7 @@ describe('the payment-order ingest pass and a debit of an order without an invoi
     mock.writer = service.supabase
   })
 
-  it("links the order with the service writer, filtered to the ingest's company, and leaves the row to the passes after it: nothing booked, no hint", async () => {
+  it("links the order with the service writer, filtered to the order and the company it was read from, and leaves the row to the passes after it: nothing booked, no hint", async () => {
     const batch = ingestBatch()
     const outcome = await paymentOrderIngestMatcher.match(batch, { orders: [signedTaxOrder()] }, { tx: rcvdTaxDebit({ journal_entry_id: null }), raw, reread: false })
 
@@ -291,6 +291,25 @@ describe('the payment-order ingest pass and a debit of an order without an invoi
       expect.objectContaining({ orderId: RCVD_TAX.orderId, transactionId: RCVD_TAX.transactionId, code: '57014' }),
     )
     expect(log.info).toHaveBeenCalledWith('payment order left for the status sync', expect.objectContaining({ orderId: RCVD_TAX.orderId, reason: 'link_failed' }))
+  })
+
+  it("never links with the service writer from a bank file the person uploaded: the link is the person's own and refused, as before", async () => {
+    const fromFile = rcvdTaxDebit({ journal_entry_id: null, import_source: 'csv_generic' })
+    db = createTableMockSupabase(asSession({ ...linkAnswers(), transactions: { data: fromFile } }))
+    const batch = ingestBatch()
+
+    const outcome = await paymentOrderIngestMatcher.match(batch, { orders: [signedTaxOrder()] }, { tx: fromFile, raw, reread: false })
+
+    expect(outcome).toBe('none')
+    // The status sync trusts only bank-feed debits to move an order: a file's never reaches the service role.
+    expect(service.tables()).toEqual([])
+    expect(writes().map((w) => `${w.table}.${w.method}`)).toEqual(['payment_orders.update'])
+    expect(events()).toEqual([])
+    expect(log.error).toHaveBeenCalledWith(
+      'payment order could not be linked to its debit',
+      undefined,
+      expect.objectContaining({ orderId: RCVD_TAX.orderId, code: '42501' }),
+    )
   })
 
   it('does nothing for an order whose signing did not finish', async () => {

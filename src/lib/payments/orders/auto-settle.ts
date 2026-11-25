@@ -31,11 +31,11 @@
  * after the BankID finished would otherwise leave the order waiting for
  * good. Nothing is booked there.
  *
- * The order's link and its event are written with a service writer
- * (orderWriter): authenticated may only read payment_orders and
- * payment_order_events, and an ingest a person starts (a poll, a file) runs on
- * their session. Everything else, the reads and the booking, runs on the
- * caller's own client.
+ * For a debit from a bank feed, the order's link and its event are written
+ * with a service writer (orderWriter): authenticated may only read
+ * payment_orders and payment_order_events, and an ingest a person starts (a
+ * poll) runs on their session. Everything else, the reads and the booking,
+ * runs on the caller's own client.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -50,6 +50,7 @@ import {
   DEBIT_LINKABLE_ORDER_STATUSES,
   debitOfTransaction,
   findLinkableOrderForDebit,
+  isBankFeedDebit,
   isDebitLinkableOrder,
   isDebitSettleableOrder,
   type DebitLinkBasis,
@@ -65,12 +66,21 @@ export const OPEN_ORDER_LOOKBACK_DAYS = 60
 export const PAYMENT_ORDER_MATCH_METHOD = 'payment_order'
 
 /**
- * The service-role client an order's link and its 'matched' event are
- * written with. The status sync passes its own; an ingest, whose client may
- * be a person's session, gets a fresh one. Every write it makes is filtered
- * to the order and the company the caller's own client read it from.
+ * The client an order's link and its 'matched' event are written with. A
+ * debit from a bank feed (isBankFeedDebit, the debits the status sync's
+ * sweep also trusts) links with the service role: the writer the caller
+ * passes (the status sync passes its own), else a fresh one, since an ingest
+ * a person starts runs on their session. Any other debit, such as a bank
+ * file a person uploaded, writes with the caller's own client, as before.
+ * Every write is filtered to the order and the company the caller's own
+ * client read it from.
  */
-function orderWriter(writer: SupabaseClient | undefined): SupabaseClient {
+function orderWriter(
+  supabase: SupabaseClient,
+  writer: SupabaseClient | undefined,
+  debit: Pick<Transaction, 'import_source'>,
+): SupabaseClient {
+  if (!isBankFeedDebit(debit)) return supabase
   return writer ?? createServiceClient()
 }
 
@@ -176,7 +186,7 @@ export interface SettleOrderWithDebitArgs {
   confidence: number
   basis: DebitMatchBasis
   log: Logger
-  /** The service writer for the order's link (orderWriter); omitted, a fresh one. */
+  /** The service writer for the order's link from a bank-feed debit (orderWriter); omitted, a fresh one. */
   writer?: SupabaseClient
 }
 
@@ -265,6 +275,11 @@ export async function settleOrderWithDebit(
       return { ok: false, reason: 'booking_review_rule' }
     }
 
+    // Chosen before anything is booked: a writer that cannot be made fails
+    // the settle with nothing booked, never a booked payment reported as a
+    // failed booking.
+    const linker = orderWriter(supabase, args.writer, transaction)
+
     const booked = await bookSupplierBankMatch(supabase, {
       transaction,
       invoice,
@@ -289,7 +304,7 @@ export async function settleOrderWithDebit(
       return { ok: false, reason: 'booking_failed', code: booked.code, details: booked.details }
     }
 
-    const link = await linkOrderToPayment(supabase, args.writer, order, transaction, { confidence, basis, log })
+    const link = await linkOrderToPayment(supabase, linker, order, transaction, { confidence, basis, log })
     return { ok: true, journalEntryId: booked.journalEntryId, orderLinked: link !== null, linkedBy: link }
   } catch (err) {
     log.warn('payment order could not be settled with its debit', {
@@ -308,11 +323,11 @@ export async function settleOrderWithDebit(
  * Returns who linked the order, or null when nobody could. The payment is
  * booked by now and nothing links the order later (the status sync's sweep
  * takes only an unbooked debit), so every miss is an error with the order's
- * id, for a person.
+ * id, for a person. `linker` writes the link (orderWriter); `supabase` reads.
  */
 async function linkOrderToPayment(
   supabase: SupabaseClient,
-  writer: SupabaseClient | undefined,
+  linker: SupabaseClient,
   order: PaymentOrderRow,
   transaction: Transaction,
   evidence: { confidence: number; basis: DebitMatchBasis; log: Logger },
@@ -350,9 +365,8 @@ async function linkOrderToPayment(
     return null
   }
 
-  const service = orderWriter(writer)
   const now = new Date().toISOString()
-  const { data: linked, error } = await service
+  const { data: linked, error } = await linker
     .from('payment_orders')
     .update({
       status: 'executed',
@@ -381,7 +395,7 @@ async function linkOrderToPayment(
     return null
   }
   await logPaymentOrderEvents(
-    service,
+    linker,
     [
       {
         company_id: order.company_id,
@@ -420,7 +434,7 @@ export interface LinkOrderToDebitArgs {
   transaction: Pick<Transaction, 'id'>
   basis: DebitLinkBasis
   log: Logger
-  /** The service writer for the link (orderWriter); omitted, a fresh one. */
+  /** The service writer for the link from a bank-feed debit (orderWriter); omitted, a fresh one. */
   writer?: SupabaseClient
 }
 
@@ -433,9 +447,9 @@ export interface LinkOrderToDebitArgs {
  * linked, a debit never links two orders, and the update is a
  * compare-and-set on the status read. An order the bank already reported
  * executed keeps the bank's executed_at; any other gets the debit's day.
- * A refused link is an error with the order's id; a lost compare-and-set is
- * left to the status sync's sweep, which links such an order on its next
- * run. Never throws.
+ * A refused link is an error with the order's id; a lost compare-and-set on
+ * a bank-feed debit is left to the status sync's sweep, which links such an
+ * order on its next run. Never throws.
  */
 export async function linkOrderToDebit(supabase: SupabaseClient, args: LinkOrderToDebitArgs): Promise<LinkOrderToDebitResult> {
   const companyId = args.order.company_id
@@ -474,7 +488,7 @@ export async function linkOrderToDebit(supabase: SupabaseClient, args: LinkOrder
     if (otherError) return { ok: false, reason: 'link_failed' }
     if (Array.isArray(otherData) && otherData.length > 0) return { ok: false, reason: 'transaction_linked_elsewhere' }
 
-    const writer = orderWriter(args.writer)
+    const writer = orderWriter(supabase, args.writer, transaction)
     const { data: linked, error } = await writer
       .from('payment_orders')
       .update({
