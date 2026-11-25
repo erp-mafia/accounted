@@ -135,6 +135,26 @@ describe('POST /api/mcp-oauth/register', () => {
     expect(body.redirect_uris).toEqual(uris)
   })
 
+  it("registers a native app on its own reverse-domain scheme (RFC 8252)", async () => {
+    // An iPhone or Android app signs in through the system browser sheet and
+    // gets the code back on its private-use scheme; no registration needed.
+    const uris = ['se.example.dashboard:/oauth/callback']
+    const response = await POST(createRequest({
+      client_name: 'Dashboard',
+      redirect_uris: uris,
+      token_endpoint_auth_method: 'none',
+    }))
+    expect(response.status).toBe(201)
+    expect((await response.json()).redirect_uris).toEqual(uris)
+  })
+
+  it('rejects a scheme without a reverse domain name', async () => {
+    for (const uri of ['myapp://callback', 'javascript:alert(1)', 'Se.Example.Dashboard:/oauth/callback']) {
+      const response = await POST(createRequest({ redirect_uris: [uri] }))
+      expect(response.status, uri).toBe(400)
+    }
+  })
+
   it('rejects other cursor.com paths and other cursor:// authorities', async () => {
     for (const uri of [
       'https://www.cursor.com/agents/mcp/oauth/callback2',

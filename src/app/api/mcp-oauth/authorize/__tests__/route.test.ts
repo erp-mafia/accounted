@@ -81,6 +81,7 @@ const PARTNER: RedirectUriResolution = { allowed: true, kind: 'partner', partner
 const FLYTT_EXTENSION: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'flytt_extension' }
 const CURSOR: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'cursor' }
 const CURSOR_DEEPLINK: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'cursor_deeplink' }
+const NATIVE_APP: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'native_app' }
 const GEMINI: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'gemini' }
 const COPILOT: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'copilot' }
 const REGISTERED: RedirectUriResolution = {
@@ -1209,6 +1210,55 @@ describe('Copilot Studio connectors', () => {
     expect(html).toContain('Copilot Studio (Microsoft)')
     expect(html).toContain('Verifierad')
     expect(html).toContain('global.consent.azure-apim.net')
+  })
+})
+
+describe('native apps on their own URI scheme (RFC 8252)', () => {
+  const params = {
+    response_type: 'code',
+    redirect_uri: 'se.example.dashboard:/oauth/callback',
+    code_challenge: 'abc',
+    code_challenge_method: 'S256',
+    state: 'xyz',
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-service-key'
+    mocks.createClient.mockResolvedValue(buildSupabase({ id: 'user-1' }))
+    mocks.resolveRedirectUri.mockResolvedValue(NATIVE_APP)
+    mocks.getActiveCompanyId.mockResolvedValue('company-1')
+    mocks.getBranding.mockReturnValue({ appName: 'Accounted' })
+  })
+
+  it('names the app by kind and its scheme as where the code goes, never as verified', async () => {
+    const html = await (await GET(new Request(buildAuthorizeUrl(params)))).text()
+
+    expect(html).toContain('Mobil- eller datorapp')
+    expect(html).toContain('Din egen enhet')
+    expect(html).toContain('se.example.dashboard')
+    expect(html).not.toContain('Verifierad')
+  })
+
+  it("lets the post-consent redirect through CSP with the app's scheme-source", async () => {
+    const response = await GET(new Request(buildAuthorizeUrl(params)))
+    expect(response.status).toBe(200)
+    const csp = response.headers.get('Content-Security-Policy')
+    expect(csp).toMatch(/form-action 'self' se\.example\.dashboard:(;|$)/)
+    expect(csp).not.toContain('null')
+  })
+
+  it('sends the code and state to the exact scheme URI after consent', async () => {
+    const response = await POST(
+      new Request(buildAuthorizeUrl(params), { method: 'POST', body: consentForm('', ['transactions:read']) }),
+    )
+    expect(response.status).toBe(303)
+    const location = response.headers.get('location')!
+    expect(location.startsWith('se.example.dashboard:/oauth/callback?')).toBe(true)
+    const query = new URLSearchParams(location.slice(location.indexOf('?') + 1))
+    expect(query.get('code')).toBe('test-auth-code')
+    expect(query.get('state')).toBe('xyz')
+    expect(lastMintedPayload().redirectUri).toBe('se.example.dashboard:/oauth/callback')
   })
 })
 

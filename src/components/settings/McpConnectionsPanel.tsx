@@ -6,6 +6,7 @@ import {
   ArrowUpRightIcon,
   BuildingOfficeIcon,
   CommandLineIcon,
+  DevicePhoneMobileIcon,
   KeyIcon,
   SpinnerIcon,
 } from '@/components/icons'
@@ -84,6 +85,7 @@ function McpMark({ className }: { className?: string }) {
 
 const ICON = {
   local: CommandLineIcon,
+  app: DevicePhoneMobileIcon,
   cursor: CursorMark,
   gemini: GeminiMark,
   mcp: McpMark,
@@ -107,7 +109,7 @@ function ClientMark({ kind, size = 'md' }: { kind: ConnectionKind | ConnectTarge
         // eslint-disable-next-line @next/next/no-img-element
         <img src={logo} alt="" className={size === 'lg' ? 'h-4 w-4' : 'h-3.5 w-3.5'} />
       ) : (
-        <Icon className={cn(kind === 'local' || kind === 'key' ? 'text-muted-foreground' : 'text-foreground', size === 'lg' ? 'h-4 w-4' : 'h-3.5 w-3.5')} />
+        <Icon className={cn(kind === 'local' || kind === 'app' || kind === 'key' ? 'text-muted-foreground' : 'text-foreground', size === 'lg' ? 'h-4 w-4' : 'h-3.5 w-3.5')} />
       )}
     </span>
   )
