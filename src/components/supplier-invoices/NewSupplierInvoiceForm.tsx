@@ -33,9 +33,11 @@ import { cn, formatAmount, formatCurrency, formatDate } from '@/lib/utils'
 import {
   invoiceTotalsCrosscheck,
   invoiceVatIsBooked,
+  isInputVatAccountRow,
   rowNetFromInvoiceTotals,
   rowsAgainstInvoiceTotals,
   totalFirstFill,
+  vatGuidanceApplies,
 } from '@/lib/supplier-invoices/total-first'
 import { useUnsavedChanges } from '@/lib/hooks/use-unsaved-changes'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -97,6 +99,7 @@ import {
   ReusedReferenceSentence,
   duplicateNumberSentence,
 } from '@/components/supplier-invoices/DuplicateWarnings'
+import { InputVatRowHint, RowsCarryNoVatLine } from '@/components/supplier-invoices/VatGuidanceLines'
 import { PayerChoiceSelect } from '@/components/expenses/PayerChoiceSelect'
 import { ExpenseClaimantFields } from '@/components/expenses/ExpenseClaimantFields'
 import { isPersonPayer } from '@/lib/expenses/payer'
@@ -657,6 +660,17 @@ export default function NewSupplierInvoiceForm({
     suppliers.find((s) => s.id === watchedSupplierId)?.supplier_type,
   )
 
+  // The guidance on the invoice's moms (the red line when the rows carry
+  // none, the caption under a moms row typed by hand) is about Swedish moms
+  // deducted from the rows: never for a foreign supplier, whose 0 % rows have
+  // the hint above.
+  const vatGuidance = vatGuidanceApplies({
+    vatRegistered,
+    reverseCharge: watchedReverseCharge,
+    selfBilled: watchedSelfBilled,
+    supplierType: suppliers.find((s) => s.id === watchedSupplierId)?.supplier_type,
+  })
+
   // Auto-fill defaults when supplier is selected: but never overwrite a value
   // the AI already filled in for us.
   const [templateAccountNote, setTemplateAccountNote] = useState<{ account: string; counterparty: string } | null>(null)
@@ -1189,6 +1203,13 @@ export default function NewSupplierInvoiceForm({
     return limitedDeductionAvailable(index) && watchedItems?.[index]?.vat_deduction_share != null
   }
 
+  // A row on the ingående moms account at 0 % is moms typed by hand: it books
+  // as typed, and a caption under it says it is not the invoice's moms.
+  function inputVatRowHintVisible(index: number): boolean {
+    const item = watchedItems?.[index]
+    return vatGuidance && !!item && isInputVatAccountRow(item)
+  }
+
   function toggleLimitedDeduction(index: number) {
     const item = watchedItems?.[index]
     if (!item) return
@@ -1404,6 +1425,7 @@ export default function NewSupplierInvoiceForm({
     totalMatches: crosscheckMatches,
     vatDiff: vatCrosscheckDiff,
     vatMatches: vatCrosscheckMatches,
+    rowsCarryNoVat,
   } = invoiceTotalsCrosscheck({
     invoiceTotal: enteredFakturaTotal,
     invoiceVat: enteredFakturaVat,
@@ -1411,6 +1433,9 @@ export default function NewSupplierInvoiceForm({
     totalVat,
     deductibleVat,
   })
+  // Rows that carry no moms against an invoice that states some: the red
+  // line says where the moms belongs instead of "check the moms sats".
+  const vatOnNoRow = vatGuidance && rowsCarryNoVat
 
   // A Moms lower than the rows deduct is usually the deductible moms typed in
   // (crm#1954): offer to book the rest as cost on the rows, a personbil row
@@ -2407,9 +2432,14 @@ export default function NewSupplierInvoiceForm({
                   </p>
                 )}
                 {vatCrosscheckDiff != null && !vatCrosscheckMatches && (
-                  <p className="text-destructive">
-                    {t('crosscheck_vat_diff', { diff: signedAmount(vatCrosscheckDiff) })}
-                  </p>
+                  vatOnNoRow ? (
+                    // The rows carry no moms, so the difference is the invoice's whole moms.
+                    <RowsCarryNoVatLine vat={vatCrosscheckDiff} currency={watchedCurrency} />
+                  ) : (
+                    <p className="text-destructive">
+                      {t('crosscheck_vat_diff', { diff: signedAmount(vatCrosscheckDiff) })}
+                    </p>
+                  )
                 )}
                 {/* Less moms than the rows deduct is often the deductible
                     moms typed into the invoice's Moms field (crm#1617,
@@ -2549,7 +2579,8 @@ export default function NewSupplierInvoiceForm({
                           (canUseAccrual && isAccrualOpen(index)) ||
                             (dimensionsEnabled && isDimOpen(index)) ||
                             slpRowVisible(index) ||
-                            isLimitedDeductionOpen(index)
+                            isLimitedDeductionOpen(index) ||
+                            inputVatRowHintVisible(index)
                             ? 'border-0'
                             : 'border-b-hairline',
                           settledFields.has('items') && 'prefill-settle',
@@ -2717,6 +2748,13 @@ export default function NewSupplierInvoiceForm({
                           </span>
                         </td>
                       </tr>
+                      {inputVatRowHintVisible(index) && (
+                        <tr className={cn((canUseAccrual && isAccrualOpen(index)) || (dimensionsEnabled && isDimOpen(index)) || slpRowVisible(index) || isLimitedDeductionOpen(index) ? 'border-0' : 'border-b-hairline')}>
+                          <td colSpan={vatColsVisible ? 6 : 4} className="pb-2">
+                            <InputVatRowHint />
+                          </td>
+                        </tr>
+                      )}
                       {canUseAccrual && isAccrualOpen(index) && (
                         <tr className={cn((dimensionsEnabled && isDimOpen(index)) || slpRowVisible(index) || isLimitedDeductionOpen(index) ? 'border-0' : 'border-b-hairline')}>
                           <td colSpan={vatColsVisible ? 6 : 4} className="pb-3">
