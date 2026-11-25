@@ -81,17 +81,21 @@ export function MailboxList({
   connectVariant?: 'default' | 'outline'
 } = {}) {
   const t = useTranslations('inkorg')
-  const digital = useDigitalMailboxes()
+  const digital = useDigitalMailboxes(true, { companyMailbox: true })
   // Until the answer is in, Kivra and Billo render as rows with a skeleton (or
   // a failed read's line): only a read that says so turns them into coming soon.
   const receives = (provider: DigitalMailboxProviderId) =>
     digital.state.status !== 'ready' || digital.state.providers[provider].available.receive
-  const entries = mailboxEntries({
-    whatsapp: ENABLED_EXTENSION_IDS.has('whatsapp-inbox'),
-    mail: ENABLED_EXTENSION_IDS.has('mail'),
-    kivra: receives('kivra'),
-    billo: receives('billo'),
-  }).filter((entry) => !doors || doors.includes(entry.door))
+  const kivraCompanyMailbox = digital.state.status === 'ready' ? (digital.state.providers.kivra.company_mailbox ?? null) : null
+  const entries = mailboxEntries(
+    {
+      whatsapp: ENABLED_EXTENSION_IDS.has('whatsapp-inbox'),
+      mail: ENABLED_EXTENSION_IDS.has('mail'),
+      kivra: receives('kivra'),
+      billo: receives('billo'),
+    },
+    kivraCompanyMailbox,
+  ).filter((entry) => !doors || doors.includes(entry.door))
 
   return (
     <ul className="border-t-hairline">
@@ -401,6 +405,8 @@ function GmailRow() {
 interface DigitalProviderAnswer {
   available: DigitalMailboxAvailability
   connection: ConnectionSummary | null
+  /** Kivra, while it is not connected for receiving: whether the company already has a company mailbox there. */
+  company_mailbox?: 'has' | 'none' | 'unknown'
 }
 
 type DigitalState =
@@ -468,9 +474,11 @@ function failedRead(prev: DigitalState): DigitalState {
  * GET /api/digital-mailboxes, once per mount (each open of the dialog) and
  * again on reload(). With `enabled` false nothing is read and the state
  * stays loading: a page that shows the rows only to some companies does not
- * ask for the others.
+ * ask for the others. With `companyMailbox`, the read also asks whether the
+ * company already has a mailbox at Kivra (the list of mailboxes shows it);
+ * a caller that only shows the connections leaves it out.
  */
-export function useDigitalMailboxes(enabled = true) {
+export function useDigitalMailboxes(enabled = true, { companyMailbox = false }: { companyMailbox?: boolean } = {}) {
   const [state, setState] = useState<DigitalState>({ status: 'loading' })
   const [reads, setReads] = useState(0)
 
@@ -479,7 +487,7 @@ export function useDigitalMailboxes(enabled = true) {
     let cancelled = false
     ;(async () => {
       try {
-        const res = await fetch('/api/digital-mailboxes')
+        const res = await fetch(companyMailbox ? '/api/digital-mailboxes?company_mailbox=1' : '/api/digital-mailboxes')
         const json = res.ok
           ? ((await res.json()) as { data?: { providers?: Partial<Record<DigitalMailboxProviderId, DigitalProviderAnswer>> } })
           : null
@@ -493,7 +501,7 @@ export function useDigitalMailboxes(enabled = true) {
     return () => {
       cancelled = true
     }
-  }, [reads, enabled])
+  }, [reads, enabled, companyMailbox])
 
   const reload = useCallback(() => setReads((n) => n + 1), [])
 
@@ -776,6 +784,13 @@ export function KivraRow({ slot, onConnection, reload, Row = DialogDigitalRow, c
     else void connect()
   }
 
+  const companyMailboxLine =
+    slot.answer.company_mailbox === 'has'
+      ? t('kivra_company_mailbox_has')
+      : slot.answer.company_mailbox === 'none'
+        ? t('kivra_company_mailbox_none')
+        : undefined
+
   const sending = view.sending && !receiveOnly ? (
     <SendingLine
       provider="kivra"
@@ -787,7 +802,7 @@ export function KivraRow({ slot, onConnection, reload, Row = DialogDigitalRow, c
 
   if (view.receive === 'off') {
     return (
-      <Row door="kivra" extra={sending}>
+      <Row door="kivra" status={companyMailboxLine} extra={sending}>
         <Button variant={connectVariant} loading={busy === 'connect'} onClick={() => void connect()}>
           {t('connect_kivra')}
         </Button>

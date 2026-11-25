@@ -19666,6 +19666,8 @@
     "gmail_connected": "{count, plural, =1 {One mailbox connected.} other {# mailboxes connected.}}",
     "connect_kivra": "Connect",
     "kivra_pending": "Waiting for you to activate Accounted in Kivra.",
+    "kivra_company_mailbox_has": "The company already has a mailbox at Kivra.",
+    "kivra_company_mailbox_none": "No company mailbox at Kivra yet.",
     "kivra_open": "Open Kivra",
     "kivra_check": "Check",
     "kivra_activated": "Kivra is connected",

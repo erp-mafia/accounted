@@ -19666,6 +19666,8 @@
     "gmail_connected": "{count, plural, =1 {En brevlåda kopplad.} other {# brevlådor kopplade.}}",
     "connect_kivra": "Anslut",
     "kivra_pending": "Väntar på att du aktiverar Accounted i Kivra.",
+    "kivra_company_mailbox_has": "Företaget har redan en brevlåda hos Kivra.",
+    "kivra_company_mailbox_none": "Ingen företagsbrevlåda hos Kivra än.",
     "kivra_open": "Öppna Kivra",
     "kivra_check": "Kontrollera",
     "kivra_activated": "Kivra är kopplad",

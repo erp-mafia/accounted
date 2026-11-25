@@ -1,5 +1,6 @@
 'use client'
 
+import dynamic from 'next/dynamic'
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
@@ -30,7 +31,6 @@ import {
   type AttachedHere,
 } from '@/lib/inkorg/missing'
 import { portalRows, purchasesAtPortal } from '@/lib/inkorg/portals'
-import { AddMailboxDialog } from './AddMailboxDialog'
 import { useDoorName } from './door-icon'
 import { InkorgFocus, type FocusMotion } from './InkorgFocus'
 import { InkorgList } from './InkorgList'
@@ -63,6 +63,9 @@ import { notifySessionExpired } from '@/lib/auth/session-timeout-shared'
 import VoucherWarningsDialog from '@/components/bookkeeping/VoucherWarningsDialog'
 import { voucherWarningsOfRefusal } from '@/lib/bookkeeping/voucher-warnings-refusal'
 import type { VoucherWarning } from '@/lib/bookkeeping/voucher-plausibility'
+
+/** The mailbox dialog, loaded when it is first opened: the page's first view does not render it. */
+const AddMailboxDialog = dynamic(() => import('./AddMailboxDialog').then((mod) => mod.AddMailboxDialog), { ssr: false })
 
 /** How long "Klart" stays on a finished item when it did not leave the queue after all. */
 const DONE_MARK_MS = 600
@@ -149,6 +152,8 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
   const [finishingId, setFinishingId] = useState<string | null>(null)
   const [lastOpenedId, setLastOpenedId] = useState<string | null>(null)
   const [addOpen, setAddOpen] = useState(false)
+  // The dialog's code loads the first time it is opened, then stays mounted.
+  const [addLoaded, setAddLoaded] = useState(false)
   const [finePrint, setFinePrint] = useState<FinePrintOpen>({ booking: false, fields: false })
   // "Jag betalar i banken": what to type in the bank, open over whatever comes next.
   const [payInBank, setPayInBank] = useState<PayInBankTarget | null>(null)
@@ -725,7 +730,7 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
             doors={doors}
             portals={portals}
             mailProvider={mailProvider}
-            onAddMailbox={canWrite ? () => setAddOpen(true) : undefined}
+            onAddMailbox={canWrite ? () => { setAddLoaded(true); setAddOpen(true) } : undefined}
           />
         )}
 
@@ -874,7 +879,7 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
         </div>
       </div>
 
-      <AddMailboxDialog open={addOpen} onOpenChange={setAddOpen} />
+      {addLoaded ? <AddMailboxDialog open={addOpen} onOpenChange={setAddOpen} /> : null}
       <PayInBankDialog target={payInBank} onClose={() => setPayInBank(null)} />
       <VoucherWarningsDialog
         warnings={voucherConfirm?.warnings ?? null}
