@@ -321,18 +321,20 @@ function appendCounts(job: SIEJob): { added: number; skippedDuplicates: number }
 /**
  * A run as it ended, once what it left behind has: an import it left going
  * reads as what that import came to, and a run the platform ended before it
- * finished (claimed long ago, never finished) is a failed night. A run still
- * going, or an import whose state cannot be read now, is left as it is.
- * `failures` of a run left going is the count before it, so a night whose
- * import fails later still counts.
+ * finished (claimed long ago, never finished) is a failed night; the third
+ * failed night in a row is a stop. A run still going, or an import whose
+ * state cannot be read now, is left as it is. `failures` of a run left going
+ * is the count before it, so a night whose import fails later still counts.
  */
 async function settledRun(supabase: SupabaseClient, companyId: string, run: FortnoxTopupRun, now: number): Promise<FortnoxTopupRun> {
   if (run.outcome !== 'running') return run
-  if (run.finishedAt === null) {
-    return now - Date.parse(run.startedAt) >= CLAIM_STALE_MS
-      ? { ...run, outcome: 'failed', failures: run.failures + 1, reason: OWN_REASONS.unfinished }
-      : run
+  const failed = (reason: FortnoxTopupReason): FortnoxTopupRun => {
+    const failures = run.failures + 1
+    return failures < FORTNOX_TOPUP_MAX_FAILURES
+      ? { ...run, outcome: 'failed', failures, reason }
+      : { ...run, outcome: 'stopped', failures, reason: repeated(reason) }
   }
+  if (run.finishedAt === null) return now - Date.parse(run.startedAt) >= CLAIM_STALE_MS ? failed(OWN_REASONS.unfinished) : run
   if (!run.importId) return run
   const job = await getSIEJob(supabase, companyId, run.importId).catch((error: unknown) => {
     // Read again next time; until then the run shows as going.
@@ -340,7 +342,7 @@ async function settledRun(supabase: SupabaseClient, companyId: string, run: Fort
     return null
   })
   if (!job || isSIEJobUnresolved(job.job_state)) return run
-  if (job.job_state === 'failed') return { ...run, outcome: 'failed', failures: run.failures + 1, reason: OWN_REASONS.importFailed }
+  if (job.job_state === 'failed') return failed(OWN_REASONS.importFailed)
   const counts = appendCounts(job)
   const added = run.added + counts.added
   return { ...run, outcome: added > 0 ? 'added' : 'nothing_new', added, failures: 0,
@@ -353,18 +355,20 @@ export async function readFortnoxTopup(
   supabase: SupabaseClient,
   companyId: string,
 ): Promise<FortnoxTopupView | null> {
-  const view = fortnoxTopupView(
-    parseSetting(await settings.get(FORTNOX_TOPUP_KEY)),
-    parseRun(await settings.get(FORTNOX_TOPUP_RUN_KEY)),
-  )
-  if (view?.lastRun) view.lastRun = await settledRun(supabase, companyId, view.lastRun, Date.now())
-  return view
+  const setting = parseSetting(await settings.get(FORTNOX_TOPUP_KEY))
+  const run = parseRun(await settings.get(FORTNOX_TOPUP_RUN_KEY))
+  // Settled first: a run that ended in a stop turns the switch off.
+  return fortnoxTopupView(setting, setting && run ? await settledRun(supabase, companyId, run, Date.now()) : null)
 }
 
-/** The failed nights in a row before this one, under the same choice; `previous` is settled. */
+/**
+ * The failed nights in a row before this one, under the same choice;
+ * `previous` is settled. A run whose import is still going carries the count
+ * from before it.
+ */
 function priorFailures(setting: FortnoxTopupSetting, previous: FortnoxTopupRun | null): number {
   if (!previous || previous.settingChangedAt !== setting.changedAt) return 0
-  return previous.outcome === 'failed' ? previous.failures : 0
+  return previous.outcome === 'failed' || previous.outcome === 'running' ? previous.failures : 0
 }
 
 /**
@@ -489,24 +493,30 @@ const sourceRef = (series: string, number: number) => `${series}\u0000${number}`
  * them again, and again after every storno of it.
  */
 async function reversedFortnoxVouchers(supabase: SupabaseClient, companyId: string, year: SIEAppendYear): Promise<Set<string>> {
-  const batches = await fetchAllRows<{ id: string }>(({ from, to }) => supabase.from('sie_imports').select('id')
-    .eq('company_id', companyId).eq('fiscal_period_id', year.fiscalPeriodId)
-    .eq('migration_documentation->>sourceSystem', FORTNOX_SIE_PROGRAM).order('id').range(from, to))
-  if (!batches.length) return new Set()
-  const entries = (status: 'reversed' | 'posted', numbers?: number[]) =>
-    fetchAllRows<{ source_voucher_series: string | null; source_voucher_number: number }>(({ from, to }) => {
-      let query = supabase.from('journal_entries').select('source_voucher_series,source_voucher_number')
-        .eq('company_id', companyId).eq('fiscal_period_id', year.fiscalPeriodId).eq('status', status)
-        .in('import_batch_id', batches.map((batch) => batch.id)).not('source_voucher_number', 'is', null)
-      if (numbers) query = query.in('source_voucher_number', numbers)
-      return query.order('id').range(from, to)
-    })
-  const reversed = await entries('reversed')
+  // The year's batches of Fortnox files: a completed one records the program
+  // in its documentation, one undone before it completed only in its manifest.
+  const batches = new Set((await fetchAllRows<{ id: string; program: string | null; sealed_program: string | null }>(({ from, to }) =>
+    supabase.from('sie_imports').select('id,program:migration_documentation->>sourceSystem,sealed_program:manifest->>source_program')
+      .eq('company_id', companyId).eq('fiscal_period_id', year.fiscalPeriodId).order('id').range(from, to)))
+    .filter((batch) => batch.program === FORTNOX_SIE_PROGRAM || batch.sealed_program === FORTNOX_SIE_PROGRAM)
+    .map((batch) => batch.id))
+  if (!batches.size) return new Set()
+  // Matched to the batches here, not in the query: a list of ids in the URL
+  // grows with every night and with a re-run migration, past what the
+  // gateway takes (ID_READ_CHUNK in lib/reconciliation/limits.ts).
+  type Entry = { source_voucher_series: string | null; source_voucher_number: number; import_batch_id: string | null }
+  const refs = async (status: 'reversed' | 'posted') => (await fetchAllRows<Entry>(({ from, to }) =>
+    supabase.from('journal_entries').select('source_voucher_series,source_voucher_number,import_batch_id')
+      .eq('company_id', companyId).eq('fiscal_period_id', year.fiscalPeriodId).eq('status', status)
+      .not('source_voucher_number', 'is', null).order('id').range(from, to)))
+    .filter((entry) => entry.import_batch_id !== null && batches.has(entry.import_batch_id))
+    .map((entry) => sourceRef(entry.source_voucher_series ?? '', entry.source_voucher_number))
+  const reversed = await refs('reversed')
   if (!reversed.length) return new Set()
-  const posted = new Set((await entries('posted', [...new Set(reversed.map((e) => e.source_voucher_number))]))
-    .map((e) => sourceRef(e.source_voucher_series ?? '', e.source_voucher_number)))
-  return new Set(reversed.map((e) => sourceRef(e.source_voucher_series ?? '', e.source_voucher_number))
-    .filter((ref) => !posted.has(ref)))
+  // A posted entry holds the voucher again (a re-run migration, an append by
+  // hand): the plan decides it, a changed one still stops the night.
+  const posted = new Set(await refs('posted'))
+  return new Set(reversed.filter((ref) => !posted.has(ref)))
 }
 
 /** A #VER line's series and number as fields 1 and 2, quoted or not; null for any other line. */
@@ -738,21 +748,25 @@ export async function runFortnoxTopups(options: FortnoxTopupSweepOptions): Promi
       // Switched off or changed since the list was read: not tonight.
       if (!(await stillOn(supabase, candidate.companyId, candidate.setting))) continue
       const previous = candidate.run ? await settledRun(supabase, candidate.companyId, candidate.run, now()) : null
-      const failuresBefore = priorFailures(candidate.setting, previous)
-      const startedAt = iso(now())
-      const settingChangedAt = candidate.setting.changedAt
-      const claimedId = await claimRun(supabase, candidate, { settingChangedAt, startedAt, finishedAt: null, outcome: 'running',
-        added: 0, skippedDuplicates: 0, skippedReversed: 0, failures: failuresBefore, reason: null })
-      if (!claimedId) continue
-      result.ran++
-      const run: FortnoxTopupRun = failuresBefore >= FORTNOX_TOPUP_MAX_FAILURES
+      let run: FortnoxTopupRun
+      if (previous?.outcome === 'stopped' && previous.settingChangedAt === candidate.setting.changedAt) {
         // The last night failed after it ended (the platform ended it, or the
-        // import it left going failed), and it was the third in a row.
-        ? { settingChangedAt, startedAt, finishedAt: iso(now()), outcome: 'stopped', added: 0, skippedDuplicates: 0,
-            skippedReversed: 0, failures: failuresBefore, reason: repeated(previous?.reason ?? OWN_REASONS.unfinished) }
-        : await topUpCompany(worker, candidate, startedAt, failuresBefore)
-      const { error } = await supabase.from('extension_data').update({ value: run }).eq('id', claimedId)
-      if (error) throw new Error(`fortnox top-up result not saved: ${error.message}`)
+        // import it left going failed), the third in a row: the stop is kept
+        // as that night's run, and nothing runs.
+        if (!(await claimRun(supabase, candidate, previous))) continue
+        result.ran++
+        run = previous
+      } else {
+        const failuresBefore = priorFailures(candidate.setting, previous)
+        const startedAt = iso(now())
+        const claimedId = await claimRun(supabase, candidate, { settingChangedAt: candidate.setting.changedAt, startedAt,
+          finishedAt: null, outcome: 'running', added: 0, skippedDuplicates: 0, skippedReversed: 0, failures: failuresBefore, reason: null })
+        if (!claimedId) continue
+        result.ran++
+        run = await topUpCompany(worker, candidate, startedAt, failuresBefore)
+        const { error } = await supabase.from('extension_data').update({ value: run }).eq('id', claimedId)
+        if (error) throw new Error(`fortnox top-up result not saved: ${error.message}`)
+      }
       if (run.outcome === 'added') result.added++
       else if (run.outcome === 'nothing_new') result.nothingNew++
       else if (run.outcome === 'failed') result.failed++

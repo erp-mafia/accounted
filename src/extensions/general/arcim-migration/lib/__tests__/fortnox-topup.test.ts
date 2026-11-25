@@ -114,10 +114,14 @@ function books(rows: Row[], options: BooksOptions = {}) {
       }
       return { data: rows }
     },
-    sie_imports: { data: [{ id: 'base-2026' }] },
+    // The year's batches: the Fortnox import, another program's, and a
+    // Fortnox append undone before it completed (its manifest names it).
+    sie_imports: { data: [{ id: 'base-2026', program: 'Fortnox', sealed_program: null },
+      { id: 'other-2026', program: 'Bokio', sealed_program: null }, { id: 'early-2026', program: null, sealed_program: 'Fortnox' }] },
     journal_entries: (calls) => {
       const status = calls.find((c) => c.method === 'eq' && c.args[0] === 'status')?.args[1]
-      return { data: (status === 'reversed' ? options.reversed : options.posted) ?? [] }
+      const [from, to] = (calls.find((c) => c.method === 'range')?.args ?? [0, Infinity]) as [number, number]
+      return { data: ((status === 'reversed' ? options.reversed : options.posted) ?? []).slice(from, to + 1) }
     },
   })
   return { ...mock, supabase: mock.supabase as unknown as SupabaseClient }
@@ -338,22 +342,51 @@ describe('what a night leaves alone', () => {
       files: [{ fiscalYear: 2026, rawContent: twoVouchers }], failedYears: [], sourceYears: [], omittedYears: [],
     })
     const { supabase, payloads, findCalls } = books([settingRow('company-1')],
-      { reversed: [{ source_voucher_series: 'A', source_voucher_number: 1 }] })
+      { reversed: [{ source_voucher_series: 'A', source_voucher_number: 1, import_batch_id: 'base-2026' }] })
     await sweep(supabase)
     const raw = vi.mocked(submitSIEJob).mock.calls[0][3]
     expect(raw).not.toContain('Faktura 1')
     expect(raw).toContain('Faktura 2')
     expect(finalRun(payloads)).toMatchObject({ outcome: 'added', skippedReversed: 1 })
-    // The year's Fortnox imports, and their reversed entries, of this company only.
-    expect(findCalls('sie_imports', 'eq')).toEqual(expect.arrayContaining([['company_id', 'company-1'], ['fiscal_period_id', 'p-2026'],
-      ['migration_documentation->>sourceSystem', 'Fortnox']]))
-    expect(findCalls('journal_entries', 'eq')).toEqual(expect.arrayContaining([['company_id', 'company-1'], ['status', 'reversed']]))
+    // The year's imports and entries, of this company only.
+    expect(findCalls('sie_imports', 'eq')).toEqual(expect.arrayContaining([['company_id', 'company-1'], ['fiscal_period_id', 'p-2026']]))
+    expect(findCalls('journal_entries', 'eq')).toEqual(expect.arrayContaining([['company_id', 'company-1'], ['fiscal_period_id', 'p-2026'],
+      ['status', 'reversed']]))
+  })
+
+  it('reads the reversed vouchers of any size of year without a list of ids in the URL', async () => {
+    // A re-run migration reverses the whole year's earlier import.
+    const many = Array.from({ length: 1500 }, (_, i) => ({ source_voucher_series: 'A', source_voucher_number: i + 1, import_batch_id: 'base-2026' }))
+    const { supabase, payloads, findCalls } = books([settingRow('company-1')], {
+      reversed: many,
+      // The re-run's import holds them again, all but A1.
+      posted: many.slice(1).map((entry) => ({ ...entry, import_batch_id: 'early-2026' })),
+    })
+    await sweep(supabase)
+    expect(findCalls('journal_entries', 'in')).toEqual([])
+    expect(findCalls('sie_imports', 'in')).toEqual([])
+    expect(finalRun(payloads)).toMatchObject({ skippedReversed: 1 })
+  })
+
+  it('counts an append undone before it completed as from Fortnox, and another program\'s import not', async () => {
+    const twoVouchers = SIE_2026 + '\n' + ['#VER A 2 20260305 "Faktura 2"', '{', '#TRANS 1930 {} 200.00', '#TRANS 3001 {} -200.00', '}'].join('\n')
+    vi.mocked(fetchProviderSieFiles).mockResolvedValue({
+      files: [{ fiscalYear: 2026, rawContent: twoVouchers }], failedYears: [], sourceYears: [], omittedYears: [],
+    })
+    const { supabase } = books([settingRow('company-1')], { reversed: [
+      { source_voucher_series: 'A', source_voucher_number: 1, import_batch_id: 'early-2026' },
+      { source_voucher_series: 'A', source_voucher_number: 2, import_batch_id: 'other-2026' },
+    ] })
+    await sweep(supabase)
+    const raw = vi.mocked(submitSIEJob).mock.calls[0][3]
+    expect(raw).not.toContain('Faktura 1')
+    expect(raw).toContain('Faktura 2')
   })
 
   it('keeps a reversed voucher a posted entry holds again: the append decides it', async () => {
     const { supabase, payloads } = books([settingRow('company-1')], {
-      reversed: [{ source_voucher_series: 'A', source_voucher_number: 1 }],
-      posted: [{ source_voucher_series: 'A', source_voucher_number: 1 }],
+      reversed: [{ source_voucher_series: 'A', source_voucher_number: 1, import_batch_id: 'base-2026' }],
+      posted: [{ source_voucher_series: 'A', source_voucher_number: 1, import_batch_id: 'early-2026' }],
     })
     await sweep(supabase)
     expect(vi.mocked(submitSIEJob).mock.calls[0][3]).toBe(SIE_2026)
@@ -401,12 +434,25 @@ describe('a night that failed after it ended', () => {
     expect(run.reason!.message).toContain('tre misslyckade nätter i rad')
   })
 
-  it('shows a run the platform ended as a failed night, not as one still going', async () => {
-    const stored: Record<string, unknown> = { [FORTNOX_TOPUP_KEY]: SETTING, [FORTNOX_TOPUP_RUN_KEY]: runRow('company-1',
-      { startedAt: new Date(Date.now() - 30 * 60_000).toISOString(), finishedAt: null, outcome: 'running', failures: 0 }).value }
-    const settings = { get: vi.fn(async (key: string) => stored[key] ?? null), set: vi.fn(), clear: vi.fn() } as unknown as ExtensionSettings
-    const view = await readFortnoxTopup(settings, books([]).supabase, 'company-1')
-    expect(view).toMatchObject({ enabled: true, lastRun: { outcome: 'failed', failures: 1, reason: { code: 'FORTNOX_TOPUP_UNFINISHED' } } })
+  it('shows a run the platform ended as a failed night, not as one still going, and the third as the stop', async () => {
+    const read = (failures: number) => {
+      const stored: Record<string, unknown> = { [FORTNOX_TOPUP_KEY]: SETTING, [FORTNOX_TOPUP_RUN_KEY]: runRow('company-1',
+        { startedAt: new Date(Date.now() - 30 * 60_000).toISOString(), finishedAt: null, outcome: 'running', failures }).value }
+      const settings = { get: vi.fn(async (key: string) => stored[key] ?? null), set: vi.fn(), clear: vi.fn() } as unknown as ExtensionSettings
+      return readFortnoxTopup(settings, books([]).supabase, 'company-1')
+    }
+    expect(await read(0)).toMatchObject({ enabled: true, lastRun: { outcome: 'failed', failures: 1, reason: { code: 'FORTNOX_TOPUP_UNFINISHED' } } })
+    expect(await read(2)).toMatchObject({ enabled: false, lastRun: { outcome: 'stopped', failures: 3 } })
+  })
+
+  it('carries the count of a night whose import is still going', async () => {
+    vi.mocked(getSIEJob).mockImplementation(async (_supabase, _company, id) => (id === 'import-old'
+      ? { id, job_state: 'running' } : { id, job_state: 'failed' }) as never)
+    vi.mocked(fetchProviderSieFiles).mockRejectedValue(new ProviderCallError('PROVIDER_UPSTREAM_ERROR', 'fortnox', 'HTTP 502'))
+    const { supabase, payloads } = books([settingRow('company-1'),
+      runRow('company-1', { outcome: 'running', importId: 'import-old', failures: 2 })])
+    await sweep(supabase)
+    expect(finalRun(payloads)).toMatchObject({ outcome: 'stopped', failures: 3 })
   })
 })
 
