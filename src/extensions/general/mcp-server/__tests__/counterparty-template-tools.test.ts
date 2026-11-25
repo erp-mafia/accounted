@@ -72,6 +72,32 @@ describe('counterparty template tools', () => {
     expect(result.templates[0]).toMatchObject({ mode: 'paused' })
   })
 
+  it('narrows by name with query, as a stored key with LIKE wildcards escaped', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [{ ...RULE, is_active: false, mode: 'paused' }], error: null })
+
+    await tool('gnubok_get_counterparty_templates').execute(
+      { include_paused: true, query: '  Hallon   100%_AB ' },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )
+
+    expect(findCalls('categorization_templates', 'eq')).toEqual([['company_id', 'company-1']])
+    expect(findCalls('categorization_templates', 'ilike')).toEqual([
+      ['counterparty_name', '%hallon 100\\%\\_ab%'],
+    ])
+  })
+
+  it('adds no name filter for an empty query', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [RULE], error: null })
+
+    await tool('gnubok_get_counterparty_templates').execute({ query: '   ' }, 'company-1', 'user-1', supabase as never)
+
+    expect(findCalls('categorization_templates', 'ilike')).toEqual([])
+  })
+
   it('stages pausing a rule with a Swedish title that names it, and writes nothing else', async () => {
     const { supabase, enqueue, findCall } = createQueuedMockSupabase()
     enqueue({ data: RULE, error: null }) // the rule (dry run)
