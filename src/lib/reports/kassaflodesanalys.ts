@@ -4,6 +4,7 @@ import { generateTrialBalance } from './trial-balance'
 import { calculateCashFlowTax, isCashFlowTaxBridgeAccount } from './cash-flow-tax'
 import { fetchVoucherMovements, type CashFlowEntryScope } from './cash-flow-evidence'
 import type { TrialBalanceRow } from '@/types'
+import { isAccumulatedContraAccount } from '@/lib/bookkeeping/bas-data/accumulated-contra-accounts'
 import { isAretsResultatAccount } from '@/lib/bookkeeping/bas-data/result-accounts'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
@@ -229,13 +230,13 @@ const FIXED_ASSET_NON_CASH = [
 const SHORT_TERM_INVESTMENT_NON_CASH = ['832', '835', '837', '838']
 
 // Accumulated depreciation and write-down accounts: the xx8/xx9 contras of
-// groups 10-12 (1080-1089, 1180-1189 and 1280-1289 are förskott and pågående
-// nyanläggningar, not contras) and the nedskrivning accounts of group 13.
+// groups 10-12 (isAccumulatedContraAccount) and the nedskrivning accounts of
+// group 13.
 const FINANCIAL_ASSET_WRITE_DOWNS = new Set([
   '1318', '1328', '1332', '1334', '1337', '1342', '1344', '1347', '1358', '1369', '1389',
 ])
 const isAccumulatedContra = (account: string) =>
-  /^1[012][0-79][89]$/.test(account.slice(0, 4)) || FINANCIAL_ASSET_WRITE_DOWNS.has(account.slice(0, 4))
+  isAccumulatedContraAccount(account) || FINANCIAL_ASSET_WRITE_DOWNS.has(account.slice(0, 4))
 const isConstructionOrAdvance = (account: string) => /^1[012]8/.test(account)
 
 interface CashFlowPeriod {

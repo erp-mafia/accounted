@@ -96,7 +96,20 @@ export type SimEvent = Dated &
     | { type: 'credit_note'; saleId: string }
     | { type: 'purchase'; id: string; supplier: string; number: string; dueDate: string; lines: PurchaseLine[] }
     | { type: 'purchase_payment'; purchaseId: string }
-    | { type: 'asset'; id: string; purchaseId: string; name: string; cost: number; usefulLifeMonths: number }
+    | {
+        type: 'asset'
+        id: string
+        purchaseId: string
+        name: string
+        cost: number
+        usefulLifeMonths: number
+        /** Bought before it went into the register: the purchase day. Absent: the event's day. */
+        acquisitionDate?: string
+        /** Depreciation already booked before the register took it over, per openingDate (inclusive). */
+        openingAmount?: number
+        openingDate?: string
+      }
+    | { type: 'depreciation_by_hand'; assetName: string; amount: number }
     | { type: 'card_cost'; category: string; account?: string; net: number; vatRate: VatRate; text: string }
     | { type: 'bank_fee'; amount: number }
     | { type: 'pension_premium'; amount: number }
@@ -336,6 +349,22 @@ const ASSET_PURCHASES = [
   { date: '2026-03-16', name: 'Bärbara datorer, utbyte', cost: 45_000, usefulLifeMonths: 60 },
 ]
 
+/**
+ * Bought in December 2024 and taken into use in January, depreciated by hand
+ * a verifikat a month from then, and taken into the register on 2025-07-01
+ * with what was depreciated stated per 2025-06-30: the books open 2025 with
+ * none of it and take the first half year in during 2025.
+ */
+const ASSET_DEPRECIATED_BY_HAND = {
+  date: '2024-12-01',
+  name: 'Kaffemaskin och köksutrustning',
+  cost: 36_000,
+  usefulLifeMonths: 36,
+  byHandFrom: { year: 2025, month: 1 },
+  registeredOn: '2025-07-01',
+  depreciatedPer: '2025-06-30',
+} as const
+
 export function generateCompany(seed: number, scaleName: SimScaleName): SimPlan {
   const random = createRandom(seed)
   const scale = SCALES[scaleName]
@@ -362,6 +391,47 @@ export function generateCompany(seed: number, scaleName: SimScaleName): SimPlan 
     events.push({ type: 'asset', date, id: `asset-${id}`, purchaseId: id, name, cost, usefulLifeMonths })
   }
   for (const asset of ASSET_PURCHASES) addPurchaseOf(asset.date, asset.name, asset.cost, asset.usefulLifeMonths)
+
+  // An asset depreciated by hand, a verifikat a month, until the register
+  // took it over in the middle of 2025 with what was already depreciated
+  // stated per the day before: the note must open 2025 with what the books
+  // held then and show the half year by hand among the year's avskrivningar.
+  {
+    const asset = ASSET_DEPRECIATED_BY_HAND
+    const id = `purchase-${(purchases.next += 1)}`
+    events.push({
+      type: 'purchase',
+      date: asset.date,
+      id,
+      supplier: 'hardware',
+      number: `HAR-${purchases.next}`,
+      dueDate: addDays(asset.date, 30),
+      lines: [{ description: asset.name, account: '1220', net: asset.cost, vatRate: 25 }],
+    })
+    events.push({ type: 'purchase_payment', date: weekday(addDays(asset.date, 21)), purchaseId: id })
+    const monthly = asset.cost / asset.usefulLifeMonths
+    let booked = 0
+    for (let step = 0; ; step += 1) {
+      const year = asset.byHandFrom.year + Math.floor((asset.byHandFrom.month - 1 + step) / 12)
+      const month = ((asset.byHandFrom.month - 1 + step) % 12) + 1
+      const date = iso(year, month, lastDayOfMonth(year, month))
+      if (date > asset.depreciatedPer) break
+      events.push({ type: 'depreciation_by_hand', date, assetName: asset.name, amount: monthly })
+      booked += monthly
+    }
+    events.push({
+      type: 'asset',
+      date: asset.registeredOn,
+      id: `asset-${id}`,
+      purchaseId: id,
+      name: asset.name,
+      cost: asset.cost,
+      usefulLifeMonths: asset.usefulLifeMonths,
+      acquisitionDate: asset.date,
+      openingAmount: booked,
+      openingDate: asset.depreciatedPer,
+    })
+  }
 
   for (let year = 2024; year <= 2026; year += 1) {
     if (year > 2024) {

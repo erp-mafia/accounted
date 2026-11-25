@@ -19,7 +19,7 @@ import {
   type K2MappingResult,
   type TrialBalancePair,
 } from '@/lib/bokslut/ixbrl/k2-mapper'
-import { k2AssetPostLabel } from '@/lib/bokslut/ixbrl/document/statements'
+import { k2AssetPostLabel, k3AssetPostLabel } from '@/lib/bokslut/ixbrl/document/statements'
 import { buildBrRows, buildRrRows } from './statement-rows'
 import { getNarrative, listFixedAssetNoteRows, type NarrativeRow } from './narrative-service'
 import { dispositionText } from './disposition-text'
@@ -64,7 +64,8 @@ import {
   noteAsset,
 } from './asset-note-figures'
 import { k2EquityPosts, loadEquityEntries, loadEquitySpecification } from './equity-specification'
-import { K3_SPLITS, k3EquityPosts, toK3Presentation } from './k3-presentation'
+import { K3_SPLITS, k3BrPostForAccount, k3EquityPosts, toK3Presentation } from './k3-presentation'
+import { inYearOpeningWarnings, moveInYearOpenings, type InYearOpeningOutcome } from './in-year-opening'
 import { USER_CLASSIFIABLE_KINDS, type EquityMovementKind } from './equity-kinds'
 import { collectDisclosureFacts, normalizeDisclosureAnswers, type DisclosureAnswers, type DisclosureFacts } from './disclosures'
 import {
@@ -966,6 +967,10 @@ function buildEquityChanges(mapping: K2MappingResult): EgenKapitalRow[] {
  * depreciation figures from posted schedules (engine fallback) so the note
  * ties to the ledger. Shared by the K2 and K3 note builders. Skips the
  * schedules query entirely when the register is empty.
+ *
+ * An opening amount dated inside the year moves from ingående to årets
+ * avskrivningar where the post's books say it was booked in the year
+ * (in-year-opening.ts); `inYearOpenings` says per post what moved.
  */
 async function buildRollforwardAssets(
   supabase: SupabaseClient,
@@ -973,14 +978,16 @@ async function buildRollforwardAssets(
   assets: Asset[],
   allPeriods: PeriodRow[],
   fiscalPeriodId: string,
-): Promise<AnlaggningAsset[]> {
-  if (assets.length === 0) return []
+  /** The year's full trial balance and the balance sheet post of an account. */
+  books: { rows: TrialBalanceRow[]; postOfAccount: (account: string) => string | null },
+): Promise<{ assets: AnlaggningAsset[]; inYearOpenings: InYearOpeningOutcome[] }> {
+  if (assets.length === 0) return { assets: [], inYearOpenings: [] }
   // Only an asset with components can have been split at the transition to K3.
   const [schedules, transitionSplits] = await Promise.all([
     loadPostedSchedules(supabase, companyId),
     assets.some(hasComponentRows) ? loadTransitionSplitOpenings(supabase, companyId) : Promise.resolve([]),
   ])
-  const figures = computeAssetNoteFigures({
+  const computed = computeAssetNoteFigures({
     assets,
     postedSchedules: schedules,
     fiscalPeriods: allPeriods,
@@ -992,19 +999,26 @@ async function buildRollforwardAssets(
   // A year before a K3 transition split reads the plain asset it was then.
   const asOfPeriod = (asset: Asset) =>
     period ? noteAsset(asset, splitByAsset.get(asset.id), period.period_start) : asset
-  return assets.map(asOfPeriod).map((a) => ({
-    category: a.category,
-    acquisition_date: a.acquisition_date,
-    acquisition_cost: a.acquisition_cost,
-    salvage_value: a.salvage_value,
-    useful_life_months: a.useful_life_months,
-    disposed_at: a.disposed_at,
-    acquisition_type: a.acquisition_type,
-    bas_asset_account: a.bas_asset_account,
-    figures: figures.get(a.id) ?? { ibAck: 0, aretsAvskrivning: 0, avgaendeAck: 0 },
-    // ÅRL 5 kap. 8 § p. 5: the year's nedskrivningar, from posted vouchers.
-    ...(period ? { writeDowns: writeDownMovement(a, period.period_start, period.period_end) } : {}),
-  }))
+  const noteAssets = assets.map(asOfPeriod)
+  const { figures, outcomes } = period
+    ? moveInYearOpenings({ assets: noteAssets, figures: computed, period, postOfAccount: books.postOfAccount, rows: books.rows })
+    : { figures: computed, outcomes: [] }
+  return {
+    assets: noteAssets.map((a) => ({
+      category: a.category,
+      acquisition_date: a.acquisition_date,
+      acquisition_cost: a.acquisition_cost,
+      salvage_value: a.salvage_value,
+      useful_life_months: a.useful_life_months,
+      disposed_at: a.disposed_at,
+      acquisition_type: a.acquisition_type,
+      bas_asset_account: a.bas_asset_account,
+      figures: figures.get(a.id) ?? { ibAck: 0, aretsAvskrivning: 0, avgaendeAck: 0 },
+      // ÅRL 5 kap. 8 § p. 5: the year's nedskrivningar, from posted vouchers.
+      ...(period ? { writeDowns: writeDownMovement(a, period.period_start, period.period_end) } : {}),
+    })),
+    inYearOpenings: outcomes,
+  }
 }
 
 /**
@@ -1177,12 +1191,17 @@ async function buildK2Noter(
   // avskrivningar, ending in utgående redovisat värde. Hard ÅR requirement
   // for any company with assets on the books. Depreciation figures come
   // from posted schedules so the note ties to the balansräkning.
-  const rollforwardAssets = await buildRollforwardAssets(
+  const legalForm = k2LegalFormOf(entityType)
+  const postOfAccount = (account: string) => k2BrPostForAccount(account, legalForm)
+  // A post whose in-year opening amounts could not be placed is reported by
+  // the per-post tie-out below.
+  const { assets: rollforwardAssets } = await buildRollforwardAssets(
     supabase,
     companyId,
     assets,
     allPeriods,
     fiscalPeriodId,
+    { rows: tbFullRows, postOfAccount },
   )
   // One table per balance sheet post (the K2 taxonomy tags the note per
   // post), every figure from one source (k2-fixed-asset-note.ts): the
@@ -1197,8 +1216,6 @@ async function buildK2Noter(
     .sort((a, b) => a.period_start.localeCompare(b.period_start))
   const statedByPeriod = earlierPeriods.length > 0 ? await listFixedAssetNoteRows(supabase, companyId) : null
   const carried = carriedFromEarlierYears(earlierPeriods.flatMap((earlier) => statedByPeriod?.get(earlier.id) ?? []))
-  const legalForm = k2LegalFormOf(entityType)
-  const postOfAccount = (account: string) => k2BrPostForAccount(account, legalForm)
   const registeredWriteDowns = registerWriteDownsByAccount(assets, periodStart, periodEnd)
   let outsideWriteDowns = writeDownsOutsideRegisterByPost(tbFullRows, registeredWriteDowns, postOfAccount)
   // Write-down accounts that were both credited and debited beyond the
@@ -1710,12 +1727,14 @@ async function buildK3Noter(
   // per-category roll-forward of anskaffningsvärde + ackumulerade
   // avskrivningar is the statutory baseline. Depreciation figures come
   // from posted schedules so the note ties to the balansräkning.
-  const rollforwardAssets = await buildRollforwardAssets(
+  const legalForm = k2LegalFormOf(entityType)
+  const { assets: rollforwardAssets, inYearOpenings } = await buildRollforwardAssets(
     supabase,
     companyId,
     assets,
     allPeriods,
     fiscalPeriodId,
+    { rows: tbFullRows, postOfAccount: (account) => k3BrPostForAccount(account, legalForm) },
   )
   const rollforwardNote = buildAnlaggningstillgangarNote({
     noteNumber: notes.length + 1,
@@ -1736,6 +1755,9 @@ async function buildK3Noter(
       tangibleImpairmentBalance(tbFullRows, registeredWriteDowns),
     )
     if (tieOut) (tieOut.blocking ? errors : warnings).push(tieOut.message)
+    // The note ties only its total: a post whose in-year opening amounts
+    // could not be placed as the books hold them is named on its own.
+    warnings.push(...inYearOpeningWarnings(inYearOpenings, (post) => k3AssetPostLabel(post) ?? k2AssetPostLabel(post) ?? post))
   }
   // ÅRL 5 kap. 8 §: nedskrivningar of immateriella and materiella
   // anläggningstillgångar booked outside the register, and the finansiella

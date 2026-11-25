@@ -16,7 +16,14 @@
  *                  kronor on the month's total underlag, the öre to öresutjämning
  *   skatteavdrag   column 1 of the employee's table, by the gross of the month
  *   semester       procentregeln: 12 % of gross, plus avgifter on it
- *   avskrivning    linear from the day of purchase, whole kronor per year
+ *   avskrivning    linear from the day of purchase, whole kronor per year; an
+ *                  asset the register takes over with depreciation already
+ *                  booked (redan avskrivet per a day) goes on linearly over
+ *                  what is left of its life from the day after
+ *   anläggningsnot per balance sheet post (ÅRL 5 kap. 8 §, K2 18.10): the
+ *                  opening and closing anskaffningsvärden and avskrivningar
+ *                  are what the books hold, and årets avskrivningar what they
+ *                  booked in the year, whoever booked it
  *   lagerförändring the counted value on balansdagen against the stock the
  *                  books hold, the difference in the year's result
  *   bolagsskatt    20.6 % of the whole result before tax with non-deductible
@@ -150,6 +157,15 @@ export interface AnswerKey {
   corporateTax: Record<number, number>
   /** Särskild löneskatt på pensionskostnader by income year. */
   pensionTax: Record<number, number>
+  /** The Inventarier post of the anläggningsnot by year: every asset here is on 1220/1229. */
+  fixedAssetNote: Record<number, FixedAssetNoteKey>
+}
+
+export interface FixedAssetNoteKey {
+  costOpening: number
+  purchases: number
+  accumulatedOpening: number
+  depreciation: number
 }
 
 const emptyBoxes = (): VatBoxes => ({
@@ -215,13 +231,38 @@ function daysBetween(fromInclusive: string, toInclusive: string): number {
   return Math.round((Date.parse(`${toInclusive}T12:00:00Z`) - Date.parse(`${fromInclusive}T12:00:00Z`)) / 86_400_000) + 1
 }
 
-/** Linear over the useful life, from the day of purchase, whole kronor per year. */
-export function depreciationFor(asset: { date: string; cost: number; usefulLifeMonths: number }, year: number): number {
-  const annual = (asset.cost * 12) / asset.usefulLifeMonths
+/** Whole months from one day to the same day of a later month (the sim only states such dates). */
+function wholeMonthsBetween(from: string, to: string): number {
+  if (from.slice(8) !== to.slice(8)) throw new Error(`the answer key counts whole months only: ${from} to ${to}`)
+  return (Number(to.slice(0, 4)) - Number(from.slice(0, 4))) * 12 + Number(to.slice(5, 7)) - Number(from.slice(5, 7))
+}
+
+function addMonthsIso(date: string, months: number): string {
+  const total = Number(date.slice(0, 4)) * 12 + Number(date.slice(5, 7)) - 1 + months
+  return `${Math.floor(total / 12)}-${String((total % 12) + 1).padStart(2, '0')}-${date.slice(8)}`
+}
+
+/**
+ * Linear over the useful life, from the day of purchase, whole kronor per
+ * year. Taken over with depreciation already booked: what is left of the cost,
+ * linearly over what is left of the life, from the day after the stated day.
+ */
+export function depreciationFor(
+  asset: { date: string; cost: number; usefulLifeMonths: number; acquisitionDate?: string; openingAmount?: number; openingDate?: string },
+  year: number,
+): number {
   const yearStart = `${year}-01-01`
   const yearEnd = `${year}-12-31`
-  if (asset.date > yearEnd) return 0
-  const inService = asset.date > yearStart ? asset.date : yearStart
+  let annual = (asset.cost * 12) / asset.usefulLifeMonths
+  let from = asset.acquisitionDate ?? asset.date
+  if (asset.openingAmount && asset.openingDate) {
+    const resumes = new Date(Date.parse(`${asset.openingDate}T12:00:00Z`) + 86_400_000).toISOString().slice(0, 10)
+    const lifeEnd = addMonthsIso(asset.acquisitionDate ?? asset.date, asset.usefulLifeMonths)
+    annual = ((asset.cost - asset.openingAmount) * 12) / wholeMonthsBetween(resumes, lifeEnd)
+    from = resumes
+  }
+  if (from > yearEnd) return 0
+  const inService = from > yearStart ? from : yearStart
   return Math.round((annual * daysBetween(inService, yearEnd)) / daysBetween(yearStart, yearEnd))
 }
 
@@ -238,6 +279,7 @@ export function computeAnswerKey(plan: SimPlan): AnswerKey {
   const sales = new Map<string, Extract<SimEvent, { type: 'sale' }>>()
   const purchases = new Map<string, Extract<SimEvent, { type: 'purchase' }>>()
   const assets: Array<Extract<SimEvent, { type: 'asset' }>> = []
+  const assetPurchases = new Map<number, number>()
   const supplierType = new Map(plan.suppliers.map((supplier) => [supplier.key, supplier.type]))
   const customerType = new Map(plan.customers.map((customer) => [customer.key, customer.type]))
 
@@ -325,6 +367,7 @@ export function computeAnswerKey(plan: SimPlan): AnswerKey {
         const { moms, gross } = invoiceTotals(event.lines)
         const costs = sum(event.lines.filter((line) => line.account !== '1220').map((line) => line.net))
         const assetCost = sum(event.lines.filter((line) => line.account === '1220').map((line) => line.net))
+        assetPurchases.set(year, roundOre((assetPurchases.get(year) ?? 0) + assetCost))
         post(date, event.id, [
           ['externalCosts', costs],
           ['tangibleAssets', assetCost],
@@ -347,6 +390,9 @@ export function computeAnswerKey(plan: SimPlan): AnswerKey {
       }
       case 'asset':
         assets.push(event)
+        break
+      case 'depreciation_by_hand':
+        post(date, event.type, [['depreciation', event.amount], ['tangibleAssets', -event.amount]])
         break
       case 'card_cost': {
         const { moms, gross } = invoiceTotals([{ net: event.net, vatRate: event.vatRate }])
@@ -440,7 +486,17 @@ export function computeAnswerKey(plan: SimPlan): AnswerKey {
       })
     }
   }
-  return { vat, payroll, years, corporateTax, pensionTax }
+  const fixedAssetNote: Record<number, FixedAssetNoteKey> = {}
+  let costOpening = 0
+  let accumulatedOpening = 0
+  for (const year of Object.keys(years).map(Number).sort((a, b) => a - b)) {
+    const purchasesOfYear = assetPurchases.get(year) ?? 0
+    const depreciationOfYear = yearLedgers.get(year)?.get('depreciation') ?? 0
+    fixedAssetNote[year] = { costOpening, purchases: purchasesOfYear, accumulatedOpening, depreciation: depreciationOfYear }
+    costOpening = roundOre(costOpening + purchasesOfYear)
+    accumulatedOpening = roundOre(accumulatedOpening + depreciationOfYear)
+  }
+  return { vat, payroll, years, corporateTax, pensionTax, fixedAssetNote }
 }
 
 function yearFigures(

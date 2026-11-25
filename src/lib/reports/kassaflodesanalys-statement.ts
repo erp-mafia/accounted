@@ -1,5 +1,6 @@
 import type { TrialBalanceRow } from '@/types'
 import { roundOre } from '@/lib/money'
+import { isAccumulatedContraAccount } from '@/lib/bookkeeping/bas-data/accumulated-contra-accounts'
 import { isAretsResultatAccount } from '@/lib/bookkeeping/bas-data/result-accounts'
 import { isCashFlowTaxBridgeAccount } from './cash-flow-tax'
 
@@ -148,14 +149,13 @@ function isLikvidaMedel(account: string, definition: LikvidaMedelDefinition): bo
 }
 
 // Accumulated depreciation and write-down accounts: the xx8/xx9 contras of
-// groups 10-12 (1080-1089, 1180-1189 and 1280-1289 are förskott and pågående
-// nyanläggningar, not contras) and the nedskrivning accounts of group 13.
+// groups 10-12 (isAccumulatedContraAccount) and the nedskrivning accounts of
+// group 13.
 const FINANCIAL_ASSET_WRITE_DOWNS = new Set([
   '1318', '1328', '1332', '1334', '1337', '1342', '1344', '1347', '1358', '1369', '1389',
 ])
 function isAccumulatedContra(account: string): boolean {
-  const head = account.slice(0, 4)
-  return /^1[012][0-79][89]$/.test(head) || FINANCIAL_ASSET_WRITE_DOWNS.has(head)
+  return isAccumulatedContraAccount(account) || FINANCIAL_ASSET_WRITE_DOWNS.has(account.slice(0, 4))
 }
 
 /** Anskaffningsvärde accounts of a kind: the ones whose growth is an acquisition. */

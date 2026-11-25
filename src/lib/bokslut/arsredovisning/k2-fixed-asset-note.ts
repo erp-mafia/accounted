@@ -675,7 +675,7 @@ export function fixedAssetOpeningCarrying(table: FixedAssetNoteTable): number {
  * instead of on a row of the year, or the other way round.
  */
 const OPENING_CAUSES =
-  'Vanliga orsaker: en tillgång som kommit in under året (köp, rörelseförvärv, fusion eller omklassificering) har ett tidigare anskaffningsdatum än dagen den kom in; redan avskrivet belopp är angivet per ett datum inne i året, och räknas då i sin helhet som ingående avskrivningar; en tillgång har flyttats till ett konto i en annan post; eller en avyttring är bokförd ett annat år än den är registrerad.'
+  'Vanliga orsaker: en tillgång som kommit in under året (köp, rörelseförvärv, fusion eller omklassificering) har ett tidigare anskaffningsdatum än dagen den kom in; redan avskrivet belopp är angivet per ett datum inne i året och postens avskrivningar kan inte stämmas av mot bokföringen, så att beloppet räknas i sin helhet som ingående avskrivningar; en tillgång har flyttats till ett konto i en annan post; eller en avyttring är bokförd ett annat år än den är registrerad.'
 
 /** What the tie of each post to its books found (fixedAssetPostTieOut). */
 export interface FixedAssetPostTieOut {
