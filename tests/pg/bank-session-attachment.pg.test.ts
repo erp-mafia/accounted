@@ -68,9 +68,52 @@ describe('checked shared-session insertion', () => {
     await sourceAccounts([account, { ...account, uid: 'eur', currency: 'EUR' }])
     expect((await attach()).account_count).toBe(1)
   })
-  it.each(['source','target','third'])('refuses an IBAN currently claimed by enabled cash in %s', async where => {
-    await claimCash(where === 'source' ? owner.companyId : where === 'target' ? targetId : thirdId)
+  it.each(['source','third'])('refuses an IBAN currently claimed by enabled cash in %s', async where => {
+    await claimCash(where === 'source' ? owner.companyId : thirdId)
     await expect(attach()).rejects.toMatchObject({ code: 'P0002' })
+  })
+  // One-session bank: the source's new login ended the target's own session,
+  // and the source's session now lists the target's account. The target's own
+  // cash account is a claim only while a connection may still feed it.
+  async function targetCash(status: string | null) {
+    let connectionId: string | null = null
+    if (status) {
+      connectionId = randomUUID()
+      await client.query(`INSERT INTO bank_connections(id,company_id,user_id,provider,bank_name,status,session_id,consent_expires,accounts_data)
+        VALUES($1,$2,$3,'other-se','Target bank',$4,$5,clock_timestamp()+interval '1 year',$6)`,
+      [connectionId, targetId, owner.userId, status, randomUUID(), JSON.stringify([{ uid: 'old-uid', currency: 'SEK', iban, enabled: true, ledger_account: '1930' }])])
+    }
+    const { rows: [row] } = await client.query(`INSERT INTO cash_accounts(company_id,ledger_account,currency,iban,enabled,bank_connection_id,external_uid)
+      VALUES($1,'1930','SEK',$2,true,$3,$4) RETURNING id`, [targetId, iban, connectionId, connectionId ? 'old-uid' : null])
+    return row.id as string
+  }
+  it.each(['expired','revoked',null])('offers the target its own account when the connection holding it is %s', async status => {
+    await targetCash(status)
+    const receipt = await attach()
+    expect(receipt.account_count).toBe(1)
+    expect((await rows()).find(r => r.id === receipt.connection_id).accounts_data).toEqual([
+      { uid: 'free', currency: 'SEK', iban, enabled: true, dedup_scope: 'source-scope' },
+    ])
+  })
+  it.each(['active','pending_selection','error','pending'])('refuses the target its own account while a %s connection may feed it', async status => {
+    await targetCash(status)
+    await expect(attach()).rejects.toMatchObject({ code: 'P0002' })
+  })
+  it("refuses a third company the target's account while the target's row is enabled", async () => {
+    await targetCash('expired')
+    await expect(attach(client, thirdId)).rejects.toMatchObject({ code: 'P0002' })
+  })
+  it('lets the picker save move the existing row onto the shared session', async () => {
+    const cashId = await targetCash('expired')
+    await client.query(`INSERT INTO chart_of_accounts(company_id,user_id,account_number,account_name,account_class,account_group,account_type,normal_balance)
+      VALUES($1,$2,'1930','Företagskonto',1,'19','asset','debit') ON CONFLICT (company_id,account_number) DO NOTHING`, [targetId, owner.userId])
+    const { connection_id: attached } = await attach()
+    const { rows: [{ token }] } = await client.query('SELECT bank_configuration_token($1) AS token', [targetId])
+    await client.query('SELECT save_bank_account_selection($1,$2,$3,$4,$5)', [targetId, owner.userId, attached, token,
+      JSON.stringify([{ uid: 'free', enabled: true, currency: 'SEK', ledger_account: '1930', reuse_cash_account_id: cashId }])])
+    const cash = (await client.query('SELECT id,bank_connection_id,external_uid,enabled FROM cash_accounts WHERE company_id=$1', [targetId])).rows
+    expect(cash).toEqual([{ id: cashId, bank_connection_id: attached, external_uid: 'free', enabled: true }])
+    expect((await rows()).find(r => r.id === attached)).toMatchObject({ status: 'active', session_id: session })
   })
   it('offers only remaining unclaimed accounts, not the stale full source array', async () => {
     await sourceAccounts([account, { ...account, uid: 'available', iban: 'SE0092' }]); await claimCash(thirdId)
