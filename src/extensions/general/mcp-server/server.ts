@@ -13978,12 +13978,13 @@ export const tools: McpTool[] = [
     catalogVisibility: 'search',
     keywords: ['motpart', 'konteringsmall', 'mallar'],
     title: 'List Counterparty Templates',
-    description: 'List active counterparty categorization templates: learned patterns from prior categorizations used for auto-matching new transactions.',
+    description: 'List counterparty categorization templates (learned booking rules) used for matching new transactions: active ones, or paused too with include_paused. Change one with gnubok_update_counterparty_template or gnubok_rename_counterparty_template.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
         limit: { type: 'number', description: 'Max results 1-200 (default 100)' },
+        include_paused: { type: 'boolean', description: 'Also list paused templates (mode paused), e.g. to resume one. Default false.' },
       },
     },
     outputSchema: {
@@ -13998,11 +13999,12 @@ export const tools: McpTool[] = [
     async execute(args, companyId, userId, supabase) {
       const limit = Math.min(Math.max(1, Number(args.limit) || 100), 200)
 
-      const { data, error } = await supabase
+      let query = supabase
         .from('categorization_templates')
-        .select('id, counterparty_name, counterparty_aliases, debit_account, credit_account, vat_treatment, vat_account, category, line_pattern, occurrence_count, confidence, last_seen_date, source')
+        .select('id, counterparty_name, counterparty_aliases, debit_account, credit_account, vat_treatment, vat_account, category, line_pattern, occurrence_count, confidence, last_seen_date, source, mode, always_review')
         .eq('company_id', companyId)
-        .eq('is_active', true)
+      if (args.include_paused !== true) query = query.eq('is_active', true)
+      const { data, error } = await query
         .order('occurrence_count', { ascending: false })
         .limit(limit)
 

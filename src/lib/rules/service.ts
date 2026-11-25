@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import type { CategorizationTemplate } from '@/types'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { aliasPatterns, postgrestFilterValue, type RuleMode, type RuleRow } from './model'
 import { stockholmYearMonth } from '@/lib/dates/iso'
@@ -180,4 +181,107 @@ export async function updateRule(
     .maybeSingle()
   if (error) throw error
   return (data as unknown as RuleRow) ?? null
+}
+
+/**
+ * Stored names are lowercase, single-spaced keys (the matcher compares them
+ * against normalized bank descriptions). A typed name gets the same shape;
+ * display re-capitalizes through formatCounterpartyName().
+ */
+export function counterpartyTemplateKey(input: string): string {
+  return input.toLowerCase().replace(/\s+/g, ' ').trim()
+}
+
+/**
+ * Why a rename was refused: the name is shorter than two characters, the
+ * template is not an active one of the company, or another active template
+ * already has the name.
+ */
+export type RenameRefusal = 'NAME_TOO_SHORT' | 'NOT_FOUND' | 'NAME_TAKEN'
+
+export type RenameOutcome =
+  | { ok: true; template: CategorizationTemplate; changed: boolean; previousName: string }
+  | { ok: false; reason: RenameRefusal }
+
+/**
+ * Rename an active counterparty template (a rule), for the settings panel and
+ * the agent's gnubok_rename_counterparty_template alike. The old name is kept
+ * as an alias so both the matcher (alias tier) and the learn path
+ * (findTemplateByKey) keep landing on this row for the merchant it was
+ * learned from. A dry run reads and refuses as the rename would, and answers
+ * the template as it would be, without writing. A failed read or write throws
+ * the database error.
+ */
+export async function renameCounterpartyTemplate(
+  supabase: SupabaseClient,
+  companyId: string,
+  id: string,
+  name: string,
+  { dryRun = false }: { dryRun?: boolean } = {},
+): Promise<RenameOutcome> {
+  const newName = counterpartyTemplateKey(name)
+  if (newName.length < 2) return { ok: false, reason: 'NAME_TOO_SHORT' }
+
+  const { data: existing, error: fetchError } = await supabase
+    .from('categorization_templates')
+    .select('*')
+    .eq('id', id)
+    .eq('company_id', companyId)
+    .eq('is_active', true)
+    .maybeSingle()
+  if (fetchError) throw fetchError
+  if (!existing) return { ok: false, reason: 'NOT_FOUND' }
+  const current = existing as CategorizationTemplate
+  const previousName = current.counterparty_name
+  if (previousName === newName) return { ok: true, template: current, changed: false, previousName }
+
+  // (company_id, counterparty_name) is UNIQUE and includes soft-deleted
+  // rows. An active twin is a real conflict the user can see and resolve;
+  // an inactive twin is invisible to them, so it is removed instead of
+  // blocking the rename (a learned pattern, not a retention-bound record).
+  const { data: twin, error: twinError } = await supabase
+    .from('categorization_templates')
+    .select('id, is_active')
+    .eq('company_id', companyId)
+    .eq('counterparty_name', newName)
+    .neq('id', id)
+    .maybeSingle()
+  if (twinError) throw twinError
+  if (twin?.is_active) return { ok: false, reason: 'NAME_TAKEN' }
+
+  const aliases = [...(current.counterparty_aliases || [])]
+  if (!aliases.includes(current.counterparty_name)) aliases.push(current.counterparty_name)
+
+  if (dryRun) {
+    return {
+      ok: true,
+      template: { ...current, counterparty_name: newName, counterparty_aliases: aliases },
+      changed: true,
+      previousName,
+    }
+  }
+
+  if (twin) {
+    const { error: purgeError } = await supabase
+      .from('categorization_templates')
+      .delete()
+      .eq('id', twin.id)
+      .eq('company_id', companyId)
+    if (purgeError) throw purgeError
+  }
+
+  const { data: updated, error: updateError } = await supabase
+    .from('categorization_templates')
+    .update({ counterparty_name: newName, counterparty_aliases: aliases })
+    .eq('id', id)
+    .eq('company_id', companyId)
+    .select('*')
+    .single()
+  if (updateError) {
+    // Lost the race against another rename or the learn path: the unique
+    // (company_id, counterparty_name) index rejected the new name.
+    if ((updateError as { code?: string }).code === '23505') return { ok: false, reason: 'NAME_TAKEN' }
+    throw updateError
+  }
+  return { ok: true, template: updated as CategorizationTemplate, changed: true, previousName }
 }

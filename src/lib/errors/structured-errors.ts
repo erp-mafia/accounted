@@ -11137,6 +11137,26 @@ const DIMENSION: Record<string, StructuredErrorEntry> = {
     message_sv: 'Import av befintliga dimensionskoder misslyckades.',
     message_en: 'Failed to import existing dimension codes from journal lines.',
   },
+  // Counterparty templates, the rules of Bokföringsregler (lib/rules/service.ts,
+  // operations counterparty-templates.*): the agent's rename and rule change.
+  COUNTERPARTY_TEMPLATE_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Regeln finns inte.',
+    message_en: 'Counterparty template not found in this company.',
+    remediation: {
+      description:
+        'List the templates (gnubok_get_counterparty_templates, include_paused true for paused ones) and use an id from the answer. A rename takes only an active template.',
+    },
+  },
+  COUNTERPARTY_TEMPLATE_NAME_TAKEN: {
+    httpStatus: 409,
+    message_sv: 'Det finns redan en mall med det här namnet.',
+    message_en: 'Another active counterparty template already has this name.',
+    remediation: {
+      description:
+        'Pick another name: two active templates cannot share one. gnubok_get_counterparty_templates lists the names in use.',
+    },
+  },
   // Account dimension rules (lib/dimensions/rules-service.ts, operations
   // dimension-rules.*): one set of codes for the dashboard, v1 and MCP.
   DIMENSION_RULE_NOT_FOUND: {

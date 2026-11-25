@@ -1604,6 +1604,8 @@
     "type_withdraw_not_momsredovisning": "Ta bort markering som rättelse",
     "type_mark_agi_period_filed": "Markera arbetsgivardeklaration som inlämnad",
     "type_complete_deadline": "Bocka av deadline",
+    "type_rename_counterparty_template": "Byt namn på regel",
+    "type_update_counterparty_template": "Ändra regel",
     "type_send_payslips": "Skicka lönebesked",
     "type_revert_salary_run": "Återställ lönekörning till utkast",
     "type_unapprove_salary_run": "Återkalla godkänd lönekörning",
