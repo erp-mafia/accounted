@@ -3,7 +3,7 @@ import { roundOre } from '@/lib/money'
 import { isAccumulatedContraAccount } from '@/lib/bookkeeping/bas-data/accumulated-contra-accounts'
 import { k2BrPostForAccount } from '@/lib/bokslut/ixbrl/k2-mapper'
 import type { AnlaggningAsset } from '../anlaggningstillgangar-note'
-import { computeAssetNoteFigures, type AssetDepreciationFigures, type PeriodLike } from '../asset-note-figures'
+import { computeAssetNoteFigures, noteAsset, type AssetDepreciationFigures, type PeriodLike, type TransitionSplitOpening } from '../asset-note-figures'
 import { inYearOpeningWarnings, moveInYearOpenings, openingDatedInYear, type InYearOpeningOutcome } from '../in-year-opening'
 import { buildK2FixedAssetTables, fixedAssetOpeningCarrying, fixedAssetPostTieOut } from '../k2-fixed-asset-note'
 import { k3BrPostForAccount } from '../k3-presentation'
@@ -129,9 +129,10 @@ describe('moveInYearOpenings', () => {
     // What the note said before: the whole 30 000 as ingående.
     expect(r.before.get('a1')).toEqual({ ibAck: 30_000, aretsAvskrivning: 6_049, avgaendeAck: 0 })
     expect(r.after.get('a1')).toEqual({ ibAck: 24_000, aretsAvskrivning: 12_049, avgaendeAck: 0 })
-    expect(r.outcomes).toEqual([
-      { post: INV, inYear: 30_000, registerAtStart: 30_000, booksAtStart: 24_000, moved: 6_000, reason: 'moved' },
-    ])
+    expect(r.outcomes).toEqual([{
+      post: INV, inYear: 30_000, registerAtStart: 30_000, booksAtStart: 24_000,
+      costAtStart: 60_000, booksCostAtStart: 60_000, moved: 6_000, estimatedAcross: [], reason: 'moved',
+    }])
     expect(r.amount(INV, 'depreciation.opening')).toBe(24_000)
     expect(r.amount(INV, 'depreciation.arets')).toBe(12_049)
     expect(r.amount(INV, 'depreciation.closing')).toBe(36_049)
@@ -155,9 +156,10 @@ describe('moveInYearOpenings', () => {
     // Accounted books the plan from 2 January.
     const arets = computeAssetNoteFigures({ assets: [firstDay], postedSchedules: [], fiscalPeriods: PERIODS, currentPeriodId: 'fy2025' }).get('a1')!.aretsAvskrivning
     const r = run([firstDay], [row('1220', 60_000), row('1229', -24_000, 0, arets)])
-    expect(r.outcomes).toEqual([
-      { post: INV, inYear: 24_000, registerAtStart: 24_000, booksAtStart: 24_000, moved: 0, reason: 'moved' },
-    ])
+    expect(r.outcomes).toEqual([{
+      post: INV, inYear: 24_000, registerAtStart: 24_000, booksAtStart: 24_000,
+      costAtStart: 60_000, booksCostAtStart: 60_000, moved: 0, estimatedAcross: [], reason: 'moved',
+    }])
     expect(r.after.get('a1')).toEqual({ ibAck: 24_000, aretsAvskrivning: arets, avgaendeAck: 0 })
     expect(r.tie).toMatchObject({ closingWarnings: [], openingWarnings: [] })
   })
@@ -186,7 +188,7 @@ describe('moveInYearOpenings', () => {
       row('1248', -18_000, 0, 36_000, 'Ackumulerade avskrivningar på bilar'),
       row('1249', -64_710, 0, 43_140, 'Ackumulerade avskrivningar på bilar'),
     ])
-    expect(r.outcomes[0]).toMatchObject({ registerAtStart: 161_850, booksAtStart: 82_710, moved: 79_140, reason: 'moved' })
+    expect(r.outcomes[0]).toMatchObject({ registerAtStart: 161_850, booksAtStart: 82_710, moved: 79_140, estimatedAcross: [], reason: 'moved' })
     expect(r.amount(INV, 'depreciation.opening')).toBe(82_710)
     expect(r.amount(INV, 'depreciation.arets')).toBe(79_140)
     // Each takes about its own year (43 140 and 36 000), the post exactly.
@@ -198,11 +200,25 @@ describe('moveInYearOpenings', () => {
   it('shares the move between assets of different kinds by what each one’s plan writes off before its stated day', () => {
     const computer = asset({ id: 'c1', category: 'computer', bas_asset_account: '1224', acquisition_cost: 36_000, useful_life_months: 36, opening_accumulated_depreciation: 30_000, opening_depreciation_date: '2025-06-30' })
     const r = run([asset(), computer], [row('1220', 96_000), row('1229', -48_000, 0, 6_000 + 6_049 + 6_000 + 6_000)])
-    expect(r.outcomes[0]).toMatchObject({ registerAtStart: 60_000, booksAtStart: 48_000, moved: 12_000, reason: 'moved' })
+    expect(r.outcomes[0]).toMatchObject({ registerAtStart: 60_000, booksAtStart: 48_000, moved: 12_000, estimatedAcross: [], reason: 'moved' })
     // Half a year of each plan: 6 000 on the machine and 6 000 on the computer.
     expect(r.after.get('a1')).toMatchObject({ ibAck: 24_000 })
     expect(r.after.get('c1')).toMatchObject({ ibAck: 24_000 })
     expect(r.tie).toMatchObject({ closingWarnings: [], openingWarnings: [] })
+  })
+
+  it('says when the books do not split as the plans do: the move is shared by estimate', () => {
+    // The machine's previous system booked once a year, so nothing of 2025 by
+    // the stated day; the computer's booked every month. The books cannot say
+    // which asset the 6 000 is, and the plans would give 12 000.
+    const machine = asset({ opening_accumulated_depreciation: 24_000 })
+    const computer = asset({ id: 'c1', category: 'computer', bas_asset_account: '1224', acquisition_cost: 36_000, useful_life_months: 36 })
+    const plan = computeAssetNoteFigures({ assets: [machine, computer], postedSchedules: [], fiscalPeriods: PERIODS, currentPeriodId: 'fy2025' })
+    const booked = plan.get('a1')!.aretsAvskrivning + plan.get('c1')!.aretsAvskrivning
+    const r = run([machine, computer], [row('1220', 96_000), row('1229', -48_000, 0, 6_000 + booked)])
+    expect(r.outcomes[0]).toMatchObject({ moved: 6_000, estimatedAcross: ['equipment', 'computer'], reason: 'moved' })
+    // The post is the books' either way.
+    expect(r.amount(INV, 'depreciation.opening')).toBe(48_000)
   })
 
   it('never moves more than the openings dated inside the year: the rest stays the opening warning', () => {
@@ -267,7 +283,7 @@ describe('moveInYearOpenings', () => {
     expect(r.tie.closingWarnings).toHaveLength(1)
   })
 
-  it('an asset on an account of another post keeps both posts as they were, each with its warning', () => {
+  it('an asset on an account of another post keeps the post as it was, with its warning', () => {
     // The register says 1220, the books hold the machine on 1210/1219.
     const r = run([asset()], [row('1210', 60_000), row('1219', -24_000, 0, 12_049)])
     expect(r.outcomes[0]).toMatchObject({ post: INV, moved: 0, reason: 'closing-not-tied' })
@@ -300,7 +316,8 @@ describe('moveInYearOpenings', () => {
 
   it('leaves a post with nedskrivningar on its books as it is', () => {
     const r = run([asset()], [...ISSUE_BOOKS, row('1228', -5_000, 0, 0, 'Ackumulerade nedskrivningar på inventarier')])
-    expect(r.outcomes[0]).toMatchObject({ moved: 0, reason: 'write-downs' })
+    // The books' avskrivningar leave the nedskrivningar out: 24 000, not 29 000.
+    expect(r.outcomes[0]).toMatchObject({ booksAtStart: 24_000, moved: 0, reason: 'write-downs' })
     expect(r.after.get('a1')).toEqual(r.before.get('a1'))
   })
 
@@ -339,6 +356,23 @@ describe('moveInYearOpenings', () => {
       ],
     })
 
+    it('reads a K3 transition split as the note does: the plain asset before it, its components from it', () => {
+      // Split at 2025-01-01 with what was depreciated carried into the
+      // components per 2024-12-31; before the split it was a plain asset
+      // taken over with 20 000 stated per 2024-06-30.
+      const split: TransitionSplitOpening = {
+        asset_id: 'k1', split_date: '2025-01-01', original_cost: '60000.00',
+        original_opening: '20000.00', original_opening_date: '2024-06-30', original_salvage: '0.00',
+      }
+      const splitMachine = asset({
+        ...machine,
+        opening_accumulated_depreciation: 24_000, opening_depreciation_date: '2024-12-31',
+        components: [component('stomme', 40_000, 120, 12_000, '2024-12-31'), component('motor', 20_000, 60, 12_000, '2024-12-31')],
+      })
+      expect(openingDatedInYear(noteAsset(splitMachine, split, FY2024.period_start), FY2024)).toBe(20_000)
+      expect(openingDatedInYear(noteAsset(splitMachine, split, FY2025.period_start), FY2025)).toBe(0)
+    })
+
     it('counts only the components whose stated day is inside the year', () => {
       expect(openingDatedInYear(machine, FY2025)).toBe(10_000)
     })
@@ -353,6 +387,20 @@ describe('moveInYearOpenings', () => {
       expect(r.tie).toMatchObject({ closingWarnings: [], openingWarnings: [] })
     })
 
+    it('shares a move with another kind of asset by the plans of its components stated inside the year', () => {
+      // On the same post, a computer for production stated 30 000 per 2025-06-30.
+      const computer = asset({ id: 'c1', category: 'computer', bas_asset_account: '1214', bas_accumulated_account: '1219', acquisition_cost: 36_000, useful_life_months: 36 })
+      const arets = computeAssetNoteFigures({ assets: [machine, computer], postedSchedules: [], fiscalPeriods: PERIODS, currentPeriodId: 'fy2025' })
+      const booked = arets.get('k1')!.aretsAvskrivning + arets.get('c1')!.aretsAvskrivning
+      // The books opened 2025 with 16 000 on the machine and 24 000 on the
+      // computer; the motor's 2 000 and the computer's 6 000 were booked before July.
+      const r = run([machine, computer], [row('1210', 60_000), row('1214', 36_000), row('1219', -40_000, 0, 8_000 + booked)])
+      expect(r.outcomes[0]).toMatchObject({ post: MASKINER, inYear: 40_000, moved: 8_000, estimatedAcross: [], reason: 'moved' })
+      // The motor's half year (2 000), not the asset's plan over its stomme too (3 000).
+      expect(r.after.get('k1')).toMatchObject({ ibAck: 16_000 })
+      expect(r.after.get('c1')).toMatchObject({ ibAck: 24_000 })
+    })
+
     it('never moves the opening of a component stated before the year', () => {
       const arets = computeAssetNoteFigures({ assets: [machine], postedSchedules: [], fiscalPeriods: PERIODS, currentPeriodId: 'fy2025' }).get('k1')!.aretsAvskrivning
       // 12 000 short at the start: only the motor's 10 000 can be inside the year.
@@ -363,32 +411,49 @@ describe('moveInYearOpenings', () => {
   })
 })
 
-describe('inYearOpeningWarnings (the K3 note, which ties only its total)', () => {
+describe('inYearOpeningWarnings (the K3 note, which ties only its total and prints per category)', () => {
   const outcome = (overrides: Partial<InYearOpeningOutcome>): InYearOpeningOutcome => ({
-    post: INV, inYear: 30_000, registerAtStart: 30_000, booksAtStart: 24_000, moved: 6_000, reason: 'moved', ...overrides,
+    post: INV, inYear: 30_000, registerAtStart: 30_000, booksAtStart: 24_000, costAtStart: 60_000, booksCostAtStart: 60_000,
+    moved: 6_000, estimatedAcross: [], reason: 'moved', ...overrides,
   })
   const label = (post: string) => (post === INV ? 'Inventarier, verktyg och installationer' : post)
-  const plain = (text: string) => text.replace(/ /g, ' ')
+  const category = (name: string) => ({ equipment: 'Inventarier', computer: 'Datorer' })[name] ?? name
+  const warn = (outcomes: InYearOpeningOutcome[]) => inYearOpeningWarnings(outcomes, label, category).map((text) => text.replace(/ /g, ' '))
 
   it('says nothing for a post that now opens as the books do', () => {
-    expect(inYearOpeningWarnings([outcome({})], label)).toEqual([])
+    expect(warn([outcome({})])).toEqual([])
   })
 
   it('names a post whose opening could not be placed, with both figures', () => {
-    const [warning] = inYearOpeningWarnings([outcome({ moved: 0, reason: 'closing-not-tied' })], label)
-    expect(plain(warning)).toContain(
+    const [warning] = warn([outcome({ moved: 0, reason: 'closing-not-tied' })])
+    expect(warning).toContain(
       'Anläggningsnoten för Inventarier, verktyg och installationer: ackumulerade avskrivningar vid årets ingång (30 000 kr) stämmer inte med postens bokförda (24 000 kr).',
     )
     expect(warning).toContain('redan avskrivet belopp är det som var bokfört det datumet')
   })
 
   it('names what is left after a clamp', () => {
-    const [warning] = inYearOpeningWarnings([outcome({ registerAtStart: 66_000, moved: 30_000, reason: 'clamped' })], label)
-    expect(plain(warning)).toContain('(36 000 kr) stämmer inte med postens bokförda (24 000 kr)')
+    const [warning] = warn([outcome({ registerAtStart: 66_000, moved: 30_000, reason: 'clamped' })])
+    expect(warning).toContain('(36 000 kr) stämmer inte med postens bokförda (24 000 kr)')
   })
 
-  it('says a post with nedskrivningar cannot be checked', () => {
-    const [warning] = inYearOpeningWarnings([outcome({ moved: 0, reason: 'write-downs' })], label)
-    expect(plain(warning)).toContain('redan avskrivet belopp på 30 000 kr är angivet per ett datum inne i året. Posten har nedskrivningar')
+  it('names a post with nedskrivningar whose avskrivningar differ, and not one whose do not', () => {
+    expect(warn([outcome({ moved: 0, reason: 'write-downs' })])).toHaveLength(1)
+    // Stated per the year's first day: the books held the amount at the start.
+    expect(warn([outcome({ booksAtStart: 30_000, moved: 0, reason: 'write-downs' })])).toEqual([])
+  })
+
+  it('names a move made while the anskaffningsvärden differ: the move may hold that difference', () => {
+    const [warning] = warn([outcome({ costAtStart: 60_000, booksCostAtStart: 70_000 })])
+    expect(warning).toContain('ingående anskaffningsvärden (60 000 kr) stämmer inte med postens bokförda (70 000 kr)')
+    // Nothing moved: the anskaffningsvärden are not this note's to explain.
+    expect(warn([outcome({ booksAtStart: 30_000, moved: 0, booksCostAtStart: 70_000 })])).toEqual([])
+  })
+
+  it('names a move shared between categories by estimate', () => {
+    const [warning] = warn([outcome({ estimatedAcross: ['equipment', 'computer'] })])
+    expect(warning).toContain('6 000 kr av årets avskrivningar bokfördes före de datum som redan avskrivet belopp är angivet per')
+    expect(warning).toContain('fördelar det mellan Inventarier och Datorer efter tillgångarnas avskrivningsplaner')
+    expect(warn([outcome({ estimatedAcross: ['equipment'] })])).toEqual([])
   })
 })

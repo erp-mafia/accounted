@@ -38,6 +38,7 @@ import {
 } from './k3-noter-builder'
 import {
   buildAnlaggningstillgangarNote,
+  CATEGORY_LABELS,
   computeRollforwardTotals,
   depreciationPrincipleLines,
   depreciationPrinciples,
@@ -1755,9 +1756,15 @@ async function buildK3Noter(
       tangibleImpairmentBalance(tbFullRows, registeredWriteDowns),
     )
     if (tieOut) (tieOut.blocking ? errors : warnings).push(tieOut.message)
-    // The note ties only its total: a post whose in-year opening amounts
-    // could not be placed as the books hold them is named on its own.
-    warnings.push(...inYearOpeningWarnings(inYearOpenings, (post) => k3AssetPostLabel(post) ?? k2AssetPostLabel(post) ?? post))
+    // The note ties only its total and prints per category: a post whose
+    // in-year opening amounts may not stand as the books hold them is named.
+    warnings.push(
+      ...inYearOpeningWarnings(
+        inYearOpenings,
+        (post) => k3AssetPostLabel(post) ?? k2AssetPostLabel(post) ?? post,
+        (category) => CATEGORY_LABELS[category] ?? category,
+      ),
+    )
   }
   // ÅRL 5 kap. 8 §: nedskrivningar of immateriella and materiella
   // anläggningstillgångar booked outside the register, and the finansiella

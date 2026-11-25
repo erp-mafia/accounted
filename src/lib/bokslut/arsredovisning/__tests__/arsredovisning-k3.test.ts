@@ -1352,6 +1352,28 @@ describe('buildArsredovisningData: an opening amount dated inside the year', () 
         expect(warnings).toHaveLength(1)
       }
     })
+
+    it(`${framework.toUpperCase()}: warns when the post's anskaffningsvärden differ from the books while the move is made`, async () => {
+      // The books also held a machine of 10 000 with 4 000 depreciated that
+      // the register lacks, sold in the year: the year's rows net it.
+      mockFetchAllRows.mockResolvedValue(PERIODS)
+      mockedListAssets.mockResolvedValue([machine] as never)
+      mockedTrialBalance.mockResolvedValue({
+        rows: [ledgerRow('1220', 70_000, 0, 10_000), ledgerRow('1229', -28_000, 4_000, 12_049)],
+        totalDebit: 0,
+        totalCredit: 0,
+        isBalanced: true,
+      } as never)
+      // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+      const data = await buildArsredovisningData(makeSupabase({ accountingFramework: framework }), 'co1', 'fp1')
+      const note = data.noter.find((n) => n.title === 'Anläggningstillgångar')
+      expect(note?.body).toMatch(new RegExp(`${opening}: \\u221228\\s000 kr`))
+      expect(noteWarnings(data.warnings)).toEqual([
+        framework === 'k3'
+          ? expect.stringMatching(/^Anläggningsnoten för Inventarier, verktyg och installationer: ingående anskaffningsvärden \(60\s000 kr\) stämmer inte med postens bokförda \(70\s000 kr\)/)
+          : expect.stringMatching(/^Anläggningsnoten för Inventarier, verktyg och installationer: ingående redovisat värde \(32\s000 kr\) stämmer inte med postens bokförda värde vid årets ingång \(42\s000 kr\)/),
+      ])
+    })
   }
 })
 
