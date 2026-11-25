@@ -128,6 +128,8 @@ Approval creates a **draft**: no number and no verifikat yet. The F-number is al
 
 \`gnubok_send_invoice({ invoice_id })\` stages emailing the PDF. After approval it allocates the F-number, emails the customer and marks the invoice sent. It needs a customer email and the email service configured.
 
+To the customer's Kivra or Billo mailbox instead of email: \`gnubok_send_invoice({ invoice_id, channel: 'kivra' })\` (or \`'billo'\`) stages the same send the invoice page makes, same numbering and booking. The mailbox finds a company by its organisationsnummer and a private person or enskild firma by the personnummer, and staging already refuses a customer it cannot reach, an invoice in another currency than SEK, and a company that has not switched on sending through that mailbox (a person does that under Inställningar, Kopplingar). Kivra sends are priced per invoice: past what is included the refusal says how the user asks for more. On any of these refusals, send by email instead.
+
 If the user delivered the invoice another way (printed, uploaded to the buyer's portal, sent through an external e-invoice provider), use \`gnubok_mark_invoice_as_sent({ invoice_id })\` instead: same numbering and booking effect, no email. Draft only.
 
 If the customer requires an e-invoice (public sector, or a buyer asking for Peppol), read "E-invoicing via Peppol" below before sending anything: it is sent from the invoice page in the dashboard or staged with \`gnubok_send_invoice_peppol\`.
@@ -200,7 +202,7 @@ End with short groups, in the user's language:
 - \`gnubok_get_invoice\` (via \`gnubok_call_tool\`): one invoice with its lines; read it before editing
 - \`gnubok_update_invoice\`: edit a draft; \`items\` is a FULL REPLACE, so pass every line back (with \`article_id\`) from \`gnubok_get_invoice\`
 - \`gnubok_delete_draft_invoice\`: remove a draft, only on the user's request (staged)
-- \`gnubok_send_invoice\`: email PDF (staged)
+- \`gnubok_send_invoice\`: email PDF, or \`channel: 'kivra'\` / \`'billo'\` to the customer's mailbox (staged)
 - \`gnubok_mark_invoice_as_sent\`: manual delivery (also the recovery when a dashboard Peppol send could not mark the invoice as sent)
 - \`gnubok_set_quote_status\`: record the customer decision on a quote (direct write)
 - \`gnubok_convert_invoice\`: proforma or quote to real invoice, or to a kundorder

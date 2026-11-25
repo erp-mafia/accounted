@@ -3591,6 +3591,9 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     httpStatus: 503,
     message_sv: 'Den digitala brevlådan är inte aktiverad i den här miljön.',
     message_en: 'This digital mailbox provider is not configured in this environment.',
+    remediation: {
+      description: 'This installation holds no sending credentials for the provider. Send by email instead: channel email, the default.',
+    },
   },
   DIGITAL_MAILBOX_SANDBOX: {
     httpStatus: 403,
@@ -3684,6 +3687,10 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     httpStatus: 409,
     message_sv: 'Aktivera utskick via den digitala brevlådan först.',
     message_en: 'Activate sending through this digital mailbox first.',
+    remediation: {
+      description:
+        'Sending through this mailbox is off for the company. A person connects Kivra or Billo and switches on "Utskick av fakturor och lönebesked" under Settings, Connections (/settings/connections); an agent or API key cannot. Until then send by email: channel email, the default.',
+    },
   },
   DIGITAL_MAILBOX_INVOICE_NOT_SENDABLE: {
     httpStatus: 409,
@@ -3699,11 +3706,21 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     httpStatus: 422,
     message_sv: 'Kunden saknar organisationsnummer (företag) eller personnummer (privatperson), så fakturan kan inte adresseras till en digital brevlåda.',
     message_en: 'The customer has no organisation number (business) or personal identity number (private person), so the invoice cannot be addressed to a digital mailbox.',
+    remediation: {
+      description:
+        "A mailbox finds a Swedish business by its organisation number and a private person by the personnummer. Add the one that is missing to the customer with gnubok_update_customer, or send the invoice by email instead (gnubok_send_invoice without channel).",
+      tool: 'gnubok_update_customer',
+    },
   },
   DIGITAL_MAILBOX_RECIPIENT_NOT_REACHABLE: {
     httpStatus: 422,
     message_sv: 'Mottagaren har ingen brevlåda som tar emot från ert företag. Skicka fakturan på annat sätt.',
     message_en: 'The recipient has no mailbox that accepts content from your company. Deliver the invoice another way.',
+    remediation: {
+      description:
+        'The provider found no mailbox for this customer that takes mail from the company, and nothing was issued or sent. Send the invoice by email instead (gnubok_send_invoice without channel); a delivery made outside Accounted is recorded with gnubok_mark_invoice_as_sent.',
+      tool: 'gnubok_send_invoice',
+    },
   },
   DIGITAL_MAILBOX_DOCUMENT_TOO_LARGE: {
     httpStatus: 413,

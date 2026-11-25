@@ -1043,6 +1043,11 @@ describe('tools/list payload size guard', () => {
     // 2026-11-24: measured without `effect`, which tools/list never sends,
     // and with a type on every enum (+29, see the full catalog case).
     // Measured 62 473 (main 63 146 with `effect`). Ceiling unchanged.
+    // 2026-11-24: channel (email, kivra or billo) on gnubok_send_invoice, the
+    // invoice page's send to the customer's Kivra or Billo mailbox. Bare and
+    // named in the description, paid for on the same tool (a shorter title
+    // and description, a bare invoice_id). Measured 63 145 (full catalog
+    // 67 574; main 63 146 and 67 575). Ceiling unchanged.
     expect(simple).toBeLessThan(SIMPLE_CATALOG_CEILING)
   })
 

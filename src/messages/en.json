@@ -1385,6 +1385,7 @@
     "warning_revoke_grant": "By clicking approve, the rule is revoked: agents no longer book this counterparty themselves, and everything waits for approval again. What was already booked under the rule stays and is listed, so you can review it.",
     "warning_revoke_service_account": "By clicking approve, the service account and all its keys are revoked: the next call with any of them is refused. This cannot be undone, and only an owner or administrator can approve. What the account has already done stays and still shows the account's name.",
     "warning_send_payslips": "By clicking approve, every employee in the payroll run gets an email with a secure link to their payslip, and links sent earlier stop working.",
+    "warning_send_payslips_mailbox": "By clicking approve, every employee in the payroll run gets their payslip in their digital mailbox where it reaches them, and the rest an email with a secure link to their payslip.",
     "warning_unapprove_salary_run": "By clicking approve, the approval is withdrawn and the payroll run goes back to review. A generated AGI that has not been submitted is removed, and a payment file already created no longer counts as current.",
     "warning_attach_salary_expense_claims": "By clicking approve, the employee's open expense claims are added to the payslip as tax-free lines and paid out with the salary.",
     "warning_add_salary_run_employee": "By clicking approve, the employee is added to the payroll run and is paid in it when the payroll run is recalculated.",

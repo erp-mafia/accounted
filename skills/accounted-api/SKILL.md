@@ -707,7 +707,7 @@ POST /companies/{companyId}/salary-runs/{id}/payment-file : Generate the bank pa
 GET /companies/{companyId}/salary-runs/{id}/payment-files : List the archived bank payment files of a salary run [scope:payroll:read risk:low idempotent]
 GET /companies/{companyId}/salary-runs/{id}/payslips/{employeeId}/pdf : Download one employee's payslip as PDF [scope:payroll:read risk:low idempotent]
 POST /companies/{companyId}/salary-runs/{id}/revert : Send a salary run in review back to draft so it can be edited [scope:payroll:write risk:low idempotent dry-run reversible]
-POST /companies/{companyId}/salary-runs/{id}/send-payslips : Email the employees on an approved salary run a secure link to their payslip [scope:payroll:write risk:medium idempotent dry-run]
+POST /companies/{companyId}/salary-runs/{id}/send-payslips : Send the employees on an approved salary run their payslip: a secure email link, or the PDF to their Kivra or Billo mailbox [scope:payroll:write risk:medium idempotent dry-run]
 POST /companies/{companyId}/salary-runs/{id}/unapprove : Recall the approval of a salary run (approved back to review) [scope:payroll:write risk:medium idempotent dry-run reversible]
 ```
 
