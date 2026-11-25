@@ -80,7 +80,7 @@ describe('open VAT per account, net of credit notes', () => {
     const reverseCharge = [l('1510', 1000, 0), l('3308', 0, 1000)]
     expect(openVatByAccount(reverseCharge, []).size).toBe(0)
     expect(vatSharesOfPart(openVatByAccount(reverseCharge, []), 1000, 1000)).toEqual([])
-    expect(reserveTarget(new Map(), 1000, 600)).toBe(600)
+    expect(reserveTarget({ amount: 600, shares: vatSharesOfPart(new Map(), 1000, 600) })).toBe(600)
   })
 
   it('knows whether the invoice reached the ledger as a receivable (the booked-branch rule)', () => {
@@ -109,7 +109,7 @@ describe('VAT share of the open part', () => {
       { account: '2611', rate: 25, vat: 125, base: 500 },
       { account: '2621', rate: 12, vat: 30, base: 250 },
     ])
-    expect(reserveTarget(open, 1810, 905)).toBe(750)
+    expect(reserveTarget({ amount: 905, shares: vatSharesOfPart(open, 1810, 905) })).toBe(750)
   })
 
   it('rounds each share to the öre', () => {

@@ -46,11 +46,12 @@ import { reverseOrphanedJournalEntry } from '@/lib/bookkeeping/cancel-orphaned-e
 import { resolvePrimaryBankAccount } from '@/lib/bookkeeping/settlement-account'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { reserveOutstanding } from '../amounts'
-import { recordConfirmedLoss } from '../confirmed'
+import { planConfirmed, recordConfirmedLoss } from '../confirmed'
 import { recordDoubtfulLoss, releaseDoubtfulReserve } from '../doubtful'
 import { decisionId } from '../ids'
 import { recordRecoveredLoss } from '../recovered'
 import { loadCustomerLossState, type CustomerLossState, type WriteOffRow } from '../state'
+import { buildCustomerLossView } from '../view'
 
 const COMPANY = 'company-1'
 const USER = 'user-1'
@@ -78,6 +79,7 @@ function makeState(overrides: Omit<Partial<CustomerLossState>, 'invoice'> & { in
     receivableAccount: '1510',
     openVat: new Map([['2611', 250]]),
     basis: 1250,
+    oreRounding: 0,
     rows,
     reserve: reserveOutstanding(rows),
     confirmed: null,
@@ -434,5 +436,152 @@ describe('återvunnen kundförlust', () => {
     const outcome = await recordRecoveredLoss(supabase, COMPANY, USER, { ...params, paymentAccount: '1689', fromCollectedPayment: true })
     expect(outcome.ok).toBe(true)
     expect(lineTuples()[0]).toEqual(['1689', 125, 0])
+  })
+})
+
+// An issue verifikat that booked the invoice's öresavrundning: 1510 carries the
+// rounded "Att betala" and the öre is on 3740, while the reskontra (total,
+// remaining_amount) keeps the exact figure. A decision clears what 1510 carries;
+// the VAT it moves is what the same invoice moves when its öre is booked at payment.
+describe('an invoice whose issue verifikat booked its öresavrundning', () => {
+  const params = { invoiceId: INVOICE, entryDate: '2026-06-01', reason: 'Konkurs', evidenceDocumentId: 'doc-1', decidedBy: USER }
+  // 799.80 + 199.95 = 999.75, to pay 1 000: D 1510 1 000 / K 3001 799.80 / K 2611 199.95 / K 3740 0.25.
+  const roundedUp = {
+    openVat: new Map([['2611', 199.95]]),
+    basis: 1000,
+    oreRounding: 0.25,
+    invoice: { total: 999.75, remaining_amount: 999.75 },
+  }
+  const partPaid = { ...roundedUp, invoice: { ...roundedUp.invoice, status: 'partially_paid', paid_amount: 500, remaining_amount: 499.75 } }
+
+  it('konstaterad writes off the 1 000 on 1510, not the 999.75 of the reskontra', async () => {
+    vi.mocked(loadCustomerLossState).mockResolvedValue({ ok: true, state: makeState(roundedUp) })
+    const { supabase, rpc } = mockSupabase()
+    const outcome = await recordConfirmedLoss(supabase, COMPANY, USER, params)
+    expect(outcome).toMatchObject({ ok: true, amount: 1000 })
+    expect(lineTuples()).toEqual([
+      ['6351', 800.05, 0],
+      ['2611', 199.95, 0],
+      ['1510', 0, 1000],
+    ])
+    expect(rpc).toHaveBeenCalledWith(
+      'record_invoice_write_off',
+      expect.objectContaining({ p_kind: 'confirmed', p_amount: 1000, p_net_amount: 800.05, p_vat_amount: 199.95 }),
+    )
+  })
+
+  it('konstaterad of an invoice rounded down writes off the 1 000 on 1510, not 1 000.40', async () => {
+    // 800.32 + 200.08 = 1 000.40, to pay 1 000: D 1510 1 000 / D 3740 0.40.
+    vi.mocked(loadCustomerLossState).mockResolvedValue({
+      ok: true,
+      state: makeState({
+        openVat: new Map([['2611', 200.08]]),
+        basis: 1000,
+        oreRounding: -0.4,
+        invoice: { total: 1000.4, remaining_amount: 1000.4 },
+      }),
+    })
+    const { supabase } = mockSupabase()
+    expect(await recordConfirmedLoss(supabase, COMPANY, USER, params)).toMatchObject({ ok: true, amount: 1000 })
+    expect(lineTuples()).toEqual([
+      ['6351', 799.92, 0],
+      ['2611', 200.08, 0],
+      ['1510', 0, 1000],
+    ])
+  })
+
+  it('konstaterad after a part payment writes off what 1510 still carries, with the VAT of the reskontra', async () => {
+    vi.mocked(loadCustomerLossState).mockResolvedValue({ ok: true, state: makeState(partPaid) })
+    const { supabase } = mockSupabase()
+    expect(await recordConfirmedLoss(supabase, COMPANY, USER, params)).toMatchObject({ ok: true, amount: 500 })
+    // 199.95 x 499.75 / 999.75: the VAT the same invoice gives back when its öre is booked at payment.
+    expect(lineTuples()).toEqual([
+      ['6351', 400.05, 0],
+      ['2611', 99.95, 0],
+      ['1510', 0, 500],
+    ])
+  })
+
+  it('moves the same VAT as the same invoice whose öre is booked at payment', () => {
+    const atPayment = makeState({ ...partPaid, basis: 999.75, oreRounding: 0 })
+    const atIssue = makeState(partPaid)
+    expect(planConfirmed(atIssue).shares).toEqual(planConfirmed(atPayment).shares)
+    expect(planConfirmed(atIssue).amount).toBe(500)
+    expect(planConfirmed(atPayment).amount).toBe(499.75)
+  })
+
+  it('konstaterad after a credit note writes off what 1510 still carries', async () => {
+    // A credit note of 100 (80 + 20) on the invoice above: 1510 carries 900, the reskontra 899.75.
+    vi.mocked(loadCustomerLossState).mockResolvedValue({
+      ok: true,
+      state: makeState({ ...roundedUp, openVat: new Map([['2611', 179.95]]), basis: 900, invoice: { total: 999.75, remaining_amount: 899.75 } }),
+    })
+    const { supabase } = mockSupabase()
+    expect(await recordConfirmedLoss(supabase, COMPANY, USER, params)).toMatchObject({ ok: true, amount: 900 })
+    expect(lineTuples()).toEqual([
+      ['6351', 720.05, 0],
+      ['2611', 179.95, 0],
+      ['1510', 0, 900],
+    ])
+  })
+
+  it('befarad reserves the 1 000 on 1510 net of its VAT', async () => {
+    vi.mocked(loadCustomerLossState).mockResolvedValue({ ok: true, state: makeState(roundedUp) })
+    const { supabase } = mockSupabase()
+    const outcome = await recordDoubtfulLoss(supabase, COMPANY, USER, { invoiceId: INVOICE, entryDate: '2026-06-01', reason: 'x', decidedBy: USER })
+    expect(outcome.ok).toBe(true)
+    expect(lineTuples()).toEqual([
+      ['6352', 800.05, 0],
+      ['1519', 0, 800.05],
+    ])
+  })
+
+  it('a part payment releases the reserve down to what 1510 still carries net of VAT', async () => {
+    const reserved = [{ id: 'f', kind: 'doubtful', net_amount: 800.05 } as unknown as WriteOffRow]
+    vi.mocked(loadCustomerLossState).mockResolvedValue({ ok: true, state: makeState({ ...partPaid, rows: reserved }) })
+    const { supabase } = mockSupabase()
+    await releaseDoubtfulReserve(supabase, COMPANY, USER, { invoiceId: INVOICE, entryDate: '2026-06-05', decidedBy: USER, reason: 'Betalning' })
+    // 500 left on 1510, of which 99.95 VAT: the reserve stays at 400.05.
+    expect(lineTuples()).toEqual([
+      ['1519', 400, 0],
+      ['6352', 0, 400],
+    ])
+  })
+
+  it('the dialog previews what is booked', () => {
+    const view = buildCustomerLossView(makeState(roundedUp), { enabled: true, today: '2026-06-01' })
+    expect(view.confirmed).toMatchObject({ available: true, amount: 1000, net: 800.05, vat: 199.95 })
+    expect(view.doubtful).toMatchObject({ available: true, reserve: 800.05 })
+  })
+
+  it.each([
+    ['a gap of a krona or more', { basis: 1001.25 }],
+    ['a gap of exactly a krona booked on 3740', { basis: 1000.75, oreRounding: 1 }],
+    ['an öre gap with no öre on 3740', { basis: 999.5, oreRounding: 0 }],
+    ['an öre gap the 3740 line does not explain', { basis: 999.5 }],
+  ])('still refuses %s between 1510 and the reskontra', async (_name, overrides) => {
+    vi.mocked(loadCustomerLossState).mockResolvedValue({ ok: true, state: makeState({ ...roundedUp, ...overrides }) })
+    const { supabase } = mockSupabase()
+    expect(await recordConfirmedLoss(supabase, COMPANY, USER, params)).toEqual({ ok: false, code: 'CUSTOMER_LOSS_LEDGER_MISMATCH' })
+    expect(
+      await recordDoubtfulLoss(supabase, COMPANY, USER, { invoiceId: INVOICE, entryDate: '2026-06-01', reason: 'x', decidedBy: USER }),
+    ).toEqual({ ok: false, code: 'CUSTOMER_LOSS_LEDGER_MISMATCH' })
+    expect(createJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('refuses a claim 1510 no longer carries', async () => {
+    // Rounded down, paid 1 000 through a linked verifikat: 1510 is cleared, the reskontra still says 0.40.
+    vi.mocked(loadCustomerLossState).mockResolvedValue({
+      ok: true,
+      state: makeState({
+        openVat: new Map([['2611', 200.08]]),
+        basis: 1000,
+        oreRounding: -0.4,
+        invoice: { total: 1000.4, status: 'partially_paid', paid_amount: 1000, remaining_amount: 0.4 },
+      }),
+    })
+    const { supabase } = mockSupabase()
+    expect(await recordConfirmedLoss(supabase, COMPANY, USER, params)).toEqual({ ok: false, code: 'CUSTOMER_LOSS_LEDGER_MISMATCH' })
+    expect(createJournalEntry).not.toHaveBeenCalled()
   })
 })

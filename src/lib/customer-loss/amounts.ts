@@ -3,8 +3,10 @@
  *
  * Every amount is SEK and comes from the ledger: the invoice's own posted
  * voucher (the one invoices.journal_entry_id names) and the vouchers of its
- * credit notes. The open part of the claim is invoices.remaining_amount,
- * checked against those vouchers before anything is booked.
+ * credit notes. The open part of the claim is what 151x still carries for the
+ * invoice (openClaim): invoices.remaining_amount, checked against those
+ * vouchers before anything is booked, plus any öresavrundning the invoice's
+ * own verifikat booked on 3740.
  *
  * - The VAT share of the open part is taken per output VAT account, pro rata
  *   to the open part of the receivable: a partial payment paid the same
@@ -18,8 +20,9 @@
  *   reserve covers the receivable excluding VAT; VAT moves only once the loss
  *   is konstaterad).
  */
+import { bookedOreRounding } from '@/lib/bookkeeping/ore-rounding'
 import { ACCOUNT_RUTA } from '@/lib/reports/vat-declaration'
-import { roundOre, sumOre } from '@/lib/money'
+import { ORE_ROUNDING_ACCOUNT, roundOre, sumOre } from '@/lib/money'
 import type { CreateJournalEntryLineInput } from '@/types'
 
 /** One output VAT share, as stored in invoice_write_offs.vat_by_rate. */
@@ -88,6 +91,20 @@ export function receivableBasis(invoiceLines: LedgerLine[], creditNoteLines: Led
   return roundOre(total)
 }
 
+/**
+ * The öresavrundning the invoice's own voucher and its credit notes' put on
+ * 3740, as a credit: > 0 when 151x carries more than the invoice total (the
+ * total was rounded up to "Att betala"), < 0 when it carries less.
+ */
+export function bookedOreOnLedger(invoiceLines: LedgerLine[], creditNoteLines: LedgerLine[]): number {
+  let total = 0
+  for (const line of [...invoiceLines, ...creditNoteLines]) {
+    if (line.account_number !== ORE_ROUNDING_ACCOUNT) continue
+    total += n(line.credit_amount) - n(line.debit_amount)
+  }
+  return roundOre(total)
+}
+
 /** Whether the invoice's own voucher put a receivable on 151x (the booked-branch rule, build spec 4.2 F). */
 export function reachedLedgerAsReceivable(invoiceLines: LedgerLine[]): boolean {
   return invoiceLines.some((line) => isReceivableAccount(line.account_number) && n(line.debit_amount) > 0)
@@ -151,10 +168,44 @@ export function reserveOutstanding(rows: WriteOffRowLike[]): number {
   return Math.max(0, roundOre(total))
 }
 
-/** The reserve a still-open part of the claim calls for: the part net of its VAT. */
-export function reserveTarget(openVat: Map<string, number>, basis: number, remaining: number): number {
-  if (remaining <= 0) return 0
-  return roundOre(remaining - totalVat(vatSharesOfPart(openVat, basis, remaining)))
+/** The open part of a claim that reached the ledger, and the output VAT riding on it. */
+export interface OpenClaim {
+  /** What 151x still carries for the invoice: the amount a konstaterad loss credits 1510. */
+  amount: number
+  shares: VatShare[]
+}
+
+/**
+ * The open part of a booked claim: the receivable less what was paid, when it
+ * is the reskontra's remaining amount or differs from it by exactly the
+ * öresavrundning the invoice's own vouchers booked on 3740 (inside the öre
+ * band, bookedOreRounding). null when the ledger and the reskontra disagree in
+ * any other way, or nothing is left on 151x.
+ *
+ * The VAT share is taken on the reskontra (remaining of paid + remaining),
+ * the öre left out: 3740 carries no VAT, so where the öre was booked, at issue
+ * or at payment, never changes the VAT a decision moves. Without öre on the
+ * ledger that is the receivable itself, as it always was.
+ */
+export function openClaim(params: {
+  openVat: Map<string, number>
+  basis: number
+  paid: number
+  remaining: number
+  ore: number
+}): OpenClaim | null {
+  const remaining = roundOre(params.remaining)
+  const amount = roundOre(params.basis - params.paid)
+  const gap = roundOre(amount - remaining)
+  if (amount <= 0) return null
+  if (gap !== 0 && (gap !== roundOre(params.ore) || bookedOreRounding(remaining, amount) === 0)) return null
+  return { amount, shares: vatSharesOfPart(params.openVat, roundOre(params.basis - gap), remaining) }
+}
+
+/** The reserve a still-open claim calls for: the claim net of its VAT. */
+export function reserveTarget(claim: OpenClaim): number {
+  if (claim.amount <= 0) return 0
+  return roundOre(claim.amount - totalVat(claim.shares))
 }
 
 /** The live konstaterad decision, if the invoice is written off. */

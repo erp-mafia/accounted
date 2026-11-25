@@ -27,7 +27,7 @@ import {
   vatSharesOfPart,
   type VatShare,
 } from './amounts'
-import { openClaimRefusal } from './eligibility'
+import { openClaimOnLedger, openClaimRefusal } from './eligibility'
 import type { CustomerLossErrorCode, CustomerLossOutcome } from './errors'
 import { bookDecision } from './record'
 import { loadCustomerLossState, type CustomerLossState } from './state'
@@ -58,8 +58,9 @@ export function planDoubtful(state: CustomerLossState): { ok: true; plan: Doubtf
   if (refusal) return { ok: false, code: refusal }
   if (!state.booked) return { ok: false, code: 'CUSTOMER_LOSS_DOUBTFUL_NOT_BOOKED' }
 
-  const remaining = state.invoice.remaining_amount
-  const target = reserveTarget(state.openVat, state.basis, remaining)
+  const claim = openClaimOnLedger(state)
+  if (!claim) return { ok: false, code: 'CUSTOMER_LOSS_LEDGER_MISMATCH' }
+  const target = reserveTarget(claim)
   const toBook = roundOre(target - state.reserve)
   if (toBook <= 0) {
     return { ok: false, code: 'CUSTOMER_LOSS_ALREADY_RESERVED', details: { reserve: state.reserve } }
@@ -67,7 +68,7 @@ export function planDoubtful(state: CustomerLossState): { ok: true; plan: Doubtf
 
   // The VAT that rides on the reserved part: informational (a reserve never
   // moves VAT), recorded so the row reads amount = net + VAT like the others.
-  const fullShares = vatSharesOfPart(state.openVat, state.basis, remaining)
+  const fullShares = claim.shares
   const shares: VatShare[] =
     toBook === target
       ? fullShares
@@ -145,7 +146,17 @@ export async function releaseDoubtfulReserve(
     state.booked &&
     isOwedInvoiceStatus(state.invoice.status) &&
     state.invoice.remaining_amount > 0
-  const target = stillOpen ? reserveTarget(state.openVat, state.basis, state.invoice.remaining_amount) : 0
+  const claim = stillOpen ? openClaimOnLedger(state) : null
+  // A claim the ledger and the reskontra disagree on keeps its reserve to the
+  // reskontra's remaining amount, as before.
+  const target = !stillOpen
+    ? 0
+    : reserveTarget(
+        claim ?? {
+          amount: state.invoice.remaining_amount,
+          shares: vatSharesOfPart(state.openVat, state.basis, state.invoice.remaining_amount),
+        },
+      )
   const release = roundOre(state.reserve - target)
   if (release <= 0) return null
 
