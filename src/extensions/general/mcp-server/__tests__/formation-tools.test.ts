@@ -277,6 +277,18 @@ describe('gnubok_formation', () => {
     expect(String(out.next)).toMatch(/uses the new company/)
   })
 
+  it('setup inserts no company row when the personal team cannot be read', async () => {
+    mocks.current = currentRow(completeStored(), { status: 'submitted', deed_date: '2026-11-19' })
+    mocks.lookup = { companyName: 'Testbolaget Nord AB', legalEntityType: 'Aktiebolag', isCeased: false, registrationDate: Date.parse('2026-11-20T00:00:00Z'), registration: {} }
+    await run({ action: 'setup', org_number: ORG, beneficial_owners_confirmed: true, confirm: true })
+    const call = mocks.setupCalls[0] as { insertCompany: (name: string) => Promise<unknown> }
+
+    const refusal = Object.assign(new Error('The owner\'s personal team could not be read'), { code: 'COMPANY_CREATE_FAILED' })
+    deps.defaultTeamForUser.mockRejectedValueOnce(refusal)
+    await expect(call.insertCompany('Testbolaget Nord AB')).rejects.toMatchObject({ code: 'COMPANY_CREATE_FAILED' })
+    expect(supabase.rpc).not.toHaveBeenCalled()
+  })
+
   it('setup refuses an org number that is not an aktiebolag', async () => {
     mocks.current = currentRow(completeStored(), { status: 'submitted', deed_date: '2026-11-19' })
     mocks.lookup = { companyName: 'Någon Firma', legalEntityType: 'Enskild näringsidkare', isCeased: false, registrationDate: Date.parse('2026-11-20T00:00:00Z'), registration: {} }
