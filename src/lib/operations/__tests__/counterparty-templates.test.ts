@@ -100,6 +100,13 @@ describe('counterparty-templates: contract', () => {
       'Regeln för Hallon Ab 4471 ska alltid granskas',
     )
     expect(update({ counterparty_template_id: TEMPLATE_ID, mode: 'paused' })).toBe('Pausa regeln för motparten')
+    // Both changed: the title names both, never only the mode.
+    expect(update({ counterparty_template_id: TEMPLATE_ID, mode: 'propose', always_review: true }, preview)).toBe(
+      'Låt regeln för Hallon Ab 4471 föreslå igen och kräv alltid granskning',
+    )
+    expect(update({ counterparty_template_id: TEMPLATE_ID, mode: 'paused', always_review: false }, preview)).toBe(
+      'Pausa regeln för Hallon Ab 4471 och sluta kräva granskning',
+    )
     const rename = counterpartyTemplatesRename.mcp!.stage!.title
     expect(
       rename(

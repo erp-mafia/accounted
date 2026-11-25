@@ -218,8 +218,17 @@ export const counterpartyTemplatesUpdate = defineOperation({
       pendingType: 'update_counterparty_template',
       title: (input, preview) => {
         const name = displayName(input, preview)
-        if (input.mode === 'paused') return `Pausa regeln för ${name}`
-        if (input.mode === 'propose') return `Låt regeln för ${name} föreslå igen`
+        const modeTitle =
+          input.mode === 'paused'
+            ? `Pausa regeln för ${name}`
+            : input.mode === 'propose'
+              ? `Låt regeln för ${name} föreslå igen`
+              : null
+        // A request that changes both names both, so the approval shows all it does.
+        if (modeTitle && input.always_review !== undefined) {
+          return input.always_review ? `${modeTitle} och kräv alltid granskning` : `${modeTitle} och sluta kräva granskning`
+        }
+        if (modeTitle) return modeTitle
         return input.always_review === false
           ? `Regeln för ${name} behöver inte alltid granskas`
           : `Regeln för ${name} ska alltid granskas`

@@ -9,8 +9,11 @@
 --
 -- Same expand pattern as 20261119003000, with the list read from the
 -- constraint's current definition, so a type added on another branch is
--- never dropped. The CHECK only grows, so validating it here reads the table
--- once and can fail no row.
+-- never dropped. The constraint is left NOT VALID: it still checks every
+-- insert and update, and the old list was validated, so a scan of the
+-- existing rows could fail none of them. A VALIDATE here would run that scan
+-- while the ALTER's exclusive lock is held, blocking staging and approvals
+-- for its duration.
 --
 -- pg-test: covered-by tests/pg/pending-operations-op-type-audit.pg.test.ts
 
@@ -47,8 +50,5 @@ BEGIN
   );
 END;
 $$;
-
-ALTER TABLE public.pending_operations
-  VALIDATE CONSTRAINT pending_operations_operation_type_check;
 
 NOTIFY pgrst, 'reload schema';
