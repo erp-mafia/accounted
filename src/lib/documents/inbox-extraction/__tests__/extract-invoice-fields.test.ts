@@ -40,6 +40,7 @@ function workingSharpChain(outputBuffer: Buffer) {
   const chain = {
     rotate: vi.fn(() => chain),
     resize: vi.fn(() => chain),
+    flatten: vi.fn(() => chain),
     jpeg: vi.fn(() => chain),
     toBuffer: vi.fn().mockResolvedValue(outputBuffer),
   }

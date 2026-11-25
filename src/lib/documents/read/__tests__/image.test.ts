@@ -52,6 +52,28 @@ describe('fitImageForModel', () => {
     expect(await sharp(out!.bytes).metadata()).toMatchObject({ format: 'jpeg', width: IMAGE_MAX_DIMENSION, height: Math.round((600 * IMAGE_MAX_DIMENSION) / 9000) })
   }, 30_000)
 
+  it('fits a transparent strip onto white, not black', async () => {
+    // A generated e-receipt: dark lines on a transparent background. JPEG has no alpha.
+    const [width, height] = [600, 9000]
+    const raw = Buffer.alloc(width * height * 4)
+    for (let i = 0; i < width * height; i++) raw.writeUInt32BE(0xffffff00, i * 4)
+    for (let y = 0; y < height; y += 24) for (let x = 0; x < width; x++) raw.writeUInt32BE(0x1e1e1eff, (y * width + x) * 4)
+    const strip = await sharp(raw, { raw: { width, height, channels: 4 } }).png().toBuffer()
+    const out = await fitImageForModel(strip, 'image/png')
+    const { channels } = await sharp(out!.bytes).stats()
+    expect(channels[0].mean).toBeGreaterThan(200)
+  }, 30_000)
+
+  it('sends nothing for an image with a side over the limit that cannot be fitted', async () => {
+    // The model refuses it as it is, so the original is not sent: a cut-off file whose header still reads 9000 px wide.
+    const noise = Buffer.alloc(9000 * 600 * 3)
+    for (let i = 0; i < noise.length; i++) noise[i] = (i * 2654435761) >>> 24
+    const jpeg = await sharp(noise, { raw: { width: 9000, height: 600, channels: 3 } }).jpeg().toBuffer()
+    const cut = jpeg.subarray(0, Math.floor(jpeg.length * 0.6))
+    expect((await sharp(cut).metadata()).width).toBe(9000)
+    expect(await fitImageForModel(cut, 'image/jpeg')).toBeNull()
+  }, 30_000)
+
   it('leaves a small image exactly at the model limit as it is', async () => {
     const tall = await stripedPng(100, MODEL_MAX_SIDE_PX)
     expect(await fitImageForModel(tall, 'image/png')).toEqual({ bytes: tall, mediaType: 'image/png' })

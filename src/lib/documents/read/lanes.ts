@@ -104,7 +104,8 @@ export const ON_DEMAND_REASONS = ['ai_gated', 'partial:ai_gated', 'partial:budge
  */
 export function isCuredFailure(doc: { read_error?: string | null; mime_type?: string | null }): boolean {
   const reason = doc.read_error ?? ''
-  if (/exceeds 5 MB maximum|image dimensions exceed max allowed size/.test(reason)) return true
+  if (/exceeds 5 MB maximum/.test(reason)) return true
+  if (doc.mime_type?.startsWith('image/') && /image dimensions exceed max allowed size/.test(reason)) return true
   if (doc.mime_type === 'text/csv' && reason.startsWith('read_failed: unsupported input: unrecognized file content')) return true
   return reason === 'unsupported_mime' && (doc.mime_type === 'image/heic' || doc.mime_type === 'image/heif')
 }

@@ -59,6 +59,8 @@ describe('needsReadOnDemand', () => {
   it('reads again what an earlier reader could not and a later one can: an oversized photo, a HEIC, a CSV', () => {
     expect(needsReadOnDemand({ pages_read_at: 'x', read_error: 'read_failed: 400 messages.0.content.0.image.source.base64: image exceeds 5 MB maximum: 6721660 bytes > 5242880 bytes', mime_type: 'image/jpeg' })).toBe(true)
     expect(needsReadOnDemand({ pages_read_at: 'x', read_error: 'read_failed: 400 messages.0.content.0.image.source.base64.data: At least one of the image dimensions exceed max allowed size: 8000 pixels', mime_type: 'image/png' })).toBe(true)
+    // Only an image goes through the fitter; any other file with that refusal is not cured by it.
+    expect(needsReadOnDemand({ pages_read_at: 'x', read_error: 'read_failed: 400 At least one of the image dimensions exceed max allowed size: 8000 pixels', mime_type: 'application/pdf' })).toBe(false)
     expect(needsReadOnDemand({ pages_read_at: 'x', read_error: 'unsupported_mime', mime_type: 'image/heic' })).toBe(true)
     expect(needsReadOnDemand({ pages_read_at: 'x', read_error: 'read_failed: unsupported input: unrecognized file content: name the format explicitly', mime_type: 'text/csv' })).toBe(true)
     expect(needsReadOnDemand({ pages_read_at: 'x', read_error: 'unsupported_mime', mime_type: 'application/zip' })).toBe(false)

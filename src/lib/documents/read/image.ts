@@ -44,13 +44,14 @@ export async function decodeHeicToJpeg(bytes: Buffer): Promise<Buffer> {
 
 /**
  * Whether a side of the image is over the model's limit. Read from the header,
- * so nothing is decoded; a header sharp cannot read counts as no, and the
- * image goes out as it was, as before.
+ * so nothing is decoded, which is also why sharp's pixel limit is off here: a
+ * header that big still says how big the image is. A header sharp cannot read
+ * counts as no, and the image goes out as it was, as before.
  */
 async function hasSideOverModelLimit(bytes: Buffer): Promise<boolean> {
   try {
     const sharp = (await import('sharp')).default
-    const { width = 0, height = 0 } = await sharp(bytes).metadata()
+    const { width = 0, height = 0 } = await sharp(bytes, { limitInputPixels: false }).metadata()
     return Math.max(width, height) > IMAGE_DOWNSCALE_THRESHOLD_PX
   } catch {
     // Safe to ignore: the image goes out as it was, as before, and a refusal by
@@ -61,9 +62,9 @@ async function hasSideOverModelLimit(bytes: Buffer): Promise<boolean> {
 
 export async function fitImageForModel(bytes: Buffer, mimeType: string): Promise<{ bytes: Buffer; mediaType: AiImageMediaType } | null> {
   const isHeic = (HEIC_MIME_TYPES as readonly string[]).includes(mimeType)
-  if (!isHeic && bytes.length <= IMAGE_DOWNSCALE_THRESHOLD_BYTES && !(await hasSideOverModelLimit(bytes))) {
-    return { bytes, mediaType: mimeType as AiImageMediaType }
-  }
+  const small = bytes.length <= IMAGE_DOWNSCALE_THRESHOLD_BYTES
+  const sideOverLimit = !isHeic && small && (await hasSideOverModelLimit(bytes))
+  if (!isHeic && small && !sideOverLimit) return { bytes, mediaType: mimeType as AiImageMediaType }
   try {
     // Lazy: sharp is a native module that only images need.
     const sharp = (await import('sharp')).default
@@ -71,6 +72,8 @@ export async function fitImageForModel(bytes: Buffer, mimeType: string): Promise
       sharp(input)
         .rotate()
         .resize({ width: IMAGE_MAX_DIMENSION, height: IMAGE_MAX_DIMENSION, fit: 'inside', withoutEnlargement: true })
+        // JPEG has no alpha: a transparent background turned black, and dark text on it vanished.
+        .flatten({ background: '#ffffff' })
         .jpeg({ quality: 80 })
         .toBuffer()
     let converted: Buffer
@@ -84,7 +87,9 @@ export async function fitImageForModel(bytes: Buffer, mimeType: string): Promise
     return { bytes: converted, mediaType: 'image/jpeg' }
   } catch (err) {
     log.warn('image not fitted for the model', { mime: mimeType, bytes: bytes.length, reason: err instanceof Error ? err.message : String(err) })
-    // A HEIC nothing could decode has no readable form; an oversized JPEG is still worth the attempt.
-    return isHeic ? null : { bytes, mediaType: mimeType as AiImageMediaType }
+    // A HEIC nothing could decode has no readable form. An image with a side over the model's
+    // limit is refused as it is, so it is not sent either; any other oversized file is still worth the attempt.
+    if (isHeic || sideOverLimit || (await hasSideOverModelLimit(bytes))) return null
+    return { bytes, mediaType: mimeType as AiImageMediaType }
   }
 }
