@@ -23,8 +23,8 @@ import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { linkBasisColumns } from '@/lib/links/stamp'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
-import { confirmedLines, totalVat, vatSharesOfPart, type VatShare } from './amounts'
-import { openClaimRefusal } from './eligibility'
+import { confirmedLines, totalVat, type VatShare } from './amounts'
+import { openClaimOnLedger, openClaimRefusal } from './eligibility'
 import type { CustomerLossOutcome } from './errors'
 import { bookDecision } from './record'
 import { loadCustomerLossState, type CustomerLossState } from './state'
@@ -45,11 +45,13 @@ export interface ConfirmedPlan {
 
 /** What a konstaterad decision books for an open claim that passed openClaimRefusal(). */
 export function planConfirmed(state: CustomerLossState): ConfirmedPlan {
-  const amount = state.invoice.remaining_amount
   if (!state.booked) {
+    const amount = state.invoice.remaining_amount
     return { amount, net: amount, vat: 0, shares: [], reserveReleased: 0, lines: null }
   }
-  const shares = vatSharesOfPart(state.openVat, state.basis, amount)
+  const claim = openClaimOnLedger(state)
+  if (!claim) throw new Error('customer loss: planConfirmed needs a claim that passed openClaimRefusal')
+  const { amount, shares } = claim
   const vat = totalVat(shares)
   return {
     amount,
