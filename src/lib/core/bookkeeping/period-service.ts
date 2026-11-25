@@ -9,7 +9,7 @@ import { countUnbookedBankTransactions } from '@/lib/transactions/unbooked'
 import { assertNoUnfinishedSieImport, sieHoldRefusal } from './sie-import-hold'
 import { codedRefusal } from '@/lib/errors/refusal'
 import { userFacing } from '@/lib/errors/user-facing'
-import { createServiceClient } from '@/lib/supabase/server'
+import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import type { FiscalPeriod } from '@/types'
 
 const log = createLogger('period-service')
@@ -238,7 +238,7 @@ interface PeriodDecisionRow {
 async function recordPeriodDecision(row: PeriodDecisionRow): Promise<void> {
   const context = { companyId: row.company_id, fiscalPeriodId: row.record_id }
   try {
-    const { error } = await createServiceClient()
+    const { error } = await createServiceClientNoCookies()
       .from('audit_log')
       .insert({
         user_id: row.user_id,

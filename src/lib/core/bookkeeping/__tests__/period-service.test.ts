@@ -32,8 +32,9 @@ function makeClient() {
 // The service-role client the period decisions write audit_log with: the
 // table has no INSERT policy, so the session client above is refused there.
 const { serviceFrom, serviceInsert } = vi.hoisted(() => ({ serviceFrom: vi.fn(), serviceInsert: vi.fn() }))
-vi.mock('@/lib/supabase/server', () => ({
-  createServiceClient: () => ({ from: serviceFrom }),
+vi.mock('@/lib/auth/api-keys', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/auth/api-keys')>()),
+  createServiceClientNoCookies: () => ({ from: serviceFrom }),
 }))
 
 import {
@@ -1324,19 +1325,22 @@ describe('SIE import hold refusals', () => {
 // ============================================================
 
 describe('period decisions: the audit_log row', () => {
+  type QueuedResult = (typeof results)[number]
+
   // Each decision as the dashboard runs it: on the caller's session client,
-  // which RLS refuses on audit_log (no INSERT policy, 42501).
+  // which RLS refuses on audit_log (no INSERT policy, 42501). `update`
+  // replaces the period update's answer.
   const decisions = [
     {
       name: 'unlockPeriod',
       description: /^Period unlocked: /,
       oldState: { locked_at: '2025-01-10T00:00:00Z' },
       newState: { locked_at: null },
-      run: (supabase: ReturnType<typeof makeClient>) => {
+      run: (supabase: ReturnType<typeof makeClient>, update?: QueuedResult) => {
         const period = makeFiscalPeriod({ id: 'fp-1', locked_at: '2025-01-10T00:00:00Z', is_closed: false })
         results = [
           { data: period, error: null }, // fetch
-          { data: { ...period, locked_at: null }, error: null }, // update
+          update ?? { data: { ...period, locked_at: null }, error: null }, // update
         ]
         return unlockPeriod(supabase as never, 'company-1', 'user-1', 'fp-1')
       },
@@ -1351,14 +1355,14 @@ describe('period decisions: the audit_log row', () => {
         closed_externally: true,
         locked_at: '2026-11-25T10:00:00Z',
       },
-      run: (supabase: ReturnType<typeof makeClient>) => {
+      run: (supabase: ReturnType<typeof makeClient>, update?: QueuedResult) => {
         const period = makeFiscalPeriod({ id: 'fp-1', locked_at: null, is_closed: false, period_end: '2024-12-31' })
         results = [
           { data: period, error: null }, // fetch
           { count: 3, data: null, error: null }, // imported-verifikat count (migrated year)
           { count: 0, data: null, error: null }, // guard leg 1: untriaged count
           { count: 0, data: null, error: null }, // guard leg 2: business-unbooked count
-          {
+          update ?? {
             data: {
               ...period,
               is_closed: true,
@@ -1382,7 +1386,7 @@ describe('period decisions: the audit_log row', () => {
         locked_at: '2026-08-27T09:20:13Z',
       },
       newState: { is_closed: false, closed_at: null, closed_externally: false, locked_at: null },
-      run: (supabase: ReturnType<typeof makeClient>) => {
+      run: (supabase: ReturnType<typeof makeClient>, update?: QueuedResult) => {
         const period = makeFiscalPeriod({
           id: 'fp-1',
           is_closed: true,
@@ -1393,7 +1397,7 @@ describe('period decisions: the audit_log row', () => {
         })
         results = [
           { data: period, error: null }, // fetch
-          {
+          update ?? {
             data: { ...period, is_closed: false, closed_at: null, closed_externally: false, locked_at: null },
             error: null,
           }, // update
@@ -1437,6 +1441,19 @@ describe('period decisions: the audit_log row', () => {
       new_state: d.newState,
     })
     expect(row.description).toMatch(d.description)
+  })
+
+  // The row is written only after the caller's own client has changed the
+  // period. An update that RLS or the concurrency guard turns into no row
+  // (PGRST116 from .single()) refuses the decision and writes nothing.
+  it.each(decisions)('$name writes no row when its update changes nothing', async (d) => {
+    const refused = {
+      data: null,
+      error: { code: 'PGRST116', message: 'JSON object requested, multiple (or no) rows returned' },
+    }
+
+    await expect(d.run(makeClient(), refused)).rejects.toThrow()
+    expect(serviceFrom).not.toHaveBeenCalled()
   })
 
   it.each(decisions)('$name keeps the change when the row is refused, and reports the refusal', async (d) => {
