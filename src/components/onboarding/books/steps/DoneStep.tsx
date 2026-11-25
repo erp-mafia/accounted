@@ -160,12 +160,18 @@ export function DoneStep({ ctx, onLeave, leaving }: {
         </div>
       )}
 
-      {/* The door is a quiet link, not the primary: the chips and the found rows are what this step is for (product direction 2026-09-14). */}
+      {/* Without the sources arrangement the door is a quiet link: the chips and the found rows are what this step is for. */}
       <div className="done-door">
-        <Button variant="ghost" className="gap-1 text-muted-foreground" disabled={leaving} onClick={() => onLeave('done')}>
-          {t('open_app', { appName })}
-          <ChevronRightIcon className="size-[13px]" aria-hidden="true" />
-        </Button>
+        {sourcesFlow ? (
+          <Button size="lg" disabled={leaving} onClick={() => onLeave('done')}>
+            {t('open_app', { appName })}
+          </Button>
+        ) : (
+          <Button variant="ghost" className="gap-1 text-muted-foreground" disabled={leaving} onClick={() => onLeave('done')}>
+            {t('open_app', { appName })}
+            <ChevronRightIcon className="size-[13px]" aria-hidden="true" />
+          </Button>
+        )}
       </div>
     </div>
   )

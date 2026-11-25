@@ -197,6 +197,11 @@
 /* ── Skatteverket: the button folds, the thread, the handshake ────── */
 .jny-bankid { font-family: inherit; cursor: pointer; }
 .jny-bankid-txt { display: inline-block; max-width: 320px; overflow: hidden; text-align: left; transition: max-width 300ms var(--ease-emphasized), opacity 150ms var(--ease-out); }
+/* the step's main action in the sources arrangement: the dark primary, the size of a large Button */
+.jny-bankid.is-primary { height: 44px; padding: 0 20px; border: 0; background: hsl(var(--primary) / 0.88); color: hsl(var(--primary-foreground)); font-weight: 500; }
+.jny-bankid.is-primary:hover, .jny-bankid.is-primary:active { background: hsl(var(--primary) / 0.8); }
+.jny-bankid.is-primary:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 2px; }
+.jny-bankid.is-primary.is-fold { height: auto; padding: 6px; }
 .jny-bankid.is-fold { gap: 0; padding: 6px; border-color: transparent; background: transparent; transition: gap 300ms var(--ease-emphasized), padding 300ms var(--ease-emphasized), border-color 150ms var(--ease-out), background-color 150ms var(--ease-out); animation: skv-go 300ms var(--ease-out) 300ms both; pointer-events: none; }
 .jny-bankid.is-fold .jny-bankid-txt { max-width: 0; opacity: 0; white-space: nowrap; }
 @keyframes skv-go { to { opacity: 0; transform: translateX(150px); } }

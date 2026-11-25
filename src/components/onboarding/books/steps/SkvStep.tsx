@@ -238,12 +238,14 @@ export function SkvStep({ ctx }: { ctx: BooksCtx }) {
           {flags.hasSkatteverket ? (
             <button
               type="button"
-              className={`jny-bankid${phase === 'leaving' ? ' is-fold' : ''}`}
+              className={`jny-bankid${flags.sourcesFlow ? ' is-primary' : ''}${phase === 'leaving' ? ' is-fold' : ''}`}
               onClick={ombudMode ? () => void appointOmbud() : connect}
             >
-              <span className="pmark" aria-hidden="true">
-                <BuildingLibraryIcon className="h-4 w-4" />
-              </span>
+              {!flags.sourcesFlow && (
+                <span className="pmark" aria-hidden="true">
+                  <BuildingLibraryIcon className="h-4 w-4" />
+                </span>
+              )}
               <span className="jny-bankid-txt">{ombudMode ? t('skv_ombud_connect', { appName }) : t('skv_connect')}</span>
             </button>
           ) : (
