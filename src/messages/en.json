@@ -17723,6 +17723,7 @@
     "personal_number_invalid": "The personal identity number is not valid.",
     "method_qr": "Scan with the BankID app",
     "method_same_device": "Open BankID on this device",
+    "method_qr_other_device": "Scan with BankID on another device",
     "qr_label": "QR code for BankID",
     "qr_hint": "Open the BankID app and scan the QR code.",
     "same_device_hint": "Open BankID on this device and approve there.",

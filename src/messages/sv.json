@@ -17723,6 +17723,7 @@
     "personal_number_invalid": "Personnumret är inte giltigt.",
     "method_qr": "Skanna med BankID-appen",
     "method_same_device": "Öppna BankID på den här enheten",
+    "method_qr_other_device": "Skanna med BankID på en annan enhet",
     "qr_label": "QR-kod för BankID",
     "qr_hint": "Öppna BankID-appen och skanna QR-koden.",
     "same_device_hint": "Öppna BankID på den här enheten och godkänn där.",

@@ -8,6 +8,7 @@ import { DialogFooter } from '@/components/ui/dialog'
 import { BankIdChallengeView } from '@/components/bankid/BankIdChallengeView'
 import { BankIdMark } from '@/components/bankid/BankIdMark'
 import { PsuAuthoriserField } from '@/components/bankid/PsuAuthoriserField'
+import { leadingSigningMethod, otherSigningMethod, type BankIdSigningWay } from '@/components/payments/signing-method'
 import { isPermanentConsentFailure } from '@/lib/bank-feed/failure-text'
 import { bankGuideUrl, bankPrerequisiteKey, type SigningApproach } from '../bank-help'
 import { consentRefused, redirectInFlight, type FlowAction, type FlowState } from '../connect-flow-reducer'
@@ -35,7 +36,7 @@ interface BankIdStepProps {
    * its page when the bank itself imposes it on a restart.
    */
   approach: SigningApproach
-  /** A phone-sized viewport: a second signatory's BankID opens on this device instead of a QR. */
+  /** A phone-sized viewport: BankID on this device leads the ways in, and a second signatory's BankID opens on this device instead of a QR. */
   mobile: boolean
   /** The bank as the person knows it (the sparbank when one is chosen). */
   bankName: string
@@ -144,6 +145,13 @@ export function BankIdStep({
         </div>
       )
     }
+    // A phone carries the BankID app and cannot scan its own screen: BankID on
+    // this device is the filled button there, and the QR the other one, named
+    // for a BankID on another device (the payment signing's rule).
+    const leading = leadingSigningMethod({ mobile })
+    const other = otherSigningMethod({ mobile })
+    const methodLabel = (way: BankIdSigningWay) =>
+      way === 'same_device' ? t('method_same_device') : mobile ? t('method_qr_other_device') : t('method_qr')
     return (
       <div className="space-y-4">
         <BankIdMark className="mx-auto" size={24} />
@@ -153,11 +161,11 @@ export function BankIdStep({
         {/* The ways in can outgrow one line: let the footer wrap instead of clipping the first button. */}
         <DialogFooter className="sm:flex-wrap">
           {closeButton}
-          <Button variant="outline" onClick={() => onStart('same_device')} loading={state.starting && state.method === 'same_device'} disabled={disabled}>
-            {t('method_same_device')}
+          <Button variant="outline" onClick={() => onStart(other)} loading={state.starting && state.method === other} disabled={disabled}>
+            {methodLabel(other)}
           </Button>
-          <Button onClick={() => onStart('qr')} loading={state.starting && state.method === 'qr'} disabled={disabled}>
-            {t('method_qr')}
+          <Button onClick={() => onStart(leading)} loading={state.starting && state.method === leading} disabled={disabled}>
+            {methodLabel(leading)}
           </Button>
         </DialogFooter>
       </div>

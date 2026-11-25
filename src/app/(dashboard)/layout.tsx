@@ -94,9 +94,11 @@ void DashboardLoading
  * frame is exactly the window (h-dvh), so a banner takes its height from the
  * panel instead of pushing it out of view. The page (<main>) is the panel's
  * right column and its own scroll container. On mobile the panel dissolves:
- * full-width document flow with the bottom nav.
+ * full-width document flow with the bottom nav. The frame pads by the side
+ * safe-area insets (safe-area-x-padding), so a phone held sideways keeps the
+ * rail and the page clear of its notch; the insets are 0 everywhere else.
  */
-const SHELL_FRAME_CLASS = 'min-h-dvh bg-frame md:flex md:h-dvh md:flex-col md:overflow-hidden'
+const SHELL_FRAME_CLASS = 'safe-area-x-padding min-h-dvh bg-frame md:flex md:h-dvh md:flex-col md:overflow-hidden'
 const MAIN_PANEL_CLASS =
   'safe-area-main-padding md:!pb-0 relative bg-background min-h-dvh ' +
   'md:min-h-0 md:min-w-0 md:flex-1 md:overflow-y-auto'
