@@ -14026,7 +14026,7 @@
     "cloud_row_description": "Löpande säkerhetskopia av arkivet till Google Drive eller Dropbox",
     "export_archive_title": "Komplett arkiv",
     "export_archive_description": "Hela bokföringen som ZIP: SIE, rapporter och alla underlag",
-    "archive_dialog_description": "Ladda ner ett komplett arkiv till din dator, med SIE-filer, rapporter och alla underlag ordnade per verifikat. Arkivet är en kopia att spara, ingen återställningspunkt: för att börja om en migrering finns Gör om migrering under Inställningar > Företag > Allmänt > Riskzon.",
+    "archive_dialog_description": "Ladda ner ett komplett arkiv till din dator, med SIE-filer, rapporter och alla underlag ordnade per verifikat. Arkivet är en kopia att spara, ingen återställningspunkt: för att börja om en migrering finns Gör om migrering under Inställningar → Företaget → Företagsuppgifter → Riskzon.",
     "archive_scope_label": "Omfattning",
     "archive_scope_all": "Hela historiken",
     "archive_scope_period": "Ett räkenskapsår",
