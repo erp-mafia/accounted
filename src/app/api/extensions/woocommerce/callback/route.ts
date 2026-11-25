@@ -149,7 +149,9 @@ export async function POST(request: Request) {
   // Stage the verified keys. Status stays pending: the row only flips to
   // active once the initiator has proved control of the store
   // (POST /verify-store). oauth_state stays until activation so the return
-  // leg can still find the row.
+  // leg can still find the row. Only into an empty slot: keys once staged
+  // are the ones the proof is checked against and the ones that go live, so
+  // a concurrent callback for the same state can never swap them.
   const { data: staged, error: stageError } = await supabase
     .from('woocommerce_connections')
     .update({
@@ -164,12 +166,15 @@ export async function POST(request: Request) {
     })
     .eq('id', pending.id)
     .eq('status', 'pending')
+    .is('consumer_key_encrypted', null)
     .select('id')
     .maybeSingle()
 
   if (stageError || !staged) {
     // The row left 'pending' between lookup and here (superseded, denied on
-    // the return leg, or expired by the sweep): nothing to stage against.
+    // the return leg, or expired by the sweep), or a concurrent callback
+    // staged its keys first: nothing to stage against. The non-200 makes
+    // WooCommerce delete the key it just minted.
     log.error('failed to stage verified credentials', {
       connectionId: pending.id,
       code: stageError?.code,

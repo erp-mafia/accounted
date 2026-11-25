@@ -180,10 +180,13 @@ describe('POST /api/extensions/woocommerce/callback', () => {
     expect(String(staged.consumer_key_encrypted)).not.toContain('ck_new')
     expect(decryptCredential(String(staged.consumer_key_encrypted))).toBe('ck_new')
     expect(decryptCredential(String(staged.consumer_secret_encrypted))).toBe('cs_new')
-    // Scoped to the pending row it found.
+    // Scoped to the pending row it found, and only into an empty slot: the
+    // keys the proof is checked against are the keys that go live.
     const eqCalls = calls.filter((c) => c.method === 'eq').map((c) => c.args)
     expect(eqCalls).toContainEqual(['id', 'conn-1'])
     expect(eqCalls).toContainEqual(['status', 'pending'])
+    const isCalls = calls.filter((c) => c.method === 'is').map((c) => c.args)
+    expect(isCalls).toContainEqual(['consumer_key_encrypted', null])
 
     expect(eventBus.emit).not.toHaveBeenCalled()
   })
@@ -220,7 +223,7 @@ describe('POST /api/extensions/woocommerce/callback', () => {
     expect(updates[0][0]).not.toHaveProperty('status')
   })
 
-  it('returns 404 when the row left pending between lookup and staging', async () => {
+  it('returns 404 when the row left pending, or another callback staged first, between lookup and staging', async () => {
     const { enqueue } = mockServiceClient()
     enqueue({ data: PENDING_ROW })
     enqueue({ data: null }) // stage update matched zero rows

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import type { ApiRouteDefinition, ExtensionContext } from '@/lib/extensions/types'
-import { checkRateLimit } from '@/lib/auth/rate-limit-http'
+import { checkRateLimit, isRateLimiterConfigured } from '@/lib/auth/rate-limit-http'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { guardSandbox, sandboxBlockedResponse } from '@/lib/sandbox/guard'
@@ -65,6 +65,16 @@ const RATE_LIMIT_VERIFY_STORE = { maxRequests: 10, windowMs: HANDSHAKE_TTL_MS }
 const ALREADY_CONNECTED = {
   error: 'Butiken är redan ansluten till ett företag.',
   error_en: 'The store is already connected to a company.',
+}
+
+const SUFFIX_MISMATCH = {
+  error: 'Tecknen stämmer inte med nyckeln. Jämför med nyckeln i butikens WooCommerce-inställningar och försök igen.',
+  error_en: "The characters do not match the key. Compare them with the key in the store's WooCommerce settings and try again.",
+}
+
+const SUFFIX_MISMATCH_RESTART = {
+  error: 'Tecknen stämmer inte med nyckeln. Starta om anslutningen och ta bort den oanvända API-nyckeln i butikens WooCommerce-inställningar.',
+  error_en: "The characters do not match the key. Start the connection again and remove the unused API key in the store's WooCommerce settings.",
 }
 
 const NOT_COMPLETED = {
@@ -580,16 +590,18 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
         )
       }
       if (!keySuffixMatches(decryptCredential(row.consumer_key_encrypted), suffix)) {
+        // The rate limiter above bounds the tries. Where none is configured
+        // (a self-host without one) nothing would, so there a wrong answer
+        // ends the attempt and guessing never pays.
+        const retryable = isRateLimiterConfigured()
         log.warn('[woocommerce] Store control proof did not match', {
           connection_id: row.id,
           companyId: ctx.companyId,
+          retryable,
         })
+        if (!retryable) await park(SUFFIX_MISMATCH_RESTART.error)
         return NextResponse.json(
-          {
-            error: 'Tecknen stämmer inte med nyckeln. Jämför med nyckeln i butikens WooCommerce-inställningar och försök igen.',
-            error_en: "The characters do not match the key. Compare them with the key in the store's WooCommerce settings and try again.",
-            code: 'suffix_mismatch',
-          },
+          { ...(retryable ? SUFFIX_MISMATCH : SUFFIX_MISMATCH_RESTART), code: 'suffix_mismatch' },
           { status: 400 },
         )
       }

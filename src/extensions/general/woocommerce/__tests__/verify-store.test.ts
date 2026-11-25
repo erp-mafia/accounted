@@ -7,12 +7,18 @@ vi.mock('@/lib/entitlements/has-capability', async (importOriginal) => {
 })
 // The staged key is read and the proof written on the service client.
 vi.mock('@/lib/auth/api-keys', () => ({ createServiceClientNoCookies: vi.fn() }))
+// Whether a shared rate limiter bounds the tries; set per test.
+vi.mock('@/lib/auth/rate-limit-http', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/rate-limit-http')>()
+  return { ...actual, isRateLimiterConfigured: vi.fn(() => true) }
+})
 // The dispatcher's session, for the unauthenticated case.
 vi.mock('@/lib/supabase/server', () => ({ createClient: vi.fn(), createServiceClient: vi.fn() }))
 
 import { woocommerceExtension } from '../index'
 import { encryptCredential } from '../lib/credentials'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
+import { isRateLimiterConfigured } from '@/lib/auth/rate-limit-http'
 import { createClient } from '@/lib/supabase/server'
 import { extensionRegistry } from '@/lib/extensions/registry'
 import { POST as dispatch } from '@/app/api/extensions/ext/[...path]/route'
@@ -91,6 +97,7 @@ describe('POST /api/extensions/ext/woocommerce/verify-store', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.stubEnv('WOOCOMMERCE_CREDENTIALS_ENCRYPTION_KEY', 'test-key')
+    vi.mocked(isRateLimiterConfigured).mockReturnValue(true)
   })
 
   afterEach(() => {
@@ -201,7 +208,7 @@ describe('POST /api/extensions/ext/woocommerce/verify-store', () => {
     expect(service.findCalls('woocommerce_connections', 'update')).toHaveLength(0)
   })
 
-  it('does not take the store live for someone who cannot read its admin: a wrong suffix confirms and activates nothing', async () => {
+  it('does not take the store live for someone who cannot read its admin: a wrong suffix confirms and activates nothing, and the rate limiter bounds further tries', async () => {
     const ctx = makeContext()
     const service = serviceReturning({ data: pendingRow() })
 
@@ -213,6 +220,26 @@ describe('POST /api/extensions/ext/woocommerce/verify-store', () => {
     expect(res.status).toBe(400)
     expect((await res.json()).code).toBe('suffix_mismatch')
     expect(service.findCalls('woocommerce_connections', 'update')).toHaveLength(0)
+    expect(ctx.emit).not.toHaveBeenCalled()
+  })
+
+  it('ends the attempt on a wrong suffix where no rate limiter bounds the tries', async () => {
+    vi.mocked(isRateLimiterConfigured).mockReturnValue(false)
+    const ctx = makeContext()
+    const service = serviceReturning({ data: pendingRow() }, { data: null }) // park
+
+    const res = await verifyStore().handler(
+      makeRequest({ connection_id: CONN, key_suffix: 'fffffff' }),
+      ctx,
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.code).toBe('suffix_mismatch')
+    expect(body.error).toMatch(/Starta om anslutningen/)
+    const updates = service.findCalls('woocommerce_connections', 'update')
+    expect(updates).toHaveLength(1)
+    expect(updates[0][0]).toMatchObject({ status: 'error', consumer_key_encrypted: null, oauth_state: null })
     expect(ctx.emit).not.toHaveBeenCalled()
   })
 
