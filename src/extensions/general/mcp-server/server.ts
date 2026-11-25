@@ -27183,7 +27183,7 @@ export const tools: McpTool[] = [
         update_account_names: { type: 'boolean', description: 'Use the file\'s #KONTO names for created and existing accounts (default true); false keeps BAS names' },
         only_used_accounts: { type: 'boolean' },
         confirm_org_number_mismatch: { type: 'boolean' },
-        on_existing_year: { enum: ['append', 'append_with_duplicates'], description: 'Imported year: add only new vouchers' },
+        on_existing_year: { type: 'string', enum: ['append', 'append_with_duplicates'], description:'Imported year: add only new vouchers' },
         series_map: { type: 'object', description: 'Append: {"K":"A"} books series K in A' },
       },
       required: ['filename', 'mappings'],
