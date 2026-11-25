@@ -463,12 +463,30 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
   const showDrop = phase === 'drop'
   const regBusy = reg === 'running'
   const canContinue = phase === 'imported' && !importError && (reg === 'done' || reg === 'skipped')
+  // The sources arrangement: once the books are in, the step says so and its
+  // one way on stands right under the title, over the theater, in view
+  // without scrolling. The stage gives the height back (books.css, .is-done).
+  const doneView = flags.sourcesFlow === true && canContinue
+  const onward = (
+    <Button size="lg" onClick={() => dispatch({ type: 'AFTER_BOOKS', flags })}>
+      {flags.hasBanking ? t('to_bank') : flags.hasSkatteverket ? t('to_skv') : t('to_done')}
+    </Button>
+  )
+  const onwardRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    // Someone who scrolled down to follow the run is brought back to the way on.
+    if (doneView) onwardRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  }, [doneView])
 
   return (
-    <div className="bks-host">
+    <div className={doneView ? 'bks-host is-done' : 'bks-host'}>
       <div className="jny-qstep" style={{ textAlign: 'center' }}>
-        <h1 className="jny-qtitle"><InkText text={t('sie_title')} /></h1>
-        <p className="jny-qsub">{sieFirst ? t('sie_sub_first', { provider: provName ?? '' }) : t('sie_sub')}</p>
+        <h1 className="jny-qtitle"><InkText text={doneView ? t('sie_done_title') : t('sie_title')} /></h1>
+        {doneView ? (
+          <div className="jny-qactions" ref={onwardRef}>{onward}</div>
+        ) : (
+          <p className="jny-qsub">{sieFirst ? t('sie_sub_first', { provider: provName ?? '' }) : t('sie_sub')}</p>
+        )}
       </div>
 
       {showDrop ? (
@@ -600,13 +618,9 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
         </div>
       ) : null}
 
-      {phase === 'imported' ? (
+      {phase === 'imported' && !doneView ? (
         <div className="jny-qactions">
-          {canContinue ? (
-            <Button size="lg" onClick={() => dispatch({ type: 'AFTER_BOOKS', flags })}>
-              {flags.hasBanking ? t('to_bank') : flags.hasSkatteverket ? t('to_skv') : t('to_done')}
-            </Button>
-          ) : null}
+          {canContinue ? onward : null}
           {importError ? (
             <>
               <Button variant="ghost" className="text-muted-foreground" onClick={() => { setPhase('drop'); setFiles([]); setModel(null); setShown(0); setTick(0); setImportError(null) }}>{t('sie_other_file')}</Button>
