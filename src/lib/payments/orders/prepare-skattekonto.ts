@@ -34,7 +34,7 @@ import { parseEntityType } from '@/lib/company/entity-type'
 import { readCompanyOrgNumber } from '@/lib/company/org-number'
 import { roundOre } from '@/lib/money'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
-import { earliestExecutionDateIso, executionDateFor, previousBankDayIso } from '@/lib/payments/bank-days'
+import { earliestExecutionDateIso, executionDateFor } from '@/lib/payments/bank-days'
 import { formatPayeeLabel } from '@/lib/payments/supplier-payee'
 import { isSandboxCompany } from '@/lib/sandbox/guard'
 import { readReportedSkattekontoSaldo, resolveSkattekontoOcr, SKATTEKONTO_BANKGIRO } from '@/lib/skatteverket/skattekonto-ocr'
@@ -52,7 +52,7 @@ import {
 } from './skattekonto-sources'
 import { openPaymentsDoor } from './switched-on'
 import type { PaymentOrderRow } from './types'
-import { OPEN_SKATTEKONTO_ORDER_STATUSES } from './skattekonto-day'
+import { isSkattekontoDayInPayment, readOpenSkattekontoOrderOnDay, skattekontoPaymentDayFor } from './skattekonto-day'
 
 /** The name every skattekonto order carries as its payee (set by create_skattekonto_payment_order). */
 export const SKATTEKONTO_PAYEE_NAME = 'Skatteverket'
@@ -316,8 +316,12 @@ export async function prepareSkattekontoPaymentOrder(
   // leaves the banking day before Skatteverket draws, so it is on the
   // skattekonto by the due date; without a charge to pay towards, the
   // earliest day the bank takes.
-  const wantedDate = input.executionDate ?? (dueDate ? previousBankDayIso(dueDate) : earliestExecutionDateIso(input.today))
-  const executionDate = executionDateFor(wantedDate, input.today)
+  const executionDate =
+    input.executionDate != null
+      ? executionDateFor(input.executionDate, input.today)
+      : dueDate
+        ? skattekontoPaymentDayFor(dueDate, input.today)
+        : executionDateFor(earliestExecutionDateIso(input.today), input.today)
   const warnings: SkattekontoPaymentWarning[] = []
   if (input.executionDate && executionDate !== input.executionDate) {
     warnings.push({ code: 'date_moved', from: input.executionDate, to: executionDate })
@@ -328,16 +332,8 @@ export async function prepareSkattekontoPaymentOrder(
   // order nobody signed yet (a draft, or approved and not claimed for
   // signing) takes this payment as an addition, approved again as a whole;
   // signed or at the bank, the day is in payment. Another day gets its own.
-  const { data: openData, error: openError } = await supabase
-    .from('payment_orders')
-    .select('id, status, amount, batch_id')
-    .eq('company_id', companyId)
-    .eq('purpose', 'skattekonto')
-    .eq('requested_execution_date', executionDate)
-    .in('status', [...OPEN_SKATTEKONTO_ORDER_STATUSES])
-  if (openError) throw openError
-  const sameDay = ((openData ?? []) as Array<{ id: string; status: string; amount: number | string; batch_id: string | null }>)[0]
-  if (sameDay && ((sameDay.status !== 'draft' && sameDay.status !== 'approved') || sameDay.batch_id)) {
+  const sameDay = await readOpenSkattekontoOrderOnDay(supabase, companyId, executionDate)
+  if (sameDay && isSkattekontoDayInPayment(sameDay)) {
     return {
       ok: false,
       code: 'SKATTEKONTO_PAYMENT_ALREADY_IN_PAYMENT',

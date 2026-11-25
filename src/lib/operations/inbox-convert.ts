@@ -77,6 +77,7 @@ import { assertAccruedCostLinesBookable } from '@/lib/bookkeeping/accruals/accru
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { resolveInboxKind } from '@/lib/documents/inbox-kind'
 import { resolveInboxCreditTarget } from '@/lib/supplier-invoices/credit-target'
+import { readDuplicateNumberHolder } from '@/lib/supplier-invoices/duplicate-lookup'
 import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
 import { fetchChartVatTreatments } from '@/lib/bookkeeping/chart-vat-treatments'
 import { invoiceDefaultDimensions } from '@/lib/suppliers/default-dimensions'
@@ -624,37 +625,11 @@ export async function convertInboxItemToSupplierInvoice(
     const isDuplicateNumber =
       pgErr?.code === '23505' && (pgErr.message || '').includes('idx_supplier_invoices_company_supplier_number')
     if (isDuplicateNumber) {
-      const { data: existing } = await supabase
-        .from('supplier_invoices')
-        .select('id, supplier_invoice_number, status')
-        .eq('company_id', companyId)
-        .eq('supplier_id', body.supplier_id)
-        .eq('supplier_invoice_number', body.supplier_invoice_number)
-        .maybeSingle()
-
-      let creditNoteId: string | null = null
-      if (existing?.status === 'credited') {
-        const { data: creditNote } = await supabase
-          .from('supplier_invoices')
-          .select('id')
-          .eq('company_id', companyId)
-          .eq('credited_invoice_id', existing.id)
-          .eq('is_credit_note', true)
-          .maybeSingle()
-        creditNoteId = creditNote?.id ?? null
-      }
       return {
         ok: false,
         code: 'SI_CREATE_DUPLICATE_INVOICE_NUMBER',
         details: {
-          existing: existing
-            ? {
-                id: existing.id,
-                supplier_invoice_number: existing.supplier_invoice_number,
-                status: existing.status,
-                credit_note_id: creditNoteId,
-              }
-            : null,
+          existing: await readDuplicateNumberHolder(supabase, companyId, body.supplier_id, body.supplier_invoice_number),
         },
       }
     }

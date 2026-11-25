@@ -125,6 +125,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
     tax_paid_at: string | null
     payment_due_date?: string | null
     period_conflict?: { code: string; message: string; message_en?: string } | null
+    bank_payment?: { status: string; amount: number; requested_execution_date: string; pays_declaration: boolean } | null
   } | null>(null)
   const [taxPaymentLoading, setTaxPaymentLoading] = useState(false)
   // The run's bank payments and whether the company can make them: they pick
@@ -1211,6 +1212,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
             paymentDueDate={taxPayment?.payment_due_date ?? null}
             agiPeriod={taxPayment ? formatAgiPeriodDashed(agiReportingPeriod(run)) : null}
             periodConflict={taxPayment?.period_conflict ?? null}
+            bankPayment={taxPayment?.bank_payment ?? null}
             defaultFormat={preferredPaymentFormat}
             senderBankgiro={senderBankgiro}
             fileAccount={taxFileAccount}

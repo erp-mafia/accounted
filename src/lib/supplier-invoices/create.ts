@@ -50,6 +50,7 @@ import { supplierInvoiceStornoBusinessEvent } from '@/lib/bookkeeping/supplier-i
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { postingPort } from '@/lib/posting/port'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
+import { readDuplicateNumberHolder } from '@/lib/supplier-invoices/duplicate-lookup'
 import type { CreateSupplierInvoiceSchema } from '@/lib/api/schemas'
 import {
   resolveSupplierInvoiceExchangeRate,
@@ -1498,9 +1499,10 @@ async function previewRegistrationVerifikat(
 
 /**
  * The insert failed. The unique index on (company_id, supplier_id,
- * supplier_invoice_number) gets its own code with the existing row, and its
- * credit note when it was credited, so the dashboard can offer "undo
- * crediting" and an agent can fetch the original.
+ * supplier_invoice_number) gets its own code with the existing row
+ * (readDuplicateNumberHolder: its payment, its verifikat, and its credit note
+ * when it was credited), so the dashboard can offer "undo crediting" and an
+ * agent can fetch the original.
  */
 async function duplicateOrInsertFailure(
   ctx: CreateSupplierInvoiceContext,
@@ -1523,40 +1525,13 @@ async function duplicateOrInsertFailure(
     }
   }
 
-  const { data: existing } = await supabase
-    .from('supplier_invoices')
-    .select('id, supplier_invoice_number, status')
-    .eq('company_id', companyId)
-    .eq('supplier_id', body.supplier_id)
-    .eq('supplier_invoice_number', body.supplier_invoice_number)
-    .maybeSingle()
-
-  let creditNoteId: string | null = null
-  if (existing?.status === 'credited') {
-    const { data: creditNote } = await supabase
-      .from('supplier_invoices')
-      .select('id')
-      .eq('company_id', companyId)
-      .eq('credited_invoice_id', existing.id)
-      .eq('is_credit_note', true)
-      .maybeSingle()
-    creditNoteId = (creditNote?.id as string | undefined) ?? null
-  }
-
   return {
     ok: false,
     code: 'SI_CREATE_DUPLICATE_INVOICE_NUMBER',
     details: {
       supplier_id: body.supplier_id,
       supplier_invoice_number: body.supplier_invoice_number,
-      existing: existing
-        ? {
-            id: existing.id,
-            supplier_invoice_number: existing.supplier_invoice_number,
-            status: existing.status,
-            credit_note_id: creditNoteId,
-          }
-        : null,
+      existing: await readDuplicateNumberHolder(supabase, companyId, body.supplier_id, body.supplier_invoice_number),
     },
   }
 }

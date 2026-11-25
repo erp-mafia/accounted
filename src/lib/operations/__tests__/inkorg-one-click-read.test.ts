@@ -228,7 +228,22 @@ describe('readOneClickInput: the payment reference on the supplier\'s other invo
     enqueueMany([{ data: UNPAID }, { data: SETTINGS }, { data: CARD }])
     const result = await read()
     expect(result.ok && result.input.referenceToAcknowledge).toBe(true)
-    expect(duplicateLookupMock).toHaveBeenCalledWith(supabase, 'company-1', { supplierId: 'sup-1', number: 'F-1002', reference: '1234567897' })
+    expect(duplicateLookupMock).toHaveBeenCalledWith(supabase, 'company-1', {
+      supplierId: 'sup-1',
+      number: 'F-1002',
+      reference: '1234567897',
+      invoiceDate: '2026-10-13',
+      total: 150,
+      currency: 'SEK',
+    })
+  })
+
+  it('opens the editor for the same document again on a reference the supplier always uses', async () => {
+    // Two or more share the reference, and one has the reading's date and total: a twin.
+    duplicateLookupMock.mockResolvedValue({ number: null, reference: { invoice: twin, count: 3, twin, needs_acknowledgement: true } })
+    enqueueMany([{ data: UNPAID }, { data: SETTINGS }, { data: CARD }])
+    const result = await read()
+    expect(result.ok && result.input.referenceToAcknowledge).toBe(true)
   })
 
   it('has nothing to acknowledge when no other invoice carries it, or two or more do', async () => {

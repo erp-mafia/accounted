@@ -287,6 +287,68 @@ export function stagedPostingLines(previewData: unknown): Data[] {
   return []
 }
 
+/**
+ * Where a staged preview states a verifikat its approval posts, in the order
+ * the approval posts them: an invoice's registration or sale before the
+ * payment that clears it (registration_entry, sale_entry, and per invoice of
+ * a batch registration_entries and sale_entries), a storno before the copy it
+ * re-posts. A key holds the rows themselves, one verifikat ({ lines }) or a
+ * list of them ({ lines } or { journal_entry: { lines } } each). Never read
+ * as posted: the verifikat a rättelse or a storno replaces (original), the
+ * one a registration is tied to and that is booked already (voucher_lines), a
+ * categorisation's moms rows a second time (vat_lines), and an inline
+ * rättelse's struck, added and resulting rows, which change a verifikat in
+ * place. A kontantmetod cutoff is not read: it also posts corrections staged
+ * in a shape of their own, and half of what it posts would read as all of
+ * it. preview_data is jsonb, which keeps its keys sorted by length, so "the
+ * first rows the preview carries" is no order at all.
+ */
+const POSTED_VERIFIKAT_KEYS = [
+  'registration_entry',
+  'registration_entries',
+  'sale_entry',
+  'sale_entries',
+  'storno',
+  'correction',
+  'reversal',
+  'corrected',
+  'journal_entry',
+  'journal_entry_preview',
+  'verifikat',
+  'lines',
+  'preview_lines',
+  'expected_lines',
+  'journal_entries',
+] as const
+
+/** One verifikat as a preview states it: its rows, { lines }, or { journal_entry: { lines } }. */
+function verifikatRows(value: unknown): Data[] | null {
+  if (isPostingLines(value)) return value
+  const entry = record(value)
+  if (isPostingLines(entry.lines)) return entry.lines
+  const nested = record(entry.journal_entry).lines
+  return isPostingLines(nested) ? nested : null
+}
+
+/**
+ * Every verifikat approving a proposal posts, each as the rows its preview
+ * states, in the order they are posted. Empty when the preview states none.
+ * A rättelse's storno of the original is not staged as rows: its sentence
+ * says it is posted.
+ */
+export function postedVerifikat(previewData: unknown): Data[][] {
+  const data = record(previewData)
+  const verifikat: Data[][] = []
+  for (const key of POSTED_VERIFIKAT_KEYS) {
+    const value = data[key]
+    for (const entry of Array.isArray(value) && !isPostingLines(value) ? value : [value]) {
+      const rows = verifikatRows(entry)
+      if (rows) verifikat.push(rows)
+    }
+  }
+  return verifikat
+}
+
 // The preview's own statement of what the proposal is worth, in the order a
 // reader means it: the total of a document, the amount of a bank row or a
 // payment, the sum of a batch.
@@ -313,6 +375,64 @@ export function headlineAmount(op: Pick<PendingOperation, 'preview_data'>): { va
   if (lines.length === 0) return null
   const debit = lines.reduce((sum, line) => sum + (Number(line.debit_amount ?? line.debit) || 0), 0)
   return debit > 0 ? { value: roundOre(debit), currency: 'SEK' } : null
+}
+
+/* ------------------------------------------------------- approval preview */
+
+/**
+ * The most verifikat rows the preview beside a row's Godkänn lists, over all
+ * the verifikat it posts; the rest are counted and left to the review.
+ */
+export const APPROVAL_PREVIEW_ROWS = 8
+
+export interface ApprovalPreview {
+  /**
+   * What the proposal concerns: its first group of typed fields (a bank
+   * row's date, an invoice's party, number and dates), and the total a later
+   * group adds up to (an invoice's Totalt).
+   */
+  facts: FactRow[]
+  /**
+   * The verifikat approving it posts that the preview has room for, in the
+   * order they are posted: each with every row it posts (its Summa adds up
+   * all of them) and how many of those rows are listed.
+   */
+  verifikat: Array<{ lines: Data[]; listed: number }>
+  /** Verifikat it posts past the room: counted, listed in the review. */
+  hiddenVerifikat: number
+  /** Something it posts is left to the review: rows past the room, or whole verifikat. */
+  truncated: boolean
+}
+
+/**
+ * What the preview beside a row's Godkänn states before the click, where the
+ * click is the approval for low and medium risk. Read from the staged preview
+ * alone: nothing is fetched, and the rows are the ones it posts as staged
+ * (postedVerifikat), never worked out a second time.
+ */
+export function approvalPreviewOf(op: Pick<PendingOperation, 'operation_type' | 'preview_data'>): ApprovalPreview {
+  const [first = [], ...rest] = proposalFacts(op.operation_type, op.preview_data) ?? []
+  const verifikat: ApprovalPreview['verifikat'] = []
+  let room = APPROVAL_PREVIEW_ROWS
+  let hiddenVerifikat = 0
+  let truncated = false
+  for (const lines of postedVerifikat(op.preview_data)) {
+    if (room === 0) {
+      hiddenVerifikat += 1
+      truncated = true
+      continue
+    }
+    const listed = Math.min(lines.length, room)
+    if (listed < lines.length) truncated = true
+    verifikat.push({ lines, listed })
+    room -= listed
+  }
+  return {
+    facts: [...first, ...rest.flat().filter((fact) => fact.strong)],
+    verifikat,
+    hiddenVerifikat,
+    truncated,
+  }
 }
 
 /* ---------------------------------------------------------------- underlag */

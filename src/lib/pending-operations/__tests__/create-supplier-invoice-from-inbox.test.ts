@@ -438,7 +438,7 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
       data: null,
       error: { code: '23505', message: 'duplicate key value violates unique constraint "idx_supplier_invoices_company_supplier_number"' },
     }) // invoice insert fails
-    enqueue({ data: { id: 'inv-existing', supplier_invoice_number: 'INV-100', status: 'registered' }, error: null }) // the invoice that holds the number
+    enqueue({ data: [{ id: 'inv-existing', supplier_invoice_number: 'INV-100', status: 'registered' }], error: null }) // the invoice that holds the number
     enqueue({ data: null, error: null }) // dispatcher's reject update
 
     const result = await commitPendingOperation(

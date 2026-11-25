@@ -9,9 +9,16 @@ import {
 // The route's reads are answered from these rows with its own filters applied
 // (company, supplier, live status), so each test states what is in the
 // database and reads what the editor would be told.
-const rows: { supplier_invoices: Record<string, unknown>[]; journal_entries: Record<string, unknown>[] } = {
+const rows: {
+  supplier_invoices: Record<string, unknown>[]
+  journal_entries: Record<string, unknown>[]
+  payment_orders: Record<string, unknown>[]
+  supplier_payment_batch_items: Record<string, unknown>[]
+} = {
   supplier_invoices: [],
   journal_entries: [],
+  payment_orders: [],
+  supplier_payment_batch_items: [],
 }
 const db = createSupplierInvoiceRowsDb(rows)
 vi.mock('@/lib/supabase/server', () => ({
@@ -31,8 +38,19 @@ const OTHER_SUPPLIER = '550e8400-e29b-41d4-a716-446655440001'
 interface ExistsBody {
   data: {
     exists: boolean
-    existing?: { id: string; supplier_invoice_number: string | null; status: string; voucher: { label: string } | null }
-    reference?: { count: number; needs_acknowledgement: boolean; invoice: { id: string; voucher: { label: string } | null } }
+    existing?: {
+      id: string
+      supplier_invoice_number: string | null
+      status: string
+      voucher: { label: string } | null
+      payment: { state: string; paid_at?: string | null }
+    }
+    reference?: {
+      count: number
+      needs_acknowledgement: boolean
+      invoice: { id: string; voucher: { label: string } | null }
+      twin: { id: string; payment: { state: string } } | null
+    }
   }
 }
 
@@ -48,6 +66,8 @@ describe('GET /api/supplier-invoices/exists', () => {
     db.reset()
     rows.supplier_invoices.length = 0
     rows.journal_entries.length = 0
+    rows.payment_orders.length = 0
+    rows.supplier_payment_batch_items.length = 0
     db.supabase.auth.getUser.mockResolvedValue({ data: { user: { id: 'user-1', email: 'test@test.se' } }, error: null })
   })
 
@@ -78,6 +98,14 @@ describe('GET /api/supplier-invoices/exists', () => {
   it('returns 400 for an empty number or reference', async () => {
     expect((await ask({ supplier_id: SUPPLIER, number: '' })).status).toBe(400)
     expect((await ask({ supplier_id: SUPPLIER, number: 'F-1', reference: '' })).status).toBe(400)
+  })
+
+  it('returns 400 for an invoice date that is not a date, an amount that is not a number, or an unknown currency', async () => {
+    const asked = { supplier_id: SUPPLIER, reference: '5550001' }
+    expect((await ask({ ...asked, invoice_date: '05/11/2026', total: '2185' })).status).toBe(400)
+    expect((await ask({ ...asked, invoice_date: '2026-11-05', total: 'tvåtusen' })).status).toBe(400)
+    expect((await ask({ ...asked, invoice_date: '2026-11-05', total: '2185', currency: 'kronor' })).status).toBe(400)
+    expect(db.tables()).toEqual([])
   })
 
   it('returns exists: false when no invoice has the number or the reference', async () => {
@@ -114,8 +142,45 @@ describe('GET /api/supplier-invoices/exists', () => {
         ore_rounding: null,
         status: 'approved',
         voucher: { journal_entry_id: 'je-1', label: 'A71' },
+        payment: { state: 'unpaid' },
       },
     })
+  })
+
+  it('number hit on a paid invoice: says it is paid, and when', async () => {
+    rows.supplier_invoices.push(
+      invoiceRow({
+        supplier_id: SUPPLIER,
+        supplier_invoice_number: 'EX-1042',
+        status: 'paid',
+        paid_at: '2026-10-28T09:12:00Z',
+        paid_amount: 1250,
+        remaining_amount: 0,
+        registration_journal_entry_id: 'je-1',
+      }),
+    )
+    rows.journal_entries.push(voucherRow())
+
+    const { body } = await ask({ supplier_id: SUPPLIER, number: 'EX-1042' })
+
+    expect(body.data.existing).toMatchObject({ voucher: { label: 'A71' }, payment: { state: 'paid', paid_at: '2026-10-28T09:12:00Z' } })
+  })
+
+  it('the same document again on a routine reference: the twin is named and asked about', async () => {
+    const twin = invoiceRow({ supplier_id: SUPPLIER, supplier_invoice_number: null, payment_reference: '5550001', invoice_date: '2026-10-05', total: 2185, status: 'paid', paid_at: '2026-11-05T08:00:00Z', remaining_amount: 0 })
+    rows.supplier_invoices.push(
+      invoiceRow({ supplier_id: SUPPLIER, supplier_invoice_number: null, payment_reference: '5550001', invoice_date: '2026-09-05', total: 2185 }),
+      twin,
+      invoiceRow({ supplier_id: SUPPLIER, supplier_invoice_number: null, payment_reference: '5550001', invoice_date: '2026-11-05', total: 2185 }),
+    )
+
+    const again = await ask({ supplier_id: SUPPLIER, reference: '5550001', invoice_date: '2026-10-05', total: '2185', currency: 'SEK' })
+    expect(again.status).toBe(200)
+    expect(again.body.data.reference).toMatchObject({ count: 3, needs_acknowledgement: true, twin: { id: twin.id, payment: { state: 'paid' } } })
+
+    // The next period's invoice: another date, nothing is asked.
+    const next = await ask({ supplier_id: SUPPLIER, reference: '5550001', invoice_date: '2026-12-05', total: '2185', currency: 'SEK' })
+    expect(next.body.data.reference).toMatchObject({ count: 3, needs_acknowledgement: false, twin: null })
   })
 
   it('reference hit: the other invoice, its verifikat, and an acknowledgement asked for', async () => {
