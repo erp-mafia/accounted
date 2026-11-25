@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { ChevronDownIcon, ChevronRightIcon } from '@/components/icons'
 import useSWR from 'swr'
@@ -9,8 +9,7 @@ import { toBookDoor } from '@/lib/bookkeeping/to-book'
 import { useBranding } from '@/lib/branding/brand-context'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { useFormat } from '@/lib/hooks/use-format'
-import { aiConnectionFromWire, type AiClient, type AiConnection } from '@/lib/onboarding/ai-clients'
-import { createAiStatusPoller, type AiStatusPoller } from '@/lib/onboarding/ai-status-poll'
+import { AI_CLIENTS } from '@/lib/onboarding/ai-clients'
 import { AI_TASK_LABEL_KEY, aiTaskHref, foundTasksStartOpen, listAiTasks, type AiTaskCategory } from '@/lib/worklist/ai-task'
 import type { WorklistCounts } from '@/lib/worklist/types'
 import { AiTaskAction } from '@/components/dashboard/AiTaskAction'
@@ -18,6 +17,7 @@ import { InkText } from '@/components/onboarding/journey/ink'
 import { Confetti } from '../ui/Confetti'
 import { AgentChips } from '../ui/AgentChips'
 import { FactsImport } from '../ui/FactsImport'
+import { useAiConnection } from '../ui/use-ai-connection'
 import type { BooksCtx } from '../context'
 import { Button } from '@/components/ui/button'
 
@@ -25,18 +25,6 @@ async function fetchWorklistCounts(): Promise<WorklistCounts> {
   const res = await fetch('/api/worklist/counts')
   if (!res.ok) throw new Error(`/api/worklist/counts ${res.status}`)
   return ((await res.json()) as { data: WorklistCounts }).data
-}
-
-/** Null when the status is unavailable: the chips keep what they last showed. */
-async function fetchAiStatus(signal: AbortSignal): Promise<AiConnection | null> {
-  try {
-    const res = await fetch('/api/onboarding/ai-status', { signal })
-    if (!res.ok) return null
-    const json = (await res.json()) as { data: { connected: AiClient[]; agentConnected?: boolean } }
-    return aiConnectionFromWire(json.data.connected, json.data.agentConnected)
-  } catch {
-    return null
-  }
 }
 
 /**
@@ -59,8 +47,6 @@ export function DoneStep({ ctx, onLeave, leaving }: {
   const { findings, state } = ctx
   const hasAi = useCapability(CAPABILITY.ai)
   const bookingScreen = useBookingScreenEnabled()
-  const [preferredClient, setPreferredClient] = useState<AiClient>()
-  const [polled, setPolled] = useState<AiConnection | null>(null)
   // null until the toggle is clicked: the list then follows what it holds (foundTasksStartOpen).
   const [toggled, setToggled] = useState<boolean | null>(null)
   const { data: worklist, isValidating, error, mutate } = useSWR(
@@ -75,8 +61,8 @@ export function DoneStep({ ctx, onLeave, leaving }: {
   const refetch = useCallback(() => {
     void mutate()
   }, [mutate])
-  const connection = polled ?? aiConnectionFromWire(findings?.ai.connected ?? [], findings?.ai.agentConnected)
-  const connected = connection.clients
+  const { connection, connected, preferredClient, onConnect } = useAiConnection(findings)
+  const sourcesFlow = ctx.flags.sourcesFlow === true
   const connectionKey = connected.join(',')
   const tasks = worklist && !error ? listAiTasks(worklist.counts, { hasAi }) : []
   const open = toggled ?? foundTasksStartOpen(tasks)
@@ -88,29 +74,6 @@ export function DoneStep({ ctx, onLeave, leaving }: {
     if (connectionKey) refetch()
   }, [connectionKey, refetch])
 
-  // The OAuth sign-in happens in another tab, so the chip turns green by
-  // asking the status route (one api_keys read, never the findings): in a
-  // bounded window after an Anslut click, and once when the user comes back.
-  const pollerRef = useRef<AiStatusPoller | null>(null)
-  useEffect(() => {
-    const poller = createAiStatusPoller({
-      fetchStatus: fetchAiStatus,
-      onStatus: setPolled,
-      isHidden: () => document.visibilityState === 'hidden',
-    })
-    pollerRef.current = poller
-    const onFocus = () => poller.check()
-    window.addEventListener('focus', onFocus)
-    return () => {
-      window.removeEventListener('focus', onFocus)
-      poller.stop()
-      pollerRef.current = null
-    }
-  }, [])
-  const onConnect = (client: AiClient) => {
-    setPreferredClient(client)
-    pollerRef.current?.attempt(client)
-  }
   const b = findings?.books
   const rows: [string, string][] = [
     [
@@ -124,6 +87,10 @@ export function DoneStep({ ctx, onLeave, leaving }: {
     [t('card_bank'), findings?.bank.connected ? (findings.bank.bankName ?? t('answer_connected')) : t('card_not_connected')],
     [t('card_skv'), findings?.skv.connected ? t('answer_connected') : t('card_not_connected')],
   ]
+  if (sourcesFlow) {
+    const names = connected.map((id) => AI_CLIENTS.find((c) => c.id === id)?.name ?? id)
+    rows.splice(2, 0, [t('card_ai'), names.length > 0 ? names.join(', ') : connection.connected ? t('ai_agent') : t('card_not_connected')])
+  }
   const next = findings?.skv.nextDeadlines[0]
   if (next) rows.push([t('card_next'), `${t(`deadline_${next.type}`)} ${formatDateLong(next.dueDate)}`])
 
@@ -143,11 +110,15 @@ export function DoneStep({ ctx, onLeave, leaving }: {
         </dl>
       </div>
 
-      <h2 className="agent-title">{t('ai_title')}</h2>
-      <p className="agent-lead">{t('ai_lead')}</p>
-      <AgentChips connection={connection} onConnect={onConnect} />
-      {/* Once an AI is connected: let it tell Accounted what it already remembers (skill company-facts-import). */}
-      <FactsImport clients={connected} preferredClient={preferredClient} disabled={leaving} />
+      {!sourcesFlow && (
+        <>
+          <h2 className="agent-title">{t('ai_title')}</h2>
+          <p className="agent-lead">{t('ai_lead')}</p>
+          <AgentChips connection={connection} onConnect={onConnect} />
+          {/* Once an AI is connected: let it tell Accounted what it already remembers (skill company-facts-import). */}
+          <FactsImport clients={connected} preferredClient={preferredClient} disabled={leaving} />
+        </>
+      )}
 
       {error ? (
         <p className="found-note" role="alert">
