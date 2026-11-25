@@ -25,13 +25,20 @@ vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: vi.fn().mockResolvedValue({ ok: true }),
 }))
 
-const { mockLogError } = vi.hoisted(() => ({ mockLogError: vi.fn() }))
+const { mockLogError, mockLogWarn, logChildContexts } = vi.hoisted(() => ({
+  mockLogError: vi.fn(),
+  mockLogWarn: vi.fn(),
+  logChildContexts: [] as Record<string, unknown>[],
+}))
 vi.mock('@/lib/logger', () => {
   const logger = {
     info: vi.fn(),
-    warn: vi.fn(),
+    warn: mockLogWarn,
     error: mockLogError,
-    child: (): unknown => logger,
+    child: (context: Record<string, unknown>): unknown => {
+      logChildContexts.push(context)
+      return logger
+    },
   }
   return { createLogger: () => logger }
 })
@@ -55,6 +62,7 @@ describe('GET /api/bookkeeping/journal-entries', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     reset()
+    logChildContexts.length = 0
     mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
   })
 
@@ -694,29 +702,6 @@ describe('GET /api/bookkeeping/journal-entries', () => {
     })
   })
 
-  it('orders by the display_amount computed column on amount sort, bypassing the RPC', async () => {
-    enqueue({ data: [], error: null, count: 0 })
-
-    const request = createMockRequest('/api/bookkeeping/journal-entries', {
-      searchParams: { period_id: 'period-1', sort_by: 'total_desc' },
-    })
-    const response = await GET(request)
-    const { status } = await parseJsonResponse(response)
-
-    expect(status).toBe(200)
-    // Amount sort orders by a PostgREST computed column (migration
-    // 20261018135300) that the include_related RPC can't express, so the
-    // route must fall through to the direct query (strict period view),
-    // exactly like voucher sort. It is display_amount, the amount the Belopp
-    // column shows, not total_amount, the omslutning (crm#1280).
-    expect(mockSupabase.from).toHaveBeenCalledWith('journal_entries')
-    expect(mockSupabase.rpc).not.toHaveBeenCalled()
-    expect(findCalls('journal_entries', 'order')[0]).toEqual([
-      'display_amount',
-      { ascending: false },
-    ])
-  })
-
   it('orders by description on description sort, bypassing the RPC', async () => {
     enqueue({ data: [], error: null, count: 0 })
 
@@ -738,7 +723,7 @@ describe('GET /api/bookkeeping/journal-entries', () => {
     enqueue({ data: [], error: null, count: 0 })
 
     const request = createMockRequest('/api/bookkeeping/journal-entries', {
-      searchParams: { period_id: 'period-1', sort_by: 'total_desc,description_asc' },
+      searchParams: { period_id: 'period-1', sort_by: 'description_desc,date_asc' },
     })
     const response = await GET(request)
     const { status } = await parseJsonResponse(response)
@@ -750,8 +735,8 @@ describe('GET /api/bookkeeping/journal-entries', () => {
     // series+number repeat across fiscal years, so equal keys need a total
     // order for stable pagination.
     expect(findCalls('journal_entries', 'order')).toEqual([
-      ['display_amount', { ascending: false }],
-      ['description', { ascending: true }],
+      ['description', { ascending: false }],
+      ['entry_date', { ascending: true }],
       ['voucher_series', { ascending: true }],
       ['voucher_number', { ascending: true }],
       ['id', { ascending: true }],
@@ -759,7 +744,7 @@ describe('GET /api/bookkeeping/journal-entries', () => {
   })
 
   it('dedupes repeated sort columns and caps the stack at three keys', async () => {
-    enqueue({ data: [], error: null, count: 0 })
+    enqueue({ data: { ok: true, total_count: 0, ids: [] }, error: null })
 
     const request = createMockRequest('/api/bookkeeping/journal-entries', {
       searchParams: {
@@ -775,14 +760,14 @@ describe('GET /api/bookkeeping/journal-entries', () => {
     // stack caps at three keys (date, voucher, total): description never
     // makes it in. Voucher is in the stack, so no series+number tiebreak is
     // appended; the id tiebreak always is (duplicate series+number across
-    // fiscal years on the all-years scope).
-    expect(findCalls('journal_entries', 'order')).toEqual([
-      ['entry_date', { ascending: false }],
-      ['voucher_series', { ascending: false }],
-      ['voucher_number', { ascending: false }],
-      ['display_amount', { ascending: true }],
-      ['id', { ascending: true }],
-    ])
+    // fiscal years on the all-years scope). An amount key in the stack takes
+    // the Belopp sort's RPC, which gets the same order.
+    expect(mockSupabase.rpc).toHaveBeenCalledWith(
+      'list_verifikat_by_amount',
+      expect.objectContaining({
+        p_order: ['entry_date.desc', 'voucher_series.desc', 'voucher_number.desc', 'display_amount.asc', 'id.asc'],
+      }),
+    )
   })
 
   it('appends the id tiebreak on the all-years scope where voucher identifiers repeat', async () => {
@@ -982,6 +967,227 @@ describe('GET /api/bookkeeping/journal-entries', () => {
       expect(body.attachment_counts).toBeUndefined()
       expect(body.invoice_references).toBeUndefined()
       expect(body.no_doc_required).toBeUndefined()
+    })
+  })
+
+  describe('sorted by Belopp (list_verifikat_by_amount)', () => {
+    // UUID-shaped ids, as journal_entries.id produces them.
+    const E1 = '11111111-1111-4111-8111-111111111111'
+    const E2 = '22222222-2222-4222-8222-222222222222'
+    const E3 = '33333333-3333-4333-8333-333333333333'
+    const RPC = 'list_verifikat_by_amount'
+    const rpcArgs = () =>
+      (mockSupabase.rpc.mock.calls.find(([name]) => name === RPC) as unknown[] | undefined)?.[1] as
+        | Record<string, unknown>
+        | undefined
+    const listQuery = () => logChildContexts.find((c) => 'list_query' in c)?.list_query
+
+    it('returns 401 when not authenticated, before any read', async () => {
+      mockSupabase.auth.getUser.mockResolvedValue({ data: { user: null } })
+
+      const request = createMockRequest('/api/bookkeeping/journal-entries', {
+        searchParams: { sort_by: 'total_desc', exclude_draft: 'true' },
+      })
+      const { status } = await parseJsonResponse(await GET(request))
+
+      expect(status).toBe(401)
+      expect(mockSupabase.rpc).not.toHaveBeenCalled()
+      expect(mockSupabase.from).not.toHaveBeenCalled()
+    })
+
+    it('answers a malformed period_id as 400 VALIDATION_ERROR', async () => {
+      enqueue({
+        data: null,
+        error: { message: 'invalid input syntax for type uuid: "inte-ett-id"', code: '22P02', details: null, hint: null },
+      })
+
+      const request = createMockRequest('/api/bookkeeping/journal-entries', {
+        searchParams: { sort_by: 'total_desc', period_id: 'inte-ett-id' },
+      })
+      const { status, body } = await parseJsonResponse<{ error: { code: string } }>(await GET(request))
+
+      expect(status).toBe(400)
+      expect(body.error.code).toBe('VALIDATION_ERROR')
+      expect(mockSupabase.from).not.toHaveBeenCalled()
+    })
+
+    it('returns the page the RPC sorted, in its order, with the full total, from one RPC call and one row read', async () => {
+      enqueue({ data: { ok: true, total_count: 70500, ids: [E3, E1, E2] }, error: null }) // the RPC
+      // The page's rows: the .in() read has no order of its own.
+      enqueue({
+        data: [makeJournalEntry({ id: E1 }), makeJournalEntry({ id: E2 }), makeJournalEntry({ id: E3 })],
+        error: null,
+      })
+
+      const request = createMockRequest('/api/bookkeeping/journal-entries', {
+        searchParams: { sort_by: 'total_desc', exclude_draft: 'true', collapse_corrections: 'true', limit: '3', offset: '20' },
+      })
+      const { status, body } = await parseJsonResponse<{ data: { id: string }[]; count: number }>(await GET(request))
+
+      expect(status).toBe(200)
+      expect(body.data.map((e) => e.id)).toEqual([E3, E1, E2])
+      expect(body.count).toBe(70500)
+      expect(mockSupabase.rpc).toHaveBeenCalledTimes(1)
+      expect(mockSupabase.from).toHaveBeenCalledTimes(1)
+      expect(findCalls('journal_entries', 'select')).toEqual([['*, lines:journal_entry_lines(*)']])
+      expect(findCalls('journal_entries', 'eq')).toEqual([['company_id', 'company-1']])
+      expect(findCalls('journal_entries', 'in')).toEqual([['id', [E3, E1, E2]]])
+      // Nothing orders by the per-row computed column any more.
+      expect(findCalls('journal_entries', 'order')).toEqual([])
+    })
+
+    it('sends the order the direct query built for every sort stack (today\'s order)', async () => {
+      // route.ts on main: the keys in priority order, the series+number
+      // tiebreak in the last key's direction unless voucher is a key, the id.
+      const stacks: Array<[string, string[]]> = [
+        ['total_desc', ['display_amount.desc', 'voucher_series.desc', 'voucher_number.desc', 'id.desc']],
+        ['total_asc', ['display_amount.asc', 'voucher_series.asc', 'voucher_number.asc', 'id.asc']],
+        [
+          'total_desc,description_asc',
+          ['display_amount.desc', 'description.asc', 'voucher_series.asc', 'voucher_number.asc', 'id.asc'],
+        ],
+        ['voucher_asc,total_desc', ['voucher_series.asc', 'voucher_number.asc', 'display_amount.desc', 'id.desc']],
+        ['date_desc,total_asc', ['entry_date.desc', 'display_amount.asc', 'voucher_series.asc', 'voucher_number.asc', 'id.asc']],
+      ]
+      for (const [sortBy, order] of stacks) {
+        vi.clearAllMocks()
+        reset()
+        enqueue({ data: { ok: true, total_count: 0, ids: [] }, error: null })
+        const request = createMockRequest('/api/bookkeeping/journal-entries', {
+          searchParams: { sort_by: sortBy, period_id: 'period-1', exclude_draft: 'true' },
+        })
+        const { status } = await parseJsonResponse(await GET(request))
+        expect(status).toBe(200)
+        expect({ sortBy, order: rpcArgs()?.p_order }).toEqual({ sortBy, order })
+      }
+    })
+
+    it('passes the direct query\'s filters through, one for one', async () => {
+      enqueue({ data: { ok: true, total_count: 0, ids: [] }, error: null })
+
+      const request = createMockRequest('/api/bookkeeping/journal-entries', {
+        searchParams: {
+          sort_by: 'total_asc',
+          period_id: 'period-1',
+          exclude_draft: 'true',
+          date_from: '2026-01-01',
+          date_to: '2026-06-30',
+          series: 'B',
+          collapse_corrections: 'true',
+          // Four digits inside a fiscal year: text, account and amount.
+          search: '1930',
+          limit: '50',
+          offset: '100',
+        },
+      })
+      const { status, body } = await parseJsonResponse(await GET(request))
+
+      expect(status).toBe(200)
+      expect(body).toEqual({ data: [], count: 0 })
+      expect(rpcArgs()).toEqual({
+        p_company_id: 'company-1',
+        p_period_id: 'period-1',
+        p_status: null,
+        p_exclude_draft: true,
+        p_date_from: '2026-01-01',
+        p_date_to: '2026-06-30',
+        p_series: 'B',
+        p_search_pattern: '%1930%',
+        p_search_voucher_series: null,
+        p_search_voucher_number: null,
+        p_search_account: '1930',
+        p_search_amount: 1930,
+        p_search_date_from: null,
+        p_search_date_to: null,
+        p_hide_reversed: false,
+        p_collapse_corrections: true,
+        p_order: ['display_amount.asc', 'voucher_series.asc', 'voucher_number.asc', 'id.asc'],
+        p_limit: 50,
+        p_offset: 100,
+      })
+      // No page rows to read for an empty page.
+      expect(mockSupabase.from).not.toHaveBeenCalled()
+    })
+
+    it('reads no amount without a fiscal year, and folds nothing it already hides', async () => {
+      enqueue({ data: { ok: true, total_count: 0, ids: [] }, error: null })
+
+      const request = createMockRequest('/api/bookkeeping/journal-entries', {
+        searchParams: {
+          sort_by: 'total_desc',
+          status: 'posted',
+          hide_reversed: 'true',
+          collapse_corrections: 'true',
+          search: 'a*b 50%',
+        },
+      })
+      await GET(request)
+
+      expect(rpcArgs()).toMatchObject({
+        p_period_id: null,
+        p_status: 'posted',
+        p_hide_reversed: true,
+        p_collapse_corrections: false,
+        // LIKE wildcards typed are literals; * is a wildcard, as PostgREST reads it.
+        p_search_pattern: '%a%b 50\\%%',
+        p_search_amount: null,
+      })
+    })
+
+    it('answers a statement timeout as 503 and logs the query shape, never the needle', async () => {
+      enqueue({
+        data: null,
+        error: { message: 'canceling statement due to statement timeout', code: '57014', details: null, hint: null },
+      })
+
+      const request = createMockRequest('/api/bookkeeping/journal-entries', {
+        searchParams: {
+          sort_by: 'total_desc,description_asc',
+          period_id: 'period-1',
+          search: 'Hemlig hyra',
+          exclude_draft: 'true',
+          limit: '20',
+          offset: '40',
+        },
+      })
+      const { status, body } = await parseJsonResponse<{ error: { code: string } }>(await GET(request))
+
+      expect(status).toBe(503)
+      expect(body.error.code).toBe('TRANSIENT_ERROR')
+      expect(mockLogError.mock.calls.map(([msg]) => msg)).toContain('TRANSIENT_ERROR')
+      expect(listQuery()).toEqual({
+        sort_by: 'total_desc,description_asc',
+        period: true,
+        search: ['text'],
+        offset: 40,
+        limit: 20,
+      })
+      expect(JSON.stringify(logChildContexts)).not.toContain('Hemlig')
+    })
+
+    it('names each reading of the needle in the shape', async () => {
+      enqueue({ data: { ok: true, total_count: 0, ids: [] }, error: null })
+
+      const request = createMockRequest('/api/bookkeeping/journal-entries', {
+        searchParams: { sort_by: 'total_desc', period_id: 'period-1', search: '1930' },
+      })
+      await GET(request)
+
+      expect(listQuery()).toEqual({ sort_by: 'total_desc', period: true, search: ['text', 'account', 'amount'], offset: 0, limit: 50 })
+    })
+
+    it('answers a refusal of the RPC as a 500 and logs it', async () => {
+      enqueue({ data: { ok: false, code: 'LIST_VERIFIKAT_BY_AMOUNT_INVALID_ORDER' }, error: null })
+
+      const request = createMockRequest('/api/bookkeeping/journal-entries', {
+        searchParams: { sort_by: 'total_desc' },
+      })
+      const { status, body } = await parseJsonResponse<{ error: { code: string } }>(await GET(request))
+
+      expect(status).toBe(500)
+      expect(body.error.code).toBe('INTERNAL_ERROR')
+      expect(mockLogError).toHaveBeenCalled()
+      expect(mockSupabase.from).not.toHaveBeenCalled()
     })
   })
 
