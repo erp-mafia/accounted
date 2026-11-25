@@ -7,6 +7,9 @@ import {
   HANDSHAKE_TTL_MS,
   HANDSHAKE_EXPIRED_MESSAGE,
   isHandshakeExpired,
+  keySuffixMatches,
+  normalizeKeySuffix,
+  parkHandshake,
 } from '../lib/connect'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 
@@ -39,6 +42,62 @@ describe('isHandshakeExpired', () => {
     const stale = new Date(now - HANDSHAKE_TTL_MS - 1_000).toISOString()
     expect(isHandshakeExpired(fresh, now)).toBe(false)
     expect(isHandshakeExpired(stale, now)).toBe(true)
+  })
+})
+
+describe('the key suffix proof', () => {
+  // What WooCommerce mints: 'ck_' and 40 lower-case hex characters. Its admin
+  // lists the key as "***" plus the last 7 (substr($consumer_key, -7)).
+  const KEY = 'ck_0123456789abcdef0123456789abcdef01a2b3c4'
+
+  it('takes the suffix as the store admin shows it: mask, spaces and case do not matter', () => {
+    expect(normalizeKeySuffix('1a2b3c4')).toBe('1a2b3c4')
+    expect(normalizeKeySuffix('***1a2b3c4')).toBe('1a2b3c4')
+    expect(normalizeKeySuffix('\u20261A2B3C4 ')).toBe('1a2b3c4')
+    expect(normalizeKeySuffix(' 1a2b 3c4')).toBe('1a2b3c4')
+  })
+
+  it('refuses anything that is not exactly the shown number of characters', () => {
+    expect(normalizeKeySuffix('')).toBeNull()
+    expect(normalizeKeySuffix('1a2b3c')).toBeNull()
+    expect(normalizeKeySuffix('01a2b3c4')).toBeNull()
+    expect(normalizeKeySuffix(KEY)).toBeNull()
+  })
+
+  it('matches only the last characters of the staged key', () => {
+    expect(keySuffixMatches(KEY, '1a2b3c4')).toBe(true)
+    expect(keySuffixMatches(KEY, '1a2b3c5')).toBe(false)
+    // The start of the key, or any other 7 characters of it, is no proof.
+    expect(keySuffixMatches(KEY, 'ck_0123')).toBe(false)
+    expect(keySuffixMatches(KEY, '0123456')).toBe(false)
+    expect(keySuffixMatches(KEY, '1a2b3c')).toBe(false)
+  })
+})
+
+describe('parkHandshake', () => {
+  it('parks only that still-pending row, with its reason, wiping the state and the staged keys', async () => {
+    const { supabase, enqueue, findCall, calls } = createQueuedMockSupabase()
+    enqueue({ data: null })
+
+    await parkHandshake(asClient(supabase), 'conn-1', 'Skälet.')
+
+    expect(findCall('woocommerce_connections', 'update')?.[0]).toEqual({
+      status: 'error',
+      error_message: 'Skälet.',
+      oauth_state: null,
+      consumer_key_encrypted: null,
+      consumer_secret_encrypted: null,
+      store_name: null,
+      currency: null,
+      prices_include_tax: null,
+      wc_version: null,
+      key_permissions: null,
+    })
+    const eqCalls = calls.filter((c) => c.method === 'eq').map((c) => c.args)
+    expect(eqCalls).toEqual([
+      ['id', 'conn-1'],
+      ['status', 'pending'],
+    ])
   })
 })
 

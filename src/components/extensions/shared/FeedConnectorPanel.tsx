@@ -83,8 +83,8 @@ export interface FeedConnectorPanelProps<C extends FeedPanelConnection, P extend
   renderBadges?: (connection: C) => ReactNode
   /** Lines under the connection's name (a pending note, a permission notice). */
   renderNotes?: (connection: C) => ReactNode
-  /** Blocks at the end of a connection's card. */
-  renderExtras?: (connection: C) => ReactNode
+  /** Blocks at the end of a connection's card; `reload` re-reads the status after an action there. */
+  renderExtras?: (connection: C, args: { reload: () => Promise<void> }) => ReactNode
   /** A sentence appended to the sync toast (WooCommerce's unusable-currency orders). */
   syncNote?: (outcome: FeedSyncOutcome) => string | null
   /** Sees every sync answer (Shopify learns whether the store withholds addresses). */
@@ -562,7 +562,7 @@ export function FeedConnectorPanel<C extends FeedPanelConnection, P extends Feed
                 </div>
               )}
 
-              {props.renderExtras?.(connection)}
+              {props.renderExtras?.(connection, { reload: loadStatus })}
             </div>
           )
         })}

@@ -6,7 +6,13 @@ import { postingPort } from '@/lib/posting/port'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { CreateDashboardJournalEntrySchema } from '@/lib/api/schemas'
-import { applyVerifikatSearch, readVerifikatQuerySearch, verifikatSearchJoins } from '@/lib/bookkeeping/verifikat-search'
+import {
+  applyVerifikatSearch,
+  readVerifikatQuerySearch,
+  verifikatSearchJoins,
+  verifikatSearchParams,
+  verifikatSearchReadings,
+} from '@/lib/bookkeeping/verifikat-search'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { dbError } from '@/lib/errors/db-error'
@@ -71,11 +77,10 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
   // tokens over date | voucher | total | description (single tokens, the old
   // format, stay valid). Unknown tokens are ignored, repeated columns are
   // deduped, and the list is capped at 3 keys to bound DB work. Amount keys
-  // order by the display_amount computed column (migration 20261018135300):
-  // the amount the Belopp column shows (the single money line, else the
-  // omslutning; voucherDisplayAmount), so the sort follows the number on
-  // screen (crm#1280). PostgREST evaluates it per row, which the RPC path
-  // below cannot express. sort_by overrides sort_date when present;
+  // order by the amount the Belopp column shows (the single money line, else
+  // the omslutning; voucherDisplayAmount), so the sort follows the number on
+  // screen (crm#1280): the list_verifikat_by_amount RPC below computes it for
+  // the whole scope at once. sort_by overrides sort_date when present;
   // sort_date is kept for backwards compatibility with older clients.
   const SORT_TOKEN_RE = /^(date|voucher|total|description)_(asc|desc)$/
   const MAX_SORT_KEYS = 3
@@ -100,6 +105,26 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
   // dialog's "Visa saknade underlag" toggle). Committed view only: the
   // predicate is posted-only, so it is meaningless for the drafts view.
   const missingUnderlag = searchParams.get('missing_underlag') === 'true' && status !== 'draft'
+  // What the needle is besides text (lib/bookkeeping/verifikat-search.ts): a
+  // voucher label, an account number (crm#1847), an amount or a
+  // bokföringsdatum. The account and the amount look at the lines, through a
+  // filtered join of their own next to `lines` (verifikatSearchJoins), which
+  // applyVerifikatSearch below asks whether it found anything. The amount is
+  // read only when a fiscal period bounds the request
+  // (isBoundedVerifikatScope): with none, a number typed is searched as it
+  // was before amounts were read.
+  const needle = search ? readVerifikatQuerySearch(search, { periodId }) : null
+  // The request's shape on its failure log lines, never the needle itself:
+  // a timeout names the query that ran into it.
+  const listLog = log.child({
+    list_query: {
+      sort_by: sortKeys.map((k) => `${k.column}_${k.ascending ? 'asc' : 'desc'}`).join(',') || null,
+      period: Boolean(periodId),
+      search: needle ? verifikatSearchReadings(needle) : null,
+      offset,
+      limit,
+    },
+  })
   // The verifikat list asks for its rows' underlag counts with the rows
   // (include_counts=true) instead of a second request to
   // /api/documents/counts per page. Best effort: when the count reads fail
@@ -115,6 +140,28 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
       log.warn('underlag counts for the verifikat list failed', err)
       return NextResponse.json({ data, count })
     }
+  }
+  // The rows of a page an RPC resolved to ids, read under the caller's RLS
+  // and put back in the page's order (the .in() read has none). In id chunks:
+  // an "Alla" chunk puts up to MAX_LIMIT ids on a page, and a single .in()
+  // with that many ids would blow PostgREST's URL length limit.
+  const pageResponse = async (pageIds: string[], total: number, context: string) => {
+    if (pageIds.length === 0) return NextResponse.json({ data: [], count: total })
+    const ROW_CHUNK = 100
+    const rowsById = new Map<string, unknown>()
+    for (let i = 0; i < pageIds.length; i += ROW_CHUNK) {
+      const chunk = pageIds.slice(i, i + ROW_CHUNK)
+      const { data: chunkRows, error } = await supabase
+        .from('journal_entries')
+        .select('*, lines:journal_entry_lines(*)')
+        .eq('company_id', companyId)
+        .in('id', chunk)
+      if (error) return errorResponse(dbError(error, context), listLog, { requestId: ctx.requestId })
+      for (const row of (chunkRows ?? []) as { id: string }[]) {
+        rowsById.set(row.id, row)
+      }
+    }
+    return listResponse(pageIds.map((id) => rowsById.get(id)).filter(Boolean), total)
   }
 
   const dateAscending = sortDate === 'asc'
@@ -148,7 +195,7 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
       if (err instanceof MissingUnderlagQueryError) {
         // err.message is the user-facing Swedish text; the driver error is
         // what an operator needs (a gateway 414 hid behind it in #2395).
-        log.error('failed to resolve missing-underlag entries', err, { cause: err.cause })
+        listLog.error('failed to resolve missing-underlag entries', err, { cause: err.cause })
         return NextResponse.json(
           { error: 'Verifikationerna kunde inte hämtas. Försök igen.' },
           { status: 500 }
@@ -157,32 +204,7 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
       throw err
     }
 
-    const { total, ids: pageIds } = page
-    if (pageIds.length === 0) {
-      return NextResponse.json({ data: [], count: total })
-    }
-
-    // Fetch the page's full rows in id chunks: an "Alla" chunk puts up to
-    // MAX_LIMIT ids on this page, and a single .in() with that many ids
-    // would blow PostgREST's URL length limit.
-    const ROW_CHUNK = 100
-    const rowsById = new Map<string, unknown>()
-    for (let i = 0; i < pageIds.length; i += ROW_CHUNK) {
-      const chunk = pageIds.slice(i, i + ROW_CHUNK)
-      const { data: chunkRows, error } = await supabase
-        .from('journal_entries')
-        .select('*, lines:journal_entry_lines(*)')
-        .eq('company_id', companyId)
-        .in('id', chunk)
-      if (error) return errorResponse(dbError(error, 'Missing-underlag page rows'), log, { requestId: ctx.requestId })
-      for (const row of (chunkRows ?? []) as { id: string }[]) {
-        rowsById.set(row.id, row)
-      }
-    }
-    // Reassemble in the sorted page order (the .in() fetch has no order).
-    const data = pageIds.map((id) => rowsById.get(id)).filter(Boolean)
-
-    return listResponse(data, total)
+    return pageResponse(page.ids, page.total, 'Missing-underlag page rows')
   }
 
   // Non-date sorts (and stacked sorts): the include_related RPC only orders
@@ -214,7 +236,7 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
       p_series: seriesFilter,
     })
 
-    if (error) return errorResponse(dbError(error, 'Fiscal period entries'), log, { requestId: ctx.requestId })
+    if (error) return errorResponse(dbError(error, 'Fiscal period entries'), listLog, { requestId: ctx.requestId })
 
     const rows = data ?? []
     const entries = rows.map((r: { entry: unknown }) => r.entry)
@@ -223,15 +245,43 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
     return listResponse(entries, count)
   }
 
-  // What the needle is besides text (lib/bookkeeping/verifikat-search.ts): a
-  // voucher label, an account number (crm#1847), an amount or a
-  // bokföringsdatum. The account and the amount look at the lines, through a
-  // filtered join of their own next to `lines` (verifikatSearchJoins), which
-  // applyVerifikatSearch below asks whether it found anything. The amount is
-  // read only when a fiscal period bounds the request
-  // (isBoundedVerifikatScope): with none, a number typed is searched as it
-  // was before amounts were read.
-  const needle = search ? readVerifikatQuerySearch(search, { periodId }) : null
+  if (sortKeys.some((k) => k.column === 'total')) {
+    // Sorted by Belopp. The amount is a rule over each verifikat's lines and
+    // the company's cash ledgers, so a page needs it for every verifikat in
+    // scope. Ordering by the display_amount computed column called a
+    // function per verifikat, and each call checked the caller's companies
+    // again: every year of a large ledger passed the 8 s statement timeout.
+    // The list_verifikat_by_amount RPC checks the membership once, applies
+    // this direct query's filters below one for one, computes the amounts of
+    // the matching set in one pass and returns the page's ids in the full
+    // sort with the total; the rows are then read like the missing-underlag
+    // page's. Same rows, order, count and pages as the direct query.
+    const { data, error } = await supabase.rpc('list_verifikat_by_amount', {
+      p_company_id: companyId,
+      p_period_id: periodId || null,
+      p_status: status || null,
+      p_exclude_draft: excludeDraft,
+      p_date_from: dateFrom || null,
+      p_date_to: dateTo || null,
+      p_series: seriesFilter,
+      ...verifikatSearchParams(search, needle),
+      p_hide_reversed: hideReversed,
+      // Folded only when not hidden, as in the direct query below.
+      p_collapse_corrections: collapseCorrections && !hideReversed,
+      // The complete order as the direct query builds it (the keys, the
+      // series+number tiebreak, the id), in the RPC's order tokens.
+      p_order: missingUnderlagOrder(sortKeys, sortDate).map((t) => `${t.column}.${t.ascending ? 'asc' : 'desc'}`),
+      p_limit: limit,
+      p_offset: offset,
+    })
+    if (error) return errorResponse(dbError(error, 'Journal entries by amount'), listLog, { requestId: ctx.requestId })
+    const page = data as { ok?: boolean; code?: string; total_count?: number | string; ids?: string[] } | null
+    if (!page?.ok) {
+      const refusal = new Error(`Journal entries by amount: refused, ${page?.code ?? 'no result'}`)
+      return errorResponse(refusal, listLog, { requestId: ctx.requestId })
+    }
+    return pageResponse(page.ids ?? [], Number(page.total_count ?? 0), 'Journal entries by amount page rows')
+  }
 
   let query = supabase
     .from('journal_entries')
@@ -239,8 +289,8 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
     .eq('company_id', companyId)
 
   if (sortKeys.length > 0) {
-    // Apply the priority list in order. display_amount is a computed column
-    // (a function on the row type), which PostgREST accepts in order=.
+    // Apply the priority list in order. An amount key never gets here: the
+    // Belopp sort is the RPC above.
     for (const key of sortKeys) {
       switch (key.column) {
         case 'voucher':
@@ -250,9 +300,6 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
           break
         case 'date':
           query = query.order('entry_date', { ascending: key.ascending })
-          break
-        case 'total':
-          query = query.order('display_amount', { ascending: key.ascending })
           break
         case 'description':
           query = query.order('description', { ascending: key.ascending })
@@ -354,7 +401,7 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
   // A statement timeout answers 503 TRANSIENT_ERROR (retryable) and any
   // other database failure 500, each with its code and the database's own
   // message in the log line.
-  if (error) return errorResponse(dbError(error, 'Journal entries'), log, { requestId: ctx.requestId })
+  if (error) return errorResponse(dbError(error, 'Journal entries'), listLog, { requestId: ctx.requestId })
 
   return listResponse(data, count)
 })
