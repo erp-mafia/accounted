@@ -120,4 +120,17 @@ describe('server instructions survive a client that cuts at 4096 characters', ()
     expect(multi).toContain('gnubok_run_across_companies')
     expect(simple).not.toContain('gnubok_run_across_companies')
   })
+
+  // A multi-company integrator checks which company a result is for; the
+  // dispatcher puts it in _meta.company only when the key reaches several
+  // companies (company-echo-dispatch.test.ts), so only those connections are told.
+  it('tells a multi-company connection where the company of a result is', () => {
+    const multi = render({ toolNamespace: 'accounted', isAnonymous: false, canApprove: true, approvalView: false, ...COMPANY_MODES['multi, default company'] }).full
+    const simple = render({ toolNamespace: 'accounted', isAnonymous: false, canApprove: true, approvalView: false, ...COMPANY_MODES['simple, one company'] }).full
+    const pinned = render({ toolNamespace: 'accounted', isAnonymous: false, canApprove: true, approvalView: false, ...COMPANY_MODES.pinned }).full
+    expect(multi).toContain('the company it ran for in result._meta.company ({company_id, name, is_default}), also through accounted_call_tool and accounted_stage_tool')
+    expect(multi).toContain('structuredContent keeps the tool\'s own outputSchema shape without it')
+    expect(simple).not.toContain('_meta.company')
+    expect(pinned).not.toContain('_meta.company')
+  })
 })

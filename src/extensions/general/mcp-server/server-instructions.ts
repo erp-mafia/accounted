@@ -103,6 +103,7 @@ export function buildServerInstructionParts(o: ServerInstructionsOptions): { hea
       ? [
           '• Many companies at once: gnubok_client_overview (unbooked, inbox, next deadline per company; filter by deadline kind and window), gnubok_run_across_companies (any read tool once per company, one summarised answer) and gnubok_stage_across_companies (one write staged per company under a batch_id; approve the batch or each operation). scope = { companies: "all" | "team" | [ids] }; "team" is the byrå team\'s clients.',
           '• MCP resources read the default company. Another company: Accounted://company/{company_id}/{resource} (e.g. attention, context) or gnubok_get_agent_briefing with company_id.',
+          '• Which company answered: a company-scoped tools/call result carries the company it ran for in result._meta.company ({company_id, name, is_default}), also through gnubok_call_tool and gnubok_stage_tool; the JSON text block repeats it as company. structuredContent keeps the tool\'s own outputSchema shape without it, so a client that reads structuredContent checks the company in _meta.company.',
         ]
       : []),
     '• When a tool is missing, a description misled you, a result looks wrong, or something worked unusually well, call gnubok_feedback (context + suggestion, optional tool_name). It is read by the product team and has fixed real bugs; include ids and what you expected. Rate-limited 1/min/key, so batch a session\'s findings into one call.',
