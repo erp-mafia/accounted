@@ -74,3 +74,30 @@ describe('skattekonto client: error answers', () => {
     await expect(getSaldo(AUTH, '165560000000', ACTOR)).resolves.toMatchObject({ saldoSkatteverket: 0 })
   })
 })
+
+describe('skattekonto client: transaktioner lists', () => {
+  beforeEach(() => {
+    requestMock.mockReset()
+  })
+
+  it('a body with its lists is listed, an empty kommande list included', async () => {
+    requestMock.mockResolvedValue(
+      new Response(JSON.stringify({ tidigareTransaktioner: [], kommandeTransaktioner: [] }), { status: 200 }),
+    )
+    const res = await getTransaktioner(AUTH, '165560000000', undefined, ACTOR)
+    expect(res).toEqual({ tidigareTransaktioner: [], kommandeTransaktioner: [], listed: true })
+  })
+
+  it('a body with only the booked list is still listed: no kommande rows', async () => {
+    requestMock.mockResolvedValue(new Response(JSON.stringify({ tidigareTransaktioner: [] }), { status: 200 }))
+    const res = await getTransaktioner(AUTH, '165560000000', undefined, ACTOR)
+    expect(res.listed).toBe(true)
+    expect(res.kommandeTransaktioner).toEqual([])
+  })
+
+  it('a body with neither list is not listed', async () => {
+    requestMock.mockResolvedValue(new Response('{}', { status: 200 }))
+    const res = await getTransaktioner(AUTH, '165560000000', undefined, ACTOR)
+    expect(res.listed).toBe(false)
+  })
+})
