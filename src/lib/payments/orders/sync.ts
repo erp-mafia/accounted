@@ -894,6 +894,7 @@ async function settleExecutedOrdersByDebit(writer: SupabaseClient, log: Logger, 
         confidence: debit.confidence,
         basis: debit.basis,
         log,
+        writer,
       })
       if (outcome.ok) {
         result.settledByDebit += 1
@@ -1009,7 +1010,7 @@ async function linkOrdersWithoutInvoiceByDebit(writer: SupabaseClient, log: Logg
     try {
       const debit = await linkableDebitFor(writer, order, orders.filter((o) => o.company_id === order.company_id))
       if (!debit) continue
-      const outcome = await linkOrderToDebit(writer, { order, transaction: debit.transaction, basis: debit.basis, log })
+      const outcome = await linkOrderToDebit(writer, { order, transaction: debit.transaction, basis: debit.basis, log, writer })
       if (outcome.ok) {
         result.linkedByDebit += 1
         log.info('payment order without an invoice linked to its debit', {
