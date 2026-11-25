@@ -156,6 +156,32 @@ describe('v1 mark-paid: sale first (defer_invoice_booking)', () => {
     expect(mockSettle).not.toHaveBeenCalled()
   })
 
+  it('lines that clear what a sale booking the öresavrundning leaves on 1510 settle the invoice', async () => {
+    // The sale books 1510 at the rounded "Att betala" 1 000 and the 0,25 on
+    // 3740, so the reskontra's 999,75 is paid by clearing 1 000, no 3740.
+    useSupabase({ data: { ...SENT_UNBOOKED, total: 999.75, remaining_amount: 999.75 }, error: null })
+    mockPlanSale.mockResolvedValue({ ok: true, required: true, invoiceId: INVOICE_ID, entry: SALE_ENTRY, receivableSek: 1000 })
+
+    const res = await markPaid(
+      makeRequest(`${URL_BASE}?dry_run=true`, {
+        payment_date: '2026-05-12',
+        lines: [
+          { account_number: '1930', debit_amount: 1000, credit_amount: 0 },
+          { account_number: '1510', debit_amount: 0, credit_amount: 1000 },
+        ],
+      }),
+      detailParams(),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.preview.status).toBe('paid')
+    expect(body.data.preview.remaining_amount).toBe(0)
+    expect(body.data.preview.books_sale_first).toBe(true)
+    // One plan serves the lines' plan and the preview.
+    expect(mockPlanSale).toHaveBeenCalledTimes(1)
+  })
+
   it('dry run refuses with the Bokför step code and details.sale_first', async () => {
     useSupabase({ data: SENT_UNBOOKED, error: null })
     mockPlanSale.mockResolvedValue({
