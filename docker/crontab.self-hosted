@@ -63,6 +63,7 @@
 20 * * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/arcim-migration/complete-invoice-lines/cron
 */5 * * * *         curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/arcim-migration/cleanup/cron
 */5 * * * *         curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/arcim-migration/register-repair/cron
+30 1,3 * * *        curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/arcim-migration/fortnox-topup/cron
 15 5 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/bookkeeping/accruals/post-due/cron
 40 1 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/bookkeeping/auto-lock/cron
 30 5 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/receipt-hunt/cron

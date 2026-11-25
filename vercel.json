@@ -163,6 +163,10 @@
       "schedule": "*/5 * * * *"
     },
     {
+      "path": "/api/extensions/arcim-migration/fortnox-topup/cron",
+      "schedule": "30 1,3 * * *"
+    },
+    {
       "path": "/api/bookkeeping/accruals/post-due/cron",
       "schedule": "15 5 * * *"
     },

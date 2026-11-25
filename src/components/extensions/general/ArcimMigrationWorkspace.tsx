@@ -2,6 +2,7 @@
 
 import { SIEJobFailedError, waitForSIEJob } from '@/lib/import/sie-job-client'
 import InvoiceCompletionRecovery from './InvoiceCompletionRecovery'
+import { FortnoxTopupSwitch } from './FortnoxTopupSwitch'
 import { describeImportResponseFailure, formatImportFailure } from '@/lib/import/import-failure'
 import { createContext, useState, useCallback, useContext, useEffect, useReducer, useRef } from 'react'
 import { useOAuthPopup } from '@/lib/hooks/use-oauth-popup'
@@ -282,6 +283,7 @@ import type {
 } from '@/extensions/general/arcim-migration/types'
 import type { SieFetchFailure } from '@/extensions/general/arcim-migration/lib/sie-fetcher'
 import type { DocumentImportRunStatus } from '@/extensions/general/arcim-migration/lib/document-import-run'
+import type { FortnoxTopupView } from '@/extensions/general/arcim-migration/lib/fortnox-topup'
 import {
   buildMigrateRequests,
   mergeMigrationResults,
@@ -630,7 +632,7 @@ interface ConnectionStatus {
      * Absent when the server could not tell or predates the field: then the
      * row says nothing about it.
      */
-    keyUse?: 'migration' | 'invoice_rows' | 'supplier_rows' | 'idle'
+    keyUse?: 'migration' | 'invoice_rows' | 'supplier_rows' | 'topup' | 'idle'
   }[]
   /** The 10 newest imports of any status: display only. */
   sieImports: SieImportSummary[]
@@ -658,6 +660,11 @@ interface ConnectionStatus {
    * Optional only for a server that predates the field.
    */
   underlagOnReplacedCopies?: number
+  /**
+   * The nightly top-up from Fortnox: its switch and latest run. Null when it
+   * was never turned on; optional only for a server that predates the field.
+   */
+  fortnoxTopup?: FortnoxTopupView | null
   entityCounts: {
     customers: number
     suppliers: number
@@ -976,6 +983,11 @@ export function ProviderStep({
                       <p className="mt-0.5 text-xs text-muted-foreground">
                         {t('ext_arcim_key_in_use_rows', { provider: providerInfo?.name ?? consent.provider })}
                       </p>
+                    )}
+                    {/* A company still booking in Fortnox after the move
+                        tops the imported years up every night. */}
+                    {hasSieImport && consent.provider === 'fortnox' && (
+                      <FortnoxTopupSwitch consentId={consent.id} initial={connectionStatus?.fortnoxTopup ?? null} />
                     )}
                     {underlagWaitsForLedger && (
                       <p id={`underlag-after-ledger-${consent.id}`} className="mt-0.5 text-xs text-muted-foreground">
