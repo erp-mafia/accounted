@@ -126,13 +126,26 @@ describe('GET /api/invoices/[id]/mark-paid: what the payment clears on 1510', ()
 
   it('answers the ledger, not the sale plan, for a foreign invoice booked first', async () => {
     enqueue({ data: invoiceRow({ currency: 'EUR', total: 100, remaining_amount: 100 }), error: null })
-    enqueue({ data: DEFERRING, error: null }) // company_settings (the sale plan)
     enqueue({ data: { ok: false, reason: 'no_registration_voucher' } }) // document_carried_sek
 
     const { status, body } = await parseJsonResponse<{ data: { carried_sek: number | null } }>(await get())
 
     expect(status).toBe(200)
     expect(body.data.carried_sek).toBeNull()
+    expect(bookInvoice).not.toHaveBeenCalled()
+  })
+
+  it('asks the ledger when a concurrent Bokför booked the sale since the row was read', async () => {
+    vi.mocked(bookInvoice).mockResolvedValue({ ok: false, code: 'INVOICE_BOOK_ALREADY_BOOKED' })
+    enqueue({ data: invoiceRow(), error: null })
+    enqueue({ data: DEFERRING, error: null }) // company_settings (the sale plan)
+    enqueue({ data: { ok: true, sek: 1000 } }) // document_carried_sek: the concurrent sale
+
+    const { status, body } = await parseJsonResponse<{ data: { carried_sek: number | null } }>(await get())
+
+    expect(status).toBe(200)
+    expect(body.data.carried_sek).toBe(1000)
+    expect(mockSupabase.rpc).toHaveBeenCalledWith('document_carried_sek', expect.objectContaining({ p_document_id: 'inv-1' }))
   })
 
   it('answers null when the Bokför step would refuse the sale: the payment is refused on its own', async () => {

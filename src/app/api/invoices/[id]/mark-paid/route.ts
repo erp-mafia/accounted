@@ -410,11 +410,20 @@ export const GET = withRouteContext(
       return errorResponseFromCode('INVOICE_PAID_NOT_FOUND', opLog, { requestId })
     }
 
+    // A foreign invoice clears what the ledger carries whether or not its sale
+    // is booked first, so only a kronor invoice needs the plan.
+    if (!isKronorCurrency(invoice.currency)) {
+      return NextResponse.json({ data: { carried_sek: await carriedSekOf(supabase, companyId, 'customer', invoice) } })
+    }
     const salePlan = await planSaleBeforeSettlement({ supabase, companyId, userId: user.id, log: opLog }, invoice)
-    const carriedSek =
-      salePlan.ok && salePlan.required && isKronorCurrency(invoice.currency)
-        ? salePlan.receivableSek
-        : await carriedSekOf(supabase, companyId, 'customer', invoice)
-    return NextResponse.json({ data: { carried_sek: carriedSek } })
+    if (salePlan.ok && salePlan.required) {
+      return NextResponse.json({ data: { carried_sek: salePlan.receivableSek } })
+    }
+    // A concurrent Bokför booked the sale since the row was read: its null
+    // journal_entry_id is stale, so it is left unknown and carriedSekOf asks
+    // the ledger, as settleInvoicePayment does.
+    const bookedSince = salePlan.ok && salePlan.bookedSince === true && !invoice.journal_entry_id
+    const ledgerRow = bookedSince ? { ...invoice, journal_entry_id: undefined } : invoice
+    return NextResponse.json({ data: { carried_sek: await carriedSekOf(supabase, companyId, 'customer', ledgerRow) } })
   },
 )
