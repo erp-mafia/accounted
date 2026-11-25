@@ -6448,6 +6448,17 @@ const PROVIDER_MIGRATION: Record<string, StructuredErrorEntry> = {
     message_en:
       'This provider does not support fetching SIE via API. Upload a SIE file manually instead.',
   },
+  // The nightly top-up from Fortnox (arcim-migration lib/fortnox-topup.ts)
+  // adds vouchers only to a year imported from Fortnox that is neither
+  // closed nor locked: turning it on without one is refused, and a top-up
+  // that has none left stops with the same sentence.
+  PROVIDER_TOPUP_NO_OPEN_YEAR: {
+    httpStatus: 409,
+    message_sv:
+      'Inget räkenskapsår som importerats från Fortnox är öppet. Den nattliga hämtningen lägger bara till verifikationer i importerade år som inte är stängda eller låsta.',
+    message_en:
+      'No fiscal year imported from Fortnox is open. The nightly fetch only adds vouchers to imported years that are neither closed nor locked.',
+  },
   PROVIDER_SIE_IMPORT_REQUIRED: {
     httpStatus: 409,
     message_sv:

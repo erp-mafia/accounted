@@ -961,6 +961,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/extensions/ext/arcim-migration/migration-jobs/accept': gap('P3', 'finish a reviewed import with the records it could not complete'),
   'POST /api/extensions/ext/arcim-migration/invoice-completion/retry': gap('P3'),
   'POST /api/extensions/ext/arcim-migration/deduction-backfill': gap('P3', 'post-migration ROT/RUT step: reads buyers\' personnummer and books vouchers; no API client has asked (crm#1144)'),
+  'PUT /api/extensions/ext/arcim-migration/fortnox-topup': gap('P3', 'switch the nightly top-up from Fortnox of the imported years on or off; no door (a client with a key appends a SIE file itself through POST /imports/sie with onExistingPeriod append)'),
   'POST /api/extensions/ext/arcim-migration/import-sie': gap('P3'),
   'POST /api/extensions/ext/arcim-migration/migrate': gap('P3'),
   'POST /api/extensions/ext/arcim-migration/reconcile': gap('P3'),
@@ -1178,5 +1179,8 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * 162 -> 159 (2026-11-25): renaming, removing and changing a learned booking
  * rule, through the staged gnubok_rename_counterparty_template and
  * gnubok_update_counterparty_template.
+ * 159 -> 160 (2026-11-25): the switch of the nightly top-up from Fortnox
+ * on a Fortnox connection (PUT .../arcim-migration/fortnox-topup), new and
+ * dashboard-only, as the nightly syncs of the webshop integrations.
  */
-export const GAP_CEILING = 159
+export const GAP_CEILING = 160

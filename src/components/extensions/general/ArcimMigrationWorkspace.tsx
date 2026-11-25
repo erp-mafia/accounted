@@ -2,6 +2,7 @@
 
 import { SIEJobFailedError, waitForSIEJob } from '@/lib/import/sie-job-client'
 import InvoiceCompletionRecovery from './InvoiceCompletionRecovery'
+import { FortnoxTopupSwitch } from './FortnoxTopupSwitch'
 import { describeImportResponseFailure, formatImportFailure } from '@/lib/import/import-failure'
 import { createContext, useState, useCallback, useContext, useEffect, useReducer, useRef } from 'react'
 import { useOAuthPopup } from '@/lib/hooks/use-oauth-popup'
@@ -282,6 +283,7 @@ import type {
 } from '@/extensions/general/arcim-migration/types'
 import type { SieFetchFailure } from '@/extensions/general/arcim-migration/lib/sie-fetcher'
 import type { DocumentImportRunStatus } from '@/extensions/general/arcim-migration/lib/document-import-run'
+import type { FortnoxTopupView } from '@/extensions/general/arcim-migration/lib/fortnox-topup'
 import {
   buildMigrateRequests,
   mergeMigrationResults,
@@ -630,7 +632,7 @@ interface ConnectionStatus {
      * Absent when the server could not tell or predates the field: then the
      * row says nothing about it.
      */
-    keyUse?: 'migration' | 'invoice_rows' | 'supplier_rows' | 'idle'
+    keyUse?: 'migration' | 'invoice_rows' | 'supplier_rows' | 'topup' | 'idle'
   }[]
   /** The 10 newest imports of any status: display only. */
   sieImports: SieImportSummary[]
@@ -658,6 +660,11 @@ interface ConnectionStatus {
    * Optional only for a server that predates the field.
    */
   underlagOnReplacedCopies?: number
+  /**
+   * The nightly top-up from Fortnox: its switch and latest run. Null when it
+   * was never turned on; optional only for a server that predates the field.
+   */
+  fortnoxTopup?: FortnoxTopupView | null
   entityCounts: {
     customers: number
     suppliers: number
@@ -804,6 +811,7 @@ export function ProviderStep({
   onFetchDocuments,
   onReconnectDocuments,
   onDisconnect,
+  onTopupChanged,
   connectionStatus,
   isLoadingStatus,
 }: {
@@ -817,6 +825,8 @@ export function ProviderStep({
    */
   onReconnectDocuments?: (consentId: string, provider: ArcimProvider) => void
   onDisconnect: (consentId: string) => void
+  /** The nightly top-up was switched: read the connections again (the key's line depends on it). */
+  onTopupChanged?: () => void
   connectionStatus: ConnectionStatus | null
   isLoadingStatus: boolean
 }) {
@@ -976,6 +986,15 @@ export function ProviderStep({
                       <p className="mt-0.5 text-xs text-muted-foreground">
                         {t('ext_arcim_key_in_use_rows', { provider: providerInfo?.name ?? consent.provider })}
                       </p>
+                    )}
+                    {/* A company still booking in Fortnox after the move
+                        tops the imported years up every night. */}
+                    {hasSieImport && consent.provider === 'fortnox' && (
+                      <FortnoxTopupSwitch
+                        consentId={consent.id}
+                        initial={connectionStatus?.fortnoxTopup ?? null}
+                        onChanged={onTopupChanged}
+                      />
                     )}
                     {underlagWaitsForLedger && (
                       <p id={`underlag-after-ledger-${consent.id}`} className="mt-0.5 text-xs text-muted-foreground">
@@ -3690,9 +3709,10 @@ export default function ArcimMigrationWorkspace({
 
   // ── Fetch connection status on mount ───────────────────────────
 
-  const fetchStatus = useCallback(async () => {
+  const fetchStatus = useCallback(async (options: { quiet?: boolean } = {}) => {
     try {
-      setIsLoadingStatus(true)
+      // A quiet read keeps the page as it is until the answer is in.
+      if (!options.quiet) setIsLoadingStatus(true)
       const res = await fetch('/api/extensions/ext/arcim-migration/status')
       if (res.ok) {
         const data = await res.json()
@@ -3701,9 +3721,10 @@ export default function ArcimMigrationWorkspace({
     } catch {
       // Non-critical: just means we can't show existing connections
     } finally {
-      setIsLoadingStatus(false)
+      if (!options.quiet) setIsLoadingStatus(false)
     }
   }, [])
+  const refreshStatusQuietly = useCallback(() => { void fetchStatus({ quiet: true }) }, [fetchStatus])
 
   useEffect(() => {
     fetchStatus()
@@ -4793,6 +4814,7 @@ export default function ArcimMigrationWorkspace({
           onFetchDocuments={handleFetchDocuments}
           onReconnectDocuments={handleReconnectDocuments}
           onDisconnect={handleDisconnect}
+          onTopupChanged={refreshStatusQuietly}
           connectionStatus={connectionStatus}
           isLoadingStatus={isLoadingStatus}
         />
