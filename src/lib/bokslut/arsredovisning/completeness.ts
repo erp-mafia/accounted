@@ -306,7 +306,7 @@ function shareRegisterIssues(
     'warning',
     'notes',
     `Antal aktier i företagsinställningarna (${reconciliation.settings_shares.toLocaleString('sv-SE')}), som aktiekapitalnoten anger, stämmer inte med aktieboken (${reconciliation.register_shares.toLocaleString('sv-SE')}).`,
-    'Kontrollera vilken uppgift som stämmer och rätta den andra under Inställningar → Företag eller i aktieboken.',
+    'Kontrollera vilken uppgift som stämmer och rätta den andra under Inställningar → Företaget → Företagsuppgifter eller i aktieboken.',
   )
   return issues
 }
@@ -384,7 +384,7 @@ export function validateAnnualReportCompleteness(
       'error',
       'company',
       'Företagets registrerade säte saknas.',
-      'Ange säte under Inställningar → Företag. Sätet är kommunen där företaget är registrerat och kan skilja sig från orten i postadressen.',
+      'Ange säte under Inställningar → Företaget → Företagsuppgifter. Sätet är kommunen där företaget är registrerat och kan skilja sig från orten i postadressen.',
     )
   }
   if (!report.forvaltningsberattelse.description.trim()) {

@@ -137,8 +137,9 @@ describe('buildAssistantSnapshot', () => {
 
   it('tells the model where the profile values are edited', async () => {
     const snap = await buildAssistantSnapshot(supabaseWith({ vat_registered: true }), 'c1')
-    expect(snap).toContain('Inställningar > Skatt')
-    expect(snap).toContain('Inställningar > Bokföring')
+    expect(snap).toContain('Inställningar → Bokföring → Moms och skatt (moms)')
+    expect(snap).toContain('Inställningar → Bokföring → Löner (löner)')
+    expect(snap).toContain('Inställningar → Bokföring (bokföringsmetod)')
   })
 
   it('lists deadlines that need attention (overdue first, capped)', async () => {

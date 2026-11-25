@@ -623,7 +623,7 @@ describe('getErrorMessage: INVOICE_SEND_PAYMENT_ACCOUNT_MISSING (#2126)', () => 
   it('SEK invoice: names bankgiro/plusgiro/Swish, not a currency account', () => {
     const msg = getErrorMessage(envelope('SEK'), { statusCode: 400 })
     expect(msg).toContain('bankgiro')
-    expect(msg).toContain('Inställningar → Fakturering')
+    expect(msg).toContain('Inställningar → Försäljning → Fakturor')
     expect(msg).not.toMatch(/valuta/i)
   })
 
@@ -636,7 +636,7 @@ describe('getErrorMessage: INVOICE_SEND_PAYMENT_ACCOUNT_MISSING (#2126)', () => 
   it('English locale gets the currency-specific English text, not the registry fallback', () => {
     const msg = getErrorMessage(envelope('SEK'), { statusCode: 400, locale: 'en' })
     expect(msg).toContain('bankgiro')
-    expect(msg).toContain('Settings → Invoicing')
+    expect(msg).toContain('Settings → Sales → Invoices')
     expect(msg).not.toMatch(/currency/i)
   })
 

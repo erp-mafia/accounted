@@ -1291,7 +1291,7 @@ export async function computeVatCloseCheck(
         `Kör om med företagets egen period, period_type=${declaredCadence}` +
         `${declaredCadence === 'yearly' ? ' och year = året räkenskapsåret slutar' : ''}. Bytte företaget ` +
         'redovisningsperiod efter den här perioden deklareras den ändå enligt den tidigare perioden. Redovisar företaget ' +
-        'en annan period hos Skatteverket, rätta inställningen med gnubok_update_company_tax_profile (eller Inställningar, Moms).',
+        'en annan period hos Skatteverket, rätta inställningen med gnubok_update_company_tax_profile (eller Inställningar → Bokföring → Moms och skatt).',
     })
   } else if (!deadline) {
     blockers.push({
@@ -1314,7 +1314,7 @@ export async function computeVatCloseCheck(
         `Perioden har handel med andra EU-länder (${formatEuTradeBoxes(ledgerEuTrade)}) men inställningen ` +
         'Handel med andra EU-länder är av. Med EU-handel ska årsmomsen lämnas tidigare' +
         `${deadline ? `, senast ${deadline.label}` : ''}. Deadlinelistan flyttar datumet när den nattliga körningen ser EU-handeln i bokföringen, så länge det tidigare datumet inte har passerat.`,
-      hint: 'Slå på vat_has_eu_trade med gnubok_update_company_tax_profile (eller Inställningar, Moms) så stämmer inställningen med bokföringen.',
+      hint: 'Slå på vat_has_eu_trade med gnubok_update_company_tax_profile (eller Inställningar → Bokföring → Moms och skatt) så stämmer inställningen med bokföringen.',
     })
   }
   // Helårsmoms follows the räkenskapsår (SFL 26 kap 10-11 §§). A company with

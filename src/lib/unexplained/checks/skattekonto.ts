@@ -96,9 +96,9 @@ async function run(ctx: CheckContext): Promise<CheckRun<SkattekontoReconciliatio
         {
           code: 'SKATTEKONTO_NOT_CONNECTED',
           message_sv:
-            'Skatteverket är inte anslutet för bolaget, så det finns inget saldo från Skatteverket att jämföra skattekontot i bokföringen med. Anslut Skatteverket under Inställningar > Skatteverket så hämtas saldot.',
+            'Skatteverket är inte anslutet för bolaget, så det finns inget saldo från Skatteverket att jämföra skattekontot i bokföringen med. Anslut Skatteverket under Inställningar → Kopplingar → Skatteverket så hämtas saldot.',
           message_en:
-            'Skatteverket is not connected for the company, so there is no balance from Skatteverket to compare the skattekonto in the books with. Connect Skatteverket under Settings > Skatteverket to fetch it.',
+            'Skatteverket is not connected for the company, so there is no balance from Skatteverket to compare the skattekonto in the books with. Connect Skatteverket under Settings → Connections → Skatteverket to fetch it.',
         },
         sidesOf(status),
       ),

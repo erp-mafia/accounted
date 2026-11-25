@@ -30,14 +30,28 @@ export type BuiltInProvider =
   | 'squidler'
   | 'celemine'
   | 'flytt_extension'
+  | 'native_app'
   | 'local'
+
+/** A native app's private-use scheme callback; the doc comment below says why each part is there. */
+const NATIVE_APP_REDIRECT =
+  /^([a-z][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)+):\/\/?[A-Za-z0-9_-][A-Za-z0-9._-]*(?:\/[A-Za-z0-9_-][A-Za-z0-9._-]*)*\/?$/
+
+/**
+ * The private-use scheme of a native app's callback (se.example.dashboard),
+ * or null when the URI is not one. The consent page names the app by it.
+ */
+export function nativeAppScheme(uri: string): string | null {
+  if (typeof uri !== 'string') return null
+  return NATIVE_APP_REDIRECT.exec(uri)?.[1] ?? null
+}
 
 /**
  * Built-in redirect URI patterns. A new partner platform is not added here:
  * it is a row in oauth_partner_clients (src/lib/auth/oauth-partner-clients.ts),
  * which needs no deploy. These bypass the DB lookup entirely so
  * the Claude, ChatGPT, Grok, Gemini, Copilot Studio, Cursor, Squidler and Celemine connectors keep working without seeded rows, and so
- * local development never depends on having a registration.
+ * local development and native apps never depend on having a registration.
  *
  * ChatGPT uses a per-connector-instance callback path
  * (https://chatgpt.com/connector/oauth/{callback_id}) plus the legacy fixed
@@ -120,6 +134,26 @@ export type BuiltInProvider =
  * in through chrome.identity, whose redirect is https://<id>.chromiumapp.org/.
  * Chrome hands that URL only to the extension with that id, so it is matched
  * for the one id, as the exact root path.
+ *
+ * A native app (an iPhone or Android app, a desktop app) signs in the way
+ * RFC 8252 section 7.1 describes: the system browser sheet
+ * (ASWebAuthenticationSession, Custom Tabs) opens /authorize, and the code
+ * comes back on the app's private-use URI scheme, a reverse domain name such
+ * as se.example.dashboard:/oauth/callback. Any app can sign in this way
+ * without a registration, the way any loopback client can: the code is
+ * PKCE-bound to the app that started the flow, exactly as for the loopback
+ * and Cursor's scheme, so another app that claims the same scheme receives a
+ * code it cannot exchange. A scheme proves nothing about who the app is, so
+ * the consent page shows the scheme itself and never marks it verified. A
+ * partner that wants its name shown as verified uses an https callback (an
+ * iOS universal link or an Android app link on its own host) as a partner
+ * row instead. The scheme must hold a dot, which keeps out every scheme a
+ * browser handles itself (http, https, javascript, data, blob, file, intent)
+ * and Cursor's `cursor:`, and be lower case, since a URL parser lower-cases a
+ * scheme and the code must go to exactly the string the token route
+ * compares. One or two slashes may follow (se.example.app:/cb and
+ * se.example.app://cb are both common), then plain path segments: no dot
+ * segment, percent-encoding, query or fragment.
  */
 const BUILT_IN_PATTERNS: readonly { pattern: RegExp; provider: BuiltInProvider }[] = [
   { pattern: /^https:\/\/claude\.ai\/api\//, provider: 'claude' },
@@ -135,6 +169,7 @@ const BUILT_IN_PATTERNS: readonly { pattern: RegExp; provider: BuiltInProvider }
   { pattern: /^https:\/\/dev\.squidler\.io\/api\/oauth\/callback\/accounted$/, provider: 'squidler' },
   { pattern: /^https:\/\/celemine\.com\/upstream(\/[A-Za-z0-9_-][A-Za-z0-9._-]*)+\/?$/, provider: 'celemine' },
   { pattern: /^https:\/\/ooeaogbjfhciekiidjaehikcbccomkmj\.chromiumapp\.org\/$/, provider: 'flytt_extension' },
+  { pattern: NATIVE_APP_REDIRECT, provider: 'native_app' },
   { pattern: /^http:\/\/localhost(:\d+)?(\/|$)/, provider: 'local' },
   { pattern: /^http:\/\/127\.0\.0\.1(:\d+)?(\/|$)/, provider: 'local' },
 ]

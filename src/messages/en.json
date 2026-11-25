@@ -5215,6 +5215,7 @@
     "hero_manual": "Paste the address yourself",
     "via_signin": "Sign-in",
     "kind_local": "Local client",
+    "kind_app": "App",
     "kind_cursor": "Cursor",
     "kind_squidler": "Squidler",
     "kind_celemine": "Celemine",

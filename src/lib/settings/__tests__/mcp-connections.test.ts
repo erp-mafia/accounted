@@ -20,6 +20,7 @@ describe('connectionKind', () => {
     expect(connectionKind({ source: 'signin', client: 'partner:' })).toBe('mcp')
     expect(connectionKind({ source: 'manual', client: 'partner:acme' })).toBe('key')
     expect(connectionKind({ source: 'signin', client: 'local' })).toBe('local')
+    expect(connectionKind({ source: 'signin', client: 'native_app' })).toBe('app')
   })
 
   it('folds both Cursor redirect shapes into cursor', () => {

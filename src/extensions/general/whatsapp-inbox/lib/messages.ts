@@ -98,11 +98,11 @@ function listQuestionMessage({ question, why, company, closing = true }: ListQue
 const SV = {
   m1Unlinked: () =>
     'Hej! Det här är *Accounteds dokumentmottagning*, en automatisk AI-tjänst.\n\n' +
-    'För att koppla ditt nummer: öppna Accounted, gå till *Inställningar -> WhatsApp* och skicka den 6-siffriga koden här.\n\n' +
+    'För att koppla ditt nummer: öppna Accounted, gå till *Inställningar → Kopplingar → WhatsApp* och skicka den 6-siffriga koden här.\n\n' +
     'Skriv *hjälp* för att nå en människa.',
 
   m2BadCode: () =>
-    'Koden stämmer inte eller har gått ut. Hämta en ny under *Inställningar -> WhatsApp* i Accounted och skicka den här inom 10 minuter.',
+    'Koden stämmer inte eller har gått ut. Hämta en ny under *Inställningar → Kopplingar → WhatsApp* i Accounted och skicka den här inom 10 minuter.',
 
   m3Linked: ({ companyName, companyCount = 1 }: LinkedTemplateArgs) => {
     const intro = companyName
@@ -207,7 +207,7 @@ const SV = {
   // and the panel shows the paused state as "Pausad": the copy must match.
   m11Stop: () =>
     'Okej, jag pausar och slutar svara här. Numret är kvar kopplat men jag tar inte emot något mer. Dina underlag i Accounted påverkas inte.\n\n' +
-    'Skicka *start* när du vill aktivera igen, eller koppla från numret helt under *Inställningar -> WhatsApp* i Accounted.',
+    'Skicka *start* när du vill aktivera igen, eller koppla från numret helt under *Inställningar → Kopplingar → WhatsApp* i Accounted.',
 
   m12Start: () => 'Välkommen tillbaka! Ditt nummer är aktivt igen, skicka kvitton när du vill.',
 
@@ -240,7 +240,7 @@ const SV = {
   // nothing changes until they act in the app. Honest and actionable beats
   // the old silent parking.
   m19NoCompany: () =>
-    'Jag kunde inte koppla kvittot till något företag. Öppna Accounted och kontrollera WhatsApp-kopplingen under *Inställningar -> WhatsApp*, och skicka sedan kvittot igen.',
+    'Jag kunde inte koppla kvittot till något företag. Öppna Accounted och kontrollera WhatsApp-kopplingen under *Inställningar → Kopplingar → WhatsApp*, och skicka sedan kvittot igen.',
 
   // Receipts parked behind the company question whose media WhatsApp no
   // longer serves (asked per file, not assumed from an age: #2363 saw a file
@@ -321,11 +321,11 @@ const SV = {
 const EN: typeof SV = {
   m1Unlinked: () =>
     'Hi! This is *Accounted document intake*, an automated AI service.\n\n' +
-    'To link your number: open Accounted, go to *Settings -> WhatsApp* and send the 6-character code here.\n\n' +
+    'To link your number: open Accounted, go to *Settings → Connections → WhatsApp* and send the 6-character code here.\n\n' +
     'Type *hjälp* to reach a human.',
 
   m2BadCode: () =>
-    'That code is wrong or has expired. Get a new one under *Settings -> WhatsApp* in Accounted and send it here within 10 minutes.',
+    'That code is wrong or has expired. Get a new one under *Settings → Connections → WhatsApp* in Accounted and send it here within 10 minutes.',
 
   m3Linked: ({ companyName, companyCount = 1 }: LinkedTemplateArgs) => {
     const intro = companyName
@@ -418,7 +418,7 @@ const EN: typeof SV = {
 
   m11Stop: () =>
     'Okay, I am pausing and will stop replying here. Your number stays linked but I will not receive anything more. Your documents in Accounted are not affected.\n\n' +
-    'Send *start* whenever you want to activate again, or disconnect the number entirely under *Settings -> WhatsApp* in Accounted.',
+    'Send *start* whenever you want to activate again, or disconnect the number entirely under *Settings → Connections → WhatsApp* in Accounted.',
 
   m12Start: () => 'Welcome back! Your number is active again, send receipts whenever you like.',
 
@@ -445,7 +445,7 @@ const EN: typeof SV = {
     'Something went wrong receiving the file. Try again in a moment, or upload the receipt directly in the app under *Underlag*. Type *hjälp* if it keeps happening.',
 
   m19NoCompany: () =>
-    'I could not assign the receipt to any company. Open Accounted and check the WhatsApp linking under *Settings -> WhatsApp*, then send the receipt again.',
+    'I could not assign the receipt to any company. Open Accounted and check the WhatsApp linking under *Settings → Connections → WhatsApp*, then send the receipt again.',
 
   m20ReceiptsExpired: ({ count }: { count: number }) =>
     count > 1
