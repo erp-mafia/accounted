@@ -9,6 +9,7 @@ import {
   luhnValid,
   personIdentityKind,
   validateKu31File,
+  validateKuCommon,
   type Ku31FileInput,
   type Ku31Recipient,
 } from '../ku31-xml'
@@ -201,5 +202,60 @@ describe('buildKu31Xml', () => {
 
   it('refuses an org number of a natural person as the payer (OrganisationsnummerTYPE needs 16 and a third digit 2-9)', () => {
     expect(validateKu31File(file({ payer_org_number: PERSON_1.slice(2) })).map((i) => i.code)).toContain('KU31_PAYER_ORG_NUMBER')
+  })
+})
+
+describe('the contact email check (KU31 and KU20)', () => {
+  /** Whether the check every Kontrolluppgifter file shares refuses this contact email. */
+  function refuses(email: string, prefix: 'KU31' | 'KU20' = 'KU31'): boolean {
+    const common = { ...file(), contact: { name: 'Anna Ek', phone: '+46701234567', email } }
+    return validateKuCommon(common, prefix).some((i) => i.field === 'Kontaktperson.Epostadress')
+  }
+
+  it.each([
+    'anna@exempel.se',
+    'anna.ek@exempel.se',
+    'förnamn.efternamn@företaget.se',
+    'Åsa.Öberg@Ängelholm.se',
+    "o'brien@example.co.uk",
+    'anna+ku31@exempel.se',
+    'anna_ek@exempel.se',
+    'anna-ek@sub-domain.exempel.se',
+    'a@b.c',
+    '1234@567.89',
+    'a.b.c.d@e.f.g.h',
+  ])('accepts %s', (email) => {
+    expect(refuses(email)).toBe(false)
+  })
+
+  it.each([
+    'not-an-email',
+    '',
+    '@exempel.se',
+    'anna@',
+    'anna@exempel',
+    '.anna@exempel.se',
+    'anna@.exempel.se',
+    'anna@exempel.se.',
+    'anna@exempel..se',
+    'anna ek@exempel.se',
+    'anna@@exempel.se',
+  ])('refuses %j', (email) => {
+    expect(refuses(email)).toBe(true)
+  })
+
+  // Each character more in a refused address used to double the time the
+  // check took. The bound is checked after every address, shortest first, so
+  // a slow check fails on a short typo instead of never returning on the longest.
+  it('answers at once for a typo with no top-level domain, up to the longest address the field takes', () => {
+    const longest = `${'ekonomiavdelningen.'.repeat(12)}foretaget@foretaget`.padEnd(254, 's')
+    expect(longest).toHaveLength(254)
+    const started = performance.now()
+    for (const email of ['ekonomi.foretaget@foretaget', 'ekonomiavdelning.foretaget@foretaget', 'ekonomiavdelningen.foretaget@foretaget', longest]) {
+      for (const prefix of ['KU31', 'KU20'] as const) {
+        expect(refuses(email, prefix)).toBe(true)
+        expect(performance.now() - started).toBeLessThan(1000)
+      }
+    }
   })
 })
