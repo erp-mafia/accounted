@@ -74,8 +74,9 @@ function servedName(slug: string): string | null {
   return valid && segments[0] !== 'own' ? segments[segments.length - 1] : null
 }
 
-function servedDescription(skill: Skill): string {
-  const text = (skill.description ?? skill.summary ?? '').replace(/\s+/g, ' ').trim()
+/** Projected before the cap: an accounted_ name is longer than its gnubok_ id. */
+function servedDescription(skill: Skill, project: (text: string) => string): string {
+  const text = project((skill.description ?? skill.summary ?? '').replace(/\s+/g, ' ').trim())
   return text.length <= SKILL_DESCRIPTION_MAX ? text : toSummary(text, SKILL_DESCRIPTION_MAX)
 }
 
@@ -87,7 +88,7 @@ function servedDescription(skill: Skill): string {
 export function buildSkillFile(skill: Skill, project: (text: string) => string): McpSkillFile | null {
   const name = servedName(skill.slug)
   if (!name) return null
-  const description = project(servedDescription(skill))
+  const description = servedDescription(skill, project)
   if (!description) return null
   // JSON string syntax is valid YAML double-quoted scalar syntax, so the
   // description round-trips exactly whatever characters it holds.

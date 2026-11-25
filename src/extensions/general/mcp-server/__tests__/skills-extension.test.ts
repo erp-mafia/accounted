@@ -186,6 +186,19 @@ describe('MCP Skills extension', () => {
       hostVerifies(skillEntry(file), file.text)
     })
 
+    it('keeps a description within 1024 characters after tool names are renamed for the connection', () => {
+      const skill: Skill = {
+        slug: 'near-limit', name: 'Near', summary: 'x', tags: [], body: 'Body', tier: 'workflow',
+        description: `${'gnubok_list_invoices '.repeat(48)}end`.slice(0, 1020),
+      }
+      const accountedNames = (text: string) => text.replace(/gnubok_/g, 'accounted_')
+      const file = buildSkillFile(skill, accountedNames)!
+      expect(file.description).toContain('accounted_list_invoices')
+      expect(file.description).not.toContain('gnubok_')
+      expect(file.description.length).toBeLessThanOrEqual(1024)
+      hostVerifies(skillEntry(file), file.text)
+    })
+
     it('serves no skill whose slug is an own item or not a valid skill path', () => {
       const base = { name: 'x', summary: 'x', tags: [], body: 'Body', tier: 'workflow' as const }
       expect(buildSkillFile({ ...base, slug: 'own/0b3c9a52-7a51-4f1e-9a51-0e6d3c1c2b11' }, identity)).toBeNull()

@@ -175,7 +175,10 @@ export async function abandonMcpTaskIfStale(supabase: SupabaseClient, row: McpTa
       companyId: row.company_id,
       ageMs,
     })
-    return { ...row, status: 'failed', error: ABANDONED_TASK_ERROR, status_message: statusMessage, updated_at: new Date(now).toISOString() }
+    // lastUpdatedAt is the database's time of the write, as on every later poll.
+    const { data: written } = await supabase.from('mcp_tasks').select('updated_at').eq('id', row.id).maybeSingle()
+    const updatedAt = (written as { updated_at?: string } | null)?.updated_at ?? new Date(now).toISOString()
+    return { ...row, status: 'failed', error: ABANDONED_TASK_ERROR, status_message: statusMessage, updated_at: updatedAt }
   }
   const { data } = await supabase.from('mcp_tasks').select('*').eq('id', row.id).eq('user_id', row.user_id).single()
   return (data as McpTaskRow | null) ?? row

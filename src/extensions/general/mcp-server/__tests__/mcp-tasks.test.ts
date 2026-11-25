@@ -307,6 +307,18 @@ describe('MCP Tasks extension', () => {
       )
     })
 
+    it('answers an abandoned task with the time the database wrote it', async () => {
+      // The mocked read after the write answers this row: its updated_at
+      // stands for the trigger's timestamp of the failed write.
+      mocks.taskRow = { ...staleWorking(), updated_at: '2026-11-25T10:15:00.000Z' }
+      mocks.updateResult = { data: [{ id: 'task-1' }], error: null }
+
+      const { result } = await readBody(mcpRequest('tasks/get', { taskId: 'task-1' }))
+
+      expect(result?.status).toBe('failed')
+      expect(result?.lastUpdatedAt).toBe('2026-11-25T10:15:00.000Z')
+    })
+
     it('logs nothing when another poll already moved the stale task, and answers the row as it is', async () => {
       mocks.taskRow = staleWorking()
       // The guarded update matched no row: something else resolved it first.
