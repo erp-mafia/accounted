@@ -516,6 +516,7 @@ describe('commitPendingOperation: register_absence', () => {
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({ data: { id: 'emp-1' } }) // service assertEmployee
     enqueue({ data: [] }) // register lock lookup: no locking runs
+    enqueue({ data: [] }) // register lock: nothing registered on the days
     enqueue({
       data: [
         { id: 'a1', absence_date: '2026-03-02', absence_type: 'sick', hours: 8, notes: null, salary_run_employee_id: null, created_at: '', updated_at: '' },
@@ -546,11 +547,49 @@ describe('commitPendingOperation: register_absence', () => {
     })
   })
 
+  it('carries late days to the later run the staged operation names', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: { id: 'emp-1' } }) // service assertEmployee
+    enqueue({
+      data: [
+        { id: 'run-oct', status: 'booked', period_year: 2026, period_month: 10, deviation_period_start: '2026-10-01', deviation_period_end: '2026-10-31', agi_submitted_at: null, corrects_run_id: null },
+        { id: 'run-nov', status: 'draft', period_year: 2026, period_month: 11, deviation_period_start: '2026-11-01', deviation_period_end: '2026-11-30', agi_submitted_at: null, corrects_run_id: null },
+      ],
+    }) // register lock lookup: October is booked
+    enqueue({ data: [] }) // register lock: nothing registered on the days
+    enqueue({ data: [{ salary_run_id: 'run-nov', salary_type: 'monthly' }, { salary_run_id: 'run-oct', salary_type: 'monthly' }] }) // on November; October paid the employee monthly
+    enqueue({ data: { salary_calculation_policy: {} } }) // the calculation conventions
+    enqueue({ data: [{ id: 'a1', absence_date: '2026-10-19', absence_type: 'parental', hours: 8 }] }) // bulk upsert
+    enqueue({ data: null, error: null }) // finalize
+
+    const op = makePendingOp({
+      operation_type: 'register_absence',
+      params: {
+        employee_id: 'emp-1',
+        from: '2026-10-19',
+        to: '2026-10-19',
+        absence_type: 'parental',
+        hours_per_day: null,
+        notes: null,
+        include_weekends: false,
+        carried_to_run_id: 'run-nov',
+      },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(findCall('salary_absence_days', 'upsert')?.[0]).toEqual([
+      expect.objectContaining({ absence_date: '2026-10-19', carried_to_run_id: 'run-nov' }),
+    ])
+  })
+
   it('resolves a day without stated hours from the employee, not from the door', async () => {
     const { supabase, enqueue, findCall } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({ data: { id: 'emp-1', hours_per_week: 20, workdays_per_week: 5 } }) // service assertEmployee
     enqueue({ data: [] }) // register lock lookup: no locking runs
+    enqueue({ data: [] }) // register lock: nothing registered on the days
     enqueue({ data: [] }) // bulk upsert
     enqueue({ data: null, error: null }) // finalize
 
@@ -576,6 +615,7 @@ describe('commitPendingOperation: register_absence', () => {
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({ data: { id: 'emp-1' } }) // assertEmployee
     enqueue({ data: [] }) // register lock lookup: no locking runs
+    enqueue({ data: [] }) // register lock: nothing registered on the days
     enqueue({ data: null, error: { code: '23514', message: 'Total tid över 24h' } }) // upsert trips trigger
     enqueue({ data: null, error: null }) // finalize (failed)
 
@@ -598,6 +638,7 @@ describe('commitPendingOperation: register_absence', () => {
       enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
       enqueue({ data: { id: 'emp-1' } }) // assertEmployee
       enqueue({ data: [] }) // register lock lookup: no locking runs
+      enqueue({ data: [] }) // register lock: nothing registered on the days
       enqueue({
         data: null,
         error: {
@@ -642,6 +683,7 @@ describe('commitPendingOperation: register_absence', () => {
       enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
       enqueue({ data: { id: 'emp-1' } }) // assertEmployee
       enqueue({ data: [REVIEW_RUN_MARCH] }) // register lock lookup: March is calculated
+      enqueue({ data: [] }) // register lock: nothing registered on the days
       enqueue({ data: null, error: null }) // finalize (rejected)
 
       const op = makePendingOp({
@@ -652,11 +694,11 @@ describe('commitPendingOperation: register_absence', () => {
 
       // A client-state conflict like the 24h cap: the op is rejected, not
       // transiently failed. The message names the run and the dates so the
-      // agent can revert it to draft or make a correction run.
+      // agent can revert it to draft.
       expect(result.status).toBe('rejected')
       expect(result.http_status).toBe(409)
       expect(result.code).toBe('SALARY_REGISTER_DATES_LOCKED_BY_RUN')
-      expect(result.error).toContain('avvikelseperioden')
+      expect(result.error).toContain('Återställ den till utkast')
       expect(result.error).toContain('run-mar')
       expect(result.error).toContain('2026-03')
       expect(result.error).toContain('2026-03-02 till 2026-03-03')
@@ -887,6 +929,12 @@ describe('commitPendingOperation: delete_absence', () => {
       const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
       enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
       enqueue({ data: { id: 'emp-1' } }) // assertEmployee
+      enqueue({
+        data: [
+          { absence_date: '2026-03-30', carried_to_run_id: null },
+          { absence_date: '2026-03-31', carried_to_run_id: null },
+        ],
+      }) // register lock: the rows the range reaches
       enqueue({ data: [REVIEW_RUN_MARCH] }) // register lock lookup: March is calculated
       enqueue({ data: null, error: null }) // finalize (rejected)
 

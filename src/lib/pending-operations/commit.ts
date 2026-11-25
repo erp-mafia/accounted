@@ -154,6 +154,7 @@ import {
 } from '@/lib/documents/link-holder'
 import { linkDocumentCopyToVoucher, linkDocumentToVoucher, type LinkDocumentRefusal } from '@/lib/documents/link-document'
 import { getErrorEntry, siCreateInvalidInputMessages } from '@/lib/errors/structured-errors'
+import { registerRefusalMessageSv } from '@/lib/salary/register-locks'
 import { recordVoucherWarningsAcknowledged, runVoucherWarningsGuard } from '@/lib/bookkeeping/voucher-warnings-guard'
 import { linkOpenBankRowsToVoucher } from '@/lib/reconciliation/voucher-bank-link'
 import { classifyError, isPeriodLockRefusal } from '@/lib/errors/get-structured-error'
@@ -5989,17 +5990,13 @@ async function commitUpdateEmployee(
 }
 
 /**
- * The run a register lock names, as a sentence to append to the registry
- * message: the MCP caller only sees `error`, and needs the run id to revert
- * it to draft or make a correction run. Undefined for every other code.
+ * The error a register refusal commits with: the sentence naming the run (its
+ * id included), the dates and the way out, since the MCP caller only sees
+ * `error` and needs the run id to revert it to draft or to carry a late day
+ * to it. The registry message, then the fallback, for every other code.
  */
-function registerLockDetail(result: { code: string; details?: Record<string, unknown> }): string | undefined {
-  if (result.code !== 'SALARY_REGISTER_DATES_LOCKED_BY_RUN' || !result.details) return undefined
-  const d = result.details
-  const period = `${d.period_year}-${String(d.period_month).padStart(2, '0')}`
-  const dates = Array.isArray(d.locked_dates) ? (d.locked_dates as string[]) : []
-  const span = dates.length > 1 ? `${dates[0]} till ${dates[dates.length - 1]}` : (dates[0] ?? '')
-  return `Lönekörning ${d.salary_run_id} (${period}, ${d.status}) läser ${dates.length} av datumen: ${span}.`
+function registerCommitError(result: { code: string; details?: Record<string, unknown> }, fallback: string): string {
+  return registerRefusalMessageSv(result.code, result.details, 'api') ?? getErrorEntry(result.code)?.message_sv ?? fallback
 }
 
 async function commitRegisterAbsence(
@@ -6026,6 +6023,7 @@ async function commitRegisterAbsence(
       hoursPerDay: (params.hours_per_day as number | null | undefined) ?? undefined,
       notes: (params.notes as string | null | undefined) ?? null,
       includeWeekends: (params.include_weekends as boolean | undefined) ?? false,
+      carriedToRunId: (params.carried_to_run_id as string | null | undefined) ?? null,
     })
     if (!result.ok) {
       // The user-facing message is generic Swedish; without this log the
@@ -6043,9 +6041,7 @@ async function commitRegisterAbsence(
       })
       const entry = getErrorEntry(result.code)
       return {
-        error: [entry?.message_sv ?? `Kunde inte registrera frånvaron: ${result.code}`, registerLockDetail(result)]
-          .filter(Boolean)
-          .join(' '),
+        error: registerCommitError(result, `Kunde inte registrera frånvaron: ${result.code}`),
         errorCode: result.code,
         status: entry?.httpStatus ?? 500,
       }
@@ -6167,9 +6163,7 @@ async function commitDeleteAbsence(
       })
       const entry = getErrorEntry(result.code)
       return {
-        error: [entry?.message_sv ?? `Kunde inte ta bort frånvaron: ${result.code}`, registerLockDetail(result)]
-          .filter(Boolean)
-          .join(' '),
+        error: registerCommitError(result, `Kunde inte ta bort frånvaron: ${result.code}`),
         errorCode: result.code,
         status: entry?.httpStatus ?? 500,
       }

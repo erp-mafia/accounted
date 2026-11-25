@@ -441,6 +441,7 @@ describe('gnubok_register_absence', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'emp-1' } }) // service assertEmployee (dry-run preflight)
     enqueue({ data: [] }) // register lock lookup: no locking runs
+    enqueue({ data: [] }) // register lock: nothing registered on the days
     enqueue({ data: { first_name: 'Anna', last_name: 'Andersson' } }) // name for title/preview
     enqueue({ data: null }) // resolvePeriodStatusForDate: company_settings
     enqueue({ data: null }) // resolvePeriodStatusForDate: fiscal_periods
@@ -463,10 +464,54 @@ describe('gnubok_register_absence', () => {
     expect((result.preview.dates_sample as string[])[0]).toBe('2026-03-02')
   })
 
+  it('stages late days with the run they go to, and says where they go when it is missing', async () => {
+    const booked = {
+      id: 'run-oct', status: 'booked', period_year: 2026, period_month: 10,
+      deviation_period_start: '2026-10-01', deviation_period_end: '2026-10-31', agi_submitted_at: null, corrects_run_id: null,
+    }
+    const draft = {
+      id: 'run-nov', status: 'draft', period_year: 2026, period_month: 11,
+      deviation_period_start: '2026-11-01', deviation_period_end: '2026-11-30', agi_submitted_at: null, corrects_run_id: null,
+    }
+    const refused = createQueuedMockSupabase()
+    refused.enqueue({ data: { id: 'emp-1' } }) // service assertEmployee
+    refused.enqueue({ data: [booked, draft] }) // runs
+    refused.enqueue({ data: [] }) // nothing registered on the days
+    await expect(
+      registerAbsence.execute(
+        { employee_id: 'emp-1', from: '2026-10-19', to: '2026-10-20', absence_type: 'parental' },
+        'company-1', 'user-1', refused.supabase as never, { type: 'user' },
+      ),
+    ).rejects.toThrow(/SALARY_REGISTER_DATES_LOCKED_BY_RUN[\s\S]*carried_to_run_id[\s\S]*run-nov/)
+
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'emp-1' } }) // service assertEmployee
+    enqueue({ data: [booked, draft] }) // runs
+    enqueue({ data: [] }) // nothing registered on the days
+    enqueue({ data: [{ salary_run_id: draft.id, salary_type: 'monthly' }, { salary_run_id: booked.id, salary_type: 'monthly' }] }) // on November; the period paid the employee monthly
+    enqueue({ data: { salary_calculation_policy: {} } })
+    enqueue({ data: { first_name: 'Anna', last_name: 'Andersson' } }) // name for title/preview
+    enqueue({ data: null }) // resolvePeriodStatusForDate: company_settings
+    enqueue({ data: null }) // resolvePeriodStatusForDate: fiscal_periods
+    enqueue({ data: { id: 'op-3' }, error: null }) // pending_operations insert
+
+    const result = (await registerAbsence.execute(
+      { employee_id: 'emp-1', from: '2026-10-19', to: '2026-10-20', absence_type: 'parental', carried_to_run_id: 'run-nov' },
+      'company-1', 'user-1', supabase as never, { type: 'user' },
+    )) as { staged: boolean; preview: Record<string, unknown> }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview).toMatchObject({ late_days: ['2026-10-19', '2026-10-20'], carried_to_run_id: 'run-nov' })
+    expect(findCall('pending_operations', 'insert')?.[0]).toMatchObject({
+      params: expect.objectContaining({ carried_to_run_id: 'run-nov' }),
+    })
+  })
+
   it('states one scheduled day of the employee when the call states no hours, and leaves the commit to resolve it', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'emp-1', hours_per_week: 40, workdays_per_week: 4 } }) // service assertEmployee
     enqueue({ data: [] }) // register lock lookup: no locking runs
+    enqueue({ data: [] }) // register lock: nothing registered on the days
     enqueue({ data: { first_name: 'Anna', last_name: 'Andersson' } }) // name for title/preview
     enqueue({ data: null }) // resolvePeriodStatusForDate: company_settings
     enqueue({ data: null }) // resolvePeriodStatusForDate: fiscal_periods

@@ -27,6 +27,7 @@ import {
   listAbsenceDays,
   upsertAbsenceRange,
 } from '@/lib/salary/absence'
+import { CarriedToRunIdSchema } from '@/lib/salary/late-days'
 
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD date format')
 
@@ -37,6 +38,11 @@ const AbsenceDay = z.object({
   hours: z.number(),
   notes: z.string().nullable(),
   salary_run_employee_id: z.string().uuid().nullable(),
+  carried_to_run_id: z
+    .string()
+    .uuid()
+    .nullable()
+    .describe('The later salary run that settles this day (a late day), or null: the run whose deviation window holds the date.'),
   created_at: z.string(),
   updated_at: z.string(),
 })
@@ -64,6 +70,7 @@ registerEndpoint({
     'Ranges over 92 days return 400 ABSENCE_RANGE_TOO_LARGE: iterate quarters instead.',
     'A day can carry multiple rows with different absence_type values (e.g. half-day sick + half-day vab).',
     'Rows may reference the salary run that consumed them via salary_run_employee_id.',
+    'carried_to_run_id names the later run a late day is carried to: that run deducts it and reports it in its AGI, not the run whose window holds the date.',
   ],
   example: {
     response: {
@@ -157,12 +164,22 @@ const UpsertRangeBody = z
       .describe('Hours each day. Omitted: one scheduled day of the employee (hours_per_week / workdays_per_week).'),
     notes: z.string().max(2000).optional(),
     include_weekends: z.boolean().default(false),
+    carried_to_run_id: CarriedToRunIdSchema.optional(),
   })
   .refine((v) => v.from <= v.to, { message: 'from must be <= to', path: ['from'] })
 
 const UpsertRangeResponse = z.object({
   count: z.number().int(),
-  days: z.array(AbsenceDay.partial({ salary_absence_day_id: true, notes: true, salary_run_employee_id: true, created_at: true, updated_at: true })),
+  days: z.array(
+    AbsenceDay.partial({
+      salary_absence_day_id: true,
+      notes: true,
+      salary_run_employee_id: true,
+      carried_to_run_id: true,
+      created_at: true,
+      updated_at: true,
+    }),
+  ),
 })
 
 registerEndpoint({
@@ -180,7 +197,9 @@ registerEndpoint({
     'Weekends are skipped by default: pass include_weekends=true for schedules that span them.',
     'Upsert REPLACES the (date, type) rows in the range: hours/notes are overwritten, not merged.',
     'A day whose combined absence + worked hours exceed 24h returns 409 ABSENCE_HOURS_CONFLICT and the whole range is rejected (atomic).',
-    'Dates inside the avvikelseperiod (deviation window, deviation_period_start..deviation_period_end, NULL = the pay month) of a run that is already calculated (review), approved, paid or booked are locked: 409 SALARY_REGISTER_DATES_LOCKED_BY_RUN naming the run (details.salary_run_id, details.status, details.locked_dates), nothing written, dry runs included. The way out is to revert that run to draft (dashboard) or, for a booked run, POST /salary-runs/{id}/correct and register the days against the correction run. Draft runs never lock.',
+    'Days a salary run that is already calculated (review), approved, paid or booked has read are locked: 409 SALARY_REGISTER_DATES_LOCKED_BY_RUN naming the run (details.salary_run_id, details.status, details.locked_dates, details.reason), nothing written, dry runs included. A run is read through its avvikelseperiod (deviation_period_start..deviation_period_end, NULL = the pay month). Draft runs never lock. Run in review or approved, neither paid nor declared: revert it to draft (POST /salary-runs/{id}/revert, after :unapprove for an approved run) and register the days.',
+    'A day not registered yet on a date a paid, booked or declared run read is a late day (details.reason late_day_needs_later_run): register it on its real date with carried_to_run_id = the next ordinary run that is neither paid nor declared (details.later_salary_run), a draft with the employee on it, paying the employee the same way (monthly or hourly) as the day\'s own period. That run deducts it, shows the dates on the payslip and reports the frånvarouppgift in its own AGI, the period whose pay the absence reduces (Skatteverket, Teknisk beskrivning 1.1.18.2, 5.6 and 9.3). Do not correct the paid run for it. A correction draft takes late absence only when named, while its period\'s AGI is not at Skatteverket and the paid run carried a deduction typed by hand for the employee, which the days replace. A wrong carried_to_run_id returns 409 SALARY_REGISTER_LATE_DAY_REFUSED with details.reason.',
+    'A day already registered that a paid or declared run read (details.reason read_by_settled_run) is part of what was paid and is not rewritten: settle a difference with a payslip line on the next run.',
     'Registering absence does not recompute a draft salary run: call POST /salary-runs/{id}/calculate afterwards.',
   ],
   example: {
@@ -228,6 +247,7 @@ export const PUT = withApiV1<{ params: Promise<{ companyId: string; id: string }
       hoursPerDay: body.hours_per_day,
       notes: body.notes ?? null,
       includeWeekends: body.include_weekends,
+      carriedToRunId: body.carried_to_run_id ?? null,
       dryRun: ctx.dryRun,
     })
 
@@ -270,11 +290,11 @@ registerEndpoint({
   useWhen:
     'An absence event was registered by mistake or ended early: "Anna came back Thursday, delete Thu-Fri sick days".',
   doNotUseFor:
-    'Correcting hours on a day: PUT the day again instead. Rows a calculated, approved, paid or booked run has already read: the delete is refused (409 SALARY_REGISTER_DATES_LOCKED_BY_RUN); use the run correction flow.',
+    'Correcting hours on a day: PUT the day again instead. Rows a calculated, approved, paid or booked run has already read: the delete is refused (409 SALARY_REGISTER_DATES_LOCKED_BY_RUN).',
   pitfalls: [
     'Without ?type, ALL absence types in the range are deleted.',
     'deleted_count: 0 with a 200 means nothing matched: not an error.',
-    'Dates inside the avvikelseperiod (deviation window, deviation_period_start..deviation_period_end, NULL = the pay month) of a run that is already calculated (review), approved, paid or booked are locked: 409 SALARY_REGISTER_DATES_LOCKED_BY_RUN naming the run (details.salary_run_id, details.status, details.locked_dates), nothing written, dry runs included. The way out is to revert that run to draft (dashboard) or, for a booked run, POST /salary-runs/{id}/correct and register the days against the correction run. Draft runs never lock.',
+    'A row a salary run that is already calculated (review), approved, paid or booked reads is not deleted: 409 SALARY_REGISTER_DATES_LOCKED_BY_RUN naming the run (details.salary_run_id, details.status, details.locked_dates), nothing deleted, dry runs included. The run reads a row through its avvikelseperiod, or, for a late day, because the row is carried to it (carried_to_run_id). Judged by the rows: a range with nothing registered on a locked date is not refused. Draft runs never lock: a late day carried to a draft run can be deleted.',
   ],
   example: {
     response: {

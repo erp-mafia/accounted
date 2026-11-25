@@ -142,6 +142,7 @@ import {
   type PrintedLineAmount,
 } from '@/lib/bookkeeping/supplier-invoice-line-totals'
 import { getErrorEntry, siCreateInvalidInputMessages } from '@/lib/errors/structured-errors'
+import { registerRefusalMessageSv } from '@/lib/salary/register-locks'
 import type { SIEAppendPlan } from '@/lib/import/sie-append'
 import { ACCOUNTS_NOT_IN_CHART } from '@/lib/bookkeeping/errors'
 import { dbError, errorCauseTag } from '@/lib/errors/db-error'
@@ -22834,7 +22835,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_register_absence',
     keywords: ['frånvaro', 'sjukanmälan', 'semester', 'vab'],
     title: 'Register Absence (Frånvaro)',
-    description: 'Stage absence registration (sick, vab, parental, ...) for an employee over a date range, max 92 days, weekends skipped unless included. Commit via gnubok_approve_pending_operation; recalculate any open salary run afterwards.',
+    description: 'Stage absence (sick, vab, parental, ...) for an employee over a date range, max 92 days, weekends skipped unless included. A day a paid or declared run already read goes to the next draft run via carried_to_run_id. Commit via gnubok_approve_pending_operation; recalculate after.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -22850,15 +22851,20 @@ export const tools: McpTool[] = [
         hours_per_day: { type: 'number', description: 'Hours per day. Omitted: one scheduled day of the employee (use e.g. half that for half days)' },
         notes: { type: 'string', description: 'Optional note' },
         include_weekends: { type: 'boolean', description: 'Also register Saturday/Sunday (default false)' },
+        carried_to_run_id: {
+          type: 'string',
+          description:
+            'For days on dates a paid, booked or declared salary run already read (late days): the next ordinary salary run that is neither paid nor declared, a draft with the employee on it (a correction draft only when named and its AGI is not filed). It deducts them, shows the dates on the payslip and reports them in its AGI. A refusal SALARY_REGISTER_DATES_LOCKED_BY_RUN with reason late_day_needs_later_run names it in later_salary_run. Days no paid or declared run read ignore it.',
+        },
       },
       required: ['employee_id', 'from', 'to', 'absence_type'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
     annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
-      const { employee_id, from, to, absence_type, hours_per_day, notes, include_weekends } = args as {
+      const { employee_id, from, to, absence_type, hours_per_day, notes, include_weekends, carried_to_run_id } = args as {
         employee_id: string; from: string; to: string; absence_type: string
-        hours_per_day?: number; notes?: string; include_weekends?: boolean
+        hours_per_day?: number; notes?: string; include_weekends?: boolean; carried_to_run_id?: string
       }
       if (!employee_id) throw badArgument('employee_id', 'employee_id is required')
       if (!from) throw badArgument('from', 'from is required')
@@ -22879,9 +22885,21 @@ export const tools: McpTool[] = [
         hoursPerDay: hours_per_day,
         notes: notes ?? null,
         includeWeekends: include_weekends,
+        carriedToRunId: carried_to_run_id ?? null,
         dryRun: true,
       })
       if (!preflight.ok) {
+        // A register refusal names the run, the dates and the way out (for a
+        // late day, the run to pass as carried_to_run_id).
+        const refusal = registerRefusalMessageSv(preflight.code, preflight.details, 'api')
+        if (refusal) {
+          throw codedRefusal(
+            preflight.code,
+            [`Cannot register absence: ${preflight.code}.`, getErrorEntry(preflight.code)?.message_en, refusal, JSON.stringify(preflight.details)]
+              .filter(Boolean)
+              .join(' '),
+          )
+        }
         throw serviceRefusal('Cannot register absence', preflight)
       }
 
@@ -22899,7 +22917,16 @@ export const tools: McpTool[] = [
         userId,
         type: 'register_absence',
         title: `Registrera frånvaro: ${employeeName}, ${absence_type} ${from}${to !== from ? ` till ${to}` : ''}`,
-        params: { employee_id, from, to, absence_type, hours_per_day: hours_per_day ?? null, notes: notes ?? null, include_weekends: include_weekends ?? false },
+        params: {
+          employee_id,
+          from,
+          to,
+          absence_type,
+          hours_per_day: hours_per_day ?? null,
+          notes: notes ?? null,
+          include_weekends: include_weekends ?? false,
+          carried_to_run_id: carried_to_run_id ?? null,
+        },
         preview: {
           employee_id,
           employee_name: employeeName,
@@ -22909,6 +22936,11 @@ export const tools: McpTool[] = [
           day_count: preflight.data.count,
           hours_per_day: preflight.data.hours_per_day,
           dates_sample: preflight.data.days.slice(0, 10).map((d) => (d as { absence_date: string }).absence_date),
+          // The late days among them and the run that deducts them.
+          late_days: preflight.data.days
+            .filter((d) => (d as { carried_to_run_id?: string | null }).carried_to_run_id)
+            .map((d) => (d as { absence_date: string }).absence_date),
+          carried_to_run_id: carried_to_run_id ?? null,
         },
         actor,
         next: {
@@ -22970,6 +23002,15 @@ export const tools: McpTool[] = [
         dryRun: true,
       })
       if (!preflight.ok) {
+        const refusal = registerRefusalMessageSv(preflight.code, preflight.details, 'api')
+        if (refusal) {
+          throw codedRefusal(
+            preflight.code,
+            [`Cannot delete absence: ${preflight.code}.`, getErrorEntry(preflight.code)?.message_en, refusal, JSON.stringify(preflight.details)]
+              .filter(Boolean)
+              .join(' '),
+          )
+        }
         throw serviceRefusal('Cannot delete absence', preflight)
       }
       if (preflight.data.deleted_count === 0) {

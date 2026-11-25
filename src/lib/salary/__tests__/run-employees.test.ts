@@ -285,6 +285,8 @@ describe('removeEmployeeFromRun', () => {
   it('removes an attached employee from a draft run', async () => {
     mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
     mock.enqueue({ data: { id: SRE_ID } })
+    mock.enqueue({ data: [] }) // late absence days
+    mock.enqueue({ data: [] }) // late worked days
     mock.enqueue({ data: null }) // delete
 
     const result = await removeEmployeeFromRun(supabase, {
@@ -323,6 +325,8 @@ describe('removeEmployeeFromRun', () => {
   it('dry-run verifies without deleting', async () => {
     mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
     mock.enqueue({ data: { id: SRE_ID } })
+    mock.enqueue({ data: [] })
+    mock.enqueue({ data: [] })
 
     const result = await removeEmployeeFromRun(supabase, {
       companyId: COMPANY_ID,
@@ -333,7 +337,50 @@ describe('removeEmployeeFromRun', () => {
 
     expect(result.ok).toBe(true)
     const fromCalls = (mock.supabase.from as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0])
-    expect(fromCalls).toEqual(['salary_runs', 'salary_run_employees'])
+    expect(fromCalls).toEqual(['salary_runs', 'salary_run_employees', 'salary_absence_days', 'salary_worked_days'])
+  })
+
+  it.each([false, true])(
+    'refuses while late days are carried to the run for the employee (dry run: %s): no run would deduct them',
+    async (dryRun) => {
+      mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
+      mock.enqueue({ data: { id: SRE_ID } })
+      mock.enqueue({ data: [{ absence_date: '2026-10-20' }, { absence_date: '2026-10-19' }] })
+      mock.enqueue({ data: [{ work_date: '2026-10-21' }] })
+
+      const result = await removeEmployeeFromRun(supabase, {
+        companyId: COMPANY_ID,
+        salaryRunId: RUN_ID,
+        employeeId: EMPLOYEE_ID,
+        dryRun,
+      })
+
+      expect(result).toEqual({
+        ok: false,
+        code: 'SALARY_RUN_EMPLOYEE_HAS_LATE_DAYS',
+        details: { late_dates: ['2026-10-19', '2026-10-20', '2026-10-21'] },
+      })
+      expect(mock.findCall('salary_absence_days', 'in')).toEqual(['carried_to_run_id', [RUN_ID]])
+      expect(mock.findCalls('salary_run_employees', 'delete')).toEqual([])
+    },
+  )
+
+  it('a correction run also answers for the late days carried to the run it corrects', async () => {
+    const ORIGINAL_ID = 'ffffffff-ffff-4fff-8fff-ffffffffffff'
+    mock.enqueue({ data: { id: RUN_ID, status: 'draft', corrects_run_id: ORIGINAL_ID } })
+    mock.enqueue({ data: { id: SRE_ID } })
+    mock.enqueue({ data: { id: ORIGINAL_ID, corrects_run_id: null } }) // the chain
+    mock.enqueue({ data: [{ absence_date: '2026-10-20' }] })
+    mock.enqueue({ data: [] })
+
+    const result = await removeEmployeeFromRun(supabase, {
+      companyId: COMPANY_ID,
+      salaryRunId: RUN_ID,
+      employeeId: EMPLOYEE_ID,
+    })
+
+    expect(result).toMatchObject({ ok: false, code: 'SALARY_RUN_EMPLOYEE_HAS_LATE_DAYS' })
+    expect(mock.findCall('salary_absence_days', 'in')).toEqual(['carried_to_run_id', [RUN_ID, ORIGINAL_ID]])
   })
 })
 

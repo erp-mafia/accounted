@@ -4,7 +4,7 @@
  * day of a 40 000 kr salary on 40 h over 4 days is 2 308,14 kr, and the old
  * 8 h default at the doors took 1 846,51 kr off it.
  */
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import {
   BatchUpsertWorkedDaysSchema,
   UpsertAbsenceDaySchema,
@@ -17,11 +17,6 @@ import { dailyDivisor, scheduledHoursPerDay } from '../work-schedule'
 import { replaceWorkedDay } from '../worked-days'
 import { createPayrollFakeDb } from './payroll-fake-db'
 import { employee } from './payroll-fixtures'
-
-vi.mock('../register-locks', () => ({
-  assertRegisterDatesUnlocked: vi.fn(async () => null),
-  assertRegisterRangeUnlocked: vi.fn(async () => null),
-}))
 
 const C = 'company-1'
 const SHORT_WEEK = { hours_per_week: 40, workdays_per_week: 4 }

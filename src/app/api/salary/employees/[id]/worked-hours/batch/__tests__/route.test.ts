@@ -65,6 +65,7 @@ const validBatch = { dates: ['2026-07-01', '2026-07-02'], hours: 8 }
 function enqueuePreamble(existing: unknown[] = []) {
   enqueue({ data: { id: 'emp-1' } }) // employee ownership check
   enqueue({ data: [] }) // register lock lookup: no locking runs
+  enqueue({ data: existing.map((row) => ({ work_date: (row as { work_date: string }).work_date, carried_to_run_id: null })) }) // register lock: the days already registered
   enqueue({ data: existing }) // prefetch of the rows the batch overwrites
 }
 
@@ -141,6 +142,7 @@ describe('POST /api/salary/employees/[id]/worked-hours/batch', () => {
   it('takes one scheduled day of the employee when the hours are left out, and clears the calculation', async () => {
     enqueue({ data: { id: 'emp-1', hours_per_week: 40, workdays_per_week: 4 } }) // employee ownership check
     enqueue({ data: [] }) // register lock lookup: no locking runs
+    enqueue({ data: [] }) // register lock: nothing registered on the days
     enqueue({ data: [] }) // prefetch
     enqueue({ data: null }) // upsert date 1
     enqueue({ data: null }) // upsert date 2
@@ -165,6 +167,7 @@ describe('POST /api/salary/employees/[id]/worked-hours/batch', () => {
   it('returns 409 with the Swedish message and the run when a calculated run already read a date, touching nothing', async () => {
     enqueue({ data: { id: 'emp-1' } }) // employee ownership check
     enqueue({ data: [REVIEW_RUN_JULY] }) // register lock lookup
+    enqueue({ data: [] }) // nothing registered on the days
 
     const response = await POST(post(validBatch), params)
     const { status, body } = await parseJsonResponse<{
@@ -175,13 +178,16 @@ describe('POST /api/salary/employees/[id]/worked-hours/batch', () => {
 
     expect(status).toBe(409)
     expect(body.code).toBe('SALARY_REGISTER_DATES_LOCKED_BY_RUN')
-    expect(body.error).toContain('avvikelseperioden')
+    expect(body.error).toContain('Återställ den till utkast')
     expect(body.details).toMatchObject({
       salary_run_id: 'run-jul',
       locked_dates: ['2026-07-01', '2026-07-02'],
     })
-    // No prefetch, no bulk delete, no insert: the lock is checked first.
-    expect(ops.filter((op) => op.table === 'salary_worked_days')).toHaveLength(0)
+    // No prefetch, no bulk delete, no insert: the lock is checked first,
+    // and reads only the days' carry.
+    expect(ops.filter((op) => op.table === 'salary_worked_days').map((op) => op.columns)).toEqual([
+      'work_date, carried_to_run_id',
+    ])
     expect(insertedRows()).toHaveLength(0)
   })
 
@@ -296,11 +302,13 @@ describe('POST /api/salary/employees/[id]/worked-hours/batch', () => {
 
     await POST(post(validBatch), params)
 
+    // The register lock reads the days' carry, then the prefetch the rest.
     const workedDayOps = ops.filter((op) => op.table === 'salary_worked_days')
-    expect(workedDayOps[0].verb).toBe('select')
-    expect(workedDayOps[0].columns).toContain('notes')
-    expect(workedDayOps[0].columns).toContain('start_time')
-    expect(workedDayOps.slice(1).map((op) => op.verb)).toEqual(['upsert', 'upsert'])
+    expect(workedDayOps[0].columns).toBe('work_date, carried_to_run_id')
+    expect(workedDayOps[1].verb).toBe('select')
+    expect(workedDayOps[1].columns).toContain('notes')
+    expect(workedDayOps[1].columns).toContain('start_time')
+    expect(workedDayOps.slice(2).map((op) => op.verb)).toEqual(['upsert', 'upsert'])
     expect(workedDayOps.some((op) => op.verb === 'delete')).toBe(false)
   })
 
@@ -362,5 +370,47 @@ describe('POST /api/salary/employees/[id]/worked-hours/batch', () => {
     const workedDayOps = ops.filter((op) => op.table === 'salary_worked_days')
     expect(workedDayOps).toHaveLength(1)
     expect(workedDayOps[0].verb).toBe('select')
+  })
+})
+
+describe('POST /api/salary/employees/[id]/worked-hours/batch: late hours', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase })
+    requireWriteMock.mockResolvedValue({ ok: true })
+  })
+
+  it("carries hours on a booked run's dates, registered from a draft payslip, to that payslip's run", async () => {
+    enqueue({ data: { id: 'emp-1' } }) // employee ownership check
+    enqueue({ data: { salary_run_id: 'run-aug' } }) // the payslip's run
+    enqueue({
+      data: [
+        { ...REVIEW_RUN_JULY, status: 'booked', agi_submitted_at: null, corrects_run_id: null },
+        {
+          id: 'run-aug',
+          status: 'draft',
+          period_year: 2026,
+          period_month: 8,
+          deviation_period_start: null,
+          deviation_period_end: null,
+          agi_submitted_at: null,
+          corrects_run_id: null,
+        },
+      ],
+    }) // runs
+    enqueue({ data: [] }) // nothing registered on the days
+    enqueue({ data: [{ salary_run_id: 'run-aug', salary_type: 'hourly' }] }) // the employee is on August
+    enqueue({ data: [] }) // prefetch
+    enqueue({ data: null }) // upsert date 1
+    enqueue({ data: null }) // upsert date 2
+
+    const response = await POST(
+      post({ ...validBatch, salary_run_employee_id: '11111111-1111-4111-8111-111111111111' }),
+      params,
+    )
+
+    expect(response.status).toBe(201)
+    expect(writtenRows().map((row) => row.carried_to_run_id)).toEqual(['run-aug', 'run-aug'])
   })
 })

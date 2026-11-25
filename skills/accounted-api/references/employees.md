@@ -547,6 +547,7 @@ Returns per-day absence rows (sick, vab, parental, ...) between ?from and ?to (i
 - Ranges over 92 days return 400 ABSENCE_RANGE_TOO_LARGE: iterate quarters instead.
 - A day can carry multiple rows with different absence_type values (e.g. half-day sick + half-day vab).
 - Rows may reference the salary run that consumed them via salary_run_employee_id.
+- carried_to_run_id names the later run a late day is carried to: that run deducts it and reports it in its AGI, not the run whose window holds the date.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -559,7 +560,7 @@ Returns per-day absence rows (sick, vab, parental, ...) between ?from and ?to (i
 Response `200`:
 ```ts
 {
-  data: { salary_absence_day_id: string, absence_date: string, absence_type: "sick" | "vab" | "parental" | "pregnancy" | "care_relative" | "study" | "unpaid_leave" | "other_leave", hours: number, notes: string | null, salary_run_employee_id: string | null, created_at: string, updated_at: string }[],
+  data: { salary_absence_day_id: string, absence_date: string, absence_type: "sick" | "vab" | "parental" | "pregnancy" | "care_relative" | "study" | "unpaid_leave" | "other_leave", hours: number, notes: string | null, salary_run_employee_id: string | null, carried_to_run_id: string | null, created_at: string, updated_at: string }[],
   meta: {
     request_id: string,
     api_version: string,
@@ -607,7 +608,9 @@ Expands [from, to] (max 92 days) to per-day rows and upserts them on the natural
 - Weekends are skipped by default: pass include_weekends=true for schedules that span them.
 - Upsert REPLACES the (date, type) rows in the range: hours/notes are overwritten, not merged.
 - A day whose combined absence + worked hours exceed 24h returns 409 ABSENCE_HOURS_CONFLICT and the whole range is rejected (atomic).
-- Dates inside the avvikelseperiod (deviation window, deviation_period_start..deviation_period_end, NULL = the pay month) of a run that is already calculated (review), approved, paid or booked are locked: 409 SALARY_REGISTER_DATES_LOCKED_BY_RUN naming the run (details.salary_run_id, details.status, details.locked_dates), nothing written, dry runs included. The way out is to revert that run to draft (dashboard) or, for a booked run, POST /salary-runs/{id}/correct and register the days against the correction run. Draft runs never lock.
+- Days a salary run that is already calculated (review), approved, paid or booked has read are locked: 409 SALARY_REGISTER_DATES_LOCKED_BY_RUN naming the run (details.salary_run_id, details.status, details.locked_dates, details.reason), nothing written, dry runs included. A run is read through its avvikelseperiod (deviation_period_start..deviation_period_end, NULL = the pay month). Draft runs never lock. Run in review or approved, neither paid nor declared: revert it to draft (POST /salary-runs/{id}/revert, after :unapprove for an approved run) and register the days.
+- A day not registered yet on a date a paid, booked or declared run read is a late day (details.reason late_day_needs_later_run): register it on its real date with carried_to_run_id = the next ordinary run that is neither paid nor declared (details.later_salary_run), a draft with the employee on it, paying the employee the same way (monthly or hourly) as the day's own period. That run deducts it, shows the dates on the payslip and reports the frånvarouppgift in its own AGI, the period whose pay the absence reduces (Skatteverket, Teknisk beskrivning 1.1.18.2, 5.6 and 9.3). Do not correct the paid run for it. A correction draft takes late absence only when named, while its period's AGI is not at Skatteverket and the paid run carried a deduction typed by hand for the employee, which the days replace. A wrong carried_to_run_id returns 409 SALARY_REGISTER_LATE_DAY_REFUSED with details.reason.
+- A day already registered that a paid or declared run read (details.reason read_by_settled_run) is part of what was paid and is not rewritten: settle a difference with a payslip line on the next run.
 - Registering absence does not recompute a draft salary run: call POST /salary-runs/{id}/calculate afterwards.
 
 | Parameter | In | Type | Required | Notes |
@@ -624,7 +627,8 @@ Request body:
   absence_type: "sick" | "vab" | "parental" | "pregnancy" | "care_relative" | "study" | "unpaid_leave" | "other_leave",
   hours_per_day?: number,
   notes?: string,
-  include_weekends?: boolean
+  include_weekends?: boolean,
+  carried_to_run_id?: string
 }
 ```
 
@@ -642,7 +646,7 @@ Response `200`:
 {
   data: {
     count: number,
-    days: { salary_absence_day_id?: string, absence_date: string, absence_type: "sick" | "vab" | "parental" | "pregnancy" | "care_relative" | "study" | "unpaid_leave" | "other_leave", hours: number, notes?: string | null, salary_run_employee_id?: string | null, created_at?: string, updated_at?: string }[]
+    days: { salary_absence_day_id?: string, absence_date: string, absence_type: "sick" | "vab" | "parental" | "pregnancy" | "care_relative" | "study" | "unpaid_leave" | "other_leave", hours: number, notes?: string | null, salary_run_employee_id?: string | null, carried_to_run_id?: string | null, created_at?: string, updated_at?: string }[]
   },
   meta: {
     request_id: string,
@@ -686,12 +690,12 @@ Example response `200`:
 Deletes per-day absence rows between ?from and ?to (inclusive), optionally filtered by ?type. Returns deleted_count (200, not 204) so callers can verify how many rows went.
 
 **Use when:** An absence event was registered by mistake or ended early: "Anna came back Thursday, delete Thu-Fri sick days".
-**Do not use for:** Correcting hours on a day: PUT the day again instead. Rows a calculated, approved, paid or booked run has already read: the delete is refused (409 SALARY_REGISTER_DATES_LOCKED_BY_RUN); use the run correction flow.
+**Do not use for:** Correcting hours on a day: PUT the day again instead. Rows a calculated, approved, paid or booked run has already read: the delete is refused (409 SALARY_REGISTER_DATES_LOCKED_BY_RUN).
 
 **Pitfalls:**
 - Without ?type, ALL absence types in the range are deleted.
 - deleted_count: 0 with a 200 means nothing matched: not an error.
-- Dates inside the avvikelseperiod (deviation window, deviation_period_start..deviation_period_end, NULL = the pay month) of a run that is already calculated (review), approved, paid or booked are locked: 409 SALARY_REGISTER_DATES_LOCKED_BY_RUN naming the run (details.salary_run_id, details.status, details.locked_dates), nothing written, dry runs included. The way out is to revert that run to draft (dashboard) or, for a booked run, POST /salary-runs/{id}/correct and register the days against the correction run. Draft runs never lock.
+- A row a salary run that is already calculated (review), approved, paid or booked reads is not deleted: 409 SALARY_REGISTER_DATES_LOCKED_BY_RUN naming the run (details.salary_run_id, details.status, details.locked_dates), nothing deleted, dry runs included. The run reads a row through its avvikelseperiod, or, for a late day, because the row is carried to it (carried_to_run_id). Judged by the rows: a range with nothing registered on a locked date is not refused. Draft runs never lock: a late day carried to a draft run can be deleted.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -1675,7 +1679,7 @@ Returns the per-day worked-hours rows (tidrapport) between ?from and ?to (inclus
 Response `200`:
 ```ts
 {
-  data: { salary_worked_day_id: string, work_date: string, hours: number, start_time: string | null, end_time: string | null, notes: string | null, created_at: string, updated_at: string }[],
+  data: { salary_worked_day_id: string, work_date: string, hours: number, start_time: string | null, end_time: string | null, notes: string | null, carried_to_run_id: string | null, created_at: string, updated_at: string }[],
   meta: {
     request_id: string,
     api_version: string,
@@ -1725,7 +1729,9 @@ Upserts 1..92 explicit per-day rows on the natural key (employee, work_date) in 
 - For hourly employees the run's gross is derived from these rows (hourly_rate x sum(hours)): PATCH /salary-runs/{id}/employees/{employeeId} monthly_salary is irrelevant for them.
 - start_time/end_time feed the OB/shift-premium rules: a row without them is priced as an assumed 08:00-17:00 day, so a night or weekend shift earns no premium. Times are HH:MM or HH:MM:SS; end_time before start_time means the shift crosses midnight.
 - Worked hours plus absence hours on one date may not exceed 24 (DB trigger, shared with absence): the whole PUT is rejected with 409 ABSENCE_HOURS_CONFLICT, nothing is written.
-- Dates inside the avvikelseperiod (deviation window, deviation_period_start..deviation_period_end, NULL = the pay month) of a run that is already calculated (review), approved, paid or booked are locked: 409 SALARY_REGISTER_DATES_LOCKED_BY_RUN naming the run (details.salary_run_id, details.status, details.locked_dates), nothing written, dry runs included. The way out is to revert that run to draft (dashboard) or, for a booked run, POST /salary-runs/{id}/correct and register the days against the correction run. Draft runs never lock.
+- Days a salary run that is already calculated (review), approved, paid or booked has read are locked: 409 SALARY_REGISTER_DATES_LOCKED_BY_RUN naming the run (details.salary_run_id, details.status, details.locked_dates, details.reason), nothing written, dry runs included. A run is read through its avvikelseperiod (deviation_period_start..deviation_period_end, NULL = the pay month). Draft runs never lock. Run in review or approved, neither paid nor declared: revert it to draft (POST /salary-runs/{id}/revert, after :unapprove for an approved run) and register the hours.
+- Hours not registered yet on a date a paid, booked or declared run read are a late day (details.reason late_day_needs_later_run): register them on their real date with carried_to_run_id = the next ordinary run that is neither paid nor declared (details.later_salary_run), a draft with the employee on it, paid hourly as their own period was. That run pays them on top of its own period's hours and names the dates on the payslip. Do not correct the paid run for them: a correction run never takes late hours. A wrong carried_to_run_id returns 409 SALARY_REGISTER_LATE_DAY_REFUSED with details.reason.
+- A day already registered that a paid or declared run read (details.reason read_by_settled_run) is part of what was paid and is not rewritten: pay a difference with a payslip line on the next run.
 - Registering hours does not recompute a draft salary run: call POST /salary-runs/{id}/calculate afterwards.
 
 | Parameter | In | Type | Required | Notes |
@@ -1737,7 +1743,8 @@ Upserts 1..92 explicit per-day rows on the natural key (employee, work_date) in 
 Request body:
 ```ts
 {
-  days: { work_date: string, hours: number, start_time?: string, end_time?: string, notes?: string }[]
+  days: { work_date: string, hours: number, start_time?: string, end_time?: string, notes?: string }[],
+  carried_to_run_id?: string
 }
 ```
 
@@ -1765,7 +1772,7 @@ Response `200`:
 {
   data: {
     count: number,
-    days: { salary_worked_day_id?: string, work_date: string, hours: number, start_time: string | null, end_time: string | null, notes: string | null, created_at?: string, updated_at?: string }[]
+    days: { salary_worked_day_id?: string, work_date: string, hours: number, start_time: string | null, end_time: string | null, notes: string | null, carried_to_run_id: string | null, created_at?: string, updated_at?: string }[]
   },
   meta: {
     request_id: string,
@@ -1812,11 +1819,11 @@ Example response `200`:
 Deletes the per-day worked-hours rows between ?from and ?to (inclusive). Returns deleted_count (200, not 204) so callers can verify how many rows went. Single day = from == to.
 
 **Use when:** Hours were pushed for the wrong employee or the wrong dates, or a time-tracking re-sync needs a clean period before a fresh PUT.
-**Do not use for:** Correcting hours on a day: PUT the day again instead. Rows a calculated, approved, paid or booked run has already read: the delete is refused (409 SALARY_REGISTER_DATES_LOCKED_BY_RUN); use the run correction flow.
+**Do not use for:** Correcting hours on a day: PUT the day again instead. Rows a calculated, approved, paid or booked run has already read: the delete is refused (409 SALARY_REGISTER_DATES_LOCKED_BY_RUN).
 
 **Pitfalls:**
 - deleted_count: 0 with a 200 means nothing matched: not an error.
-- Dates inside the avvikelseperiod (deviation window, deviation_period_start..deviation_period_end, NULL = the pay month) of a run that is already calculated (review), approved, paid or booked are locked: 409 SALARY_REGISTER_DATES_LOCKED_BY_RUN naming the run (details.salary_run_id, details.status, details.locked_dates), nothing written, dry runs included. The way out is to revert that run to draft (dashboard) or, for a booked run, POST /salary-runs/{id}/correct and register the days against the correction run. Draft runs never lock.
+- A row a salary run that is already calculated (review), approved, paid or booked reads is not deleted: 409 SALARY_REGISTER_DATES_LOCKED_BY_RUN naming the run (details.salary_run_id, details.status, details.locked_dates), nothing deleted, dry runs included. The run reads a row through its avvikelseperiod, or, for a late day, because the row is carried to it (carried_to_run_id). Judged by the rows: a range with nothing registered on a locked date is not refused. Draft runs never lock: a late day carried to a draft run can be deleted.
 - Hours a draft run has already summed stay in the run until POST /salary-runs/{id}/calculate is called again.
 
 | Parameter | In | Type | Required | Notes |

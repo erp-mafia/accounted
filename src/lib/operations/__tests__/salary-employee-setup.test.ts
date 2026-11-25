@@ -294,6 +294,7 @@ describe('employees.worked-days.list (gnubok_list_worked_days)', () => {
           start_time: '22:00:00',
           end_time: '06:00:00',
           notes: null,
+          carried_to_run_id: null,
           created_at: STAMP,
           updated_at: STAMP,
         },
@@ -346,6 +347,7 @@ describe('employees.worked-days.upsert (gnubok_set_worked_days)', () => {
         { work_date: '2026-03-03', hours: 4, start_time: null, end_time: null, notes: 'Halvdag' },
         { work_date: '2026-03-02', hours: 8, start_time: '22:00', end_time: '06:00', notes: null },
       ],
+      carriedToRunId: null,
       dryRun: true,
     })
     expect(preview).toMatchObject({ employee_id: EMPLOYEE_ID, count: 2, from: '2026-03-02', to: '2026-03-03', days: previewDays })

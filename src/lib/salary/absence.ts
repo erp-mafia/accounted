@@ -17,10 +17,13 @@
  * rejected write (e.g. the 24h cap) never drops existing rows.
  *
  * Every write first checks the register lock (lib/salary/register-locks.ts):
- * dates a run in review, approved, paid or booked has already read through
- * its deviation window are refused with SALARY_REGISTER_DATES_LOCKED_BY_RUN,
- * dry runs included. Draft runs and corrected originals never lock. A write a
- * draft run reads clears its calculation (invalidate-calculation.ts).
+ * days a run in review, approved, paid or booked has already read are refused
+ * with SALARY_REGISTER_DATES_LOCKED_BY_RUN, dry runs included. Draft runs and
+ * corrected originals never lock. A new day on a date a paid or declared run
+ * read is a late day: it is written only with carriedToRunId, the next run
+ * that is neither paid nor declared, and that run deducts it and reports it
+ * in its AGI (lib/salary/late-days.ts). A write a draft run reads clears its
+ * calculation (invalidate-calculation.ts).
  *
  * A day without stated hours is one scheduled day of the employee
  * (work-schedule.ts defaultDayHours), the length the calendar offers and the
@@ -29,7 +32,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { invalidateRunCalculation } from './invalidate-calculation'
-import { assertRegisterDatesUnlocked, assertRegisterRangeUnlocked } from './register-locks'
+import { checkRegisterRangeDelete, planRegisterUpsert } from './register-locks'
 import { defaultDayHours } from './work-schedule'
 
 export type AbsenceResult<T> =
@@ -43,6 +46,8 @@ export interface AbsenceDayRow {
   hours: number
   notes: string | null
   salary_run_employee_id: string | null
+  /** The later run that settles this day (a late day), or null: the run whose window holds the date. */
+  carried_to_run_id: string | null
   created_at: string
   updated_at: string
 }
@@ -140,7 +145,7 @@ export async function listAbsenceDays(
 
   let query = supabase
     .from('salary_absence_days')
-    .select('id, absence_date, absence_type, hours, notes, salary_run_employee_id, created_at, updated_at')
+    .select('id, absence_date, absence_type, hours, notes, salary_run_employee_id, carried_to_run_id, created_at, updated_at')
     .eq('company_id', args.companyId)
     .eq('employee_id', args.employeeId)
     .gte('absence_date', args.from)
@@ -171,18 +176,32 @@ export async function upsertAbsenceDay(
       notes?: string | null
       salary_run_employee_id?: string | null
     }
+    /** The later run (a draft) that takes the day if a paid or declared run already read its date. */
+    carriedToRunId?: string | null
   },
 ): Promise<AbsenceResult<AbsenceDayRow>> {
   const emp = await assertEmployee(supabase, args.companyId, args.employeeId)
   if (!emp.ok) return emp
 
-  const locked = await assertRegisterDatesUnlocked(supabase, args.companyId, [args.day.absence_date])
-  if (locked) return locked
-
-  const invalidated = await invalidateRunCalculation(supabase, args.companyId, {
+  const planned = await planRegisterUpsert(supabase, args.companyId, {
+    kind: 'absence',
     employeeId: args.employeeId,
-    absenceDays: { from: args.day.absence_date, to: args.day.absence_date },
+    dates: [args.day.absence_date],
+    absenceType: args.day.absence_type,
+    carriedToRunId: args.carriedToRunId,
   })
+  if (!planned.ok) return planned
+  const { plan } = planned
+
+  const invalidated =
+    (await invalidateRunCalculation(supabase, args.companyId, {
+      employeeId: args.employeeId,
+      absenceDays: { from: args.day.absence_date, to: args.day.absence_date },
+    })) ??
+    (await invalidateRunCalculation(supabase, args.companyId, {
+      employeeId: args.employeeId,
+      salaryRunIds: plan.carriedReaderRunIds,
+    }))
   if (invalidated) return invalidated
 
   // Atomic upsert on the natural-key unique index: a rejected write (24h
@@ -198,10 +217,11 @@ export async function upsertAbsenceDay(
         hours: args.day.hours ?? defaultDayHours(emp.data.hours_per_week, emp.data.workdays_per_week),
         notes: args.day.notes ?? null,
         salary_run_employee_id: args.day.salary_run_employee_id ?? null,
+        carried_to_run_id: plan.carriedTo.get(args.day.absence_date) ?? null,
       },
       { onConflict: 'employee_id,absence_date,absence_type' },
     )
-    .select('id, absence_date, absence_type, hours, notes, salary_run_employee_id, created_at, updated_at')
+    .select('id, absence_date, absence_type, hours, notes, salary_run_employee_id, carried_to_run_id, created_at, updated_at')
     .single()
 
   if (error) {
@@ -223,10 +243,20 @@ export async function upsertAbsenceRange(
     hoursPerDay?: number
     notes?: string | null
     includeWeekends?: boolean
+    /** The later run (a draft) that takes the days a paid or declared run already read. */
+    carriedToRunId?: string | null
     /** Validate + expand only; return the would-be days without writing. */
     dryRun?: boolean
   },
-): Promise<AbsenceResult<{ count: number; hours_per_day: number; days: AbsenceDayRow[] | Array<{ absence_date: string; absence_type: string; hours: number }> }>> {
+): Promise<
+  AbsenceResult<{
+    count: number
+    hours_per_day: number
+    days:
+      | AbsenceDayRow[]
+      | Array<{ absence_date: string; absence_type: string; hours: number; carried_to_run_id: string | null }>
+  }>
+> {
   const emp = await assertEmployee(supabase, args.companyId, args.employeeId)
   if (!emp.ok) return emp
 
@@ -241,8 +271,15 @@ export async function upsertAbsenceRange(
 
   // Checked before the dry-run branch on purpose: a preview must report the
   // lock, that is what the preview is for.
-  const locked = await assertRegisterDatesUnlocked(supabase, args.companyId, dates)
-  if (locked) return locked
+  const planned = await planRegisterUpsert(supabase, args.companyId, {
+    kind: 'absence',
+    employeeId: args.employeeId,
+    dates,
+    absenceType: args.absenceType,
+    carriedToRunId: args.carriedToRunId,
+  })
+  if (!planned.ok) return planned
+  const { plan } = planned
 
   const hours = args.hoursPerDay ?? defaultDayHours(emp.data.hours_per_week, emp.data.workdays_per_week)
   const rows = dates.map((absence_date) => ({
@@ -253,6 +290,7 @@ export async function upsertAbsenceRange(
     hours,
     notes: args.notes ?? null,
     salary_run_employee_id: null,
+    carried_to_run_id: plan.carriedTo.get(absence_date) ?? null,
   }))
 
   if (args.dryRun) {
@@ -265,6 +303,7 @@ export async function upsertAbsenceRange(
           absence_date: r.absence_date,
           absence_type: r.absence_type,
           hours: r.hours,
+          carried_to_run_id: r.carried_to_run_id,
         })),
       },
     }
@@ -274,10 +313,15 @@ export async function upsertAbsenceRange(
     return { ok: true, data: { count: 0, hours_per_day: hours, days: [] } }
   }
 
-  const invalidated = await invalidateRunCalculation(supabase, args.companyId, {
-    employeeId: args.employeeId,
-    absenceDays: { from: args.from, to: args.to },
-  })
+  const invalidated =
+    (await invalidateRunCalculation(supabase, args.companyId, {
+      employeeId: args.employeeId,
+      absenceDays: { from: args.from, to: args.to },
+    })) ??
+    (await invalidateRunCalculation(supabase, args.companyId, {
+      employeeId: args.employeeId,
+      salaryRunIds: plan.carriedReaderRunIds,
+    }))
   if (invalidated) return invalidated
 
   // Bulk atomic upsert on the natural-key unique index (employee, date,
@@ -287,7 +331,7 @@ export async function upsertAbsenceRange(
   const { data, error } = await supabase
     .from('salary_absence_days')
     .upsert(rows, { onConflict: 'employee_id,absence_date,absence_type' })
-    .select('id, absence_date, absence_type, hours, notes, salary_run_employee_id, created_at, updated_at')
+    .select('id, absence_date, absence_type, hours, notes, salary_run_employee_id, carried_to_run_id, created_at, updated_at')
 
   if (error) {
     const mapped = mapInsertError(error)
@@ -313,10 +357,17 @@ export async function deleteAbsenceRange(
   const emp = await assertEmployee(supabase, args.companyId, args.employeeId)
   if (!emp.ok) return emp
 
-  // Computed from the range, not from the rows it would delete: one query,
-  // and the dry run reports the lock too.
-  const locked = await assertRegisterRangeUnlocked(supabase, args.companyId, args.from, args.to)
-  if (locked) return locked
+  // Judged by the rows the range reaches, the dry run included: a row a
+  // calculated, approved, paid or booked run reads (through its window or a
+  // carry) is not deleted.
+  const checked = await checkRegisterRangeDelete(supabase, args.companyId, {
+    kind: 'absence',
+    employeeId: args.employeeId,
+    from: args.from,
+    to: args.to,
+    absenceType: args.absenceType,
+  })
+  if (!checked.ok) return checked
 
   if (args.dryRun) {
     // Count what WOULD be deleted so the preview is informative.
@@ -335,10 +386,15 @@ export async function deleteAbsenceRange(
     return { ok: true, data: { deleted_count: count ?? 0 } }
   }
 
-  const invalidated = await invalidateRunCalculation(supabase, args.companyId, {
-    employeeId: args.employeeId,
-    absenceDays: { from: args.from, to: args.to },
-  })
+  const invalidated =
+    (await invalidateRunCalculation(supabase, args.companyId, {
+      employeeId: args.employeeId,
+      absenceDays: { from: args.from, to: args.to },
+    })) ??
+    (await invalidateRunCalculation(supabase, args.companyId, {
+      employeeId: args.employeeId,
+      salaryRunIds: checked.carriedReaderRunIds,
+    }))
   if (invalidated) return invalidated
 
   let query = supabase
