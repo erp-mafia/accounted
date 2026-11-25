@@ -14,6 +14,8 @@ import { TD_CLASS, TH_CLASS, QUIET_LINK_CLASS, HOVER_REVEAL_CLASS } from '@/comp
 import { VoucherPeekLink } from '@/components/bookkeeping/VoucherPeekLink'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
+import { bankRowBookHref } from '@/lib/bookkeeping/booking-screen'
+import { useBookingScreenEnabled } from '@/contexts/CompanyContext'
 import type { ReconciliationAccount, ReconciliationItem } from '@/lib/reconciliation/schemas'
 
 /**
@@ -103,6 +105,7 @@ export function PairRow({
   onMove,
 }: PairRowProps) {
   const t = useTranslations('reconciliation')
+  const bookingScreen = useBookingScreenEnabled()
   const can = (a: ReconciliationItem['actions'][number]) => item.actions.includes(a)
   const voucherOf = (e: { voucher_series?: string | null; voucher_number?: number | null }) =>
     e.voucher_number != null ? formatVoucher({ voucher_series: e.voucher_series, voucher_number: e.voucher_number }) : null
@@ -225,7 +228,8 @@ export function PairRow({
   // group header above it already reads "saknas i bokföringen".
 
   // ---- actions: one button, the rest behind the menu -----------------------
-  const openHref = item.item_type === 'transaction' ? `/transactions?highlight=${item.item_id}` : null
+  // Bokför on a bank row opens it on the booking screen where it is switched on.
+  const openHref = item.item_type === 'transaction' ? bankRowBookHref(item.item_id, bookingScreen) : null
   let primary: React.ReactNode = null
   if (can('match') && item.proposal) {
     primary = (
