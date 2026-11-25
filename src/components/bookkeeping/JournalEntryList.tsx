@@ -372,7 +372,7 @@ export default function JournalEntryList({
   // The person's choice for every company and device, kept in ui_state: a
   // key in localStorage was emptied by every sign-out. This tab's own press
   // shows at once, before the save lands.
-  const { uiState, mutate: mutateUiState } = useUiState()
+  const { uiState, loaded: uiStateLoaded, mutate: mutateUiState } = useUiState()
   const [densityPressed, setDensityPressed] = useState<boolean | null>(null)
   const compact = densityPressed ?? uiState?.journal_density === 'compact'
   const showingAll = pageSizeChoice === 'all'
@@ -1069,7 +1069,13 @@ export default function JournalEntryList({
     const next = !compact
     const patch = { journal_density: next ? 'compact' : 'comfortable' } as const
     setDensityPressed(next)
-    void mutateUiState((current) => ({ ...current, ...patch }), { revalidate: false })
+    // Only a loaded cache takes the patch. Written before the first read
+    // lands, it would hold the density alone and drop the read, so the
+    // page's other ui_state keys (the create button's saved mode, the
+    // hidden bank columns) would read as unset until the next refresh.
+    if (uiStateLoaded) {
+      void mutateUiState((current) => (current ? { ...current, ...patch } : current), { revalidate: false })
+    }
     persistUiState(patch)
   }
 

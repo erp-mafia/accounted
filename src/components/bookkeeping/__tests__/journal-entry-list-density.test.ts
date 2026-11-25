@@ -44,6 +44,16 @@ describe('JournalEntryList compact rows', () => {
     expect(SRC).not.toContain('journal-density')
   })
 
+  it('leaves the shared ui_state cache alone until it has loaded', () => {
+    // A press before the first read lands would put the density alone in
+    // the cache and drop the read: the page's create button would lose its
+    // saved mode, and the bank list its hidden columns, until a refresh.
+    const toggle = SRC.slice(SRC.indexOf('const toggleDensity = () => {'))
+    const guard = toggle.indexOf('if (uiStateLoaded) {')
+    expect(guard).toBeGreaterThan(-1)
+    expect(toggle.indexOf('mutateUiState(')).toBeGreaterThan(guard)
+  })
+
   it('has the label in both locales', () => {
     expect(readMessages('sv').journal_list.density_compact).toBe('Kompakta rader')
     expect(readMessages('en').journal_list.density_compact).toBe('Compact rows')
