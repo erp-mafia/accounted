@@ -429,10 +429,31 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // dashboard mark-paid flow. The default path pays the exact remaining, so
     // absorption is a no-op there.
     // Lines for a SEK invoice whose issue verifikat booked the öresavrundning
-    // carry only the rest of it on 3740 (carriedSekOf).
-    const linesCarriedSek =
-      customLines && invoiceAlreadyBooked && isKronorCurrency(typed.currency)
-        ? await carriedSekOf(ctx.supabase, ctx.companyId!, 'customer', typed)
+    // carry only the rest of it on 3740 (carriedSekOf). So do lines that clear
+    // 1510 of an invoice the commit books first (lib/invoices/sale-first.ts):
+    // they are planned against what that sale leaves there
+    // (salePlan.receivableSek), as settleInvoicePayment plans them, and the
+    // dry run below shows the same plan.
+    const planSale = () =>
+      customLines && !clearsReceivable(customLines)
+        ? Promise.resolve(SALE_FIRST_NOT_REQUIRED)
+        : planSaleBeforeSettlement(
+            { supabase: ctx.supabase, companyId: ctx.companyId!, userId: ctx.userId, log: ctx.log },
+            typed,
+            { settlementDate: paymentDate },
+          )
+    const linesSalePlan = customLines && isKronorCurrency(typed.currency) ? await planSale() : null
+    if (linesSalePlan && !linesSalePlan.ok) return v1OutcomeResponse(linesSalePlan, ctx)
+    // A null journal_entry_id goes stale when a concurrent Bokför books the
+    // sale (bookedSince): left unknown, carriedSekOf asks the ledger.
+    const bookedSince = !!linesSalePlan && !linesSalePlan.required && linesSalePlan.bookedSince === true
+    const linesCarriedSek = linesSalePlan?.required
+      ? linesSalePlan.receivableSek
+      : customLines && isKronorCurrency(typed.currency) && (invoiceAlreadyBooked || bookedSince)
+        ? await carriedSekOf(ctx.supabase, ctx.companyId!, 'customer', {
+            ...typed,
+            journal_entry_id: typed.journal_entry_id || undefined,
+          })
         : null
     const payment = planInvoicePaymentForLines(
       typed,
@@ -531,14 +552,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       // the :book step (lib/invoices/sale-first.ts): its dry run is every check
       // that booking runs, so a preview shows both verifikat and cannot mask a
       // refusal. Custom lines that book the revenue themselves need none.
-      const salePlan =
-        customLines && !clearsReceivable(customLines)
-          ? SALE_FIRST_NOT_REQUIRED
-          : await planSaleBeforeSettlement(
-              { supabase: ctx.supabase, companyId: ctx.companyId!, userId: ctx.userId, log: ctx.log },
-              typed,
-              { settlementDate: paymentDate },
-            )
+      const salePlan = linesSalePlan ?? (await planSale())
       if (!salePlan.ok) return v1OutcomeResponse(salePlan, ctx)
       const previewAccount = await settlementAccountOrRefusal()
       if (typeof previewAccount !== 'string') return previewAccount
