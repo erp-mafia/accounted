@@ -79,8 +79,10 @@ const INVOICE_TEXT_MIN_CONTRAST = 4.5
 /**
  * One invoice colour: the browser's colour picker beside the hex code, either
  * of which saves. The picker fires on every step of a drag, so its save waits
- * until the hand has stopped; the hex field saves on blur or Enter. A colour
- * too pale to read on white is saved, with a note saying so.
+ * until the hand has stopped; the hex field saves on blur or Enter. Saves go
+ * one at a time, the newest choice last, so a save still on its way can
+ * neither swallow a later choice nor land after it. A colour too pale to read
+ * on white is saved, with a note saying so.
  */
 function InvoiceColorRow({
   id,
@@ -95,11 +97,17 @@ function InvoiceColorRow({
   help: string
   value: string
   defaultColor: string
-  onSave: (color: string) => void
+  /** Resolves true once the server holds the colour. */
+  onSave: (color: string) => Promise<boolean>
 }) {
   const t = useTranslations('settings_pdf_print')
   const [draft, setDraft] = useState(value)
   const pickerTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // The colour the server holds as far as this row knows, the newest choice
+  // not yet sent, and whether a save is under way.
+  const stored = useRef(value.toLowerCase())
+  const wanted = useRef<string | null>(null)
+  const saving = useRef(false)
 
   useEffect(() => () => {
     if (pickerTimer.current) clearTimeout(pickerTimer.current)
@@ -108,20 +116,36 @@ function InvoiceColorRow({
   const normalized = normalizeInvoiceColor(draft)
   const shown = normalized ?? value
 
+  function cancelPick() {
+    if (pickerTimer.current) clearTimeout(pickerTimer.current)
+    pickerTimer.current = null
+  }
+
+  async function send() {
+    if (saving.current) return
+    saving.current = true
+    while (wanted.current !== null) {
+      const color = wanted.current
+      wanted.current = null
+      if (color !== stored.current && (await onSave(color))) stored.current = color
+    }
+    saving.current = false
+  }
+
   function commit(next: string) {
     // The newest choice wins: a picker save still waiting would otherwise
     // land after a typed code or "Återställ" and put the older colour back.
-    if (pickerTimer.current) clearTimeout(pickerTimer.current)
-    pickerTimer.current = null
+    cancelPick()
     const color = normalizeInvoiceColor(next)
     if (!color) return
     setDraft(color)
-    if (color !== value.toLowerCase()) onSave(color)
+    wanted.current = color
+    void send()
   }
 
   function pick(next: string) {
     setDraft(next)
-    if (pickerTimer.current) clearTimeout(pickerTimer.current)
+    cancelPick()
     pickerTimer.current = setTimeout(() => commit(next), 400)
   }
 
@@ -141,7 +165,11 @@ function InvoiceColorRow({
         spellCheck={false}
         autoComplete="off"
         aria-invalid={normalized ? undefined : true}
-        onChange={(event) => setDraft(event.target.value)}
+        onChange={(event) => {
+          // Typing over a picked colour: the picker's waiting save is dropped.
+          cancelPick()
+          setDraft(event.target.value)
+        }}
         onBlur={() => commit(draft)}
         onKeyDown={(event) => {
           if (event.key === 'Enter') commit(draft)
@@ -275,7 +303,9 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
   const saveColor = useCallback(
     async (field: 'invoice_primary_color' | 'invoice_accent_color', color: string) => {
       const update = { [field]: color } as Partial<CompanySettings>
-      if (await saveSettings(update, { failedTitle })) onUpdate(update)
+      if (!(await saveSettings(update, { failedTitle }))) return false
+      onUpdate(update)
+      return true
     },
     [onUpdate, saveSettings, failedTitle],
   )
@@ -447,7 +477,7 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
         help={t('primary_color_help')}
         value={settings.invoice_primary_color ?? DEFAULT_INVOICE_PRIMARY_COLOR}
         defaultColor={DEFAULT_INVOICE_PRIMARY_COLOR}
-        onSave={(color) => void saveColor('invoice_primary_color', color)}
+        onSave={(color) => saveColor('invoice_primary_color', color)}
       />
       <InvoiceColorRow
         id="invoice_accent_color"
@@ -455,7 +485,7 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
         help={t('accent_color_help')}
         value={settings.invoice_accent_color ?? DEFAULT_INVOICE_ACCENT_COLOR}
         defaultColor={DEFAULT_INVOICE_ACCENT_COLOR}
-        onSave={(color) => void saveColor('invoice_accent_color', color)}
+        onSave={(color) => saveColor('invoice_accent_color', color)}
       />
 
       <SettingsRow label={t('header_text_label')} htmlFor="invoice_header_text" help={t('header_text_help')}>
