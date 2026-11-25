@@ -10,6 +10,7 @@
  * rounds) is help, behind the "?".
  */
 
+import { bankReached } from '@/lib/bank-feed/bank-coverage'
 import type { OpenPaymentsBank } from './open-payments-client'
 
 export type BankHelpKey = 'handelsbanken' | 'nordea' | 'swedbank' | 'svea'
@@ -131,4 +132,23 @@ function popularityRank(name: string): number {
 /** Popular banks first, then the rest alphabetically (Swedish collation). */
 export function orderBanks<T extends { name: string }>(banks: readonly T[]): T[] {
   return [...banks].sort((a, b) => popularityRank(a.name) - popularityRank(b.name) || a.name.localeCompare(b.name, 'sv'))
+}
+
+/** The banks shown first on a surface with room for a few, in this order. */
+const COMMON_BANK_PATTERNS: readonly RegExp[] = [/^swedbank\b/i, /^seb\b/i, /handelsbanken/i, /^nordea/i, /danske/i, /länsförsäkringar|lansforsakringar/i]
+
+/**
+ * The common banks the list carries, in the order above, one per name: the
+ * shortest matching name wins (the bank itself, not a sub-brand). A bank we
+ * cannot sign at, or that the provider does not reach for this company, is
+ * left out, so nothing offered ends at a refusal. Empty when the list has none.
+ */
+export function commonBanks<T extends Pick<OpenPaymentsBank, 'name' | 'decoupled' | 'redirect' | 'reached'>>(banks: readonly T[]): T[] {
+  const offered = banks.filter((bank) => bankSelectable(bank) && bankReached(bank.name, bank.reached))
+  const out: T[] = []
+  for (const pattern of COMMON_BANK_PATTERNS) {
+    const match = offered.filter((bank) => pattern.test(bank.name)).sort((a, b) => a.name.length - b.name.length)[0]
+    if (match) out.push(match)
+  }
+  return out
 }
