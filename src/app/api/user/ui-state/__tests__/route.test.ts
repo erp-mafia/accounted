@@ -325,6 +325,28 @@ describe('POST /api/user/ui-state', () => {
     expect(shown.body.data.ui_state).toEqual({ tx_columns: { hidden: ['date'] }, support_fab_hidden: false })
   })
 
+  it('stores the verifikat list row density beside the existing keys, and switches it back', async () => {
+    enqueue({ data: { ui_state: { tx_columns: { hidden: ['date'] } } } })
+    enqueue({ data: null })
+    const compact = await parseJsonResponse<{ data: { ui_state: Record<string, unknown> } }>(
+      await POST(request({ journal_density: 'compact' })),
+    )
+    expect(compact.status).toBe(200)
+    expect(compact.body.data.ui_state).toEqual({ tx_columns: { hidden: ['date'] }, journal_density: 'compact' })
+
+    enqueue({ data: { ui_state: { tx_columns: { hidden: ['date'] }, journal_density: 'compact' } } })
+    enqueue({ data: null })
+    const comfortable = await parseJsonResponse<{ data: { ui_state: Record<string, unknown> } }>(
+      await POST(request({ journal_density: 'comfortable' })),
+    )
+    expect(comfortable.body.data.ui_state).toEqual({ tx_columns: { hidden: ['date'] }, journal_density: 'comfortable' })
+  })
+
+  it('returns 400 on an unknown journal_density value', async () => {
+    const res = await POST(request({ journal_density: 'tiny' }))
+    expect(res.status).toBe(400)
+  })
+
   it('returns 400 when support_fab_hidden is not a boolean', async () => {
     const res = await POST(request({ support_fab_hidden: 'yes' }))
     expect(res.status).toBe(400)

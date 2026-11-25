@@ -95,10 +95,13 @@ import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useBulkSelection } from '@/lib/hooks/use-bulk-selection'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
+import { useUiState } from '@/lib/hooks/use-ui-state'
+import { saveUiState } from '@/lib/ui-state/client'
+import { createOrderedSave } from '@/lib/ui-state/ordered-save'
 import { listContextKey, writeListContext } from '@/lib/navigation/list-context'
 import { NEEDS_DOC_SOURCE_TYPES } from '@/lib/worklist/types'
 import { collectPages } from '@/lib/lists/collect-pages'
-import type { JournalEntry, JournalEntryLine } from '@/types'
+import type { JournalEntry, JournalEntryLine, UserUiState } from '@/types'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 
 // Shared source of truth (lib/worklist/types.ts) so the per-row chip and
@@ -179,11 +182,6 @@ function sortHeadOf(stack: SortKey[], column: SortColumn): { direction: 'asc' | 
   if (index === -1) return { direction: null }
   return { direction: stack[index].direction, rank: stack.length > 1 ? index + 1 : undefined }
 }
-
-// Compact row density (support feedback: "kompakt visning av verifikat",
-// asked again in crm#1323). Persisted per company, mirroring the sort key
-// convention.
-const DENSITY_STORAGE_KEY_PREFIX = 'Accounted:journal-density:'
 
 // Page-size selector. Persisted per company, mirroring the sort key convention.
 // 'all' collects everything in the current scope in chunks of the most rows
@@ -371,7 +369,18 @@ export default function JournalEntryList({
   const [ledgerHasAnyEntry, setLedgerHasAnyEntry] = useState<boolean | null>(null)
   const [pageSizeChoice, setPageSizeChoice] = useState<PageSizeChoice>('20')
   const [pageSizeHydrated, setPageSizeHydrated] = useState(false)
-  const [compact, setCompact] = useState(false)
+  // Compact row density (support feedback: "kompakt visning av verifikat").
+  // The person's choice for every company and device, kept in ui_state: a
+  // key in localStorage was emptied by every sign-out. This tab's own press
+  // shows at once, before the save lands.
+  const { uiState, loaded: uiStateLoaded, mutate: mutateUiState } = useUiState()
+  const [densityPressed, setDensityPressed] = useState<boolean | null>(null)
+  const compact = densityPressed ?? uiState?.journal_density === 'compact'
+  // One save at a time, in press order (lib/ui-state/ordered-save.ts): two
+  // in flight could land in either order and leave the older choice stored.
+  const [saveDensity] = useState(() =>
+    createOrderedSave<NonNullable<UserUiState['journal_density']>>((journal_density) => saveUiState({ journal_density })),
+  )
   const showingAll = pageSizeChoice === 'all'
   const pageSize = showingAll ? Number.POSITIVE_INFINITY : Number(pageSizeChoice)
 
@@ -505,14 +514,6 @@ export default function JournalEntryList({
       if (stored && PAGE_SIZE_VALUES.has(stored as PageSizeChoice)) setPageSizeChoice(stored as PageSizeChoice)
     }
     setPageSizeHydrated(true)
-  }, [company?.id])
-
-  // Restore the persisted row density (per company). Purely visual, so it
-  // doesn't gate the first fetch; the effect-read avoids an SSR mismatch.
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      setCompact(window.localStorage.getItem(DENSITY_STORAGE_KEY_PREFIX + (company?.id ?? 'default')) === 'compact')
-    }
   }, [company?.id])
 
   // Belopp shows the money that moved when a verifikat records one payment
@@ -1070,12 +1071,25 @@ export default function JournalEntryList({
     }
   }
 
+  // The shared ui_state cache takes this tab's press, so coming back to the
+  // list within the dedupe window shows it. Only once the first read has
+  // landed: written before, it would hold the density alone and drop the
+  // read, so the page's other ui_state keys (the create button's saved mode,
+  // the hidden bank columns) would read as unset until the next refresh. A
+  // press made before the read is put in when it lands, so a read that
+  // left before the save cannot put the older choice back.
+  useEffect(() => {
+    if (!uiStateLoaded || densityPressed === null) return
+    const journal_density = densityPressed ? 'compact' : 'comfortable'
+    void mutateUiState((current) => (current ? { ...current, journal_density } : current), { revalidate: false })
+  }, [uiStateLoaded, densityPressed, mutateUiState])
+
   const toggleDensity = () => {
     const next = !compact
-    setCompact(next)
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem(DENSITY_STORAGE_KEY_PREFIX + (company?.id ?? 'default'), next ? 'compact' : 'comfortable')
-    }
+    setDensityPressed(next)
+    // A refused save is not put back: the choice is cosmetic, and the next
+    // press stores it again.
+    void saveDensity(next ? 'compact' : 'comfortable', () => {})
   }
 
   // Apply a sort stack, whether it came from a column header or the dialog
@@ -1433,7 +1447,7 @@ export default function JournalEntryList({
             </button>
           )}
         </div>
-        {/* Row density: comfortable vs compact, persisted per company. A toggle
+        {/* Row density: comfortable vs compact, kept per person. A toggle
             (aria-pressed) rather than a mode buried in the filter dialog. It
             carries its name like the Filter button beside it: as a bare icon
             the only way to learn what it did was to press it, and people

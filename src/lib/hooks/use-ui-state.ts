@@ -15,7 +15,7 @@ import type { UserUiState } from '@/types'
  * empty state: the UI falls back to its defaults.
  */
 export function useUiState() {
-  const { data } = useSWR<UserUiState>('user-ui-state', async () => {
+  const { data, mutate } = useSWR<UserUiState>('user-ui-state', async () => {
     const supabase = createClient()
     const { data: row } = await supabase
       .from('user_preferences')
@@ -24,5 +24,7 @@ export function useUiState() {
     return (row?.ui_state as UserUiState) ?? {}
   }, REFERENCE_SWR_OPTIONS)
 
-  return { uiState: data, loaded: data !== undefined }
+  // mutate: a page that stores a choice puts it in the cache too, so coming
+  // back to the page within the dedupe window shows it.
+  return { uiState: data, loaded: data !== undefined, mutate }
 }
