@@ -185,8 +185,44 @@ describe('POST /api/v1/companies', () => {
     // the first membership regardless of kind attached a consultant's private
     // company to their byrå team.
     expect(supabase.from).toHaveBeenCalledWith('team_members')
-    expect(supabase.chain.select).toHaveBeenCalledWith('team_id, teams!inner(kind, created_at)')
+    expect(supabase.chain.select).toHaveBeenCalledWith('team_id, teams!inner(id, kind, created_at)')
     expect(supabase.chain.eq).toHaveBeenCalledWith('teams.kind', 'personal')
+  })
+
+  it('refuses with 500 and creates nothing when the personal team cannot be read', async () => {
+    const supabase = makeSupabase(TEAM_ID)
+    supabase.chain.maybeSingle.mockResolvedValue({
+      data: null,
+      error: { code: '42703', message: 'column team_members_teams_1.id does not exist' },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await createCompany(makeRequest(validBody), staticRouteContext())
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body.error.code).toBe('INTERNAL_ERROR')
+    // No company without its team, no claimed key: a retry runs again.
+    expect(mocks.createCompanyCore).not.toHaveBeenCalled()
+    expect(creationCalls(supabase)).toHaveLength(0)
+    expect(supabase.idempotency.rows).toHaveLength(0)
+  })
+
+  it('refuses the dry run too when the personal team cannot be read', async () => {
+    mockValidate.mockResolvedValue({
+      userId: USER_ID,
+      companyId: null,
+      apiKeyId: 'key-1',
+      apiKeyName: 'Test key',
+      scopes: ['companies:write'],
+      mode: 'test',
+    })
+    const supabase = makeSupabase(TEAM_ID)
+    supabase.chain.maybeSingle.mockResolvedValue({ data: null, error: { message: 'connection reset' } })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await createCompany(makeRequest(validBody), staticRouteContext())
+    expect(res.status).toBe(500)
+    expect(mocks.createCompanyCore).not.toHaveBeenCalled()
   })
 
   it('passes p_team_id null when the user has no personal team', async () => {

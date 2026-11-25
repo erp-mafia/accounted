@@ -49,6 +49,7 @@ import {
 import { checkRateLimit } from '@/lib/auth/rate-limit-http'
 import { getCanonicalBaseUrl, resolveDiscoveryBaseUrl } from '@/lib/api/v1/base-url'
 import { createCompanyCore } from '@/lib/company/create-company'
+import { defaultTeamForNewCompany } from '@/lib/company/default-team'
 import {
   AssetCorrectionBlockedError,
   AssetDeleteBlockedError,
@@ -4514,34 +4515,6 @@ async function newCompanyReach(
   }
 }
 
-/**
- * The team a company created through the API/MCP path attaches to when the
- * caller does not name one: the user's PERSONAL team only (WL-08: companies
- * created through the normal flow always attach to the personal team; cockpit
- * flows pass the byrå team id explicitly). Picking the first membership
- * regardless of kind attached a consultant's private company to their byrå
- * team, exposing their books to the whole byrå and suppressing the trial.
- * Mirrors ensure_user_team: earliest teams row with kind='personal'. null
- * when the user has no personal team; create_company_for_user then leaves
- * team_id NULL. Explicit team_id args are authorized by the DB gate instead.
- */
-async function defaultTeamForUser(supabase: SupabaseClient, userId: string): Promise<string | null> {
-  const { data, error } = await supabase
-    .from('team_members')
-    .select('team_id, teams!inner(kind, created_at)')
-    .eq('user_id', userId)
-    .eq('teams.kind', 'personal')
-    .order('teams(created_at)', { ascending: true })
-    .order('teams(id)', { ascending: true })
-    .limit(1)
-    .maybeSingle()
-  if (error) {
-    log.warn('default team lookup failed', { error: error.message })
-    return null
-  }
-  return (data?.team_id as string | undefined) ?? null
-}
-
 function paginatedSchema(
   itemsKey: string,
   itemSchema: Record<string, unknown> = { type: 'object' },
@@ -7358,7 +7331,8 @@ export const tools: McpTool[] = [
         throw codedError('VALIDATION_ERROR', `Invalid fiscal period: ${plan.error}`)
       }
 
-      const teamId = parsed.data.team_id ?? (await defaultTeamForUser(supabase, userId))
+      // A failed lookup throws COMPANY_CREATE_FAILED: no preview, nothing created.
+      const teamId = parsed.data.team_id ?? (await defaultTeamForNewCompany(supabase, userId))
       const preview = {
         name: parsed.data.name,
         entity_type: parsed.data.entity_type,
@@ -7463,7 +7437,7 @@ export const tools: McpTool[] = [
   ...createFormationTools({
     annotations: annotationsForEffect('additive', { idempotentHint: true, openWorldHint: true }),
     appOrigin: connectLinkBaseUrl,
-    defaultTeamForUser,
+    defaultTeamForUser: defaultTeamForNewCompany,
     newCompanyReach,
   }),
 
