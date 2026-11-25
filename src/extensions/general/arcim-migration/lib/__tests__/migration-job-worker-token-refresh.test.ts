@@ -58,18 +58,24 @@ function consentDatabase(expiresInMs: number) {
     }
     return chain
   }
-  return { supabase: { from } as unknown as SupabaseClient, storedToken: () => openConsentToken(row.access_token as string) }
+  return { supabase: { from } as unknown as SupabaseClient, storedToken: () => openConsentToken(row.access_token as string),
+    /** Another request (a sync, the document import) rotates the pair and saves it. */
+    rotateElsewhere: (token: string) => Object.assign(row, { access_token: sealConsentToken(token),
+      refresh_token: sealConsentToken(`${token}-refresh`), credential_revision: `revision-${++revisions}` }) }
 }
 
 /**
  * Fortnox. The first token answers `answers` requests and is then refused,
- * as when its hour ends mid-run. The token endpoint swaps refresh-1 for a
- * new pair, or refuses it (`invalid_grant`: the grant is gone).
+ * as when its hour ends mid-run (`onRetire` runs then). The token endpoint
+ * swaps refresh-1 for a new pair, or refuses it (`invalid_grant`: the grant
+ * is gone). `alsoLive` are tokens issued to other requests.
  */
-function fortnox(options: { answers: number; refresh?: 'invalid_grant'; refuseRefreshed?: boolean }) {
+function fortnox(options: { answers: number; refresh?: 'invalid_grant'; refuseRefreshed?: boolean
+  alsoLive?: string[]; onRetire?: () => void }) {
   const refreshes: string[] = []
-  const live = new Set(['access-1'])
+  const live = new Set(['access-1', ...(options.alsoLive ?? [])])
   let answered = 0
+  let retired = false
   const json = (status: number, body: unknown) =>
     new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
   const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -81,7 +87,11 @@ function fortnox(options: { answers: number; refresh?: 'invalid_grant'; refuseRe
       return json(200, { access_token: 'access-2', refresh_token: 'refresh-2', expires_in: 3600, token_type: 'bearer', scope: 'customer' })
     }
     const token = new Headers(init?.headers).get('Authorization')?.replace(/^Bearer /, '')
-    if (token === 'access-1' && answered === options.answers) live.delete('access-1')
+    if (token === 'access-1' && answered === options.answers && !retired) {
+      retired = true
+      live.delete('access-1')
+      options.onRetire?.()
+    }
     if (!token || !live.has(token)) return json(401, { message: 'unauthorized' })
     if (token === 'access-1') answered++
     const page = url.match(/\/customers\?page=(\d+)$/)?.[1]
@@ -97,8 +107,13 @@ function fortnox(options: { answers: number; refresh?: 'invalid_grant'; refuseRe
   return { fetch, refreshes }
 }
 
-/** The job's own tables, as the worker's RPCs move them (as in migration-job-worker.test.ts). */
-function jobDatabase(job: Partial<ProviderMigrationJob>, pending: string[] = []) {
+/**
+ * The job's own tables, as the worker's RPCs move them (as in
+ * migration-job-worker.test.ts). `commitError` is a commit the database
+ * refuses, as lock_provider_migration_job does for a consent it no longer
+ * accepts.
+ */
+function jobDatabase(job: Partial<ProviderMigrationJob>, pending: string[] = [], commitError?: string) {
   const row = { id: 'job', company_id: 'company', user_id: 'user', consent_id: 'consent', provider: 'fortnox',
     resources: ['customers'], resource_index: 1, next_page: 1, phase: 'discover', state: 'queued', error_code: null,
     account_key: '5560000000', attempt: 0, failures: 0, fiscal_year_scope: null, ...job } as ProviderMigrationJob
@@ -122,6 +137,7 @@ function jobDatabase(job: Partial<ProviderMigrationJob>, pending: string[] = [])
       else if (args.p_next_page !== 0) row.next_page = args.p_next_page as number
     }
     if (name === 'commit_provider_migration_records') {
+      if (commitError) return { data: null, error: { message: commitError, code: 'P0001' } }
       for (const r of args.p_records as { id: string; error?: string; skip?: string }[]) {
         chunks.find(c => c.id === r.id)!.state = r.error ? 'needs_attention' : r.skip ? 'skipped' : 'done'
       }
@@ -218,5 +234,55 @@ describe('a Fortnox token that ends mid-run', () => {
     expect(db.job).toMatchObject({ state: 'needs_attention', error_code: 'PROVIDER_AUTH_EXPIRED' })
     expect(db.chunks.map(c => c.state)).toEqual(['done', 'done', 'pending', 'pending'])
     expect(provider.refreshes).toEqual(['refresh-1'])
+  })
+
+  it('takes the pair another request rotated meanwhile, without rotating it again', async () => {
+    const consent = consentDatabase(60_000)
+    mocks.tokens = consent.supabase
+    const provider = fortnox({ answers: 2, alsoLive: ['access-3'], onRetire: () => consent.rotateElsewhere('access-3') })
+    vi.stubGlobal('fetch', provider.fetch)
+    const db = jobDatabase({ phase: 'import', resource_index: 2 }, ['1', '2', '3', '4'])
+
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: 'job', budgetMs: 60_000 })
+
+    expect(db.job).toMatchObject({ state: 'completed', error_code: null })
+    expect(db.chunks.map(c => c.state)).toEqual(['done', 'done', 'done', 'done'])
+    // A second rotation would have spent the other request's refresh token.
+    expect(provider.refreshes).toEqual([])
+    expect(consent.storedToken()).toBe('access-3')
+  })
+
+  it('rotates nothing too late in the run to save the pair: the next run refreshes and finishes', async () => {
+    const consent = consentDatabase(60_000)
+    mocks.tokens = consent.supabase
+    const provider = fortnox({ answers: 2 })
+    vi.stubGlobal('fetch', provider.fetch)
+    const db = jobDatabase({ phase: 'import', resource_index: 2 }, ['1', '2', '3', '4'])
+
+    // A 20 s run leaves less than the refresh and its save need (resolveConsent's refreshWithinBudget).
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: 'job', budgetMs: 20_000 })
+
+    expect(db.job).toMatchObject({ state: 'queued', error_code: null, failures: 0 })
+    expect(db.chunks.map(c => c.state)).toEqual(['done', 'done', 'pending', 'pending'])
+    expect(provider.refreshes).toEqual([])
+    expect(consent.storedToken()).toBe('access-1')
+
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: 'job', budgetMs: 60_000 })
+
+    expect(db.job).toMatchObject({ state: 'completed', error_code: null })
+    expect(db.chunks.map(c => c.state)).toEqual(['done', 'done', 'done', 'done'])
+    expect(provider.refreshes).toEqual(['refresh-1'])
+  })
+
+  it('is told apart from a consent the database refuses, which parks the job without a refresh', async () => {
+    mocks.tokens = consentDatabase(60_000).supabase
+    const provider = fortnox({ answers: 10 })
+    vi.stubGlobal('fetch', provider.fetch)
+    const db = jobDatabase({ phase: 'import', resource_index: 2 }, ['1', '2'], 'PROVIDER_AUTH_EXPIRED')
+
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: 'job', budgetMs: 60_000 })
+
+    expect(db.job).toMatchObject({ state: 'needs_attention', error_code: 'PROVIDER_AUTH_EXPIRED' })
+    expect(provider.refreshes).toEqual([])
   })
 })

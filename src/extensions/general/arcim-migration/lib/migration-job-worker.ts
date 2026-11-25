@@ -6,7 +6,7 @@ import { ExecutionBudgetExceeded, withExecutionDeadline } from '@/lib/http/execu
 import { resolveConsent, type ResolvedConsent } from '@/lib/providers/resolve-consent'
 import { classifyProviderError, providerRefusalReason } from '@/lib/providers/with-provider-call'
 import { readProviderRefusal } from '@/lib/providers/read-refusal'
-import { fortnoxApiErrorCode } from '@/lib/providers/fortnox/client'
+import { FortnoxApiError, fortnoxApiErrorCode } from '@/lib/providers/fortnox/client'
 import { fetchMigrationPage, hydrateCustomers, hydrateSalesInvoices, hydrateSupplierInvoices, hydrateSuppliers, type HydrationReport, type MigrationDto } from '@/lib/providers/provider-data-fetcher'
 import { migrationRetrySeconds, type MigrationJobScope, type ProviderMigrationJob, type MigrationResource } from '@/lib/providers/migration-contract'
 import { sealMigrationPayload, openMigrationPayload } from '@/lib/providers/migration-payload'
@@ -749,22 +749,23 @@ async function fetchRegisterPage(supabase: SupabaseClient, job: ProviderMigratio
   }
 }
 
-/**
- * The job's connection: its consent's token, refreshed by resolveConsent when
- * it has expired or when it is `rejectedAccessToken`, the one the provider
- * just refused. Inside the worker's budget, so a refresh starts only with
- * time left to save the pair the provider rotates. The consent must still
- * name the provider and account the job imports from.
- */
-async function jobConnection(job: ProviderMigrationJob, consentId: string, deadline: number,
-  rejectedAccessToken?: string): Promise<ResolvedConsent> {
-  const connection = await withinMigrationDeadline(withExecutionDeadline(deadline, 'migration-credentials',
-    () => resolveConsent(job.company_id, consentId, { rejectedAccessToken })), deadline)
+/** A connection the job may import through: its consent still names the job's provider and account. */
+function sameSource(job: ProviderMigrationJob, connection: ResolvedConsent): ResolvedConsent {
   const sourceAccount = String(connection.consent.org_number ?? '').replace(/[^a-z0-9]/gi, '') || connection.providerCompanyId
   if (connection.consent.provider !== job.provider || sourceAccount !== job.account_key) {
     throw new Error('MIGRATION_SOURCE_IDENTITY_CHANGED')
   }
   return connection
+}
+
+/**
+ * Did Fortnox refuse the access token itself? Its 401 ends the token, which a
+ * refresh may cure, as import-documents.ts and repair-imported-registers.ts
+ * read it. A refused register or licence, or a consent the database no
+ * longer accepts, is not the token's age (classifyProviderError says which).
+ */
+function fortnoxRefusedToken(error: unknown): boolean {
+  return error instanceof FortnoxApiError && error.statusCode === 401 && failureCode(error) === 'PROVIDER_AUTH_EXPIRED'
 }
 
 /** Cron owns recovery. A browser nudge only reduces latency, including in local dev. */
@@ -806,7 +807,7 @@ export async function runProviderMigrationWorker(options: {
     try {
       const consentId = job.consent_id
       if (!consentId) throw new Error('PROVIDER_AUTH_EXPIRED')
-      let connection = await jobConnection(job, consentId, deadline - 5000)
+      let connection = sameSource(job, await withinMigrationDeadline(resolveConsent(job.company_id, consentId), deadline - 5000))
       // Whether this claim has traded a refused token for a new one (see the catch below).
       let tokenReplaced = false
       while (Date.now() < deadline - 10_000 && job.state === 'running') {
@@ -853,17 +854,21 @@ export async function runProviderMigrationWorker(options: {
             else await withinMigrationDeadline(followupBatch(supabase, job, chunks, deadline - 5000), deadline - 5000)
           }
         } catch (error) {
-          // An access token lasts an hour (Fortnox's) and a run minutes, and
-          // the token is read once per run. A run that starts near the end of
-          // the hour meets the provider's 401 midway, a moment before the
-          // expiry we stamped (resolveConsent's B11): the token has ended, not
-          // the grant. So the run asks once for a token in place of the
-          // refused one and repeats the step, which every phase can replay:
-          // an import commits what it prepared before the refusal. The same
-          // token back (Bokio's do not refresh), a refresh that fails, or a
-          // refusal of the new token is the connection's answer, as before.
-          if (tokenReplaced || failureCode(error) !== 'PROVIDER_AUTH_EXPIRED') throw error
-          const replacement = await jobConnection(job, consentId, deadline - 5000, connection.accessToken)
+          // A Fortnox access token lasts an hour and a run minutes, and the
+          // token is read once per run. A run that starts near the end of the
+          // hour meets Fortnox's 401 midway, a moment before the expiry we
+          // stamped (resolveConsent's B11): the token has ended, not the
+          // grant. So the run asks once for a token in place of the refused
+          // one and repeats the step, which every phase can replay: an import
+          // commits what it prepared before the refusal. Inside the budget a
+          // refresh starts only with time left to save the pair Fortnox
+          // rotates; later than that the step waits for the next run, which
+          // refreshes. A refresh Fortnox refuses, or a refusal of the new
+          // token, is the connection's answer, as before.
+          if (tokenReplaced || !fortnoxRefusedToken(error)) throw error
+          const replacement = sameSource(job, await withinMigrationDeadline(withExecutionDeadline(deadline - 5000,
+            'migration-credentials', () => resolveConsent(job.company_id, consentId, { rejectedAccessToken: connection.accessToken })),
+            deadline - 5000))
           if (replacement.accessToken === connection.accessToken) throw error
           connection = replacement
           tokenReplaced = true
