@@ -272,6 +272,31 @@ function upcomingToRow(companyId: string, tx: SkatteverketUpcomingTransaction): 
 }
 
 /**
+ * One row per dedup_key for the upsert. Postgres refuses an INSERT ... ON
+ * CONFLICT DO UPDATE that proposes one key twice ("ON CONFLICT DO UPDATE
+ * command cannot affect row a second time"), so a response that carried a key
+ * twice failed the whole sync, every hour until Skatteverket's answer changed
+ * (2026-11-25). A booked row wins over an upcoming one with the same key: the
+ * booked row is the transaction, the upcoming one only predicts it, the order
+ * the takeover of file-imported rows and partitionFileRows keep too. Of two
+ * rows with the same status the first in the response stays. Each row left
+ * out comes back with the row kept in its place.
+ */
+function oneRowPerDedupKey(rows: SyncRow[]): { rows: SyncRow[]; dropped: { row: SyncRow; kept: SyncRow }[] } {
+  const kept = new Map<string, SyncRow>()
+  for (const row of rows) {
+    const held = kept.get(row.dedup_key)
+    if (!held || (held.status === 'upcoming' && row.status === 'booked')) kept.set(row.dedup_key, row)
+  }
+  const dropped: { row: SyncRow; kept: SyncRow }[] = []
+  for (const row of rows) {
+    const keptRow = kept.get(row.dedup_key)
+    if (keptRow && keptRow !== row) dropped.push({ row, kept: keptRow })
+  }
+  return { rows: [...kept.values()], dropped }
+}
+
+/**
  * Delete the company's stored upcoming rows whose dedup_key is not among
  * `currentKeys`, the kommande rows of the response just stored. Only rows the
  * API wrote and nobody has acted on: a linked or ignored row is a step in the
@@ -587,9 +612,24 @@ export async function syncSkattekonto(
   // hash-keys on the same material an id-less kommande row would, so an
   // upcoming row colliding with an existing booked row is dropped rather
   // than upserted.
-  const safeRows = allRows.filter(
-    r => r.status !== 'upcoming' || existingMap.get(r.dedup_key)?.status !== 'booked',
+  const { rows: safeRows, dropped } = oneRowPerDedupKey(
+    allRows.filter(
+      r => r.status !== 'upcoming' || existingMap.get(r.dedup_key)?.status !== 'booked',
+    ),
   )
+  if (dropped.length > 0) {
+    // Minimized like the skipped-row warning above: no text, no amounts.
+    log.warn('skattekonto response repeated a transaction, one row kept per key', {
+      companyId: ctx.companyId,
+      rows: dropped.map(d => ({
+        transaktionsidentitet: d.row.transaktionsidentitet,
+        transaktionsdatum: d.row.transaktionsdatum,
+        droppedStatus: d.row.status,
+        keptStatus: d.kept.status,
+        amountDiffers: d.row.belopp_skatteverket !== d.kept.belopp_skatteverket,
+      })),
+    })
+  }
 
   if (safeRows.length > 0) {
     const { error } = await ctx.supabase
@@ -735,10 +775,12 @@ export async function syncSkattekonto(
     })
   }
 
-  // First-appearance upcoming transactions.
+  // First-appearance upcoming transactions, one per row stored as upcoming: a
+  // key the response repeated is announced once, and one kept as booked not at all.
+  const storedUpcoming = new Set(safeRows.filter(r => r.status === 'upcoming').map(r => r.dedup_key))
   for (const tx of kommande) {
     const key = computeDedupKey(tx)
-    if (existingMap.has(key)) continue
+    if (existingMap.has(key) || !storedUpcoming.delete(key)) continue
     await ctx.emit({
       type: 'skattekonto.transaction.upcoming',
       payload: {
