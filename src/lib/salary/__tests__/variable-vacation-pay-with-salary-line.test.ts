@@ -3,8 +3,9 @@
  * under a central kollektivavtal (Semesterlagen 2 a § andra stycket,
  * lib/salary/variable-vacation-pay.ts): the line command every door runs
  * accepts the mark only on a positive semesterersättning row of an employee
- * on sammalöneregeln, records the confirmation in audit_log (or removes the
- * row again when it cannot), and keeps the row semesterersättning on an edit.
+ * on sammalöneregeln, records the confirmation in audit_log before the row is
+ * written (and writes nothing when it cannot), and keeps the row
+ * semesterersättning on an edit.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -109,7 +110,8 @@ describe('createPayslipLine: semesterlön for rörliga lönedelar paid with the 
 
     expect(result.ok).toBe(true)
     if (result.ok) expect(result.data).toMatchObject({ id: LINE_ID, settles_variable_vacation_pay: true })
-    expect(mock.findCall('salary_line_items', 'insert')?.[0]).toMatchObject({
+    const inserted = mock.findCall('salary_line_items', 'insert')?.[0] as { id?: string }
+    expect(inserted).toMatchObject({
       item_type: 'semesterersattning',
       amount: 600,
       is_vacation_basis: false,
@@ -118,33 +120,33 @@ describe('createPayslipLine: semesterlön for rörliga lönedelar paid with the 
     expect(serviceFrom).toHaveBeenCalledWith('audit_log')
     expect(auditInsert).toHaveBeenCalledTimes(1)
     const record = auditInsert.mock.calls[0][0]
+    // The confirmation is recorded first, under the id the row is then inserted with.
+    expect(inserted.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
     expect(record).toMatchObject({
       user_id: USER_ID,
       company_id: COMPANY_ID,
       action: 'GUARD_BYPASSED',
       table_name: 'salary_line_items',
-      record_id: LINE_ID,
+      record_id: inserted.id,
       actor_type: 'user',
       new_state: {
         guard: VARIABLE_VACATION_PAY_WITH_SALARY_GUARD,
         reason: 'kollektivavtal',
         employee_id: EMPLOYEE_ID,
         salary_run_id: RUN_ID,
-        salary_line_item_id: LINE_ID,
+        salary_line_item_id: inserted.id,
       },
     })
     // Ids only: never the amount.
     expect(JSON.stringify(record)).not.toContain('600')
   })
 
-  it('removes the line again and fails when the confirmation cannot be recorded', async () => {
+  it('writes no line and fails when the confirmation cannot be recorded', async () => {
     for (const failure of ['error', 'throw'] as const) {
       mock = createQueuedMockSupabase()
       supabase = mock.supabase as unknown as SupabaseClient
       enqueueGate()
       mock.enqueue({ data: { employee: { vacation_rule: 'sammaloneregeln' } } })
-      mock.enqueue({ data: STORED_LINE })
-      mock.enqueue({ data: null })
       if (failure === 'error') auditInsert.mockResolvedValueOnce({ error: { message: 'boom', code: 'XX000' } })
       else auditInsert.mockRejectedValueOnce(new Error('network'))
 
@@ -154,17 +156,18 @@ describe('createPayslipLine: semesterlön for rörliga lönedelar paid with the 
         code: 'INTERNAL_ERROR',
         details: { message: VARIABLE_VACATION_PAY_WITH_SALARY_RECORD_MESSAGE },
       })
-      expect(mock.findCall('salary_line_items', 'delete'), failure).toBeDefined()
+      expect(mock.findCall('salary_line_items', 'insert'), failure).toBeUndefined()
     }
   })
 
-  it('keeps the line when the confirmation is recorded: nothing is removed', async () => {
+  it('fails when the line cannot be inserted after its confirmation, and stores no marked line', async () => {
     enqueueGate()
     mock.enqueue({ data: { employee: { vacation_rule: 'sammaloneregeln' } } })
-    mock.enqueue({ data: STORED_LINE })
+    mock.enqueue({ data: null, error: { message: 'insert failed' } })
 
     const result = await create(PAID_WITH_SALARY)
-    expect(result.ok).toBe(true)
+    expect(result).toEqual({ ok: false, code: 'INTERNAL_ERROR', details: { message: 'insert failed' } })
+    expect(auditInsert).toHaveBeenCalledTimes(1)
     expect(mock.findCall('salary_line_items', 'delete')).toBeUndefined()
   })
 
@@ -223,6 +226,8 @@ describe('createPayslipLine: semesterlön for rörliga lönedelar paid with the 
     const result = await create({ ...PAID_WITH_SALARY, settles_variable_vacation_pay: undefined })
     expect(result.ok).toBe(true)
     expect(mock.findCall('salary_line_items', 'insert')?.[0]).not.toHaveProperty('settles_variable_vacation_pay')
+    // The database gives it its id, as before.
+    expect(mock.findCall('salary_line_items', 'insert')?.[0]).not.toHaveProperty('id')
     expect(auditInsert).not.toHaveBeenCalled()
   })
 })

@@ -24,8 +24,9 @@
  * the semesterår; a central kollektivavtal may deviate (2 a § andra stycket).
  * The row is marked only on the caller's word that such an agreement
  * applies, kept the same way: ids only, never the amount. The mark rests on
- * that record, so this one reports whether it was written and the caller
- * removes the row when it was not.
+ * that record, so this one reports whether it was written: the caller records
+ * it before the row is inserted, under the row's id, and writes no row when
+ * it was not.
  */
 
 import { getActor } from '@/lib/bookkeeping/actor-context'
@@ -103,8 +104,9 @@ export interface VariableVacationPayKollektivavtalRecord {
 /**
  * Records the confirmation behind a row marked settles_variable_vacation_pay.
  * True when the audit row was written. A failure is logged and reported as
- * false, never thrown: the caller (payslip-lines.ts) then removes the marked
- * row, so no row is marked without its confirmation.
+ * false, never thrown: the caller (payslip-lines.ts) records it before it
+ * inserts the marked row and then writes no row, so no row is marked without
+ * its confirmation.
  */
 export async function recordVariableVacationPayKollektivavtal(input: VariableVacationPayKollektivavtalRecord): Promise<boolean> {
   // Every line door runs inside a commit-actor scope (withRouteContext,

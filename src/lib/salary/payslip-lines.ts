@@ -38,8 +38,8 @@
  *     lönedelar paid with the salary under a central kollektivavtal,
  *     variable-vacation-pay.ts) is a positive semesterersättning row of an
  *     employee on sammalöneregeln, and the confirmation is recorded in
- *     audit_log: when it cannot be recorded the row is removed again and the
- *     add fails. The mark is set when the row is added, never by an edit,
+ *     audit_log before the row is written: when it cannot be recorded
+ *     nothing is written and the add fails. The mark is set when the row is added, never by an edit,
  *     and an edit's answer carries it.
  *
  * Result-object convention mirrors lib/salary/run-calculation.ts:
@@ -47,6 +47,7 @@
  * in lib/errors/structured-errors.ts.
  */
 
+import { randomUUID } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { z } from 'zod'
 import type { CreateSalaryLineItemSchema, UpdateSalaryLineItemSchema } from '@/lib/api/schemas'
@@ -58,7 +59,6 @@ import { invalidateRunCalculation } from '@/lib/salary/invalidate-calculation'
 import { isBaseSalaryDisplayLine, isBaseSalaryLineType, payslipLineFlags } from '@/lib/salary/line-item-roles'
 import { RUN_COMPUTED_TAX_ACCOUNT_MESSAGE, isRunComputedTaxAccount } from '@/lib/salary/line-account-override'
 import { recordVariableVacationPayKollektivavtal } from '@/lib/salary/sammaloneregeln-kollektivavtal-record'
-import { createLogger } from '@/lib/logger'
 import type { SalaryLineItemType } from '@/types'
 import {
   TEXT_ROW_RETYPE_MESSAGE,
@@ -66,8 +66,6 @@ import {
   normalizeTextRow,
   validatePayslipLineContent,
 } from '@/lib/salary/text-rows'
-
-const log = createLogger('salary/payslip-lines')
 
 export type PayslipLineResult<T> =
   | { ok: true; data: T }
@@ -396,15 +394,18 @@ export async function createPayslipLine(
   if (taxAccount) return taxAccount
   // Semesterlön for rörliga lönedelar paid with the salary: the caller's
   // word that a central kollektivavtal allows it, judged here and recorded
-  // once the row exists. Written only when true, so no other row names the
-  // column (absent until migration 20261125180000 is applied).
+  // before the row is written, under the id the row then gets. Written only
+  // when true, so no other row names the column (absent until migration
+  // 20261125180000 is applied).
   const settles = input.settles_variable_vacation_pay === true
   if (settles) {
     const refusal = await variableVacationPayWithSalaryRefusal(supabase, args.companyId, sre.data.id, input)
     if (refusal) return refusal
   }
+  const markedId = settles ? randomUUID() : null
 
   const row = {
+    ...(markedId ? { id: markedId } : {}),
     salary_run_employee_id: sre.data.id,
     company_id: args.companyId,
     item_type: input.item_type,
@@ -430,6 +431,21 @@ export async function createPayslipLine(
   const invalidated = await invalidateRunCalculation(supabase, args.companyId, { salaryRunEmployeeId: sre.data.id })
   if (invalidated) return invalidated
 
+  // The mark rests on the confirmation, so the confirmation is recorded first:
+  // no marked row ever stands without it. A row that then fails to insert
+  // leaves a confirmation the user did give, for a row that was never stored.
+  if (markedId) {
+    const recorded = await recordVariableVacationPayKollektivavtal({
+      companyId: args.companyId,
+      employeeId: sre.data.employee_id,
+      salaryRunId: args.salaryRunId,
+      salaryLineItemId: markedId,
+    })
+    if (!recorded) {
+      return { ok: false, code: 'INTERNAL_ERROR', details: { message: VARIABLE_VACATION_PAY_WITH_SALARY_RECORD_MESSAGE } }
+    }
+  }
+
   const { data: created, error } = await supabase
     .from('salary_line_items')
     .insert(row)
@@ -440,31 +456,7 @@ export async function createPayslipLine(
     return { ok: false, code: 'INTERNAL_ERROR', details: { message: error.message } }
   }
   const line = created as unknown as SalaryLineItemRow
-  if (settles) {
-    const recorded = await recordVariableVacationPayKollektivavtal({
-      companyId: args.companyId,
-      employeeId: sre.data.employee_id,
-      salaryRunId: args.salaryRunId,
-      salaryLineItemId: line.id,
-    })
-    if (!recorded) {
-      // The mark rests on the confirmation: a marked row never stands without it.
-      const { error: undoError } = await supabase
-        .from('salary_line_items')
-        .delete()
-        .eq('id', line.id)
-        .eq('company_id', args.companyId)
-      if (undoError) {
-        log.error('could not remove a marked salary line whose kollektivavtal confirmation was not recorded', new Error(undoError.message), {
-          companyId: args.companyId,
-          salaryLineItemId: line.id,
-        })
-      }
-      return { ok: false, code: 'INTERNAL_ERROR', details: { message: VARIABLE_VACATION_PAY_WITH_SALARY_RECORD_MESSAGE } }
-    }
-    return { ok: true, data: { ...line, settles_variable_vacation_pay: true } }
-  }
-  return { ok: true, data: line }
+  return { ok: true, data: markedId ? { ...line, settles_variable_vacation_pay: true } : line }
 }
 
 /**
