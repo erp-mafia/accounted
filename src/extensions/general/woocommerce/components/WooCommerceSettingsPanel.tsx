@@ -18,7 +18,7 @@ import {
   WOO_SYNC_TIMEOUT_MS,
   type WooSyncPayload,
 } from '../lib/settings-actions'
-import { MAX_BACKFILL_YEARS } from '../types'
+import { KEY_SUFFIX_LENGTH, MAX_BACKFILL_YEARS } from '../types'
 import type { WooCommerceConnectionStatusView } from '../types'
 
 /** "#1042 (2026-08-01)": the order number the store shows, plus its date. */
@@ -29,6 +29,69 @@ function skippedOrderLabel(order: { order_number: string; order_date: string | n
 /** Client twin of wooStoreScope(): store identity used by the mapping table. */
 function storeScopeOf(storeUrl: string): string {
   return storeUrl.replace(/^https:\/\//, '')
+}
+
+/**
+ * The last step of the store's authorization handshake: the store goes live
+ * once the user types the last characters of the new key, which only the
+ * store's own admin shows (POST /verify-store).
+ */
+function StoreProofForm({ connectionId, reload }: { connectionId: string; reload: () => Promise<void> }) {
+  const t = useTranslations('woocommerce')
+  const tf = useTranslations('feed_connector')
+  const locale = useLocale() as ErrorLocale
+  const { toast } = useToast()
+  const [suffix, setSuffix] = useState('')
+  const [verifying, setVerifying] = useState(false)
+  const inputId = `woocommerce-key-suffix-${connectionId}`
+
+  async function handleVerify() {
+    if (verifying) return
+    setVerifying(true)
+    try {
+      const result = await wooRequest({
+        url: '/api/extensions/ext/woocommerce/verify-store',
+        body: { connection_id: connectionId, key_suffix: suffix },
+        locale,
+      })
+      if (!result.ok) {
+        toast({
+          title: tf('connect_failed_title'),
+          description: failureDescription(result, { timeout: t('action_timeout'), network: t('action_network') }),
+          variant: 'destructive',
+        })
+        // A refusal may have closed the attempt (expired, store taken): show it.
+        await reload()
+        return
+      }
+      toast({ title: t('connected_toast_title'), description: t('connected_toast_description') })
+      await reload()
+    } finally {
+      setVerifying(false)
+    }
+  }
+
+  return (
+    <div className="max-w-prose space-y-2 border-t-hairline pt-4">
+      <p className="text-sm font-medium">{t('proof_title')}</p>
+      <p className="text-sm text-muted-foreground">{t('proof_hint', { count: KEY_SUFFIX_LENGTH })}</p>
+      <Label htmlFor={inputId}>{t('proof_label', { count: KEY_SUFFIX_LENGTH })}</Label>
+      <div className="flex flex-wrap items-center gap-2">
+        <Input
+          id={inputId}
+          className="w-40 font-mono"
+          autoComplete="off"
+          spellCheck={false}
+          value={suffix}
+          onChange={(e) => setSuffix(e.target.value)}
+          disabled={verifying}
+        />
+        <Button onClick={handleVerify} disabled={!suffix.trim()} loading={verifying}>
+          {verifying ? t('proof_verifying') : t('proof_submit')}
+        </Button>
+      </div>
+    </div>
+  )
 }
 
 /**
@@ -80,14 +143,12 @@ export default function WooCommerceSettingsPanel() {
           ? t('sync_unknown_currency', { count: outcome.values.unknownCurrency })
           : null
       }
-      renderNotes={(c) =>
-        c.status === 'pending' ? <p className="mt-1 text-sm text-muted-foreground">{t('pending_note')}</p> : null
-      }
-      renderExtras={(c) => {
+      renderExtras={(c, { reload }) => {
         const skipped = c.skipped_currency_orders
         const skippedMore = skipped ? skipped.count - skipped.orders.length : 0
         return (
           <>
+            {c.status === 'pending' && <StoreProofForm connectionId={c.id} reload={reload} />}
             {skipped && skipped.count > 0 && (
               // Orders the sync skipped for an unusable currency stay listed
               // until a sync imports them: the cursor has moved past them, so
