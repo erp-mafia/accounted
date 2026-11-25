@@ -165,7 +165,7 @@ export async function getTransaktioner(
   omfragad: string,
   datumFrom: string | undefined,
   actor: SkvAuditActor,
-): Promise<SkatteverketTransaktionerResponse> {
+): Promise<SkatteverketTransaktionerResponse & { listed: boolean }> {
   const qs = datumFrom ? `?datumFrom=${encodeURIComponent(datumFrom)}` : ''
   const response = await skvRequestWithAuth(
     auth,
@@ -184,5 +184,10 @@ export async function getTransaktioner(
   return {
     tidigareTransaktioner: data.tidigareTransaktioner ?? [],
     kommandeTransaktioner: data.kommandeTransaktioner ?? [],
+    // False for a body that carries neither list: the empty lists above are
+    // then a stand-in, not Skatteverket saying the account has no rows, and
+    // the sync must not read them as "every upcoming row was withdrawn".
+    listed:
+      Array.isArray(data.tidigareTransaktioner) || Array.isArray(data.kommandeTransaktioner),
   }
 }

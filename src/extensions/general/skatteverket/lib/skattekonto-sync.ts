@@ -272,6 +272,47 @@ function upcomingToRow(companyId: string, tx: SkatteverketUpcomingTransaction): 
 }
 
 /**
+ * Delete the company's stored upcoming rows whose dedup_key is not among
+ * `currentKeys`, the kommande rows of the response just stored. Only rows the
+ * API wrote and nobody has acted on: a linked or ignored row is a step in the
+ * books with its own behandlingshistorik (20261101003500) and stays. The
+ * delete repeats those conditions, so a row linked or ignored between the read
+ * and the delete is kept. Returns how many rows were removed.
+ */
+async function removeWithdrawnUpcomingRows(
+  supabase: SupabaseClient,
+  companyId: string,
+  currentKeys: Set<string>,
+): Promise<number> {
+  const stored = await fetchAllRows<{ id: string; dedup_key: string }>(({ from, to }) =>
+    supabase
+      .from('skattekonto_transactions')
+      .select('id, dedup_key')
+      .eq('company_id', companyId)
+      .eq('status', 'upcoming')
+      .eq('source', 'api')
+      .is('journal_entry_id', null)
+      .eq('is_ignored', false)
+      .order('id', { ascending: true })
+      .range(from, to),
+  )
+  const withdrawnIds = stored.filter(r => !currentKeys.has(r.dedup_key)).map(r => r.id)
+  if (withdrawnIds.length === 0) return 0
+
+  const { data: removed, error } = await supabase
+    .from('skattekonto_transactions')
+    .delete()
+    .eq('company_id', companyId)
+    .in('id', withdrawnIds)
+    .eq('status', 'upcoming')
+    .is('journal_entry_id', null)
+    .eq('is_ignored', false)
+    .select('id')
+  if (error) throw new Error(error.message)
+  return removed?.length ?? 0
+}
+
+/**
  * Sync skattekonto data for the active company in `ctx`.
  *
  * Steps:
@@ -279,7 +320,8 @@ function upcomingToRow(companyId: string, tx: SkatteverketUpcomingTransaction): 
  * 2. Fetch saldo + transaktioner in parallel (rate-limited).
  * 3. Upsert rows by (company_id, dedup_key). When a kommande row graduates
  *    to tidigare it's updated in place: same dedup_key, status flips,
- *    transaktionsidentitet populated.
+ *    transaktionsidentitet populated. Upcoming rows the response no longer
+ *    carries were withdrawn at Skatteverket and are removed.
  * 4. Auto-settle AGI tax payments from booked AGI debit rows (see
  *    agi-tax-settlement.ts).
  * 5. Cache the saldo response in extension_data with a fetched-at timestamp.
@@ -560,6 +602,31 @@ export async function syncSkattekonto(
     if (error) {
       log.error('upsert failed', { companyId: ctx.companyId, message: error.message })
       throw new Error(`Kunde inte spara skattekonto-transaktioner: ${error.message}`)
+    }
+  }
+
+  // SKV's kommande list is its whole current forecast, so a stored upcoming
+  // row this response no longer carries was withdrawn at Skatteverket (a debit
+  // that will not happen, or one reissued with another date, amount or text)
+  // and must leave the mirror. Skipped when the body carried no list at all
+  // (nothing was said) or a kommande row came back unusable (it may be one of
+  // the stored rows). Best effort: on failure the stale rows simply stay
+  // until the next sync.
+  if (transaktioner.listed && !currentSkipped.some(s => s.status === 'upcoming')) {
+    try {
+      const removed = await removeWithdrawnUpcomingRows(
+        ctx.supabase,
+        ctx.companyId,
+        new Set(upcomingRows.map(r => r.dedup_key)),
+      )
+      if (removed > 0) {
+        log.info('removed upcoming rows Skatteverket withdrew', { companyId: ctx.companyId, removed })
+      }
+    } catch (err) {
+      log.warn('withdrawn upcoming rows not removed', {
+        companyId: ctx.companyId,
+        message: err instanceof Error ? err.message : String(err),
+      })
     }
   }
 
