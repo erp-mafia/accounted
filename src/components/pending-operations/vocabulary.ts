@@ -275,6 +275,10 @@ export function singleActionWarning(
   }
   const ledger = registerBookedLedgerOf(operationType, params)
   if (ledger) return t(REGISTER_BOOKED_SENTENCE_KEYS[ledger])
+  // Payslips to a Kivra or Billo mailbox: the email link only for whoever it does not reach.
+  if (operationType === 'send_payslips' && (params?.channel === 'kivra' || params?.channel === 'billo')) {
+    return t('warning_send_payslips_mailbox')
+  }
   // A kontantfaktura (crm#1281): issued already paid, not merely sent.
   if (operationType === 'mark_invoice_sent' && params?.paid_at_issue) {
     return t('warning_mark_invoice_sent_paid_at_issue')

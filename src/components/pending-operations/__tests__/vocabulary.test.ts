@@ -86,6 +86,17 @@ describe('singleActionWarning', () => {
     }
   })
 
+  it('says payslips to a Kivra or Billo mailbox reach the employees there, and the email link the rest', () => {
+    for (const channel of ['kivra', 'billo']) {
+      const sentence = singleActionWarning('send_payslips', { salary_run_id: 'r-1', channel }, tSv)
+      expect(sentence).toContain('digitala brevlåda')
+      expect(sentence).toContain('säker länk')
+      expect(sentence).not.toMatch(/[\u2013\u2014]/)
+    }
+    expect(singleActionWarning('send_payslips', { salary_run_id: 'r-1' }, tSv)).toBe(svWarning('send_payslips'))
+    expect(singleActionWarning('send_payslips', { salary_run_id: 'r-1', channel: 'email' }, tSv)).toBe(svWarning('send_payslips'))
+  })
+
   it('ignores params for every other operation type', () => {
     expect(singleActionWarning('credit_invoice', { target: 'order' }, tSv)).toBe(svWarning('credit_invoice'))
     expect(singleActionWarning('unknown_type', { target: 'order' }, tSv)).toBe('')
