@@ -665,6 +665,7 @@ describe('validateApiKey', () => {
       expect(credentialActor({ apiKeyName: OAUTH_MCP_KEY_NAME, client: 'squidler', serviceAccount: null }).label).toBe('Squidler')
       expect(credentialActor({ apiKeyName: OAUTH_MCP_KEY_NAME, client: 'celemine', serviceAccount: null }).label).toBe('Celemine')
       expect(credentialActor({ apiKeyName: OAUTH_MCP_KEY_NAME, client: 'flytt_extension', serviceAccount: null }).label).toBe('Flytta till Accounted')
+      expect(credentialActor({ apiKeyName: OAUTH_MCP_KEY_NAME, client: 'native_app', serviceAccount: null }).label).toBe('App')
     })
 
     it('names a registered client by its own name', () => {
