@@ -5,7 +5,7 @@ import { calculateAgeAtYearStart, decryptPersonnummer } from './personnummer'
 import { avgiftAgeTier } from './avgift-tier'
 import { TAX_FREE_REIMBURSEMENT_TYPES } from './account-mapping'
 import { resolveVacationPayRate } from './vacation-pay-rate'
-import { sammaloneVariablePay } from './variable-vacation-pay'
+import { sammaloneVariablePay, variableVacationPaidWithSalary } from './variable-vacation-pay'
 import { roundOre } from '@/lib/money'
 import type { SalaryCalculationPolicy } from './calculation-policy'
 import { groupOneOffBasesByRate, oneOffTaxForGroup, validateOneOffTaxLine } from './one-off-tax'
@@ -144,6 +144,13 @@ export interface CalculationLineItem {
   oneOffTaxPercent?: number | null
   /** On a net_deduction_benefit_payment row: the benefit it pays for (benefit-payments.ts). */
   benefitType?: string | null
+  /**
+   * On a manual semesterersättning row: semesterlön for rörliga lönedelar
+   * paid with this salary under a central kollektivavtal
+   * (variable-vacation-pay.ts). Under sammalöneregeln it lowers Step 9's
+   * accrual of the variable part. Omitted = false.
+   */
+  settlesVariableVacationPay?: boolean
 }
 
 export interface CalculationStep {
@@ -930,15 +937,30 @@ export function calculateSalary(
     // It is paid after the semesterår ends, so until then it is a liability:
     // it accrues here with the tillägg and books on 2920/2940 like it. A run
     // without variable pay accrues exactly what it did before.
+    //
+    // A central kollektivavtal may let it be paid with each salary instead
+    // (2 a § andra stycket): what this payslip pays that way is no
+    // liability, so it lowers the variable part, at most to nothing. A
+    // payment for an earlier payslip's variable pay leaves this run's
+    // accrual alone; the payout after the semesterår and the year-end
+    // liability count it (variableVacationPayOwed).
     const variablePay = sammaloneVariablePay(input.lineItems)
     if (variablePay !== 0) {
       const variableRate = resolveVacationPayRate(input.vacationDaysPerYear, input.vacationPayRate)
-      const variablePart = roundOre(variablePay * variableRate)
+      const earned = roundOre(variablePay * variableRate)
+      const settled = Math.min(Math.max(0, variableVacationPaidWithSalary(input.lineItems)), Math.max(0, earned))
+      const variablePart = roundOre(earned - settled)
       vacationAccrual = roundOre(tillagg + variablePart)
       steps.push({
         label: `Semesteravsättning rörliga lönedelar (sammalöneregeln ${fmtPct(variableRate)})`,
-        formula: `rörlig lön (OB, övertid, bonus, provision) × ${fmtPct(variableRate)}`,
-        input: { variable_pay: variablePay, rate: variableRate },
+        formula:
+          settled > 0
+            ? `rörlig lön (OB, övertid, bonus, provision) × ${fmtPct(variableRate)} − utbetalt med lönen enligt kollektivavtal`
+            : `rörlig lön (OB, övertid, bonus, provision) × ${fmtPct(variableRate)}`,
+        input:
+          settled > 0
+            ? { variable_pay: variablePay, rate: variableRate, paid_with_salary: settled }
+            : { variable_pay: variablePay, rate: variableRate },
         output: variablePart,
       })
     }

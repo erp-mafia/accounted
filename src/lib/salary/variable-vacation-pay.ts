@@ -43,6 +43,22 @@
  * Rate: resolveVacationPayRate, the codebase's one semesterlön percentage:
  * 12 %, 14.4 % at 30 days, or a higher kollektivavtal rate. Never below the
  * statutory 12 %.
+ *
+ * Paid with the salary: a central kollektivavtal may deviate from 16 a § and
+ * 26 § (2 a § andra stycket: "Genom kollektivavtal, som på arbetstagarsidan
+ * har slutits eller godkänts av en central arbetstagarorganisation, får
+ * avvikelse göras från ... 16-16 b, 22, 26 ... §§", riksdagen.se, ändrad
+ * t.o.m. SFS 2014:424, read 2026-11-25) and let the semesterlön of the
+ * rörliga lönedelar be paid with each salary. Without one, an agreement that
+ * does so is void (2 §) and the payout after the semesterår stands. Such a
+ * payment is a manual semesterersättning row marked
+ * settles_variable_vacation_pay, the operator's word that the agreement
+ * applies (recorded in audit_log by payslip-lines.ts). It settles the
+ * variable pay of the semesterår its payslip falls in: the run's accrual
+ * (step 9) is lowered by it, at most to nothing, and the payout after the
+ * year and the year-end liability count it as already paid. Without the mark
+ * a hand-entered semesterersättning row is a wage the operator decided on
+ * and settles nothing.
  */
 
 import { roundOre, sumOre } from '@/lib/money'
@@ -106,6 +122,8 @@ export interface StoredPayslipLine {
   is_gross_deduction: boolean | null
   is_net_deduction: boolean | null
   calculation_source?: string | null
+  /** Absent until migration 20261125180000 is applied: read as false. */
+  settles_variable_vacation_pay?: boolean | null
 }
 
 function toLineLike(line: StoredPayslipLine): VariablePayLineLike {
@@ -127,6 +145,28 @@ function toLineLike(line: StoredPayslipLine): VariablePayLineLike {
  */
 export function isVariableVacationPayoutLine(line: StoredPayslipLine): boolean {
   return line.item_type === 'semesterersattning' && line.calculation_source === VACATION_COMPENSATION_SOURCE
+}
+
+/** The fields of a payslip line the paid-with-salary sum reads (engine shape). */
+export interface PaidWithSalaryLineLike {
+  itemType: SalaryLineItemType
+  amount: number
+  settlesVariableVacationPay?: boolean
+}
+
+/**
+ * Semesterlön for rörliga lönedelar paid with this salary under a central
+ * kollektivavtal (the module comment): the semesterersättning rows marked
+ * settles_variable_vacation_pay. Signed, like the rows. Only a manual row
+ * carries the mark (the DB CHECK of migration 20261125180000), so the
+ * engine's own payout row is never in it.
+ */
+export function variableVacationPaidWithSalary(lines: readonly PaidWithSalaryLineLike[]): number {
+  return sumOre(
+    lines
+      .filter((line) => line.itemType === 'semesterersattning' && line.settlesVariableVacationPay === true)
+      .map((line) => line.amount),
+  )
 }
 
 /**
@@ -156,6 +196,8 @@ export interface VariablePayRun {
   variablePay: number
   /** Variable vacation pay this payslip paid out (the engine-derived row). */
   payout: number
+  /** Variable vacation pay paid with this salary under a kollektivavtal (variableVacationPaidWithSalary). */
+  paidWithSalary?: number
 }
 
 /**
@@ -185,6 +227,19 @@ export function summarizePayslip(row: {
     payout: sammaloneregeln
       ? sumOre(row.lines.filter(isVariableVacationPayoutLine).map((line) => Number(line.amount) || 0))
       : 0,
+    // Read only where the payslip was calculated under sammalöneregeln, as
+    // the payout: under any other rule the row settled nothing of this.
+    paidWithSalary: sammaloneregeln
+      ? variableVacationPaidWithSalary(
+          row.lines
+            .filter((line) => !line.calculation_source)
+            .map((line) => ({
+              itemType: line.item_type as SalaryLineItemType,
+              amount: Number(line.amount) || 0,
+              settlesVariableVacationPay: line.settles_variable_vacation_pay === true,
+            })),
+        )
+      : 0,
   }
 }
 
@@ -203,7 +258,10 @@ export interface VariableVacationPayOwed {
   runCount: number
   rate: number
   owed: number
+  /** Every payment that settles it: the payouts and what was paid with the salary. */
   alreadyPaid: number
+  /** The part of alreadyPaid paid with the salary under a kollektivavtal. */
+  paidWithSalary: number
   /** What is still unpaid, never below zero (an overpayment is not clawed back). */
   unpaid: number
 }
@@ -216,30 +274,40 @@ export interface VariableVacationPayOwed {
  * `extraVariablePay` (the variable pay of a final payslip still being
  * calculated). Paid: the engine-derived payout rows on payslips in the paid
  * window that were not superseded by a correction, whatever their status, so
- * two draft runs in the same month never both pay it.
+ * two draft runs in the same month never both pay it; and what was paid with
+ * the salary under a kollektivavtal on the payslips that earned it (the same
+ * due, sammalöneregeln payslips of the earned window, with or without
+ * variable pay of their own), plus `extraPaidWithSalary` (the final payslip's
+ * own).
  */
 export function variableVacationPayOwed(input: {
   runs: readonly VariablePayRun[]
   rate: number
   window: VariableVacationPayWindow
   extraVariablePay?: number
+  extraPaidWithSalary?: number
 }): VariableVacationPayOwed {
   const { runs, rate, window } = input
-  const earnedRuns = runs.filter(
+  const dueInEarnedWindow = runs.filter(
     (run) =>
       DUE_STATUSES.has(run.status) &&
       run.sammaloneregeln &&
-      run.variablePay !== 0 &&
       run.paymentDate >= window.earnedFrom &&
       run.paymentDate < window.earnedTo,
   )
+  const earnedRuns = dueInEarnedWindow.filter((run) => run.variablePay !== 0)
   const extra = input.extraVariablePay ?? 0
   const variablePay = sumOre([...earnedRuns.map((run) => run.variablePay), extra])
-  const alreadyPaid = sumOre(
+  const paidOut = sumOre(
     runs
       .filter((run) => run.status !== 'corrected' && run.paymentDate >= window.paidFrom && run.paymentDate < window.paidTo)
       .map((run) => run.payout),
   )
+  const paidWithSalary = sumOre([
+    ...dueInEarnedWindow.map((run) => run.paidWithSalary ?? 0),
+    input.extraPaidWithSalary ?? 0,
+  ])
+  const alreadyPaid = sumOre([paidOut, paidWithSalary])
   const owed = roundOre(variablePay * rate)
   return {
     variablePay,
@@ -247,6 +315,7 @@ export function variableVacationPayOwed(input: {
     rate,
     owed,
     alreadyPaid,
+    paidWithSalary,
     unpaid: Math.max(0, roundOre(owed - alreadyPaid)),
   }
 }
@@ -272,7 +341,9 @@ export interface PayslipVariableVacationPay {
  * after the year end pays it, which meets the one-month deadline (26 § andra
  * stycket) for a company paying salary monthly. When the employment has
  * ended (final pay), the running year is settled as well, including this
- * payslip's own variable pay (29 §).
+ * payslip's own variable pay (29 §) and what it pays with the salary under a
+ * kollektivavtal. Outside a final pay this payslip's own such payment
+ * settles the running year, which this payout does not cover.
  */
 export function payslipVariableVacationPay(input: {
   paymentDate: string
@@ -281,6 +352,8 @@ export function payslipVariableVacationPay(input: {
   runs: readonly VariablePayRun[]
   finalSettlement: boolean
   thisRunVariablePay: number
+  /** This payslip's variableVacationPaidWithSalary. Omitted = none. */
+  thisRunPaidWithSalary?: number
 }): PayslipVariableVacationPay {
   const currentStart = getVacationYearStart(input.paymentDate, input.basis)
   const currentEnd = getVacationYearBounds(currentStart).end
@@ -291,6 +364,7 @@ export function payslipVariableVacationPay(input: {
     rate: input.rate,
     window: { earnedFrom: previousStart, earnedTo: coveredTo, paidFrom: currentStart, paidTo: currentEnd },
     extraVariablePay: input.finalSettlement ? input.thisRunVariablePay : 0,
+    extraPaidWithSalary: input.finalSettlement ? (input.thisRunPaidWithSalary ?? 0) : 0,
   })
   return { yearStart: previousStart, coveredTo, finalSettlement: input.finalSettlement, owed }
 }
@@ -339,6 +413,10 @@ interface HistoryRow {
  * Every payslip of the given employees paid in [from, to), summarised per
  * employee. Paginated (fetchAllRows) and company-scoped; `excludeRunId` leaves
  * out the run being calculated, whose own lines are in memory.
+ *
+ * Every line column, not a list: settles_variable_vacation_pay (migration
+ * 20261125180000) is then simply absent, never a failed calculation, if
+ * this code is deployed before the migration is applied.
  */
 export async function loadVariablePayRuns(
   supabase: SupabaseClient,
@@ -350,7 +428,7 @@ export async function loadVariablePayRuns(
     supabase
       .from('salary_run_employees')
       .select(
-        'employee_id, salary_type, calculation_breakdown, line_items:salary_line_items(item_type, amount, is_taxable, is_vacation_basis, is_gross_deduction, is_net_deduction, calculation_source), salary_run:salary_runs!inner(id, payment_date, status)',
+        'employee_id, salary_type, calculation_breakdown, line_items:salary_line_items(*), salary_run:salary_runs!inner(id, payment_date, status)',
       )
       .eq('company_id', args.companyId)
       .in('employee_id', args.employeeIds)

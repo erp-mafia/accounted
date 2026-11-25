@@ -5958,13 +5958,22 @@ export const CreateSalaryLineItemSchema = z.object({
   // Origin year of the sparade dagar a 'saved' line consumes. Omitted = the
   // oldest saved year first (the one that expires first).
   vacation_saved_year: fiscalYearSchema.nullable().optional(),
+  // Semesterlön for rörliga lönedelar paid with this salary
+  // (lib/salary/variable-vacation-pay.ts): only on a positive
+  // semesterersattning row of an employee on sammalöneregeln. true is the
+  // caller's confirmation that a central kollektivavtal lets it be paid with
+  // the salary (Semesterlagen 2 a § andra stycket), recorded in audit_log.
+  // The calculation then counts the row as already paid.
+  settles_variable_vacation_pay: z.boolean().optional(),
 })
 
 // account_number is an override only (lib/salary/account-mapping.ts): null
 // drops a stored override so the line books on the default the booking
-// resolves from the item type and the employee.
+// resolves from the item type and the employee. settles_variable_vacation_pay
+// is set when the line is added, with its confirmation: a changed mind is a
+// deleted line and a new one.
 export const UpdateSalaryLineItemSchema = CreateSalaryLineItemSchema.partial()
-  .omit({ salary_run_employee_id: true })
+  .omit({ salary_run_employee_id: true, settles_variable_vacation_pay: true })
   .extend({ account_number: accountNumber.nullable().optional() })
 
 // ── Absence (frånvaro) per-day records ──────────────────────────────

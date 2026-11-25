@@ -79,6 +79,7 @@ import {
   previousVacationYearStart,
   sammaloneVariablePay,
   vacationYearLabel,
+  variableVacationPaidWithSalary,
   type VariablePayRun,
 } from './variable-vacation-pay'
 import { vaxaStodRefundWarning } from './vaxa-stod'
@@ -141,6 +142,7 @@ function engineLine(
     amount: number
     one_off_tax_percent?: number | null
     benefit_type?: string | null
+    settles_variable_vacation_pay?: boolean | null
   },
 ): CalculationLineItem {
   return {
@@ -153,6 +155,8 @@ function engineLine(
     isNetDeduction: row.is_net_deduction,
     oneOffTaxPercent: row.one_off_tax_percent ?? null,
     benefitType: row.benefit_type ?? null,
+    // Stored, not derived: the operator's word (variable-vacation-pay.ts).
+    ...(row.settles_variable_vacation_pay === true ? { settlesVariableVacationPay: true } : {}),
   }
 }
 
@@ -962,6 +966,7 @@ export async function runSalaryCalculation(
         amount: li.amount as number,
         one_off_tax_percent: li.one_off_tax_percent as number | null | undefined,
         benefit_type: li.benefit_type as string | null | undefined,
+        settles_variable_vacation_pay: li.settles_variable_vacation_pay === true,
       })
     })
     const lineItems = [
@@ -1050,7 +1055,8 @@ export async function runSalaryCalculation(
     //      semesterlön percentage, paid in the first run after the year ends,
     //      or with the final pay when the employment has ended. Derived from
     //      the other payslips every calculation (nothing is stored but the
-    //      row), less what an earlier payslip of the year already paid. The
+    //      row), less what an earlier payslip of the year already paid, by
+    //      this payout or with the salary under a kollektivavtal. The
     //      row carries the engine's provenance, so the next calculation
     //      replaces it like the semesterersättning row (step 9c).
     const variableVacationPayRows: Array<Record<string, unknown>> = []
@@ -1064,6 +1070,7 @@ export async function runSalaryCalculation(
         runs: variablePayRunsByEmployee.get(emp.id) ?? [],
         finalSettlement,
         thisRunVariablePay: sammaloneVariablePay(lineItems),
+        thisRunPaidWithSalary: variableVacationPaidWithSalary(lineItems),
       })
       const amount = variable.owed.unpaid
       if (amount > 0) {

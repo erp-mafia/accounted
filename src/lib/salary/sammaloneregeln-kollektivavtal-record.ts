@@ -16,6 +16,14 @@
  *
  * The employee is already saved when this runs, so nothing here may undo or
  * fail it: every failure is logged at error level and swallowed.
+ *
+ * The second confirmation recorded here: a payslip row that pays semesterlön
+ * for rörliga lönedelar with the salary (salary_line_items
+ * settles_variable_vacation_pay, lib/salary/variable-vacation-pay.ts).
+ * Semesterlagen 16 a § tredje stycket and 26 § andra stycket pay it after
+ * the semesterår; a central kollektivavtal may deviate (2 a § andra stycket).
+ * The row is marked only on the caller's word that such an agreement
+ * applies, kept the same way: ids only, never the amount.
  */
 
 import { getActor } from '@/lib/bookkeeping/actor-context'
@@ -76,6 +84,64 @@ export async function recordSammaloneregelnKollektivavtal(input: Sammaloneregeln
     log.error('audit_log insert threw for the sammalöneregeln kollektivavtal confirmation', err as Error, {
       companyId: input.companyId,
       employeeId: input.employeeId,
+    })
+  }
+}
+
+/** `new_state.guard` discriminator for a row paid with the salary: a stable contract, not a message. */
+export const VARIABLE_VACATION_PAY_WITH_SALARY_GUARD = 'salary_line_variable_vacation_pay_with_salary' as const
+
+export interface VariableVacationPayKollektivavtalRecord {
+  companyId: string
+  employeeId: string
+  salaryRunId: string
+  salaryLineItemId: string
+}
+
+/**
+ * Records the confirmation behind a row marked settles_variable_vacation_pay.
+ * The line is already saved when this runs: failures are logged and
+ * swallowed, as above.
+ */
+export async function recordVariableVacationPayKollektivavtal(input: VariableVacationPayKollektivavtalRecord): Promise<void> {
+  // Every line door runs inside a commit-actor scope (withRouteContext,
+  // withApiV1, the pending-operation commit), so the person is known here.
+  const actor = getActor()
+  try {
+    const { error } = await createServiceClient()
+      .from('audit_log')
+      .insert({
+        user_id: actor?.userId ?? null,
+        company_id: input.companyId,
+        action: 'GUARD_BYPASSED',
+        table_name: 'salary_line_items',
+        record_id: input.salaryLineItemId,
+        actor_type: actor?.type ?? 'user',
+        actor_label: actor?.label ?? null,
+        old_state: null,
+        new_state: {
+          guard: VARIABLE_VACATION_PAY_WITH_SALARY_GUARD,
+          reason: 'kollektivavtal',
+          employee_id: input.employeeId,
+          salary_run_id: input.salaryRunId,
+          salary_line_item_id: input.salaryLineItemId,
+          vacation_rule: 'sammaloneregeln',
+        },
+        description:
+          'Semesterlön for rörliga lönedelar paid with the salary: a central kollektivavtal was confirmed ' +
+          '(semesterlagen 2 a § andra stycket, 16 a § tredje stycket, 26 § andra stycket)',
+      })
+    if (error) {
+      log.error(
+        'audit_log insert failed for the variable vacation pay kollektivavtal confirmation',
+        new Error(error.message ?? 'audit_log insert failed'),
+        { companyId: input.companyId, salaryLineItemId: input.salaryLineItemId, code: error.code },
+      )
+    }
+  } catch (err) {
+    log.error('audit_log insert threw for the variable vacation pay kollektivavtal confirmation', err as Error, {
+      companyId: input.companyId,
+      salaryLineItemId: input.salaryLineItemId,
     })
   }
 }

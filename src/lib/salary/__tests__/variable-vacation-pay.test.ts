@@ -21,6 +21,7 @@ import {
   summarizePayslip,
   unpaidVariableVacationPayAtYearEnd,
   vacationYearLabel,
+  variableVacationPaidWithSalary,
   type VariablePayRun,
 } from '../variable-vacation-pay'
 import { createPayrollFakeDb, type Row } from './payroll-fake-db'
@@ -242,6 +243,106 @@ describe('unpaidVariableVacationPayAtYearEnd', () => {
   })
 })
 
+describe('semesterlön for rörliga lönedelar paid with the salary under a kollektivavtal', () => {
+  const paidRow = (over: Record<string, unknown> = {}) => ({
+    item_type: 'semesterersattning',
+    amount: 600,
+    is_taxable: true,
+    is_vacation_basis: false,
+    is_gross_deduction: false,
+    is_net_deduction: false,
+    calculation_source: null,
+    settles_variable_vacation_pay: true,
+    ...over,
+  })
+
+  it('is only the marked semesterersättning rows, never an unmarked one or the engine\'s payout', () => {
+    expect(
+      variableVacationPaidWithSalary([
+        { itemType: 'semesterersattning', amount: 600, settlesVariableVacationPay: true },
+        { itemType: 'semesterersattning', amount: 999 },
+        { itemType: 'bonus', amount: 5000, settlesVariableVacationPay: true },
+      ]),
+    ).toBe(600)
+    const base = { salaryRunId: 'r', paymentDate: '2026-03-25', status: 'booked', calculationBreakdown: SAMMALONE_BREAKDOWN }
+    expect(summarizePayslip({ ...base, lines: [paidRow()] })).toMatchObject({ paidWithSalary: 600, payout: 0, variablePay: 0 })
+    // A hand-entered semesterersättning row without the mark settles nothing.
+    expect(summarizePayslip({ ...base, lines: [paidRow({ settles_variable_vacation_pay: false })] }).paidWithSalary).toBe(0)
+    // Before the migration the column is absent.
+    expect(summarizePayslip({ ...base, lines: [paidRow({ settles_variable_vacation_pay: undefined })] }).paidWithSalary).toBe(0)
+    // The engine's own row is the payout, never a payment with the salary.
+    expect(
+      summarizePayslip({ ...base, lines: [paidRow({ calculation_source: 'vacation_compensation' })] }),
+    ).toMatchObject({ paidWithSalary: 0, payout: 600 })
+    // A payslip calculated under procentregeln settled nothing of this.
+    expect(summarizePayslip({ ...base, calculationBreakdown: PROCENT_BREAKDOWN, lines: [paidRow()] }).paidWithSalary).toBe(0)
+  })
+
+  it('lowers the payout after the semesterår by what the year\'s payslips paid with the salary', () => {
+    const result = payslipVariableVacationPay({
+      paymentDate: '2027-01-25',
+      basis: 'calendar',
+      rate: 0.12,
+      runs: [
+        run({ paymentDate: '2026-03-25', variablePay: 5000, paidWithSalary: 600 }),
+        // Paid a month after the overtime it was for: still the same year.
+        run({ paymentDate: '2026-06-25', variablePay: 2500 }),
+        run({ paymentDate: '2026-07-25', paidWithSalary: 300 }),
+      ],
+      finalSettlement: false,
+      thisRunVariablePay: 0,
+    })
+    expect(result.owed).toMatchObject({ variablePay: 7500, owed: 900, paidWithSalary: 900, alreadyPaid: 900, unpaid: 0 })
+  })
+
+  it('counts only payslips that have fallen due, under sammalöneregeln, in the year they settle', () => {
+    const result = payslipVariableVacationPay({
+      paymentDate: '2027-01-25',
+      basis: 'calendar',
+      rate: 0.144,
+      runs: [
+        run({ paymentDate: '2026-03-25', variablePay: 5000, paidWithSalary: 600 }),
+        run({ paymentDate: '2026-04-25', paidWithSalary: 200, status: 'draft' }), // not paid yet
+        run({ paymentDate: '2026-05-25', paidWithSalary: 200, status: 'corrected' }), // superseded
+        run({ paymentDate: '2026-06-25', paidWithSalary: 200, sammaloneregeln: false }), // procentregeln
+        run({ paymentDate: '2025-12-25', paidWithSalary: 200 }), // settles 2025, not 2026
+        run({ paymentDate: '2027-01-10', paidWithSalary: 200 }), // settles 2027
+      ],
+      finalSettlement: false,
+      thisRunVariablePay: 0,
+      // This payslip's own payment settles 2027, which this payout does not cover.
+      thisRunPaidWithSalary: 500,
+    })
+    // 14,4 % of 5 000 = 720, less the 600 paid with the March salary.
+    expect(result.owed).toMatchObject({ owed: 720, paidWithSalary: 600, unpaid: 120 })
+  })
+
+  it('a final pay counts what it pays with the salary itself (29 §)', () => {
+    const result = payslipVariableVacationPay({
+      paymentDate: '2026-10-25',
+      basis: 'calendar',
+      rate: 0.12,
+      runs: [run({ paymentDate: '2026-03-25', variablePay: 5000, paidWithSalary: 600 })],
+      finalSettlement: true,
+      thisRunVariablePay: 1000,
+      thisRunPaidWithSalary: 120,
+    })
+    expect(result.owed).toMatchObject({ variablePay: 6000, owed: 720, paidWithSalary: 720, unpaid: 0 })
+  })
+
+  it('lowers the year-end liability the same way', () => {
+    const result = unpaidVariableVacationPayAtYearEnd({
+      closingYearStart: '2026-01-01',
+      rate: 0.12,
+      runs: [
+        run({ paymentDate: '2026-05-25', variablePay: 5000, paidWithSalary: 600 }),
+        run({ paymentDate: '2026-09-25', variablePay: 2500 }),
+      ],
+    })
+    expect(result.unpaid).toBe(300)
+  })
+})
+
 // ---------------------------------------------------------------------------
 // The run calculation over the in-memory payroll tables
 // ---------------------------------------------------------------------------
@@ -412,5 +513,79 @@ describe('runSalaryCalculation: semesterlön för rörliga lönedelar', () => {
     expect((await calculate(sammaDb)).ok).toBe(true)
     // One more read, and only for a roster with someone on sammalöneregeln.
     expect(historyReads(sammaDb)).toBe(historyReads(procentDb) + 1)
+  })
+
+  // Semesterlön for the variable pay paid with the salary under a central
+  // kollektivavtal (Semesterlagen 2 a § andra stycket): a marked
+  // semesterersättning row, entered by hand.
+  const PAID_WITH_SALARY = (amount: number, settles = true): Row => ({
+    item_type: 'semesterersattning',
+    description: 'Semesterlön rörliga lönedelar',
+    amount,
+    is_vacation_basis: false,
+    settles_variable_vacation_pay: settles,
+  })
+
+  it('pays nothing after the semesterår when the year\'s payslips paid it with the salary', async () => {
+    const paidMonthly = [
+      payslipRows('run-2025-03', '2025-03-25', samma, [GRUNDLON, OB(5000), PAID_WITH_SALARY(600)]),
+      payslipRows('run-2025-06', '2025-06-25', samma, [GRUNDLON, OB(2500), PAID_WITH_SALARY(300)]),
+    ]
+    const db = createPayrollFakeDb(seed(samma, paidMonthly))
+    const result = await calculate(db)
+    expect(result.ok).toBe(true)
+    expect(currentLines(db).filter((li) => li.calculation_source === 'vacation_compensation')).toHaveLength(0)
+    expect(currentRow(db).gross_salary).toBe(30000)
+  })
+
+  it('pays only what the salary did not: an unmarked semesterersättning row settles nothing', async () => {
+    const partly = [
+      payslipRows('run-2025-03', '2025-03-25', samma, [GRUNDLON, OB(5000), PAID_WITH_SALARY(600)]),
+      payslipRows('run-2025-06', '2025-06-25', samma, [GRUNDLON, OB(2500), PAID_WITH_SALARY(300, false)]),
+    ]
+    const db = createPayrollFakeDb(seed(samma, partly))
+    const result = await calculate(db)
+    expect(result.ok).toBe(true)
+    const payout = currentLines(db).filter((li) => li.calculation_source === 'vacation_compensation')
+    expect(payout).toHaveLength(1)
+    expect(payout[0].amount).toBe(300)
+    const steps = (currentRow(db).calculation_breakdown as { steps: Array<{ label: string; input: Record<string, unknown> }> }).steps
+    expect(steps.find((s) => s.label.startsWith('Semesterlön rörliga lönedelar 2025'))?.input).toMatchObject({
+      variable_pay: 7500,
+      already_paid: 600,
+    })
+  })
+
+  it('accrues nothing on 2920 for the variable pay this salary pays its semesterlön on', async () => {
+    const db = createPayrollFakeDb(seed(samma, [], { paymentDate: '2026-10-25', lines: [BONUS(5000), PAID_WITH_SALARY(600)] }))
+    const result = await calculate(db)
+    expect(result.ok).toBe(true)
+    const row = currentRow(db)
+    // The tillägg only: 12 % of the bonus was paid with the salary.
+    expect(row.vacation_accrual).toBe(268.75)
+    expect(row.gross_salary).toBe(35600)
+    // The row is kept as entered, and no payout is derived during the year.
+    const rows = currentLines(db).filter((li) => li.item_type === 'semesterersattning')
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ amount: 600, calculation_source: null, settles_variable_vacation_pay: true })
+  })
+
+  it('accrues the rest when the salary pays less than the rate, and never less than the tillägg', async () => {
+    const short = createPayrollFakeDb(seed(samma, [], { paymentDate: '2026-10-25', lines: [BONUS(5000), PAID_WITH_SALARY(400)] }))
+    expect((await calculate(short)).ok).toBe(true)
+    expect(currentRow(short).vacation_accrual).toBe(468.75)
+
+    clearTaxTableCache()
+    // Paid for an earlier payslip's variable pay: this run's accrual is left alone.
+    const more = createPayrollFakeDb(seed(samma, [], { paymentDate: '2026-10-25', lines: [BONUS(1000), PAID_WITH_SALARY(600)] }))
+    expect((await calculate(more)).ok).toBe(true)
+    expect(currentRow(more).vacation_accrual).toBe(268.75)
+
+    clearTaxTableCache()
+    const unmarked = createPayrollFakeDb(
+      seed(samma, [], { paymentDate: '2026-10-25', lines: [BONUS(5000), PAID_WITH_SALARY(600, false)] }),
+    )
+    expect((await calculate(unmarked)).ok).toBe(true)
+    expect(currentRow(unmarked).vacation_accrual).toBe(868.75)
   })
 })

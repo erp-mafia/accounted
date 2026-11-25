@@ -5440,6 +5440,10 @@ export interface SalaryLineItem {
   /** The benefit a net_deduction_benefit_payment row pays for (employee_benefits
    *  benefit_type, migration 20261028030447); null = the payslip's only benefit type. */
   benefit_type?: 'bike' | 'car' | 'meals' | 'housing' | 'wellness' | 'other' | null
+  /** A manual semesterersättning row paying semesterlön for rörliga lönedelar
+   *  with the salary under a central kollektivavtal (migration 20261125180000,
+   *  lib/salary/variable-vacation-pay.ts); absent before the migration. */
+  settles_variable_vacation_pay?: boolean
   created_at: string
   updated_at: string
 }

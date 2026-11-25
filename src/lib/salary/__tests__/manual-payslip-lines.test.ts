@@ -491,3 +491,47 @@ describe('Semester (vacation days taken, crm#1331)', () => {
     }
   })
 })
+
+describe('Semesterlön rörliga lönedelar (paid with the salary under a kollektivavtal)', () => {
+  it('is a semesterersättning row, semesterlön and so not semesterlönegrundande', () => {
+    expect(storedLineItemType('variable_vacation_pay')).toBe('semesterersattning')
+    expect(flagsOf('variable_vacation_pay')).toEqual({
+      is_taxable: true,
+      is_avgift_basis: true,
+      is_vacation_basis: false,
+      is_gross_deduction: false,
+      is_net_deduction: false,
+    })
+    // No unmarked semesterersättning row is offered.
+    expect(isManualPayslipLineType('semesterersattning')).toBe(false)
+  })
+
+  it('needs the confirmation of the kollektivavtal, and then carries the mark', () => {
+    const input = { item_type: 'variable_vacation_pay' as const, amount: 600 }
+    expect(buildManualPayslipLine(input)).toEqual({ ok: false, reason: 'no_kollektivavtal' })
+    expect(buildManualPayslipLine({ ...input, kollektivavtal_confirmed: false })).toEqual({
+      ok: false,
+      reason: 'no_kollektivavtal',
+    })
+    expect(body(buildManualPayslipLine({ ...input, kollektivavtal_confirmed: true }))).toEqual({
+      item_type: 'semesterersattning',
+      description: 'Semesterlön rörliga lönedelar',
+      amount: 600,
+      settles_variable_vacation_pay: true,
+    })
+    // A typed minus is a magnitude: what is paid out is positive.
+    expect(body(buildManualPayslipLine({ ...input, amount: -600, kollektivavtal_confirmed: true })).amount).toBe(600)
+    // The amount is judged first.
+    expect(buildManualPayslipLine({ item_type: 'variable_vacation_pay', kollektivavtal_confirmed: true })).toEqual({
+      ok: false,
+      reason: 'no_amount',
+    })
+  })
+
+  it('no other entry carries the mark', () => {
+    for (const type of MANUAL_PAYSLIP_LINE_TYPES) {
+      if (type === 'variable_vacation_pay') continue
+      expect(MANUAL_PAYSLIP_LINE_SPECS[type].settlesVariableVacationPay, type).toBeUndefined()
+    }
+  })
+})
