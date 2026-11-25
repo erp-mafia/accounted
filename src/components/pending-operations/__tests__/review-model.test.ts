@@ -648,6 +648,18 @@ describe('postedVerifikat: every verifikat approving a proposal posts', () => {
     expect(postedVerifikat({ expected_lines: payment, sale_entry: { lines: sale } })).toEqual([sale, payment])
     expect(postedVerifikat({ corrected: { lines: lines(300) }, storno: { lines: lines(-300) } })).toEqual([lines(-300), lines(300)])
     expect(postedVerifikat({ journal_entries: [{ lines: lines(10) }, { lines: lines(20) }] })).toEqual([lines(10), lines(20)])
+    // A supplier invoice's registration, booked before the link to the payment's verifikat.
+    expect(postedVerifikat({ voucher_label: 'A88', registration_entry: { lines: lines(400, '5410') } })).toEqual([lines(400, '5410')])
+    // A batch: each invoice's sale, then the samlingsverifikation.
+    expect(
+      postedVerifikat({
+        expected_lines: payment,
+        sale_entries: [
+          { invoice_id: 'i-1', journal_entry: { lines: lines(3000, '1510') } },
+          { invoice_id: 'i-2', journal_entry: { lines: lines(4000, '1510') } },
+        ],
+      }),
+    ).toEqual([lines(3000, '1510'), lines(4000, '1510'), payment])
   })
 
   it('reads nothing it does not post: moms rows again, a booked verifikat, an inline rättelse', () => {
@@ -656,16 +668,8 @@ describe('postedVerifikat: every verifikat approving a proposal posts', () => {
     expect(postedVerifikat({ struck_lines: lines(5), added_lines: lines(6), resulting_lines: lines(6) })).toEqual([])
     // Rows of a settlement that state amounts but no debit or credit are no kontering.
     expect(postedVerifikat({ lines: [{ account_number: '1580', amount: 120 }] })).toEqual([])
-  })
-})
-
-describe('headlineAmount of a proposal that posts several verifikat', () => {
-  it('states no figure when the preview names none: no one verifikat is the proposal\'s', () => {
-    const lines = (debit: number) => [
-      { account_number: '6110', debit_amount: debit, credit_amount: 0 },
-      { account_number: '1930', debit_amount: 0, credit_amount: debit },
-    ]
-    expect(headlineAmount({ preview_data: { storno: { lines: lines(300) }, corrected: { lines: lines(300) } } })).toBeNull()
+    // A kontantmetod cutoff also posts corrections staged in a shape of their own: none of it is read.
+    expect(postedVerifikat({ entries: [{ lines: lines(50) }], corrections: [{ corrected_lines: lines(50) }] })).toEqual([])
   })
 })
 

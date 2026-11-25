@@ -289,18 +289,25 @@ export function stagedPostingLines(previewData: unknown): Data[] {
 
 /**
  * Where a staged preview states a verifikat its approval posts, in the order
- * the approval posts them: an invoice's sale before the payment that clears
- * it (sale_entry), a storno before the copy it re-posts. A key holds the rows
- * themselves, one verifikat ({ lines }) or a list of them. Never read as
- * posted: the verifikat a rättelse or a storno replaces (original), the one a
- * registration is tied to and that is booked already (voucher_lines), a
+ * the approval posts them: an invoice's registration or sale before the
+ * payment that clears it (registration_entry, sale_entry, and per invoice of
+ * a batch registration_entries and sale_entries), a storno before the copy it
+ * re-posts. A key holds the rows themselves, one verifikat ({ lines }) or a
+ * list of them ({ lines } or { journal_entry: { lines } } each). Never read
+ * as posted: the verifikat a rättelse or a storno replaces (original), the
+ * one a registration is tied to and that is booked already (voucher_lines), a
  * categorisation's moms rows a second time (vat_lines), and an inline
  * rättelse's struck, added and resulting rows, which change a verifikat in
- * place. preview_data is jsonb, which keeps its keys sorted by length, so
- * "the first rows the preview carries" is no order at all.
+ * place. A kontantmetod cutoff is not read: it also posts corrections staged
+ * in a shape of their own, and half of what it posts would read as all of
+ * it. preview_data is jsonb, which keeps its keys sorted by length, so "the
+ * first rows the preview carries" is no order at all.
  */
 const POSTED_VERIFIKAT_KEYS = [
+  'registration_entry',
+  'registration_entries',
   'sale_entry',
+  'sale_entries',
   'storno',
   'correction',
   'reversal',
@@ -312,8 +319,16 @@ const POSTED_VERIFIKAT_KEYS = [
   'preview_lines',
   'expected_lines',
   'journal_entries',
-  'entries',
 ] as const
+
+/** One verifikat as a preview states it: its rows, { lines }, or { journal_entry: { lines } }. */
+function verifikatRows(value: unknown): Data[] | null {
+  if (isPostingLines(value)) return value
+  const entry = record(value)
+  if (isPostingLines(entry.lines)) return entry.lines
+  const nested = record(entry.journal_entry).lines
+  return isPostingLines(nested) ? nested : null
+}
 
 /**
  * Every verifikat approving a proposal posts, each as the rows its preview
@@ -326,10 +341,9 @@ export function postedVerifikat(previewData: unknown): Data[][] {
   const verifikat: Data[][] = []
   for (const key of POSTED_VERIFIKAT_KEYS) {
     const value = data[key]
-    const entries = Array.isArray(value) && !isPostingLines(value) ? value : [value]
-    for (const entry of entries) {
-      const lines = isPostingLines(entry) ? entry : record(entry).lines
-      if (isPostingLines(lines)) verifikat.push(lines)
+    for (const entry of Array.isArray(value) && !isPostingLines(value) ? value : [value]) {
+      const rows = verifikatRows(entry)
+      if (rows) verifikat.push(rows)
     }
   }
   return verifikat
@@ -342,10 +356,9 @@ const HEADLINE_KEYS = ['total', 'amount', 'transaction_amount', 'payment_amount'
 
 /**
  * The headline number of a proposal: the amount its preview states, else the
- * debit total of the verifikat it posts, when it posts one (always SEK). Null
- * when it names no amount (a new customer). `currency` is null when the
- * preview names some other field's currency only: the figure then shows
- * without a unit.
+ * debit total of the verifikat it posts (always SEK). Null when it names no
+ * amount (a new customer). `currency` is null when the preview names some
+ * other field's currency only: the figure then shows without a unit.
  */
 export function headlineAmount(op: Pick<PendingOperation, 'preview_data'>): { value: number; currency: string | null } | null {
   const data = record(op.preview_data)
@@ -356,11 +369,11 @@ export function headlineAmount(op: Pick<PendingOperation, 'preview_data'>): { va
   const stated = finite(data.total_debit)
   if (stated !== null) return { value: stated, currency: 'SEK' }
   // A rättelse or a storno carries the verifikat it replaces beside the one
-  // it posts: the headline is the one it posts. Of several, no one is the
-  // proposal's figure.
-  const posted = postedVerifikat(data)
-  if (posted.length !== 1) return null
-  const debit = posted[0].reduce((sum, line) => sum + (Number(line.debit_amount ?? line.debit) || 0), 0)
+  // it posts: the headline is the one it posts.
+  const posted = [record(data.correction), record(data.reversal)].find((entry) => isPostingLines(entry.lines))
+  const lines = posted ? (posted.lines as Data[]) : stagedPostingLines(data)
+  if (lines.length === 0) return null
+  const debit = lines.reduce((sum, line) => sum + (Number(line.debit_amount ?? line.debit) || 0), 0)
   return debit > 0 ? { value: roundOre(debit), currency: 'SEK' } : null
 }
 
