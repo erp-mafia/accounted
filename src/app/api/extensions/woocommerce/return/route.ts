@@ -1,7 +1,6 @@
 import { UUID_RE } from '@/lib/invariants/uuid'
 import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
-import { eventBus } from '@/lib/events/bus'
 import { extensionRegistry } from '@/lib/extensions/registry'
 import { createLogger } from '@/lib/logger'
 import { resolveRequestAppOrigin } from '@/lib/domains/trusted-app-origin'
@@ -10,7 +9,6 @@ import {
   FLOW_INITIATOR_MISMATCH_MESSAGE,
 } from '@/lib/auth/oauth-flow-binding'
 import {
-  activateIfComplete,
   HANDSHAKE_EXPIRED_MESSAGE,
   isHandshakeExpired,
 } from '@/extensions/general/woocommerce/lib/connect'
@@ -21,24 +19,17 @@ const log = createLogger('woocommerce/return')
  * GET /api/extensions/woocommerce/return
  *
  * Browser leg of the wc-auth handshake: WooCommerce redirects the merchant
- * here with ?success=1|0&user_id=<our oauth_state>. The credentials arrive on
- * the separate server-to-server callback (usually before this redirect, but
- * ordering is not guaranteed).
+ * here with ?success=1|0&user_id=<our oauth_state>, after it has posted the
+ * keys to the server-to-server callback.
  *
- * This leg is the only point in the handshake where a browser session is
- * present, so it is where the completion is bound to the user who started the
- * flow: the callback POST has no cookies (the store calls it) and so can only
- * stage the keys. Confirmation here is the second signal; the row flips to
- * active only when both are present (activateIfComplete, either order).
- *
- * What this binding does and does not give: activation always happens under
- * the initiating user's session (auditable, never headless), and a return
- * completed by a different signed-in user is refused and the keys taken
- * back. It does NOT authenticate the person who approved in wp-admin: the
- * wc-auth redirect carries only success and our own state, and the keys
- * travel server-to-server, so a store admin who approves a link someone else
- * generated still connects their store to that someone's company. Closing
- * that needs a proof of store control from the initiator (follow-up).
+ * This leg activates nothing. The redirect carries only the success flag and
+ * our own state, both of which the initiator already holds in the authorize
+ * URL, so it cannot tell whether the store's own admin approved. On success
+ * it sends the initiator to the panel, where the store goes live once they
+ * prove control of it by typing the key's last characters (POST
+ * /verify-store, lib/connect). It still closes what it can: a denial, a
+ * return completed by a different signed-in user (refused, keys taken back)
+ * and a handshake past its TTL.
  */
 export async function GET(request: Request) {
   if (!(await extensionRegistry.get('woocommerce'))) {
@@ -98,8 +89,8 @@ export async function GET(request: Request) {
 
 /**
  * The approved leg: find the row this state belongs to, require that the
- * browser completing it is the initiator's, then record the confirmation and
- * activate if the callback has already staged the keys.
+ * browser completing it is the initiator's, then hand them to the panel for
+ * the proof of store control.
  */
 async function completeApproved(
   request: Request,
@@ -210,79 +201,9 @@ async function completeApproved(
     return NextResponse.redirect(`${returnUrl}&woocommerce_error=expired`)
   }
 
-  // Record the session-bound confirmation. The state stays on the row until
-  // activation: if the callback has not landed yet it still needs it.
-  const { error: confirmError } = await supabase
-    .from('woocommerce_connections')
-    .update({ browser_confirmed_at: new Date().toISOString() })
-    .eq('id', row.id)
-    .eq('status', 'pending')
-  if (confirmError) {
-    log.error('failed to record browser confirmation', {
-      connectionId: row.id,
-      code: confirmError.code,
-      message: confirmError.message,
-    })
-    return NextResponse.redirect(`${returnUrl}&woocommerce_error=failed`)
-  }
-
-  const activation = await activateIfComplete(supabase, row.id)
-
-  if (activation.outcome === 'incomplete') {
-    // Keys not staged yet: the callback is still in flight (or failed, in
-    // which case the row is parked in error and the panel shows why). No
-    // "connected" toast; the panel's pending note covers the wait.
-    return NextResponse.redirect(returnUrl)
-  }
-
-  if (activation.outcome !== 'activated') {
-    const isConflict = activation.outcome === 'conflict'
-    log.error('failed to activate connection on the return leg', {
-      connectionId: row.id,
-      code: activation.error.code,
-      message: activation.error.message,
-    })
-    await supabase
-      .from('woocommerce_connections')
-      .update({
-        status: 'error',
-        error_message: isConflict
-          ? 'Butiken är redan ansluten till ett företag.'
-          : 'Anslutningen kunde inte slutföras.',
-        oauth_state: null,
-        consumer_key_encrypted: null,
-        consumer_secret_encrypted: null,
-        store_name: null,
-        currency: null,
-        prices_include_tax: null,
-        wc_version: null,
-        key_permissions: null,
-      })
-      .eq('id', row.id)
-      .eq('status', 'pending')
-    return NextResponse.redirect(
-      `${returnUrl}&woocommerce_error=${isConflict ? 'conflict' : 'failed'}`,
-    )
-  }
-
-  const activated = activation.connection
-  try {
-    await eventBus.emit({
-      type: 'woocommerce.connected',
-      payload: {
-        connectionId: activated.id,
-        storeUrl: activated.store_url,
-        userId: activated.user_id,
-        companyId: activated.company_id,
-      },
-    })
-  } catch (emitError) {
-    // Non-fatal: the DB state (source of truth) is already committed.
-    log.error('failed to emit woocommerce.connected', {
-      connectionId: activated.id,
-      message: emitError instanceof Error ? emitError.message : String(emitError),
-    })
-  }
-
-  return NextResponse.redirect(connectedUrl)
+  // Approved in the store, which proves nothing about who approved. No
+  // "connected" toast: the panel asks the initiator for the proof of store
+  // control, and the store goes live only when it matches. The row and its
+  // state are left as they are.
+  return NextResponse.redirect(returnUrl)
 }

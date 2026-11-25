@@ -5,6 +5,8 @@ import {
   readVerifikatQuerySearch,
   readVerifikatSearch,
   verifikatSearchJoins,
+  verifikatSearchParams,
+  verifikatSearchReadings,
 } from '../verifikat-search'
 
 const NOTHING = { voucher: null, account: null, amount: null, dates: null }
@@ -169,5 +171,78 @@ describe('verifikatSearchJoins and applyVerifikatSearch', () => {
     const { query, calls } = recorder()
     applyVerifikatSearch(query, '10432', readVerifikatQuerySearch('10432', { periodId: null }))
     expect(calls).toEqual([['ilike', 'description', '%10432%']])
+  })
+
+  it('reads a needle for list_verifikat_by_amount as it reads it for the direct query', () => {
+    for (const scope of [{ periodId: 'period-1' }, { periodId: null }]) {
+      for (const search of ['hyra', 'A71', '1930', '0000', '12 500 kr', '10432', '2026-03', '2026-03-15']) {
+        const needle = readVerifikatQuerySearch(search, scope)
+        const { query, calls } = recorder()
+        applyVerifikatSearch(query, search, needle)
+        const filters = calls.map((c) => String(c[1])).join(' ')
+        const direct = [
+          'text',
+          ...(filters.includes('voucher_series.eq.') ? ['voucher'] : []),
+          ...(filters.includes('account_match.not.is.null') ? ['account'] : []),
+          ...(filters.includes('amount_match.not.is.null') ? ['amount'] : []),
+          ...(filters.includes('entry_date.') ? ['date'] : []),
+        ]
+        const p = verifikatSearchParams(search, needle)
+        const rpc = [
+          ...(p.p_search_pattern ? ['text'] : []),
+          ...(p.p_search_voucher_series ? ['voucher'] : []),
+          ...(p.p_search_account ? ['account'] : []),
+          ...(p.p_search_amount !== null ? ['amount'] : []),
+          ...(p.p_search_date_from ? ['date'] : []),
+        ]
+        const label = `${search} ${String(scope.periodId)}`
+        expect(rpc, label).toEqual(direct)
+        expect(verifikatSearchReadings(needle), label).toEqual(direct)
+      }
+    }
+  })
+})
+
+describe('verifikatSearchParams', () => {
+  const NO_SEARCH = {
+    p_search_pattern: null,
+    p_search_voucher_series: null,
+    p_search_voucher_number: null,
+    p_search_account: null,
+    p_search_amount: null,
+    p_search_date_from: null,
+    p_search_date_to: null,
+  }
+
+  it('passes every reading of the needle as its own parameter', () => {
+    expect(verifikatSearchParams('A71', readVerifikatQuerySearch('A71', { periodId: null }))).toEqual({
+      ...NO_SEARCH,
+      p_search_pattern: '%A71%',
+      p_search_voucher_series: 'A',
+      p_search_voucher_number: 71,
+    })
+    expect(verifikatSearchParams('1930', readVerifikatQuerySearch('1930', { periodId: 'period-1' }))).toEqual({
+      ...NO_SEARCH,
+      p_search_pattern: '%1930%',
+      p_search_account: '1930',
+      p_search_amount: 1930,
+    })
+    expect(verifikatSearchParams('2026-03', readVerifikatQuerySearch('2026-03', { periodId: null }))).toEqual({
+      ...NO_SEARCH,
+      p_search_pattern: '%2026-03%',
+      p_search_date_from: '2026-03-01',
+      p_search_date_to: '2026-03-31',
+    })
+  })
+
+  it('escapes LIKE wildcards typed, and reads * as % the way PostgREST does for the direct query', () => {
+    const search = 'a*b 50%_x'
+    expect(verifikatSearchParams(search, readVerifikatQuerySearch(search, { periodId: null })).p_search_pattern).toBe(
+      '%a%b 50\\%\\_x%',
+    )
+  })
+
+  it('is all NULL without a search', () => {
+    expect(verifikatSearchParams(null, null)).toEqual(NO_SEARCH)
   })
 })

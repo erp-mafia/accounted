@@ -21,7 +21,8 @@
  *   6. the partner's exchange runs, then the conditional activation.
  *
  * WooCommerce is not here: wc-auth delivers its keys server to server and
- * activates when both legs have arrived (woocommerce/lib/connect.ts).
+ * the store goes live only after the initiator proves control of it
+ * (woocommerce/lib/connect.ts).
  */
 import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
