@@ -153,10 +153,10 @@ describe('getSkvFilingReadiness', () => {
   })
 })
 
-// The wiki's context view and the in-app chat run the briefing with the
-// caller's session client. End-user roles have no grant on the token columns
-// and see only their own profile, so the read was refused and the briefing
-// those doors showed had no filing line, while the agent on MCP got one.
+// The wiki's context view runs the briefing with the caller's session client.
+// End-user roles have no grant on the token columns and see only their own
+// profile, so the read was refused and the briefing the wiki showed had no
+// filing line, while the agent on MCP got one.
 describe('getSkvFilingReadiness from a session door', () => {
   // PostgREST's answer to an end-user role that names a withheld column.
   const sessionClient = () =>

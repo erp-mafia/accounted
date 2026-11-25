@@ -121,11 +121,11 @@ function ownSessionIsLive(row: FilingTokenRow, now: number): boolean {
  * is decided by whether a refresh token is stored, and end-user roles have no
  * grant on that column (migration 20260929173432); profiles is self-only, so
  * another member's name is hidden from them too. The session client of the
- * wiki's context view and the in-app chat was refused on the token read, the
- * whole answer came back null, and those doors showed a briefing without the
- * filing line the agent got. Confined to `companyId`, which the door resolved
- * for the caller. Only the presence and the member's name leave this
- * function, never a token.
+ * wiki's context view was refused on the token read, the whole answer came
+ * back null, and the wiki showed a briefing without the filing line the agent
+ * got. Confined to `companyId`, which every caller must have resolved for the
+ * user (membership or key grant): this read does not check it. Only the
+ * presence and the member's name leave this function, never a token.
  *
  * Best-effort: null when the rows cannot be read.
  */
