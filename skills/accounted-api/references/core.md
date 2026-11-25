@@ -584,6 +584,7 @@ Peppol is part of the paid plans. For a company on a paid plan (or a trial with 
 **Pitfalls:**
 - A company that already has access answers 409 PEPPOL_ACCESS_ALREADY_ENABLED; receiving is switched on with POST /peppol/registration, a higher cap through support.
 - A company whose Peppol the operators switched off answers 403 PEPPOL_ACCESS_DISABLED: getting it back goes through support.
+- wants_receiving=true is for owners and admins (it publishes the company in the Peppol directory): a member key gets 403 FORBIDDEN.
 - A company that cannot be a Peppol participant answers 422 with the code GET /peppol/registration reports in participant.code (PEPPOL_REGISTRATION_PERSONAL_NUMBER for a sole trader identified by personnummer); nothing is recorded.
 - plan_required=true means nothing was switched on: tell the user Peppol needs a paid plan (Inställningar > Abonnemang); it switches on by itself once they pay.
 

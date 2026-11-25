@@ -190,12 +190,15 @@ export async function registerPeppolParticipant(
     // a plan that ends withdraws the identifier, and one that comes back
     // keeps the choice. Guarded on `enabled` so a pause in between wins.
     if (!access.receive_enabled) {
-      const { error } = await service
+      const { data: recorded, error } = await service
         .from('peppol_access')
         .update({ receive_enabled: true })
         .eq('company_id', companyId)
         .eq('status', 'enabled')
+        .select('company_id')
       if (error) throw new Error(`Failed to record the receiving choice: ${error.message}`)
+      // Paused since it was read: nothing is published without access.
+      if ((recorded ?? []).length === 0) return { ok: false, code: 'PEPPOL_ACCESS_REQUIRED' }
     }
 
     const result = await registerCompanyForPeppolReceiving({
@@ -292,12 +295,23 @@ export interface PeppolAccessRequestResult {
 export async function requestPeppolAccessForCompany(
   ctx: OperationContext,
   input: PeppolAccessRequestInput,
-  options: DoorOptions & { dryRun?: boolean } = {},
+  options: DoorOptions & { dryRun?: boolean; requireAdminForReceiving?: boolean } = {},
 ): Promise<OperationOutcome<PeppolAccessRequestResult>> {
   const { supabase, companyId, userId, log } = ctx
   const service = options.service ?? supabase
   const wantsReceiving = input.wants_receiving === true
   const note = input.note?.trim() || null
+
+  // Receiving publishes the company in the Peppol directory once access is
+  // on, so a door that reserves registering for owners and admins
+  // (peppol.register) reserves choosing it here too.
+  if (wantsReceiving && options.requireAdminForReceiving) {
+    const denied = await requireCompanyAdmin(
+      ctx,
+      'Bara ägare och administratörer kan välja Peppol-mottagning för bolaget.',
+    )
+    if (denied) return denied
+  }
 
   if (await isSandboxCompany(supabase, companyId)) return { ok: false, code: 'PEPPOL_SANDBOX_NOT_ALLOWED' }
 

@@ -633,6 +633,7 @@ export const peppolRequestAccess = defineOperation({
     pitfalls: [
       'A company that already has access answers 409 PEPPOL_ACCESS_ALREADY_ENABLED; receiving is switched on with POST /peppol/registration, a higher cap through support.',
       'A company whose Peppol the operators switched off answers 403 PEPPOL_ACCESS_DISABLED: getting it back goes through support.',
+      'wants_receiving=true is for owners and admins (it publishes the company in the Peppol directory): a member key gets 403 FORBIDDEN.',
       'A company that cannot be a Peppol participant answers 422 with the code GET /peppol/registration reports in participant.code (PEPPOL_REGISTRATION_PERSONAL_NUMBER for a sole trader identified by personnummer); nothing is recorded.',
       'plan_required=true means nothing was switched on: tell the user Peppol needs a paid plan (Inställningar > Abonnemang); it switches on by itself once they pay.',
     ],
@@ -655,6 +656,7 @@ export const peppolRequestAccess = defineOperation({
     plan_required: z.boolean().describe('True when the company has no paid plan: the request is kept and Peppol switches on by itself once it pays.'),
   }),
   errorCodes: [
+    'FORBIDDEN',
     'PEPPOL_SANDBOX_NOT_ALLOWED',
     'PEPPOL_ACCESS_ALREADY_ENABLED',
     'PEPPOL_ACCESS_DISABLED',
@@ -675,7 +677,7 @@ export const peppolRequestAccess = defineOperation({
     },
   },
   run: async (ctx, input, { dryRun }) => {
-    const outcome = await requestPeppolAccessForCompany(ctx, input, { dryRun })
+    const outcome = await requestPeppolAccessForCompany(ctx, input, { dryRun, requireAdminForReceiving: true })
     if (!outcome.ok || outcome.dryRun) return outcome
     return { ...outcome, data: { access: toAccess(outcome.data.access), created: outcome.data.created, plan_required: outcome.data.plan_required } }
   },

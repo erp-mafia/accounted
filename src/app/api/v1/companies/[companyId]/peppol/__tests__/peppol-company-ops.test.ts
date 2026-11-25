@@ -284,12 +284,31 @@ describe('POST /api/v1/companies/:companyId/peppol/registration', () => {
   })
 
   it('a send-only company chooses receiving itself: the choice is recorded and the id published', async () => {
-    const client = ownerClient({ peppol_access: { data: { ...GRANT, receive_enabled: false }, error: null } })
+    const client = ownerClient({
+      peppol_access: [
+        { data: { ...GRANT, receive_enabled: false }, error: null },  // send-only access
+        { data: [{ company_id: COMPANY_ID }], error: null },          // the choice recorded
+      ],
+    })
     mockServiceClient.mockReturnValue(client)
     const res = await post()
     expect(res.status).toBe(201)
     expect(client.calls).toContainEqual({ table: 'peppol_access', method: 'update', args: [{ receive_enabled: true }] })
     expect(transport.registerRecipient).toHaveBeenCalledTimes(1)
+  })
+
+  it('publishes nothing when access was paused between the read and the choice', async () => {
+    const client = ownerClient({
+      peppol_access: [
+        { data: { ...GRANT, receive_enabled: false }, error: null },
+        { data: [], error: null },                                    // the guarded update matched nothing
+      ],
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post()
+    expect(res.status).toBe(403)
+    expect((await res.json()).error.code).toBe('PEPPOL_ACCESS_REQUIRED')
+    expect(transport.registerRecipient).not.toHaveBeenCalled()
   })
 
   it('422 PEPPOL_REGISTRATION_PERSONAL_NUMBER for a personnummer, on the dry run already', async () => {
@@ -399,7 +418,7 @@ describe('POST /api/v1/companies/:companyId/peppol/access-request', () => {
   it('422 PEPPOL_REGISTRATION_PERSONAL_NUMBER for a sole trader, on the dry run too, recording nothing', async () => {
     for (const query of ['', '?dry_run=true']) {
       const client = makeClient({
-        company_members: role('member'),
+        company_members: role('owner'),
         company_settings: { data: { org_number: '800101-1234', company_name: 'Firma', country: 'SE', entity_type: 'enskild_firma', is_sandbox: false }, error: null },
         peppol_access: { data: null, error: null },
       })
@@ -414,7 +433,7 @@ describe('POST /api/v1/companies/:companyId/peppol/access-request', () => {
 
   it('a dry run records nothing, mails nobody and says whether Peppol would switch on', async () => {
     const client = makeClient({
-      company_members: role('member'),
+      company_members: role('owner'),
       company_settings: SETTINGS,
       peppol_access: { data: null, error: null },
       companies: { data: [{ id: COMPANY_ID, team_id: null }], error: null },
@@ -436,7 +455,7 @@ describe('POST /api/v1/companies/:companyId/peppol/access-request', () => {
 
   it('switches Peppol on at once for a paying company, receiving as it chose, and mails nobody', async () => {
     const client = makeClient({
-      company_members: role('member'),
+      company_members: role('owner'),
       company_settings: [SETTINGS, SETTINGS, { data: [PARTICIPANT], error: null }],
       peppol_access: [
         { data: null, error: null },                  // no row yet
@@ -465,7 +484,7 @@ describe('POST /api/v1/companies/:companyId/peppol/access-request', () => {
 
   it('keeps the request of a company on the seeded trial and mails the person who asked', async () => {
     const client = makeClient({
-      company_members: role('member'),
+      company_members: role('owner'),
       company_settings: SETTINGS,
       peppol_access: [
         { data: null, error: null },                  // no row yet
@@ -502,6 +521,17 @@ describe('POST /api/v1/companies/:companyId/peppol/access-request', () => {
     expect(res.status).toBe(200)
     expect((await res.json()).data).toMatchObject({ created: false, plan_required: true })
     expect(sendEmailMock).not.toHaveBeenCalled()
+  })
+
+  it('403 FORBIDDEN when a member asks for receiving: it publishes the company, like registering', async () => {
+    for (const query of ['', '?dry_run=true']) {
+      const client = makeClient({ company_members: role('member'), company_settings: SETTINGS, peppol_access: { data: null, error: null } })
+      mockServiceClient.mockReturnValue(client)
+      const res = await post({ wants_receiving: true }, query)
+      expect(res.status).toBe(403)
+      expect((await res.json()).error.code).toBe('FORBIDDEN')
+      expect(wrote(client)).toBe(false)
+    }
   })
 
   it('403 PEPPOL_ACCESS_DISABLED for a company the operators switched off, recording nothing', async () => {

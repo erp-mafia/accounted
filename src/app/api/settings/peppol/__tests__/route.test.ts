@@ -237,7 +237,7 @@ describe('/api/settings/peppol', () => {
     enqueue({ data: { is_sandbox: false }, error: null })
     service.enqueue({ data: { ...enabledAccess, receive_enabled: false }, error: null }) // send-only access
     enqueue({ data: companySettings, error: null })                     // company settings
-    service.enqueue({ data: null, error: null })                        // record the receiving choice
+    service.enqueue({ data: [{ company_id: 'company-1' }], error: null }) // record the receiving choice
     service.enqueue({ data: [], error: null })                          // existing registrations
     service.enqueue({ data: { id: 'reg-1' }, error: null })             // insert pending
     service.enqueue({ data: registeredRow, error: null })               // finalize
