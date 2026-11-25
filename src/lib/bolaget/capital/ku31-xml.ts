@@ -156,7 +156,7 @@ export function validateKuCommon(input: KuFileCommon, prefix: 'KU31' | 'KU20'): 
   }
   if (!/^\d{10}$/.test(input.payer_org_number) || !luhnValid(input.payer_org_number) || !isLegalPersonOrgNumber(input.payer_org_number)) {
     // OrganisationsnummerTYPE: 16 followed by a third digit 2-9 (a legal person), and the check digit.
-    push('PAYER_ORG_NUMBER', '201', 'Bolagets organisationsnummer saknas eller är ogiltigt. Kontrollera det under Inställningar, Företag.')
+    push('PAYER_ORG_NUMBER', '201', 'Bolagets organisationsnummer saknas eller är ogiltigt. Kontrollera det under Inställningar → Företaget → Företagsuppgifter.')
   }
   if (!textOk(input.payer_name, 50)) push('PAYER_NAME', '202', 'Bolagets namn saknas.')
   if (!textOk(input.contact.name, 50)) push('CONTACT_NAME', 'Kontaktperson.Namn', 'Ange kontaktpersonens namn (högst 50 tecken).')

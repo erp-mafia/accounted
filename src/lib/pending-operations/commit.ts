@@ -2071,7 +2071,7 @@ function cashAccountDisabledPayeeRefusal(ledgerAccount: string): ExecutorResult 
     error:
       `Bankkontot på ${ledgerAccount} är avstängt och markerat att visas på fakturor, så transaktionen sparades inte. ` +
       'En ägare eller administratör behöver aktivera det under Inställningar → Bokföring (då visas det på fakturor igen) ' +
-      'eller dölja det på fakturor under Inställningar → Fakturering.',
+      'eller dölja det på fakturor under Inställningar → Försäljning → Fakturor.',
     errorCode: code,
     status: getErrorEntry(code)?.httpStatus ?? 409,
     data: { ledger_account: ledgerAccount },

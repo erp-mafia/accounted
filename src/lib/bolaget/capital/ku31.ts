@@ -180,7 +180,7 @@ export async function loadKu31Status(ctx: OperationContext, year: number): Promi
   }
   const company = await companyIdentity(ctx)
   if (!company.org_number) {
-    blockers.push({ code: 'KU31_PAYER_ORG_NUMBER', message_sv: 'Bolagets organisationsnummer saknas. Ange det under Inställningar, Företag.' })
+    blockers.push({ code: 'KU31_PAYER_ORG_NUMBER', message_sv: 'Bolagets organisationsnummer saknas. Ange det under Inställningar → Företaget → Företagsuppgifter.' })
   }
 
   return {
