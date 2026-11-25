@@ -63,6 +63,14 @@ vi.mock('@/extensions/general/skatteverket/lib/audit', () => ({
 // returns; only its per-verifikat ledger scan is stubbed.
 vi.mock('@/lib/reports/rc-basis-gaps', () => ({ findRcBasisGaps: vi.fn(async () => []) }))
 
+// The filing readiness reads on the service role whichever client the tool
+// gets (skv-connection-health.ts), as on MCP: the tests hand it the same rows.
+let serviceDb: unknown = null
+vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/api-keys')>()
+  return { ...actual, createServiceClientNoCookies: () => serviceDb }
+})
+
 import { tools } from '../server'
 import { getSkvConnectionHealth } from '../skv-connection-health'
 import { toToolError } from '../tool-result'
@@ -88,6 +96,7 @@ const realResolveAuth = await vi.importActual<typeof import('@/extensions/genera
 let prevEnv: string | undefined
 beforeEach(() => {
   vi.clearAllMocks()
+  serviceDb = null
   mockResolveUserReadAuth.mockImplementation(realResolveAuth.resolveUserReadAuth as (...a: unknown[]) => unknown)
   prevEnv = process.env.SKATTEVERKET_ENABLED
   process.env.SKATTEVERKET_ENABLED = 'true'
@@ -282,11 +291,14 @@ describe('VAT filing tools on the caller\'s own session (crm#1263)', () => {
     { user_id: 'user-1', status: 'needs_reconsent', created_at: minutes(-38_000), expires_at: minutes(-37_940), refresh_count: 2, refresh_token: 'c' },
   ]
   const sessionExpired = () => new SkatteverketAuthError('Sessionen har gått ut. Logga in med BankID igen.', 'SESSION_EXPIRED')
-  const clientWith = (rows: unknown[]) =>
-    createTableMockSupabase({
+  const clientWith = (rows: unknown[]) => {
+    const db = createTableMockSupabase({
       skatteverket_tokens: { data: rows },
       profiles: { data: { full_name: 'Anna Admin' } },
     })
+    serviceDb = db.supabase
+    return db
+  }
   type Refusal = Error & { code?: string; remediation?: { tool?: string } }
 
   beforeEach(() => {
