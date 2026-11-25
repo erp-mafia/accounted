@@ -21,6 +21,7 @@ import {
 } from '@/lib/bokslut/ixbrl/k2-mapper'
 import { k2AssetPostLabel, k3AssetPostLabel } from '@/lib/bokslut/ixbrl/document/statements'
 import { buildBrRows, buildRrRows } from './statement-rows'
+import { holdsOnlyOpeningBalances, loadBalanceFileYears } from './balance-file-year'
 import { getNarrative, listFixedAssetNoteRows, type NarrativeRow } from './narrative-service'
 import { dispositionText } from './disposition-text'
 import { loadRegisterNoteTexts } from '@/lib/commitments/disclosures'
@@ -287,6 +288,8 @@ export async function buildArsredovisningReport(
   // year" with a warning instead of blocking the whole document (partial SIE
   // imports can leave prior years without IB continuity).
   const statementWarnings: string[] = []
+  // Faults in the statements that make the document wrong as filed: completeness blocks on them.
+  const statementErrors: string[] = []
   // The year ending the day before this one starts (pickPreviousFiscalPeriod):
   // the link when it is adjacent, the date otherwise, never across a gap.
   const prevPeriodRow = pickPreviousFiscalPeriod(period, (periodList ?? []) as PeriodRow[])
@@ -328,6 +331,38 @@ export async function buildArsredovisningReport(
       }
     }),
   )
+  // A prior year that came in as an SIE balance file (#IB, #UB, #RES and no
+  // #VER) holds only its ingående balans in the books. Its figures are read
+  // from the file, nothing is booked in the year (balance-file-year.ts), and
+  // the report says where they are from. A file that cannot be read blocks
+  // the report: the books alone would give that year's opening as its close.
+  const balanceFileCandidates = [...tbTargets.values()].flatMap((p) => {
+    const rows = tbPairs.get(p.id)?.full as TrialBalanceRow[] | undefined
+    return rows && holdsOnlyOpeningBalances(rows)
+      ? [{ periodId: p.id, period_start: p.period_start, period_end: p.period_end, booksRows: rows }]
+      : []
+  })
+  const balanceFileYears = await loadBalanceFileYears(supabase, companyId, balanceFileCandidates)
+  for (const [periodId, year] of balanceFileYears) {
+    const name = tbTargets.get(periodId)?.name ?? ''
+    if (year.kind === 'read') {
+      tbPairs.set(periodId, year.pair)
+      statementWarnings.push(
+        `Räkenskapsåret ${name} har bara ingående balanser i Accounted, så dess belopp är hämtade ur den importerade SIE-filens utgående balanser och resultat (${year.filename}). Stäm av jämförelsesiffrorna mot föregående års fastställda årsredovisning.`,
+      )
+    } else if (year.kind === 'not_used') {
+      // An empty year already has its own warning below (saknar bokföring).
+      if (balanceFileCandidates.find((c) => c.periodId === periodId)?.booksRows.length) {
+        statementWarnings.push(
+          `Räkenskapsåret ${name} har bara ingående balanser i Accounted, så dess belopp visar årets ingående balanser och ett resultat på 0 kr. Den importerade SIE-filen (${year.filename}) kan inte användas i stället: ${year.reason}. Bokför året eller importera det med verifikationer innan årsredovisningen lämnas in.`,
+        )
+      }
+    } else {
+      statementErrors.push(
+        `Den importerade SIE-filen för räkenskapsåret ${name} (${year.filename}) kunde inte läsas, så årets jämförelsesiffror kan inte tas fram. Försök igen, och kontakta supporten om felet kvarstår.`,
+      )
+    }
+  }
 
   // Previous fiscal year comparison (jämförelsesiffror): a TB failure
   // downgrades to "no comparison year" with a warning instead of blocking.
@@ -700,7 +735,7 @@ export async function buildArsredovisningReport(
     warnings,
     // Present only when there is one: an absent key keeps the content hash of
     // every report without a fault unchanged.
-    ...(noterErrors.length > 0 ? { errors: noterErrors } : {}),
+    ...(statementErrors.length + noterErrors.length > 0 ? { errors: [...statementErrors, ...noterErrors] } : {}),
     balansrakning,
     noter,
     kassaflodesanalys,
