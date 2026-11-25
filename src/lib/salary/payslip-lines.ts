@@ -38,7 +38,9 @@
  *     lönedelar paid with the salary under a central kollektivavtal,
  *     variable-vacation-pay.ts) is a positive semesterersättning row of an
  *     employee on sammalöneregeln, and the confirmation is recorded in
- *     audit_log. The mark is set when the row is added, never by an edit.
+ *     audit_log: when it cannot be recorded the row is removed again and the
+ *     add fails. The mark is set when the row is added, never by an edit,
+ *     and an edit's answer carries it.
  *
  * Result-object convention mirrors lib/salary/run-calculation.ts:
  * `{ ok: true, data } | { ok: false, code, details? }` where `code` is a key
@@ -56,6 +58,7 @@ import { invalidateRunCalculation } from '@/lib/salary/invalidate-calculation'
 import { isBaseSalaryDisplayLine, isBaseSalaryLineType, payslipLineFlags } from '@/lib/salary/line-item-roles'
 import { RUN_COMPUTED_TAX_ACCOUNT_MESSAGE, isRunComputedTaxAccount } from '@/lib/salary/line-account-override'
 import { recordVariableVacationPayKollektivavtal } from '@/lib/salary/sammaloneregeln-kollektivavtal-record'
+import { createLogger } from '@/lib/logger'
 import type { SalaryLineItemType } from '@/types'
 import {
   TEXT_ROW_RETYPE_MESSAGE,
@@ -63,6 +66,8 @@ import {
   normalizeTextRow,
   validatePayslipLineContent,
 } from '@/lib/salary/text-rows'
+
+const log = createLogger('salary/payslip-lines')
 
 export type PayslipLineResult<T> =
   | { ok: true; data: T }
@@ -288,6 +293,8 @@ export const VARIABLE_VACATION_PAY_WITH_SALARY_AMOUNT_MESSAGE =
 export const VARIABLE_VACATION_PAY_WITH_SALARY_RULE_MESSAGE =
   'Semesterlön på rörliga lönedelar betalas ut med lönen bara för en anställd med sammalöneregeln. ' +
   'Med procentregeln ingår de rörliga lönedelarna redan i semesterlönen.'
+export const VARIABLE_VACATION_PAY_WITH_SALARY_RECORD_MESSAGE =
+  'Bekräftelsen om kollektivavtal kunde inte sparas, så raden lades inte till. Försök igen.'
 export const VARIABLE_VACATION_PAY_WITH_SALARY_RETYPE_MESSAGE =
   'Raden är semesterlön på rörliga lönedelar som betalas ut med lönen enligt kollektivavtal och kan inte byta typ. ' +
   'Ta bort raden och lägg till en ny i stället.'
@@ -434,15 +441,52 @@ export async function createPayslipLine(
   }
   const line = created as unknown as SalaryLineItemRow
   if (settles) {
-    await recordVariableVacationPayKollektivavtal({
+    const recorded = await recordVariableVacationPayKollektivavtal({
       companyId: args.companyId,
       employeeId: sre.data.employee_id,
       salaryRunId: args.salaryRunId,
       salaryLineItemId: line.id,
     })
+    if (!recorded) {
+      // The mark rests on the confirmation: a marked row never stands without it.
+      const { error: undoError } = await supabase
+        .from('salary_line_items')
+        .delete()
+        .eq('id', line.id)
+        .eq('company_id', args.companyId)
+      if (undoError) {
+        log.error('could not remove a marked salary line whose kollektivavtal confirmation was not recorded', new Error(undoError.message), {
+          companyId: args.companyId,
+          salaryLineItemId: line.id,
+        })
+      }
+      return { ok: false, code: 'INTERNAL_ERROR', details: { message: VARIABLE_VACATION_PAY_WITH_SALARY_RECORD_MESSAGE } }
+    }
     return { ok: true, data: { ...line, settles_variable_vacation_pay: true } }
   }
   return { ok: true, data: line }
+}
+
+/**
+ * Whether a stored row carries settles_variable_vacation_pay. Read with every
+ * column, so it needs no column that may not exist yet (absent until
+ * migration 20261125180000 is applied: unmarked).
+ */
+async function storedVariableVacationPayMark(
+  supabase: SupabaseClient,
+  companyId: string,
+  lineId: string,
+): Promise<PayslipLineResult<boolean>> {
+  const { data, error } = await supabase
+    .from('salary_line_items')
+    .select('*')
+    .eq('id', lineId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (error) {
+    return { ok: false, code: 'INTERNAL_ERROR', details: { message: error.message } }
+  }
+  return { ok: true, data: (data as { settles_variable_vacation_pay?: boolean } | null)?.settles_variable_vacation_pay === true }
 }
 
 export async function updatePayslipLine(
@@ -479,28 +523,25 @@ export async function updatePayslipLine(
       args.patch.item_type,
     )
     if (ownBase) return ownBase
-    // A row paid as semesterlön for rörliga lönedelar stays semesterersättning
-    // (the DB CHECK of migration 20261125180000). Read with every column, so
-    // the check needs no column that may not exist yet.
-    if (existing.data.item_type === 'semesterersattning') {
-      const { data: stored, error: storedError } = await supabase
-        .from('salary_line_items')
-        .select('*')
-        .eq('id', args.lineId)
-        .eq('company_id', args.companyId)
-        .maybeSingle()
-      if (storedError) {
-        return { ok: false, code: 'INTERNAL_ERROR', details: { message: storedError.message } }
-      }
-      if ((stored as { settles_variable_vacation_pay?: boolean } | null)?.settles_variable_vacation_pay === true) {
-        return {
-          ok: false,
-          code: 'VALIDATION_ERROR',
-          details: { field: 'item_type', message: VARIABLE_VACATION_PAY_WITH_SALARY_RETYPE_MESSAGE },
-        }
+  }
+  // A row paid as semesterlön for rörliga lönedelar stays semesterersättning
+  // (the DB CHECK of migration 20261125180000), and the answer to an edit of
+  // it says it is still marked.
+  let marked = false
+  if (existing.data.item_type === 'semesterersattning') {
+    const mark = await storedVariableVacationPayMark(supabase, args.companyId, args.lineId)
+    if (!mark.ok) return mark
+    marked = mark.data
+    if (marked && args.patch.item_type !== undefined && args.patch.item_type !== existing.data.item_type) {
+      return {
+        ok: false,
+        code: 'VALIDATION_ERROR',
+        details: { field: 'item_type', message: VARIABLE_VACATION_PAY_WITH_SALARY_RETYPE_MESSAGE },
       }
     }
   }
+  const withMark = (line: SalaryLineItemRow): SalaryLineItemRow =>
+    marked ? { ...line, settles_variable_vacation_pay: true } : line
   const text = isTextRow(existing.data)
   if (args.patch.item_type !== undefined && isTextRow(args.patch) !== text) {
     return { ok: false, code: 'VALIDATION_ERROR', details: { field: 'item_type', message: TEXT_ROW_RETYPE_MESSAGE } }
@@ -565,7 +606,7 @@ export async function updatePayslipLine(
   if (taxAccount) return taxAccount
 
   if (args.dryRun) {
-    return { ok: true, data: { ...existing.data, ...updates } as SalaryLineItemRow }
+    return { ok: true, data: withMark({ ...existing.data, ...updates } as SalaryLineItemRow) }
   }
 
   const invalidated = await invalidateRunCalculation(supabase, args.companyId, {
@@ -587,7 +628,7 @@ export async function updatePayslipLine(
   if (!updated) {
     return { ok: false, code: 'SALARY_LINE_NOT_FOUND' }
   }
-  return { ok: true, data: updated as unknown as SalaryLineItemRow }
+  return { ok: true, data: withMark(updated as unknown as SalaryLineItemRow) }
 }
 
 export async function deletePayslipLine(

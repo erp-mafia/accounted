@@ -3,8 +3,8 @@
  * under a central kollektivavtal (Semesterlagen 2 a § andra stycket,
  * lib/salary/variable-vacation-pay.ts): the line command every door runs
  * accepts the mark only on a positive semesterersättning row of an employee
- * on sammalöneregeln, records the confirmation in audit_log, and keeps the
- * row semesterersättning on an edit.
+ * on sammalöneregeln, records the confirmation in audit_log (or removes the
+ * row again when it cannot), and keeps the row semesterersättning on an edit.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -25,6 +25,7 @@ vi.mock('@/lib/salary/invalidate-calculation', async (original) => ({
 
 import {
   VARIABLE_VACATION_PAY_WITH_SALARY_AMOUNT_MESSAGE,
+  VARIABLE_VACATION_PAY_WITH_SALARY_RECORD_MESSAGE,
   VARIABLE_VACATION_PAY_WITH_SALARY_RETYPE_MESSAGE,
   VARIABLE_VACATION_PAY_WITH_SALARY_RULE_MESSAGE,
   VARIABLE_VACATION_PAY_WITH_SALARY_TYPE_MESSAGE,
@@ -136,14 +137,35 @@ describe('createPayslipLine: semesterlön for rörliga lönedelar paid with the 
     expect(JSON.stringify(record)).not.toContain('600')
   })
 
-  it('keeps the line when the audit row cannot be written', async () => {
+  it('removes the line again and fails when the confirmation cannot be recorded', async () => {
+    for (const failure of ['error', 'throw'] as const) {
+      mock = createQueuedMockSupabase()
+      supabase = mock.supabase as unknown as SupabaseClient
+      enqueueGate()
+      mock.enqueue({ data: { employee: { vacation_rule: 'sammaloneregeln' } } })
+      mock.enqueue({ data: STORED_LINE })
+      mock.enqueue({ data: null })
+      if (failure === 'error') auditInsert.mockResolvedValueOnce({ error: { message: 'boom', code: 'XX000' } })
+      else auditInsert.mockRejectedValueOnce(new Error('network'))
+
+      const result = await create(PAID_WITH_SALARY)
+      expect(result, failure).toEqual({
+        ok: false,
+        code: 'INTERNAL_ERROR',
+        details: { message: VARIABLE_VACATION_PAY_WITH_SALARY_RECORD_MESSAGE },
+      })
+      expect(mock.findCall('salary_line_items', 'delete'), failure).toBeDefined()
+    }
+  })
+
+  it('keeps the line when the confirmation is recorded: nothing is removed', async () => {
     enqueueGate()
     mock.enqueue({ data: { employee: { vacation_rule: 'sammaloneregeln' } } })
     mock.enqueue({ data: STORED_LINE })
-    auditInsert.mockResolvedValueOnce({ error: { message: 'boom', code: 'XX000' } })
 
     const result = await create(PAID_WITH_SALARY)
     expect(result.ok).toBe(true)
+    expect(mock.findCall('salary_line_items', 'delete')).toBeUndefined()
   })
 
   it('a dry run judges the row and records nothing', async () => {
@@ -243,9 +265,34 @@ describe('updatePayslipLine: a row paid with the salary', () => {
     expect(retyped.ok).toBe(true)
   })
 
-  it('an amount edit of a marked row does not read the mark', async () => {
+  it('an amount edit of a marked row answers with the mark, and writes nothing about it', async () => {
+    for (const dryRun of [false, true]) {
+      mock = createQueuedMockSupabase()
+      supabase = mock.supabase as unknown as SupabaseClient
+      mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
+      mock.enqueue({ data: { ...STORED_LINE, salary_run_employee: { salary_run_id: RUN_ID } } })
+      mock.enqueue({ data: { ...STORED_LINE, settles_variable_vacation_pay: true } })
+      if (!dryRun) mock.enqueue({ data: { ...STORED_LINE, amount: 720 } })
+      const result = await updatePayslipLine(supabase, {
+        companyId: COMPANY_ID,
+        salaryRunId: RUN_ID,
+        lineId: LINE_ID,
+        patch: { amount: 720 },
+        dryRun,
+      })
+      expect(result.ok, String(dryRun)).toBe(true)
+      if (result.ok) expect(result.data, String(dryRun)).toMatchObject({ amount: 720, settles_variable_vacation_pay: true })
+      const update = mock.findCall('salary_line_items', 'update')
+      if (dryRun) expect(update).toBeUndefined()
+      else expect(update?.[0]).not.toHaveProperty('settles_variable_vacation_pay')
+    }
+  })
+
+  it('an edit of an unmarked semesterersättning row answers without the mark', async () => {
     mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
     mock.enqueue({ data: { ...STORED_LINE, salary_run_employee: { salary_run_id: RUN_ID } } })
+    // Before the migration the column is absent: the row is unmarked.
+    mock.enqueue({ data: STORED_LINE })
     mock.enqueue({ data: { ...STORED_LINE, amount: 720 } })
     const result = await updatePayslipLine(supabase, {
       companyId: COMPANY_ID,
@@ -254,7 +301,6 @@ describe('updatePayslipLine: a row paid with the salary', () => {
       patch: { amount: 720 },
     })
     expect(result.ok).toBe(true)
-    const fromCalls = (mock.supabase.from as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0])
-    expect(fromCalls).toEqual(['salary_runs', 'salary_line_items', 'salary_line_items'])
+    if (result.ok) expect(result.data).not.toHaveProperty('settles_variable_vacation_pay')
   })
 })

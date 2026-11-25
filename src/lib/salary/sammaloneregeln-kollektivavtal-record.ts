@@ -23,7 +23,9 @@
  * Semesterlagen 16 a § tredje stycket and 26 § andra stycket pay it after
  * the semesterår; a central kollektivavtal may deviate (2 a § andra stycket).
  * The row is marked only on the caller's word that such an agreement
- * applies, kept the same way: ids only, never the amount.
+ * applies, kept the same way: ids only, never the amount. The mark rests on
+ * that record, so this one reports whether it was written and the caller
+ * removes the row when it was not.
  */
 
 import { getActor } from '@/lib/bookkeeping/actor-context'
@@ -100,10 +102,11 @@ export interface VariableVacationPayKollektivavtalRecord {
 
 /**
  * Records the confirmation behind a row marked settles_variable_vacation_pay.
- * The line is already saved when this runs: failures are logged and
- * swallowed, as above.
+ * True when the audit row was written. A failure is logged and reported as
+ * false, never thrown: the caller (payslip-lines.ts) then removes the marked
+ * row, so no row is marked without its confirmation.
  */
-export async function recordVariableVacationPayKollektivavtal(input: VariableVacationPayKollektivavtalRecord): Promise<void> {
+export async function recordVariableVacationPayKollektivavtal(input: VariableVacationPayKollektivavtalRecord): Promise<boolean> {
   // Every line door runs inside a commit-actor scope (withRouteContext,
   // withApiV1, the pending-operation commit), so the person is known here.
   const actor = getActor()
@@ -137,11 +140,14 @@ export async function recordVariableVacationPayKollektivavtal(input: VariableVac
         new Error(error.message ?? 'audit_log insert failed'),
         { companyId: input.companyId, salaryLineItemId: input.salaryLineItemId, code: error.code },
       )
+      return false
     }
+    return true
   } catch (err) {
     log.error('audit_log insert threw for the variable vacation pay kollektivavtal confirmation', err as Error, {
       companyId: input.companyId,
       salaryLineItemId: input.salaryLineItemId,
     })
+    return false
   }
 }
