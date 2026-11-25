@@ -31,10 +31,13 @@ export function FactsImport({
   clients,
   preferredClient,
   disabled = false,
+  quiet = false,
 }: {
   clients: AiClient[]
   preferredClient?: AiClient
   disabled?: boolean
+  /** One quiet line: the sentence followed by the action as a text link, no outlined buttons. */
+  quiet?: boolean
 }) {
   const t = useTranslations('books')
 
@@ -54,6 +57,34 @@ export function FactsImport({
     // eslint-disable-next-line @next/next/no-img-element
     <img src={src} alt="" className={className} />
   )
+
+  if (quiet) {
+    return (
+      <div className="found-note">
+        {t('facts_import_quiet_lead', { client: primary.name })}{' '}
+        <Button type="button" variant="link" className="text-[length:inherit]" onClick={() => open(primary.id)} disabled={disabled}>
+          {t('facts_import_quiet')}
+        </Button>
+        {others.length > 0 && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button type="button" variant="link" className="ml-1 text-[length:inherit]" disabled={disabled} aria-label={t('facts_import_other')}>
+                <ChevronDownIcon className="h-3.5 w-3.5" aria-hidden />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              {others.map((c) => (
+                <DropdownMenuItem key={c.id} onSelect={() => open(c.id)}>
+                  {logo(c.logo, 'mr-2 h-4 w-4')}
+                  {t('facts_import_with', { client: c.name })}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+      </div>
+    )
+  }
 
   return (
     <div className="found-note">

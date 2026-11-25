@@ -25,10 +25,10 @@ export function AiStep({ ctx }: { ctx: BooksCtx }) {
       </h1>
       <p className="agent-lead">{t('ai_lead')}</p>
       <AgentChips connection={connection} onConnect={onConnect} />
-      {hasClient && <FactsImport clients={connected} preferredClient={preferredClient} />}
+      {hasClient && <FactsImport clients={connected} preferredClient={preferredClient} quiet />}
       <div className="jny-qactions">
         {hasClient ? (
-          <Button onClick={() => ctx.dispatch({ type: 'AFTER_AI', flags: ctx.flags })}>{t('continue')}</Button>
+          <Button size="lg" onClick={() => ctx.dispatch({ type: 'AFTER_AI', flags: ctx.flags })}>{t('continue')}</Button>
         ) : (
           <Button variant="ghost" className="text-muted-foreground" onClick={() => ctx.dispatch({ type: 'AFTER_AI', flags: ctx.flags })}>
             {t('ai_continue_without')}

@@ -920,14 +920,6 @@ export default function OnboardingJourney({
                 .
               </p>
             )}
-            {/* Someone who has not formed the company yet: the formation
-                flow prepares it and sets it up here once registered. */}
-            <p className="jny-more">
-              {t('journey_start_ab_pre')}{' '}
-              <Link className="jny-link" href={FORMATION_PATH}>
-                {t('journey_start_ab_link')}
-              </Link>
-            </p>
           </Question>
         )
 
@@ -951,6 +943,16 @@ export default function OnboardingJourney({
               }
               {...flyProps}
             />
+            {/* A company that is not registered yet: the formation flow
+                prepares it and sets it up here once registered. */}
+            {firmByPersonnummer ? null : (
+              <p className="jny-more">
+                {t('journey_start_ab_pre')}{' '}
+                <Link className="jny-link" href={FORMATION_PATH}>
+                  {t('journey_start_ab_link')}
+                </Link>
+              </p>
+            )}
           </Question>
         )
       }

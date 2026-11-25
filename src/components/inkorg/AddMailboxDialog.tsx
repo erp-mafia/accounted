@@ -69,7 +69,17 @@ export function AddMailboxDialog({ open, onOpenChange }: { open: boolean; onOpen
 }
 
 /** `doors` limits the list to those ways in (the dialog shows them all). */
-export function MailboxList({ doors }: { doors?: readonly MailboxDoor[] } = {}) {
+export function MailboxList({
+  doors,
+  receiveOnly = false,
+  connectVariant,
+}: {
+  doors?: readonly MailboxDoor[]
+  /** Leaves out the sending line of Kivra and Billo: the list is only about what comes in. */
+  receiveOnly?: boolean
+  /** The look of the buttons that connect Kivra and Billo. */
+  connectVariant?: 'default' | 'outline'
+} = {}) {
   const t = useTranslations('inkorg')
   const digital = useDigitalMailboxes()
   // Until the answer is in, Kivra and Billo render as rows with a skeleton (or
@@ -99,9 +109,9 @@ export function MailboxList({ doors }: { doors?: readonly MailboxDoor[] } = {}) 
         ) : entry.door === 'mailbox' ? (
           <GmailRow key={entry.door} />
         ) : entry.door === 'kivra' ? (
-          <KivraRow key={entry.door} {...digital.rowProps('kivra')} />
+          <KivraRow key={entry.door} {...digital.rowProps('kivra')} receiveOnly={receiveOnly} connectVariant={connectVariant} />
         ) : entry.door === 'billo' ? (
-          <BilloRow key={entry.door} {...digital.rowProps('billo')} />
+          <BilloRow key={entry.door} {...digital.rowProps('billo')} receiveOnly={receiveOnly} connectVariant={connectVariant} />
         ) : (
           <MailboxRow key={entry.door} door={entry.door}>
             <Button asChild variant="outline">
@@ -429,6 +439,8 @@ export interface DigitalRowProps {
   Row?: ComponentType<DigitalMailboxRowFrameProps>
   /** The look of the button that connects: the dialog's primary when left out, `outline` in a list of connections. */
   connectVariant?: 'default' | 'outline'
+  /** Leaves out the sending line: only what comes in is shown. */
+  receiveOnly?: boolean
 }
 
 /** The frame in this dialog: the state and its notes take the place of the door's description. */
@@ -721,7 +733,7 @@ function DigitalRowMenu({ provider, onDisconnect }: { provider: DigitalMailboxPr
  * in a new tab); the row waits until Kivra confirms, by its webhook, the
  * cron's lookup or "Kontrollera", and then reads the mailbox.
  */
-export function KivraRow({ slot, onConnection, reload, Row = DialogDigitalRow, connectVariant }: DigitalRowProps) {
+export function KivraRow({ slot, onConnection, reload, Row = DialogDigitalRow, connectVariant, receiveOnly = false }: DigitalRowProps) {
   const actions = useDigitalMailboxActions('kivra', { onConnection, reload })
   const { t, busy } = actions
   // Kivra's activation page from the last connect answer, reopened without another round trip.
@@ -764,7 +776,7 @@ export function KivraRow({ slot, onConnection, reload, Row = DialogDigitalRow, c
     else void connect()
   }
 
-  const sending = view.sending ? (
+  const sending = view.sending && !receiveOnly ? (
     <SendingLine
       provider="kivra"
       state={view.sending}
@@ -809,7 +821,7 @@ export function KivraRow({ slot, onConnection, reload, Row = DialogDigitalRow, c
  * Billo: the company's business mailbox is created from here, with the
  * admin (BankID) as its representative, and read from then on.
  */
-export function BilloRow({ slot, onConnection, reload, Row = DialogDigitalRow, connectVariant }: DigitalRowProps) {
+export function BilloRow({ slot, onConnection, reload, Row = DialogDigitalRow, connectVariant, receiveOnly = false }: DigitalRowProps) {
   const actions = useDigitalMailboxActions('billo', { onConnection, reload })
   const { t, busy } = actions
   const [creating, setCreating] = useState(false)
@@ -817,7 +829,7 @@ export function BilloRow({ slot, onConnection, reload, Row = DialogDigitalRow, c
   if (slot.status !== 'ready') return <DigitalPlaceholderRow door="billo" status={slot.status} Row={Row} />
   const view = digitalMailboxRowView(slot.answer.available, slot.answer.connection)
 
-  const sending = view.sending ? (
+  const sending = view.sending && !receiveOnly ? (
     <SendingLine
       provider="billo"
       state={view.sending}

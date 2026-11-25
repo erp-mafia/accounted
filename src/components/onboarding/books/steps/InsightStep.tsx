@@ -18,6 +18,16 @@ export function InsightStep({ ctx }: { ctx: BooksCtx }) {
   const next = flags.hasBanking ? t('to_bank') : flags.hasSkatteverket ? t('to_skv') : t('to_done')
   // A failed read is not "nothing imported": it says so, with the retry.
   const failed = !findings && findingsFailed
+  // With the sources arrangement the way on sits right under the headline,
+  // before the detail panel, so it is in view without scrolling.
+  const nextFirst = flags.sourcesFlow === true && !failed
+  const nextButton = (
+    <div className="jny-qactions">
+      <Button size="lg" onClick={() => dispatch({ type: 'AFTER_BOOKS', flags })}>
+        {next}
+      </Button>
+    </div>
+  )
   return (
     <Question
       title={
@@ -29,6 +39,7 @@ export function InsightStep({ ctx }: { ctx: BooksCtx }) {
       }
       sub={failed ? undefined : t('insight_sub')}
     >
+      {nextFirst ? nextButton : null}
       {failed ? (
         <div className="jny-qactions">
           <Button variant="outline" loading={loadingFindings} onClick={() => void loadFindings()}>
@@ -38,11 +49,7 @@ export function InsightStep({ ctx }: { ctx: BooksCtx }) {
       ) : (
         <InsightPanel ctx={ctx} />
       )}
-      <div className="jny-qactions">
-        <Button size="lg" onClick={() => dispatch({ type: 'AFTER_BOOKS', flags })}>
-          {next}
-        </Button>
-      </div>
+      {nextFirst ? null : nextButton}
     </Question>
   )
 }

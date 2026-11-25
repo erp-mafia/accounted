@@ -34,6 +34,18 @@ export const IMPORT_HISTORY_HREF = '/import?history=sie'
 /** Steps whose work is an import. The bank and Skatteverket steps also work, but import nothing. */
 const IMPORT_STEPS = new Set<BooksStep>(['sie', 'provider'])
 
+/** Steps with no way forward of their own: the only place the skip shows when the sources arrangement is on. */
+const SKIP_ONLY_STEPS = new Set<BooksStep>(['sie', 'provider', 'resume'])
+
+/**
+ * Whether the skip button shows on a step. Always, except on Klart; with the
+ * sources arrangement only on the steps that have no way on of their own.
+ */
+export function skipShown(step: BooksStep, sourcesFlow: boolean): boolean {
+  if (step === 'done') return false
+  return sourcesFlow ? SKIP_ONLY_STEPS.has(step) : true
+}
+
 export function booksSkip(
   state: Pick<BooksState, 'step' | 'working' | 'imported' | 'path'>,
   /** Posted entries exist, per the act's findings: the books are already here. */

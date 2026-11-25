@@ -8,7 +8,7 @@ import { singleFlight } from '@/lib/onboarding/single-flight'
 import { useOnboardingNavigation } from '@/lib/hooks/use-onboarding-navigation'
 import { useOnboardingStepEvent } from '@/lib/hooks/use-onboarding-step-event'
 import { reconcileBooksDraft } from '@/lib/onboarding-books/resume'
-import { booksSkip } from '@/lib/onboarding-books/skip'
+import { booksSkip, skipShown } from '@/lib/onboarding-books/skip'
 import { useBranding } from '@/lib/branding/brand-context'
 import { booksReducer, hasStepBehind, initialState, stationCount, stationOf, type BooksEntry, type BooksFlags } from '@/lib/onboarding-books/reducer'
 import JourneyOrb, { type OrbState } from '@/components/onboarding/journey/JourneyOrb'
@@ -297,7 +297,7 @@ export default function BooksJourney(props: BooksJourneyProps) {
           </Button>
           {/* Never disabled by running work: an import is the server's job, so
               the act must not hold anyone (lib/onboarding-books/skip). */}
-          {state.step !== 'done' && (
+          {skipShown(state.step, sourcesFlow) && (
             <Button variant="ghost" className="text-muted-foreground" disabled={leaving || !navigation.ready} onClick={() => setSkipOpen(true)}>
               {t('skip_all')}
             </Button>
