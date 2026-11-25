@@ -87,6 +87,7 @@ const RETAINED = new Set([
   'inventory_counts.user_id', // Who made an inventeringslista (LIV 1955:257); räkenskapsinformation the company keeps.
   'bank_file_imports.user_id',
   'bank_connect_invites.created_by', // Who sent the firmatecknare a signatory link; the company keeps the record.
+  'bank_connections.oauth_user_id', // Who started a bank login still pending on the company's connection. The tombstone id completes nothing (a deleted account cannot return from the bank), and the next login on the row overwrites it.
   'payment_signing_links.created_by', // Who asked the firmatecknare to sign a basket of payments; the company keeps the record.
   'signing_requests.created_by', // Who sent a document for BankID signing; the company keeps the record with the signatures.
   'share_register_events.created_by', // Who entered an aktiebok entry; the aktiebok is kept 10 years after dissolution (ABL 5:3).
