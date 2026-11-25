@@ -2332,6 +2332,7 @@
     "approved_description": "The invoice has been approved",
     "status_picker_aria": "Filter by status",
     "search_placeholder": "Search supplier invoices …",
+    "search_hit_reference": "OCR {reference}",
     "status_picker_label": "Status",
     "status_paid_date": "Paid {date}",
     "help_body": "Approval attests the invoice for payment. Select invoices with the checkbox and create a payment file to upload in your internet bank, or tick In bank on the row once you have entered the payment by hand. Payments are reconciled automatically when they are matched against the bank, and the tick then clears itself.",

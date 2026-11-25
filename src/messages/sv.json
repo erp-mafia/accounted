@@ -2332,6 +2332,7 @@
     "approved_description": "Fakturan är attesterad och kan betalas",
     "status_picker_aria": "Filtrera på status",
     "search_placeholder": "Sök leverantörsfaktura …",
+    "search_hit_reference": "OCR {reference}",
     "status_picker_label": "Status",
     "status_paid_date": "Betald {date}",
     "help_body": "Attesten frigör fakturan för betalning. Markera fakturor med kryssrutan och skapa en betalfil som laddas upp i internetbanken, eller bocka i I banken på raden när du lagt in betalningen för hand. Betalningar prickas av automatiskt när de matchas mot banken, och bocken försvinner då av sig själv.",
