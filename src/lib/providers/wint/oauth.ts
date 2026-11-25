@@ -7,10 +7,10 @@ import {
   OAUTH_TIMEOUT_MS,
 } from '@/lib/http/fetch-with-timeout';
 
-// WINT has no OAuth and no API keys (per their own swagger): authentication is
-// the user's WINT login exchanged ONCE, server-side, for an
-// AccessToken/RefreshToken pair. The password is used in loginWint and nowhere
-// else: it must never be persisted or logged. Only the token pair is stored.
+// Connections made before WINT connected with an app credential
+// (wintAppCredential in client.ts) hold an AccessToken/RefreshToken pair from
+// the account's own login. Nothing logs in any more: this file keeps those
+// pairs alive through the refresh, whose answer is the login's envelope.
 
 /** Mirror of WINT's LoginState enum (POST /api/Auth/jwt response). */
 export type WintLoginState =
@@ -87,9 +87,9 @@ export function jwtExpiresInSeconds(token: string, nowMs: number = Date.now()): 
 
 function toTokenResponse(auth: WintAuthResponse, context: string): TokenResponse {
   // Strict on purpose: anything other than an explicit Success is rejected.
-  // Accepting an ambiguous response here would mint a consent that LOOKS
+  // Accepting an ambiguous response here would keep a consent that LOOKS
   // connected but cannot refresh, which surfaces days later as a broken
-  // migration instead of failing loudly at connect time.
+  // migration instead of failing loudly now.
   const state = normalizeLoginState(auth.State);
   if (state !== 'Success') {
     throw new WintLoginRejectedError(state);
@@ -98,8 +98,8 @@ function toTokenResponse(auth: WintAuthResponse, context: string): TokenResponse
   const accessToken = auth.AuthTokens?.AccessToken;
   const refreshToken = auth.AuthTokens?.RefreshToken;
   if (!accessToken || !refreshToken) {
-    // Refresh is WINT's only token-revival path (no stored password, no API
-    // keys): a pair without a refresh token is as unusable as no pair.
+    // Refresh is the only way to revive such a pair (no password is
+    // stored): one without a refresh token is as unusable as no pair.
     throw new WintApiError(`${context}: response carried an incomplete token pair`, 502);
   }
 
@@ -129,7 +129,7 @@ async function postAuth(path: string, body: unknown, context: string): Promise<T
   if (!response.ok) {
     const responseBody = await response.text().catch(() => '');
     // 400/401 from the auth endpoints is a credential verdict; carry the
-    // status so submitProviderToken can tell it apart from an outage.
+    // status so the caller can tell it apart from an outage.
     throw new WintApiError(`${context} failed: ${response.status}`, response.status, responseBody);
   }
 
@@ -138,17 +138,10 @@ async function postAuth(path: string, body: unknown, context: string): Promise<T
 }
 
 /**
- * Exchange the user's WINT login for a token pair. The mail/password pair is
- * intentionally NOT retained in any form after this call resolves.
- */
-export async function loginWint(mail: string, password: string): Promise<TokenResponse> {
-  return postAuth('/api/Auth/jwt', { Mail: mail, Password: password }, 'WINT login');
-}
-
-/**
  * Refresh via POST /api/Auth/refresh. The swagger types the request body as a
- * bare JSON string (the refresh token). The response is the same auth envelope
- * as login; treat both tokens as rotated and persist the returned pair.
+ * bare JSON string (the refresh token). The response is the auth envelope a
+ * login answers with; treat both tokens as rotated and persist the returned
+ * pair.
  */
 export async function refreshWintToken(refreshToken: string): Promise<TokenResponse> {
   return postAuth('/api/Auth/refresh', refreshToken, 'WINT token refresh');

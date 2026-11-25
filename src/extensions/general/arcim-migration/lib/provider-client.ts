@@ -31,9 +31,9 @@ import {
   isBokioPricePlanError,
   normalizeBokioAccessToken,
 } from '@/lib/providers/bokio/client'
-import { WintClient, WintApiError } from '@/lib/providers/wint/client'
-import { loginWint, WintLoginRejectedError } from '@/lib/providers/wint/oauth'
+import { WintClient, WintApiError, wintAppCredential } from '@/lib/providers/wint/client'
 import { normalizeOrgNumber, orgNumberKey } from '@/lib/invariants/org-number'
+import { isUuid } from '@/lib/invariants/uuid'
 import { checkSourceOrgNumber } from '@/lib/company/org-number'
 import { fetchCompanyInfoDirect } from '@/lib/providers/provider-data-fetcher'
 import { resolveConsent as resolveConsentForIdentity } from '@/lib/providers/resolve-consent'
@@ -52,7 +52,7 @@ const bjornLundenClient = new BjornLundenClient()
 // Singleton (holds the rate limiter): used to verify Bokio company identity
 const bokioClient = new BokioClient()
 
-// Singleton (holds the rate limiter): used to verify the WINT login at submit
+// Singleton (holds the rate limiter): used to verify the WINT app credential at submit
 const wintClient = new WintClient()
 
 /**
@@ -77,7 +77,10 @@ export class ProviderTokenInvalidError extends Error {
       | 'plan-no-api'
       // Bokio: what was pasted as the company id holds no GUID, so Bokio
       // can never find a company by it.
-      | 'company-id-invalid' = 'credentials',
+      | 'company-id-invalid'
+      // WINT: what was pasted as the API key holds no UUID (a typo, or the
+      // account's password), so WINT can never accept it.
+      | 'api-key-invalid' = 'credentials',
   ) {
     super(message)
     this.name = 'ProviderTokenInvalidError'
@@ -896,8 +899,8 @@ export async function submitProviderToken(
   let tokenExpiresAt: string | null = null
   // What lands in provider_consent_tokens.provider_company_id. Usually the
   // caller-supplied value (BL User-Key, Bokio GUID, Briox account id); WINT
-  // overrides it below because its caller-supplied value is the login mail,
-  // which must not be persisted.
+  // overrides it below because its caller-supplied value is the app username,
+  // which belongs inside the sealed credential.
   let storedProviderCompanyId: string | undefined = providerCompanyId
 
   // BL uses app-level client credentials: get a real token, then prove the
@@ -1101,37 +1104,39 @@ export async function submitProviderToken(
     }
   }
 
-  // WINT: no API keys exist, so the wizard sends the user's WINT login
-  // (providerCompanyId = mail, apiToken = password). The pair is exchanged
-  // HERE, once, for an access/refresh token pair; the password is used for
-  // this single call and never stored, logged, or echoed. The token is then
-  // probed against GET /api/Auth to learn WHICH company it opens, mirroring
-  // the Bokio org-number mismatch guard.
+  // WINT: the customer creates an app inside WINT (Inställningar >
+  // Integrationer, "Egen app") and pastes its username (providerCompanyId) and
+  // API key (apiToken). The app does not go through the account's login,
+  // which WINT refuses with e-mail and password when the account requires
+  // BankID (prod, 2026-11-19), and it carries no expiry. WINT issues the key
+  // as a UUID (CustomApp.APIKey in its own spec), so anything else is refused
+  // HERE: a password typed into the field is never sent on or stored. The
+  // credential is then probed against GET /api/Auth to learn WHICH company it
+  // opens, mirroring the Bokio org-number guard.
   if (provider === 'wint') {
-    const mail = providerCompanyId?.trim()
-    if (!mail || !mail.includes('@')) {
-      throw new ProviderTokenInvalidError('WINT requires the login e-mail address')
+    const username = providerCompanyId?.trim()
+    const apiKey = apiToken.trim()
+    if (!username) {
+      throw new ProviderTokenInvalidError('WINT requires the app username')
     }
+    if (!isUuid(apiKey)) {
+      throw new ProviderTokenInvalidError('WINT API key holds no UUID', 'api-key-invalid')
+    }
+    accessToken = wintAppCredential(username, apiKey)
 
+    let wintCompany: Record<string, unknown>
     try {
-      const tokenResponse = await loginWint(mail, apiToken)
-      accessToken = tokenResponse.access_token
-      refreshToken = tokenResponse.refresh_token || null
-      tokenExpiresAt = new Date(Date.now() + tokenResponse.expires_in * 1000).toISOString()
+      wintCompany = await wintClient.get<Record<string, unknown>>(accessToken, '/api/Auth')
     } catch (error) {
-      // A definitive LoginState (wrong password, locked, BankID-only) is a
-      // credential verdict. Auth-endpoint 400/401/403 likewise. 429/5xx are
+      // 401/403 on the first call made with the credential is WINT's verdict
+      // on what was pasted (a typo, an app that is switched off). 429/5xx are
       // transient: rethrow as a generic submit failure.
-      if (error instanceof WintLoginRejectedError) {
-        throw new ProviderTokenInvalidError(`WINT rejected the login (${error.state})`)
-      }
-      if (error instanceof WintApiError && error.statusCode < 500 && error.statusCode !== 429) {
-        throw new ProviderTokenInvalidError(`WINT rejected the login (HTTP ${error.statusCode})`)
+      if (error instanceof WintApiError && (error.statusCode === 401 || error.statusCode === 403)) {
+        throw new ProviderTokenInvalidError(`WINT rejected the app credentials (HTTP ${error.statusCode})`)
       }
       throw error
     }
 
-    const wintCompany = await wintClient.get<Record<string, unknown>>(accessToken, '/api/Auth')
     const wintCompanyName = typeof wintCompany['Name'] === 'string' ? (wintCompany['Name'] as string).trim() : ''
     const wintOrgNumber = normalizeOrgNumber(wintCompany['Org'] as string | undefined)
 
@@ -1140,7 +1145,8 @@ export async function submitProviderToken(
     await refuseProviderOfOtherCompany(supabase, ownerCompanyId, wintCompany['Org'] as string | undefined, wintCompanyName || null)
 
     // The WINT-internal company id is what later calls may need (CompanyAuth
-    // company switching); the login mail is deliberately NOT persisted.
+    // company switching); the app username lives only inside the sealed
+    // credential.
     storedProviderCompanyId = wintCompany['Id'] != null ? String(wintCompany['Id']) : undefined
 
     if (wintCompanyName || wintOrgNumber) {

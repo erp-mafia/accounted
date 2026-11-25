@@ -53,6 +53,22 @@ export interface WintListResponse<T> {
 
 const DEFAULT_PAGE_SIZE = 200;
 
+const BASIC_PREFIX = 'Basic ';
+
+/**
+ * The stored credential of a WINT app ("Egen app" under Inställningar >
+ * Integrationer in WINT): its username and API key as HTTP Basic, the scheme
+ * the API itself names (`WWW-Authenticate: Basic realm="Wint.se"` on a request
+ * without credentials, probed 2026-11-24). The customer creates the app inside
+ * WINT, it carries no expiry and they switch it off there. Not yet seen
+ * working against a live WINT app: the first real connection is the proof.
+ * Kept in the access-token slot with its scheme so the client can tell it
+ * from a login JWT, which never starts with "Basic ".
+ */
+export function wintAppCredential(username: string, apiKey: string): string {
+  return `${BASIC_PREFIX}${Buffer.from(`${username}:${apiKey}`, 'utf8').toString('base64')}`;
+}
+
 export class WintClient {
   private readonly rateLimiter: TokenBucketRateLimiter;
   private readonly baseUrl: string;
@@ -62,12 +78,14 @@ export class WintClient {
     this.rateLimiter = new TokenBucketRateLimiter(WINT_RATE_LIMIT, 'ratelimit:wint');
   }
 
-  // Assumption (unverified against a live account, no securityScheme in the
-  // swagger): the JWT from POST /api/Auth/jwt travels as a standard Bearer
-  // token. If a live test proves otherwise the change is confined here.
+  // Two credentials reach this client. An app credential (wintAppCredential)
+  // is sent as it is stored. A connection made before those holds a JWT from
+  // the account's login, which travels as a Bearer token: the API answers a
+  // bad one with `WWW-Authenticate: Bearer error="invalid_token"` (probed
+  // 2026-11-24), no live account has proven a good one.
   private authHeaders(accessToken: string): Record<string, string> {
     return {
-      Authorization: `Bearer ${accessToken}`,
+      Authorization: accessToken.startsWith(BASIC_PREFIX) ? accessToken : `Bearer ${accessToken}`,
       Accept: 'application/json',
       'Content-Type': 'application/json',
     };
