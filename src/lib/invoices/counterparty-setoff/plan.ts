@@ -234,7 +234,7 @@ export function planSetoff(input: {
   // carries. An issue verifikat that booked the öresavrundning put 151x at
   // the rounded Att betala, so 3740 takes only the set-off's own gap less
   // that öre, the rule of the payment builders (book_counterparty_setoff,
-  // migration 20261125160100, books the same).
+  // migration 20261125160147, books the same).
   const issueOre = applied === invoiceRemaining ? bookedOreRounding(invoiceRemaining, invoice.carriedSek) : 0
   const oreRounding = roundOre(residual - issueOre)
   const invoiceAfter = roundOre(invoiceRemaining - applied)

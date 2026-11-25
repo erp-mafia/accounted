@@ -6,7 +6,7 @@ import { insertAuthUser, insertCompanyMember, insertPostedJournalEntry, seedComp
 
 /**
  * Migration 20261022130100_counterparty_setoffs (crm#1367),
- * 20261104100600 (crm#1644, öresavrundning) and 20261125160100 (crm#2283,
+ * 20261104100600 (crm#1644, öresavrundning) and 20261125160147 (crm#2283,
  * öresavrundning the issue verifikat booked): kvittning of a
  * customer invoice against a supplier invoice of the same counterparty.
  *  - book_counterparty_setoff books Dr 244x / Cr 151x, lowers both invoices,
@@ -639,12 +639,12 @@ describe('counterparty set-off absorbs öresavrundning (migration 20261104100600
   })
 })
 
-// Migration 20261125160100 (crm#2283): an issue verifikat that booked the
+// Migration 20261125160147 (crm#2283): an issue verifikat that booked the
 // invoice's öresavrundning put 1510 at the rounded Att betala (999,75 issued
 // as Dr 1510 1 000 / Cr 3740 0,25). A set-off that settles the invoice in full
 // clears all 1510 carries and books on 3740 only its own gap less that öre, so
 // 1510 ends at zero and the öre is not booked twice.
-describe('counterparty set-off clears the öre the issue verifikat booked (migration 20261125160100)', () => {
+describe('counterparty set-off clears the öre the issue verifikat booked (migration 20261125160147)', () => {
   async function voucherLines(entryId: string): Promise<Array<[string, number, number]>> {
     const { rows } = await getPool().query(
       `SELECT account_number, debit_amount::numeric AS debit, credit_amount::numeric AS credit
