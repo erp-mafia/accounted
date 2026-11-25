@@ -153,8 +153,10 @@ function ledger(lineCount: number, accountCount: number, balanceOnly = 0): Gener
       total_debit: roundOre(share * 125.5),
       total_credit: 0,
     })
-    // A balance-only account between two accounts with lines.
-    if (a === 0 && balanceOnly > 0) accounts.push({ ...balanceAccount(500), account_number: String(2001) })
+    // Balance-only accounts between the first two accounts with lines.
+    if (a === 0) {
+      for (let b = 0; b < balanceOnly; b++) accounts.push({ ...balanceAccount(500 + b), account_number: String(2001 + b) })
+    }
   }
   for (let b = 0; b < balanceOnly; b++) accounts.push({ ...balanceAccount(900 + b), account_number: String(9000 + b) })
   return { accounts, period: { start: '2026-01-01', end: '2026-12-31' } }
@@ -408,6 +410,11 @@ describe('the answer through the MCP route (judge: response bytes against the pl
     expect(result.isError).not.toBe(true)
     expect(bytes).toBeLessThan(BUFFERED_RESPONSE_LIMIT_BYTES)
     expect(result.structuredContent).toMatchObject({ count: 100, total_count: 100_000, has_more: true, next_offset: 100 })
+    // The page is the ledger's first 100 lines, with their account as in the whole answer.
+    const whole = ledger(100_000, 40)
+    const [account] = result.structuredContent.accounts
+    expect(result.structuredContent.accounts).toHaveLength(1)
+    expect(account).toEqual({ ...whole.accounts[0], lines: whole.accounts[0].lines.slice(0, 100), line_count: 2_500 })
     // What the model reads says it too.
     expect(JSON.parse(result.content[0].text)).toMatchObject({ has_more: true, total_count: 100_000, next_offset: 100 })
   }, 60_000)
