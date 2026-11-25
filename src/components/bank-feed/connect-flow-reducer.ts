@@ -426,10 +426,15 @@ export function flowReducer(state: FlowState, action: FlowAction): FlowState {
 
     case 'bank_details_loaded': {
       if (!state.bank || action.details.bic !== state.bank.bic) return state
-      // A locked bank named after its sparbank (a renewal) finds itself among the affiliates.
+      // A locked bank named after its sparbank (a renewal) finds itself among
+      // the affiliates. The bank itself stays on its own row: the provider
+      // lists Swedbank among its own affiliates too, and that entry confines
+      // the consent to Swedbank's own accounts, where a sparbank customer is
+      // refused (PSU_ACCOUNT_MISSING). The own row sends no affiliate, and the
+      // bank looks in whichever of its banks holds the person's accounts.
       const bankName = state.bank.name
-      const affiliate = state.affiliate ?? action.details.affiliates.find((a) => sameName(a.name, bankName)) ?? null
-      return { ...state, bankDetails: action.details, affiliate }
+      const named = sameName(bankName, action.details.name) ? null : action.details.affiliates.find((a) => sameName(a.name, bankName))
+      return { ...state, bankDetails: action.details, affiliate: state.affiliate ?? named ?? null }
     }
 
     case 'bank_details_failed':
