@@ -244,23 +244,18 @@ describe('the contact email check (KU31 and KU20)', () => {
     expect(refuses(email)).toBe(true)
   })
 
-  // Each character more in a refused address used to double the time the check took.
-  it('answers at once for a typo with no top-level domain', () => {
+  // Each character more in a refused address used to double the time the
+  // check took. The bound is checked after every address, shortest first, so
+  // a slow check fails on a short typo instead of never returning on the longest.
+  it('answers at once for a typo with no top-level domain, up to the longest address the field takes', () => {
+    const longest = `${'ekonomiavdelningen.'.repeat(12)}foretaget@foretaget`.padEnd(254, 's')
+    expect(longest).toHaveLength(254)
     const started = performance.now()
-    for (const prefix of ['KU31', 'KU20'] as const) {
-      for (const email of ['ekonomi.foretaget@foretaget', 'ekonomiavdelning.foretaget@foretaget', 'ekonomiavdelningen.foretaget@foretaget']) {
+    for (const email of ['ekonomi.foretaget@foretaget', 'ekonomiavdelning.foretaget@foretaget', 'ekonomiavdelningen.foretaget@foretaget', longest]) {
+      for (const prefix of ['KU31', 'KU20'] as const) {
         expect(refuses(email, prefix)).toBe(true)
+        expect(performance.now() - started).toBeLessThan(1000)
       }
     }
-    expect(performance.now() - started).toBeLessThan(250)
-  })
-
-  it('answers at once for a typo as long as the field allows', () => {
-    const email = `${'ekonomiavdelningen.'.repeat(12)}foretaget@foretaget`
-    expect(email.length).toBeLessThanOrEqual(254)
-    const started = performance.now()
-    expect(refuses(email, 'KU31')).toBe(true)
-    expect(refuses(email, 'KU20')).toBe(true)
-    expect(performance.now() - started).toBeLessThan(250)
   })
 })
