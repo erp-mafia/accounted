@@ -43,7 +43,8 @@
  *   - a duplicate supplier invoice number answers the existing invoice.
  *
  * A dry run resolves the item, the supplier, the rules and the rate, and
- * computes the invoice; it allocates no ankomstnummer and writes no invoice,
+ * computes the invoice (withVerifikat: and the registration verifikat the
+ * commit would post); it allocates no ankomstnummer and writes no invoice,
  * verifikat or supplier payment details. A refusal writes none of them either.
  */
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
@@ -83,6 +84,7 @@ import { fetchChartVatTreatments } from '@/lib/bookkeeping/chart-vat-treatments'
 import { invoiceDefaultDimensions } from '@/lib/suppliers/default-dimensions'
 import { rejectSupersededInboxConversions } from '@/lib/pending-operations/supersede'
 import {
+  previewRegistrationVerifikat,
   resolveSupplierInvoiceReverseCharge,
   resolveSupplierInvoiceReverseChargeKind,
   reverseChargeAccountRefusal,
@@ -248,6 +250,12 @@ export async function convertInboxItemToSupplierInvoice(
      * not add up to what was approved.
      */
     approvedTotal?: number
+    /**
+     * With dryRun: the dry run also answers the registration verifikat the
+     * commit would post (preview.verifikat, null when it posts none now), or
+     * the commit's refusal of it, such as no open fiscal year.
+     */
+    withVerifikat?: boolean
   } = {},
 ): Promise<OperationOutcome<ConvertInboxItemResult>> {
   const { supabase, companyId, userId, log } = ctx
@@ -513,7 +521,60 @@ export async function convertInboxItemToSupplierInvoice(
     }
   }
 
+  // The invoice as the commit below inserts it, less what only the commit
+  // draws (the ankomstnummer) or reads (the payee the document states): the
+  // dry run builds its verifikat over this same row.
+  const invoiceRow = {
+    supplier_id: body.supplier_id,
+    supplier_invoice_number: body.supplier_invoice_number,
+    invoice_date: body.invoice_date,
+    due_date: dueDate,
+    delivery_date: body.delivery_date || null,
+    status: 'registered' as const,
+    currency: fx.rate.currency,
+    exchange_rate: fx.rate.exchangeRate,
+    // Which day's kurs the SEK amounts were translated at (BFL 5 kap).
+    exchange_rate_date: fx.rate.exchangeRateDate,
+    vat_treatment: vatTreatment,
+    reverse_charge: reverseCharge,
+    reverse_charge_kind: reverseChargeKind.kind,
+    payment_reference: body.payment_reference || null,
+    subtotal: roundOre(subtotal),
+    subtotal_sek: subtotalSek,
+    vat_amount: roundOre(totalVat),
+    vat_amount_sek: vatAmountSek,
+    total,
+    total_sek: totalSek,
+    remaining_amount: total,
+    document_id: item.document_id || null,
+    notes,
+    // Invoice-level bag; the registration, periodisering and payment
+    // generators apply it to every line they book.
+    default_dimensions: defaultDimensions,
+  }
+
   if (options.dryRun) {
+    // The registration verifikat as the commit posts it: the same builder
+    // over the same row and lines, its accounts judged as the engine judges
+    // them. The ankomstnummer, drawn at the commit, only names its text.
+    const registration = options.withVerifikat
+      ? await previewRegistrationVerifikat(ctx, {
+          header: { ...invoiceRow, id: '', arrival_number: null, is_self_billed: false } as unknown as SupplierInvoice,
+          items,
+          supplierType: supplier.supplier_type as string,
+          supplierName: supplier.name as string,
+          entityType: null,
+          body,
+          booksOnRegistration,
+          paidPrivately: false,
+          total,
+          vatAmount: totalVat,
+          exchangeRate: fx.rate.exchangeRate,
+          documentId: invoiceRow.document_id,
+          inboxItemId,
+        })
+      : null
+    if (registration && !registration.ok) return registration
     return {
       ok: true,
       dryRun: true,
@@ -549,6 +610,7 @@ export async function convertInboxItemToSupplierInvoice(
             }
           : {}),
         would_create_registration_journal_entry: booksOnRegistration,
+        ...(registration ? { verifikat: registration.verifikat } : {}),
       },
     }
   }
@@ -578,39 +640,14 @@ export async function convertInboxItemToSupplierInvoice(
     .insert({
       user_id: userId,
       company_id: companyId,
-      supplier_id: body.supplier_id,
       arrival_number: arrivalNum,
-      supplier_invoice_number: body.supplier_invoice_number,
-      invoice_date: body.invoice_date,
-      due_date: dueDate,
-      delivery_date: body.delivery_date || null,
-      status: 'registered',
-      currency: fx.rate.currency,
-      exchange_rate: fx.rate.exchangeRate,
-      // Which day's kurs the SEK amounts were translated at (BFL 5 kap).
-      exchange_rate_date: fx.rate.exchangeRateDate,
-      vat_treatment: vatTreatment,
-      reverse_charge: reverseCharge,
-      reverse_charge_kind: reverseChargeKind.kind,
-      payment_reference: body.payment_reference || null,
+      ...invoiceRow,
       // What the document itself says to pay to, validated: a payment
       // compares it with the supplier card instead of trusting either.
       payee_bankgiro: payeeAssessment.stated.payee_bankgiro,
       payee_plusgiro: payeeAssessment.stated.payee_plusgiro,
       payee_iban: payeeAssessment.stated.payee_iban,
       payee_bic: payeeAssessment.stated.payee_bic,
-      subtotal: roundOre(subtotal),
-      subtotal_sek: subtotalSek,
-      vat_amount: roundOre(totalVat),
-      vat_amount_sek: vatAmountSek,
-      total,
-      total_sek: totalSek,
-      remaining_amount: total,
-      document_id: item.document_id || null,
-      notes,
-      // Invoice-level bag; the registration, periodisering and payment
-      // generators apply it to every line they book.
-      default_dimensions: defaultDimensions,
     })
     .select()
     .single()
