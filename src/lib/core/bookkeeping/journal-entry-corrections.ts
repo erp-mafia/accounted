@@ -36,6 +36,7 @@ import { resolvePeriodStatusForDate } from '@/lib/core/bookkeeping/period-servic
 import { correctionChainDepth, CORRECTION_CHAIN_GUARD_DEPTH } from '@/lib/core/bookkeeping/correction-chain'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { DATE_FIXED_SOURCE_TYPES } from '@/lib/core/bookkeeping/date-fixed-source-types'
+import { LINE_RATTELSE_EXCLUDED_SOURCES } from '@/lib/core/bookkeeping/correction-paths'
 import { standingStornoOf } from '@/lib/core/bookkeeping/storno-target'
 import { resolveUserLabelsFromProfiles } from '@/lib/reports/behandlingshistorik'
 import { rpcWithActor } from '@/lib/bookkeeping/actor-rpc'
@@ -59,9 +60,6 @@ import type { StrikeLinesSchema } from '@/lib/api/schemas'
 import { toError } from '@/lib/errors/to-error'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
-
-/** Entry types whose lines keep their dedicated flows (same list as the RPC). */
-const LINE_RATTELSE_EXCLUDED_SOURCES = ['storno', 'year_end', 'vat_settlement'] as const
 
 const STORNO_HINT = 'använd rättelseverifikat (storno).'
 
@@ -439,7 +437,7 @@ async function previewLineRattelse(
   if (!loaded.ok) return loaded
   const { entry } = loaded
 
-  if ((LINE_RATTELSE_EXCLUDED_SOURCES as readonly string[]).includes(entry.source_type)) {
+  if (LINE_RATTELSE_EXCLUDED_SOURCES.includes(entry.source_type)) {
     return refused('Den här verifikationstypen kan inte rättas radvis: använd dess egen rättelsefunktion.', {
       source_type: entry.source_type,
     })

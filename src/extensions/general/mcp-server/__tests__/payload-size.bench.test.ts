@@ -15,6 +15,7 @@ const FULL_CATALOG_CEILING = 67_600
 const SIMPLE_CATALOG_CEILING = 63_150
 const DEFAULT_CATALOG_TOOL_LIMIT = 140
 import { projectToolReferences } from '../tool-namespace'
+import { publicToolAnnotations } from '../tool-effects'
 
 // Mirror the real tools/list serializer, including the derived staging _meta
 // (requires_approval / approve_tool / preflight) merged over any literal
@@ -37,7 +38,7 @@ function serializeCatalog(
       description: t.description,
       inputSchema: projectToolInputSchema(t, { omitCompanyId: simple }),
       ...(t.outputSchema ? { outputSchema: t.outputSchema } : {}),
-      annotations: t.annotations,
+      annotations: publicToolAnnotations(t.annotations),
       ...(Object.keys(meta).length > 0 ? { _meta: meta } : {}),
     }
     return namespace === 'accounted'
@@ -796,6 +797,13 @@ describe('tools/list payload size guard', () => {
     //     "samlingsbetalning" and two "the"s to stay under 280. +81, measured
     //     66 322 (single-company 61 892). Ceiling unchanged.
     //   * FROZEN at 67 600 on 2026-11-06: see FULL_CATALOG_CEILING.
+    //   * 2026-11-24: the guard measured each tool's `effect`, which
+    //     tools/list never sends (publicToolAnnotations strips it), about 720
+    //     tokens; it now measures the annotations tools/list sends. In the
+    //     same change every enum names its type (default_vat_treatment and
+    //     vat_box on create_account and update_account, on_existing_year on
+    //     import_sie), which a connector directory review requires: +29.
+    //     Measured 66 882 (main 67 575 with `effect`). Ceiling unchanged.
     expect(approxTokens).toBeLessThan(FULL_CATALOG_CEILING)
   })
 
@@ -1032,6 +1040,9 @@ describe('tools/list payload size guard', () => {
     // part on the same tool (a shorter description that also names the new
     // field); the rest is the field's own schema, and the tool's other listed
     // bytes are the shared staging fields. Measured 63 147 (main 63 098).
+    // 2026-11-24: measured without `effect`, which tools/list never sends,
+    // and with a type on every enum (+29, see the full catalog case).
+    // Measured 62 473 (main 63 146 with `effect`). Ceiling unchanged.
     expect(simple).toBeLessThan(SIMPLE_CATALOG_CEILING)
   })
 

@@ -11,7 +11,38 @@
 import { describe, it, expect } from 'vitest'
 import { tools, STAGE_BRIDGE_TARGETS } from '../server'
 import { TOOL_SCOPE_MAP } from '@/lib/auth/api-keys'
-import { isTenantWriteScope } from '../company-routing'
+import { isTenantWriteScope, projectToolInputSchema } from '../company-routing'
+
+type JsonSchema = Record<string, unknown>
+
+const COMPOSED = ['anyOf', 'oneOf', 'allOf'] as const
+
+/**
+ * Every schema a parameter value is checked against, at any depth: object
+ * properties, array items and the branches of a composition. A record's
+ * value schema (additionalProperties) is left out: `{}` there admits any
+ * value on purpose.
+ */
+function untypedSchemas(node: JsonSchema, path: string, found: string[] = []): string[] {
+  const children: Array<[string, unknown]> = []
+  if (node.properties && typeof node.properties === 'object') {
+    for (const [name, schema] of Object.entries(node.properties as JsonSchema)) children.push([`${path}.${name}`, schema])
+  }
+  if (node.items && typeof node.items === 'object' && !Array.isArray(node.items)) children.push([`${path}[]`, node.items])
+  for (const key of COMPOSED) {
+    const options = node[key]
+    if (Array.isArray(options)) options.forEach((option, i) => children.push([`${path}.${key}[${i}]`, option]))
+  }
+  for (const [childPath, child] of children) {
+    if (typeof child !== 'object' || child === null) continue
+    const schema = child as JsonSchema
+    if (!('type' in schema) && !('$ref' in schema) && !COMPOSED.some((key) => key in schema)) {
+      found.push(childPath)
+    }
+    untypedSchemas(schema, childPath, found)
+  }
+  return found
+}
 
 describe('MCP tool inputSchema strictness', () => {
   it('every tool inputSchema has additionalProperties: false at the top level', () => {
@@ -22,6 +53,17 @@ describe('MCP tool inputSchema strictness', () => {
       })
       .map((t) => t.name)
     expect(missing).toEqual([])
+  })
+
+  it('every parameter of every tool names its type, as tools/list and gnubok_search_tools show it', () => {
+    // A connector directory review refuses a property without a JSON Schema
+    // type, and clients send a parameter whose type they cannot read as a
+    // string. An enum or const names the type of its values too
+    // ({ type: 'string', enum: [...] }); Zod-generated schemas get it from
+    // toolInputSchema. Walks every tool, listed or search-only, with the
+    // company_id the multi-company projection adds.
+    const untyped = tools.flatMap((t) => untypedSchemas(projectToolInputSchema(t), t.name))
+    expect(untyped).toEqual([])
   })
 
   it('every tenant write tool has a scope that the central role guard can classify', () => {

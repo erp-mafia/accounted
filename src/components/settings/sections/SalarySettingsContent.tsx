@@ -24,7 +24,7 @@ import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { useSettings } from '@/components/settings/useSettings'
 import { usePaymentFileAccount } from '@/lib/hooks/use-payment-file-account'
 import { payingAccountDisplay } from '@/lib/payments/paying-account-label'
-import { resolveDefaultSeriesForSource } from '@/lib/bookkeeping/voucher-series-resolver'
+import { resolveDefaultSeriesForSource, voucherSeriesLabel } from '@/lib/bookkeeping/voucher-series-resolver'
 import { resolveEmployerSwitches } from '@/lib/salary/employer-switches'
 import {
   DEFAULT_SALARY_CALCULATION_POLICY,
@@ -34,8 +34,6 @@ import {
   type SalaryCalculationPolicyKey,
 } from '@/lib/salary/calculation-policy'
 import type { CompanySettings } from '@/types'
-
-const SERIES_OPTIONS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 
 /**
  * One <select> per calculation convention. The form field name is the policy
@@ -95,7 +93,11 @@ export function SalarySettingsContent() {
   const effectivePays = employer.paysSalaries
   const effectiveRegistered = employer.employerRegistered
   const effectiveSeasonal = employer.employerSeasonal
+  // The series salary runs start on is the Lön row of the per-type map under
+  // Bokföring, its one home: shown here with the way there. Each run seeds
+  // run.voucher_series from it and can change its own.
   const currentSeries = resolveDefaultSeriesForSource(settings, 'salary_payment')
+  const currentSeriesName = voucherSeriesLabel(currentSeries, settings.voucher_series_labels)
   // {} on a company that never touched the conventions = every default.
   const currentPolicy: SalaryCalculationPolicy = {
     ...DEFAULT_SALARY_CALCULATION_POLICY,
@@ -106,7 +108,6 @@ export function SalarySettingsContent() {
     const payDayRaw = parseInt((formData.get('salary_pay_day') as string) || '25', 10)
     const payDay = Number.isFinite(payDayRaw) ? Math.min(28, Math.max(1, payDayRaw)) : 25
     const paymentFormat = (formData.get('preferred_payment_format') as string) || 'pain001'
-    const series = (formData.get('salary_voucher_series') as string) || 'A'
     const deviationRaw = formData.get('salary_deviation_period') as string | null
     const deviationPeriod = deviationRaw === 'previous_month' ? 'previous_month' : 'same_month'
 
@@ -122,17 +123,6 @@ export function SalarySettingsContent() {
       // All six conventions travel together: the internal settings route
       // stores the object as a whole.
       salary_calculation_policy: readPolicyFromForm(formData),
-    }
-
-    // The booking engine resolves the series from the per-source-type map;
-    // salary entries pass run.voucher_series explicitly, seeded from this
-    // entry at run creation. Merge, never replace, the map so other
-    // source-type overrides survive.
-    if (series !== currentSeries) {
-      updates.default_voucher_series_per_source_type = {
-        ...(settings?.default_voucher_series_per_source_type || {}),
-        salary_payment: series,
-      }
     }
 
     return {
@@ -363,16 +353,17 @@ export function SalarySettingsContent() {
             htmlFor="salary_voucher_series"
             help={t('voucher_series_help')}
           >
-            <SettingsSelect
+            {/* No name attribute: a read-only value, never part of the save. */}
+            <SettingsInput
               id="salary_voucher_series"
-              name="salary_voucher_series"
-              defaultValue={currentSeries}
-              className="font-mono"
-            >
-              {SERIES_OPTIONS.map((letter) => (
-                <option key={letter} value={letter}>{letter}</option>
-              ))}
-            </SettingsSelect>
+              disabled
+              readOnly
+              value={currentSeriesName ? `${currentSeries}  ${currentSeriesName}` : currentSeries}
+              className="basis-full font-mono"
+            />
+            <Link href="/settings/bookkeeping" className={QUIET_LINK_CLASS}>
+              {t('voucher_series_change')}
+            </Link>
           </SettingsRow>
         </SettingsGroup>
         </SettingsReveal>

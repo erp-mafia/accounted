@@ -56,7 +56,8 @@ describe('Attesterade: attested and nothing paid yet', () => {
   })
 
   it('the ladder reads the same attest fact', () => {
-    const base = { is_credit_note: false, in_open_batch: false, reconciled: false }
+    // A company with an attest step: faktureringsmetoden with the attest policy on.
+    const base = { is_credit_note: false, in_open_batch: false, reconciled: false, accounting_method: 'accrual', attest_policy_on: true }
     expect(deriveStage({ ...base, status: 'overdue', approved_at: ATTESTED_AT })).toBe('approved')
     expect(deriveStage({ ...base, status: 'approved', approved_at: null })).toBe('approved')
     expect(deriveStage({ ...base, status: 'overdue', approved_at: null })).toBe('registered')

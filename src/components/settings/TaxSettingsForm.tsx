@@ -10,9 +10,13 @@ import {
   SettingsInput,
   SettingsReveal,
   SettingsRow,
+  SettingsRowEnd,
   SettingsRowNote,
   SettingsSelect,
 } from '@/components/settings/SettingsRows'
+import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { useFormat } from '@/lib/hooks/use-format'
+import { registrationShownAsFact, type RegistryRegistrations } from '@/lib/company/registry-registrations'
 import { formatAmount } from '@/lib/utils'
 import type { KuSignalTrigger } from '@/lib/tax/ku-signal'
 import type { CompanySettings } from '@/types'
@@ -33,6 +37,31 @@ interface TaxSettingsFormProps {
    * form): named beside the form the books follow (PH 237).
    */
   registryFormLabel?: string | null
+  /** What the registry snapshot says about F-skatt and moms, and when it was read. */
+  registryRegistrations?: RegistryRegistrations | null
+}
+
+/**
+ * A registration the registry snapshot and the saved setting both answer yes:
+ * shown as that fact with its source and date instead of a switch. "Ändra"
+ * brings back the switch, the correction the row always had.
+ */
+function RegistryFact({ readAt, onChange }: { readAt: string | null; onChange: () => void }) {
+  const t = useTranslations('settings_tax_form')
+  const { formatDateLong } = useFormat()
+  return (
+    <>
+      <span>{t('registry_fact_yes')}</span>
+      <SettingsRowNote>
+        {readAt ? t('registry_fact_source_dated', { date: formatDateLong(readAt) }) : t('registry_fact_source')}
+      </SettingsRowNote>
+      <SettingsRowEnd>
+        <button type="button" className={QUIET_LINK_CLASS} onClick={onChange}>
+          {t('registry_fact_change')}
+        </button>
+      </SettingsRowEnd>
+    </>
+  )
 }
 
 /**
@@ -56,10 +85,17 @@ export function TaxSettingsForm({
   kuTriggers = [],
   rotRutSignalDetected = false,
   registryFormLabel = null,
+  registryRegistrations = null,
 }: TaxSettingsFormProps) {
   const t = useTranslations('settings_tax_form')
   const [vatRegistered, setVatRegistered] = useState(settings.vat_registered ?? false)
   const [fSkatt, setFSkatt] = useState(settings.f_skatt ?? true)
+  // A switch once opened stays a switch: the snapshot loads after the form,
+  // and a fact must never stand over a value the person changed.
+  const [fSkattAsked, setFSkattAsked] = useState(false)
+  const [vatAsked, setVatAsked] = useState(false)
+  const fSkattFact = !fSkattAsked && fSkatt && registrationShownAsFact(settings.f_skatt, registryRegistrations?.fTax)
+  const vatFact = !vatAsked && vatRegistered && registrationShownAsFact(settings.vat_registered, registryRegistrations?.vat)
   const [momsPeriod, setMomsPeriod] = useState(settings.moms_period || '')
   const [vatTaxableBaseOver40m, setVatTaxableBaseOver40m] = useState(
     settings.vat_taxable_base_over_40m ?? false,
@@ -101,30 +137,41 @@ export function TaxSettingsForm({
           )}
         </SettingsRow>
 
-        <SettingsRow label={t('f_skatt_label')} htmlFor="f_skatt" help={t('f_skatt_help')}>
-          <Switch
-            id="f_skatt"
-            checked={fSkatt}
-            onCheckedChange={(v) => setFSkatt(v === true)}
-          />
+        <SettingsRow label={t('f_skatt_label')} htmlFor={fSkattFact ? undefined : 'f_skatt'} help={t('f_skatt_help')}>
+          {fSkattFact ? (
+            <RegistryFact readAt={registryRegistrations?.readAt ?? null} onChange={() => setFSkattAsked(true)} />
+          ) : (
+            <Switch
+              id="f_skatt"
+              // Opened through Ändra: focus lands on the switch it brought back.
+              autoFocus={fSkattAsked}
+              checked={fSkatt}
+              onCheckedChange={(v) => setFSkatt(v === true)}
+            />
+          )}
           <input type="hidden" name="f_skatt" value={fSkatt ? 'true' : 'false'} />
         </SettingsRow>
 
         <SettingsRow
           label={t('vat_registered_label')}
-          htmlFor="vat_registered"
+          htmlFor={vatFact ? undefined : 'vat_registered'}
           help={t('vat_registered_help')}
           borderless={vatRegistered}
         >
-          <Switch
-            id="vat_registered"
-            checked={vatRegistered}
-            onCheckedChange={(value) => {
-              const checked = value === true
-              setVatRegistered(checked)
-              if (checked && vatTaxableBaseOver40m) setMomsPeriod('monthly')
-            }}
-          />
+          {vatFact ? (
+            <RegistryFact readAt={registryRegistrations?.readAt ?? null} onChange={() => setVatAsked(true)} />
+          ) : (
+            <Switch
+              id="vat_registered"
+              autoFocus={vatAsked}
+              checked={vatRegistered}
+              onCheckedChange={(value) => {
+                const checked = value === true
+                setVatRegistered(checked)
+                if (checked && vatTaxableBaseOver40m) setMomsPeriod('monthly')
+              }}
+            />
+          )}
           <input type="hidden" name="vat_registered" value={vatRegistered ? 'true' : 'false'} />
         </SettingsRow>
 

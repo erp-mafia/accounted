@@ -69,9 +69,9 @@ export const WORKLIST_CATEGORIES = [
    *           approved_at null (ATTESTABLE_SUPPLIER_INVOICE_STATUSES: an
    *           unattested invoice past its due date still waits, crm#1631),
    *           not a credit note (a credit note is a reversal, never a
-   *           payable), in a company that attests at all: never under
-   *           kontantmetoden, which has no attest step
-   *           (companyAttestsSupplierInvoices).
+   *           payable), in a company that attests at all: faktureringsmetoden
+   *           with the attest policy on (companyAttestsSupplierInvoices);
+   *           kontantmetoden and a company without a policy have no attest step.
    * Done:     attested (approved_at set), or the status moves to
    *           paid/partially_paid/credited/….
    */

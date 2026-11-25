@@ -182,11 +182,18 @@ describe('watchCountFailures', () => {
 })
 
 describe('countSupplierInvoicesAwaitingApproval', () => {
+  /** The reads after the count: the settings row, then the attest policy (on unless said). */
+  const attesting = (method: string | null = 'accrual', policy: Record<string, unknown> | null = { enabled: true }) => {
+    enqueue({ data: method === null ? null : { accounting_method: method } })
+    enqueue({ data: policy })
+  }
+
   it('counts unattested registered invoices but never credit notes', async () => {
     // A credit note is a reversal with nothing to attest; the detail page
     // offers no attest button for it, so counting one here made an item
     // nobody could clear (support case 2026-09-04).
     enqueue({ count: 1 })
+    attesting()
     await expect(countSupplierInvoicesAwaitingApproval(supabase, COMPANY)).resolves.toBe(1)
     const eqCalls = findCalls('supplier_invoices', 'eq')
     expect(eqCalls).toContainEqual(['is_credit_note', false])
@@ -199,6 +206,7 @@ describe('countSupplierInvoicesAwaitingApproval', () => {
     // so a 'registered'-only count dropped it from Att göra the day it fell
     // due. The count reads the same statuses as canApproveSupplierInvoice.
     enqueue({ count: 3 })
+    attesting()
     await expect(countSupplierInvoicesAwaitingApproval(supabase, COMPANY)).resolves.toBe(3)
     expect(findCalls('supplier_invoices', 'in')).toContainEqual(['status', [...ATTESTABLE_SUPPLIER_INVOICE_STATUSES]])
     expect([...ATTESTABLE_SUPPLIER_INVOICE_STATUSES]).toEqual(['registered', 'overdue'])
@@ -221,31 +229,48 @@ describe('countSupplierInvoicesAwaitingApproval', () => {
     // kontantmetoden, so a registered invoice counted here was an Att göra
     // item nobody could clear.
     enqueue({ count: 2 })
-    enqueue({ data: { accounting_method: 'cash' } })
+    attesting('cash')
     await expect(countSupplierInvoicesAwaitingApproval(supabase, COMPANY)).resolves.toBe(0)
     expect(findCall('company_settings', 'select')).toEqual(['accounting_method'])
     expect(findCalls('company_settings', 'eq')).toContainEqual(['company_id', COMPANY])
   })
 
-  it('keeps counting under faktureringsmetoden, and for a company with no setting', async () => {
+  it('counts nothing under faktureringsmetoden without an attest policy on: no page asks for attest there', async () => {
+    for (const policy of [null, { enabled: false }]) {
+      reset()
+      enqueue({ count: 2 })
+      attesting('accrual', policy)
+      await expect(countSupplierInvoicesAwaitingApproval(supabase, COMPANY), JSON.stringify(policy)).resolves.toBe(0)
+      expect(findCall('company_attest_policies', 'select')).toEqual(['enabled'])
+      expect(findCalls('company_attest_policies', 'eq')).toContainEqual(['company_id', COMPANY])
+    }
+  })
+
+  it('keeps counting under faktureringsmetoden with the attest policy on, and for a company with no setting', async () => {
     enqueue({ count: 2 })
-    enqueue({ data: { accounting_method: 'accrual' } })
+    attesting('accrual')
     await expect(countSupplierInvoicesAwaitingApproval(supabase, COMPANY)).resolves.toBe(2)
     // The credit-note exclusion is unchanged by the method gate.
     expect(findCalls('supplier_invoices', 'eq')).toContainEqual(['is_credit_note', false])
     reset()
     enqueue({ count: 2 })
-    enqueue({ data: null })
+    attesting(null)
     await expect(countSupplierInvoicesAwaitingApproval(supabase, COMPANY)).resolves.toBe(2)
   })
 
-  it('soft-fails to 0 when either read fails', async () => {
+  it('soft-fails to 0 when any read fails', async () => {
     enqueue({ error: { message: 'boom' } })
-    enqueue({ data: { accounting_method: 'accrual' } })
+    attesting()
     await expect(countSupplierInvoicesAwaitingApproval(supabase, COMPANY)).resolves.toBe(0)
     reset()
     enqueue({ count: 2 })
     enqueue({ error: { message: 'settings boom' } })
+    enqueue({ data: { enabled: true } })
+    await expect(countSupplierInvoicesAwaitingApproval(supabase, COMPANY)).resolves.toBe(0)
+    reset()
+    enqueue({ count: 2 })
+    enqueue({ data: { accounting_method: 'accrual' } })
+    enqueue({ error: { message: 'policy boom' } })
     await expect(countSupplierInvoicesAwaitingApproval(supabase, COMPANY)).resolves.toBe(0)
   })
 })
@@ -403,6 +428,11 @@ describe('simple head counts', () => {
     ['countPendingOperations', countPendingOperations, 'pending_operations'],
   ] as const)('%s returns the count and targets the right table', async (_name, fn, table) => {
     enqueue({ count: 3 })
+    // The attest count reads the settings row and the attest policy (on) next.
+    if (fn === countSupplierInvoicesAwaitingApproval) {
+      enqueue({ data: { accounting_method: 'accrual' } })
+      enqueue({ data: { enabled: true } })
+    }
     await expect(fn(supabase, COMPANY)).resolves.toBe(3)
     expect(mockSupabase.from).toHaveBeenCalledWith(table)
   })

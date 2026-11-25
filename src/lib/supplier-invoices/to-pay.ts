@@ -17,10 +17,10 @@
  * at the bank (an open bank payment, crm#1243, or the "Inlagd i banken" tick
  * while it holds, crm#1824), and not held by the attest policy
  * (paymentWaitsForAttest, the payment file's own attest_required). Without a
- * policy attest is not a step before payment: the payment file pays an
- * unattested invoice with a warning, and most such companies never attest
- * (2026-11-12: 229 of 386). A payment file keeps the invoice waiting: a
- * generated file may never have reached the bank.
+ * policy attest is not a step at all (companyAttestsSupplierInvoices): the
+ * payment file pays an unattested invoice, and most such companies never
+ * attested (2026-11-12: 229 of 386). A payment file keeps the invoice
+ * waiting: a generated file may never have reached the bank.
  *
  * Pure and dependency-light: the list page imports it.
  */
