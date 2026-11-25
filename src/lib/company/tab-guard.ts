@@ -26,8 +26,36 @@ export const TAB_SYNC_CHANNEL = 'gnubok-company-switch'
  */
 export const TAB_SYNC_STORAGE_KEY = 'gnubok-active-company'
 
+/**
+ * Request header the tab sets on every same-origin /api/ request: the company
+ * this tab is rendering. withRouteContext refuses a write whose value differs
+ * from the company it resolved for the session.
+ */
+export const TAB_COMPANY_HEADER = 'x-tab-company-id'
+
+/**
+ * Response header withRouteContext sets once it has resolved the session's
+ * active company: the company the server acted on. The tab compares it with
+ * the company it shows.
+ */
+export const ACTIVE_COMPANY_HEADER = 'x-active-company-id'
+
 /** Methods that mutate state and must not run from a stale tab. */
 const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
+
+/** Methods that never write: the server does not check the tab's company. */
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
+
+/** The route that answers which company the session has active. */
+export const COMPANY_CURRENT_PATH = '/api/company/current'
+
+/**
+ * How long the tab waits before it asks the server, after an answer named
+ * another company than the tab shows. A change of company this tab started
+ * itself (a new company, a removed one) renders the tab with the new company
+ * within the wait, and the question is then never put.
+ */
+export const ACTIVE_COMPANY_VERIFY_DELAY_MS = 1200
 
 /**
  * The header Next.js puts on every client-invoked server action POST
@@ -70,12 +98,19 @@ export const guardStore: {
    * renders the OLD company and must get the full guard back.
    */
   selfSwitchTargetId: string | null
+  /**
+   * Asks the server which company is active, after its wait, and raises the
+   * dialog when it still differs from the tab's (set by CompanyTabSync).
+   * Called when an answer named another company than this tab shows.
+   */
+  verifyActiveCompany: (() => void) | null
 } = {
   tabCompanyId: null,
   observedCompanyId: null,
   notifyBlocked: null,
   companySwitchInFlight: false,
   selfSwitchTargetId: null,
+  verifyActiveCompany: null,
 }
 
 /**
@@ -241,4 +276,95 @@ export function guardBrowserWrite(): boolean {
   }
   guardStore.notifyBlocked?.()
   return false
+}
+
+/**
+ * Whether a request URL is a same-origin /api/ request, the only requests the
+ * tab labels with its company. Relative URLs resolve against the page origin.
+ */
+export function isSameOriginApiUrl(url: string, pageOrigin: string): boolean {
+  let parsed: URL
+  try {
+    parsed = new URL(url, pageOrigin)
+  } catch {
+    // An unparseable url is not a same-origin /api/ request: nothing to label.
+    return false
+  }
+  return parsed.origin === pageOrigin && parsed.pathname.startsWith('/api/')
+}
+
+/**
+ * The (input, init) pair to hand to fetch with the tab's company named in
+ * TAB_COMPANY_HEADER. Returns the arguments untouched when the tab has no
+ * company or the request is not a same-origin /api/ one. Otherwise `init`
+ * gains a merged Headers object: the headers of init (a Headers, an entries
+ * array or a record) or, when init sets none, those of a Request input (fetch
+ * lets init.headers replace the Request's headers whole, so they are carried
+ * over). A header the caller already set under the same name is kept.
+ */
+export function withTabCompanyHeader<I extends string | URL | Request>(
+  input: I,
+  init: RequestInit | undefined,
+  opts: { tabCompanyId: string | null; pageOrigin: string },
+): { input: I; init: RequestInit | undefined } {
+  if (!opts.tabCompanyId) return { input, init }
+  const target: string | URL | Request = input
+  const url =
+    typeof target === 'string'
+      ? target
+      : target instanceof URL
+        ? target.toString()
+        : target.url
+  if (!isSameOriginApiUrl(url, opts.pageOrigin)) return { input, init }
+
+  let headers: Headers
+  try {
+    const source =
+      init?.headers ??
+      (typeof target === 'string' || target instanceof URL ? undefined : target.headers)
+    headers = new Headers(source)
+  } catch {
+    // Headers the platform cannot read: send the request as the caller made it.
+    return { input, init }
+  }
+  if (!headers.has(TAB_COMPANY_HEADER)) headers.set(TAB_COMPANY_HEADER, opts.tabCompanyId)
+  return { input, init: { ...init, headers } }
+}
+
+/**
+ * The company id to treat as observed when a response arrives, or null when
+ * the response gives no reason to block. Looks only at responses the caller
+ * already established are same-origin /api/ ones. Silent while this tab's own
+ * company switch is running or the tab is navigating to the company it
+ * switched to: the switch itself answers with the new company.
+ */
+export function companyObservedFromResponse(opts: {
+  responseCompanyId: string | null | undefined
+  tabCompanyId: string | null
+  companySwitchInFlight: boolean
+  selfSwitchTargetId: string | null
+}): string | null {
+  if (opts.companySwitchInFlight || opts.selfSwitchTargetId) return null
+  if (!opts.responseCompanyId) return null
+  return isTabMismatch(opts.tabCompanyId, opts.responseCompanyId) ? opts.responseCompanyId : null
+}
+
+/**
+ * Server side: whether a request must be refused because the tab that sent it
+ * shows another company than the one the session has active. Only a mutating
+ * request that names a company (TAB_COMPANY_HEADER) can be refused; the
+ * company switch itself never is, as it is how the dialog's exits get out.
+ */
+export function shouldRefuseForTabCompany(opts: {
+  method: string | undefined
+  pathname: string
+  tabCompanyHeader: string | null | undefined
+  activeCompanyId: string
+}): boolean {
+  const method = (opts.method ?? 'GET').toUpperCase()
+  if (SAFE_METHODS.has(method)) return false
+  if (opts.pathname === COMPANY_SWITCH_PATH) return false
+  const claimed = opts.tabCompanyHeader?.trim()
+  if (!claimed) return false
+  return claimed !== opts.activeCompanyId
 }
