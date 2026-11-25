@@ -1,11 +1,14 @@
 'use client'
 
 import { useTranslations } from 'next-intl'
+import type { SendOrderWay } from '@/lib/invoices/send-order'
 import { SendOrderEditor } from './SendOrderEditor'
 
 interface SendOrderSetupProps {
   /** The order was saved in this visit: the block shows one sentence instead. */
   saved: boolean
+  /** The ways the company can use; the page shows the block only with at least two. */
+  available: readonly SendOrderWay[]
   onSaved: () => void
 }
 
@@ -15,34 +18,35 @@ interface SendOrderSetupProps {
  * customers and the one button. The page decides when it shows (the user is
  * in the rollout, may change settings, the company has no saved order).
  */
-export function SendOrderSetup({ saved, onSaved }: SendOrderSetupProps) {
+export function SendOrderSetup({ saved, available, onSaved }: SendOrderSetupProps) {
   const t = useTranslations('invoice_send_order')
   if (saved) {
     return (
-      <p className="text-[13px] text-foreground/80" role="status">
+      <p className="max-w-xl text-[13px] text-foreground/80" role="status">
         {t('saved')}
       </p>
     )
   }
   return (
-    <section aria-labelledby="send-order-heading" className="space-y-1">
-      <h2 id="send-order-heading" className="text-[15px] font-medium leading-[22px] text-strong">
-        {t('heading')}
-      </h2>
-      <p className="text-[13px] text-foreground/80">{t('intro')}</p>
-      <div className="pt-3">
-        <SendOrderEditor
-          saved={null}
-          onSaved={onSaved}
-          lead={(customerCount) =>
-            customerCount === null ? null : (
-              <p className="text-[13px] text-foreground/80">
+    <section aria-labelledby="send-order-heading" className="max-w-xl space-y-6">
+      <SendOrderEditor
+        saved={null}
+        available={available}
+        onSaved={onSaved}
+        lead={(customerCount) => (
+          <div className="space-y-2">
+            {customerCount === null ? null : (
+              <p className="text-[13px] text-muted-foreground">
                 {customerCount > 0 ? t('customers_here', { count: customerCount }) : t('customers_none')}
               </p>
-            )
-          }
-        />
-      </div>
+            )}
+            <h2 id="send-order-heading" className="text-[20px] font-medium text-strong">
+              {t('heading')}
+            </h2>
+            <p className="text-[13px] text-muted-foreground">{t('intro')}</p>
+          </div>
+        )}
+      />
     </section>
   )
 }

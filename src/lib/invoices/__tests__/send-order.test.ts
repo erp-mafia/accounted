@@ -5,6 +5,7 @@ import {
   SEND_ORDER_WAYS,
   availableSendOrderWays,
   defaultChannelByOrder,
+  hasOrderToChoose,
   initialSendOrderRows,
   isValidSendOrder,
   moveSendOrderRowUp,
@@ -198,5 +199,21 @@ describe('invoice_send_order in the settings schema', () => {
     expect(parse(['email', 'email']).success).toBe(false)
     expect(parse([]).success).toBe(false)
     expect(parse('email').success).toBe(false)
+  })
+})
+
+describe('hasOrderToChoose', () => {
+  it('is false with no way or one way', () => {
+    expect(hasOrderToChoose([])).toBe(false)
+    expect(hasOrderToChoose(['email'])).toBe(false)
+  })
+
+  it('is true with two or more ways', () => {
+    expect(hasOrderToChoose(['peppol', 'email'])).toBe(true)
+    expect(hasOrderToChoose(availableSendOrderWays(true, ['kivra', 'billo']))).toBe(true)
+  })
+
+  it('is false for a company that can only send by email', () => {
+    expect(hasOrderToChoose(availableSendOrderWays(false, []))).toBe(false)
   })
 })

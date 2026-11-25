@@ -22359,7 +22359,7 @@
   },
   "invoice_send_order": {
     "heading": "How should invoices go out?",
-    "intro": "We try from the top down for each customer. Move what you want first to the top.",
+    "intro": "We try them from the top down for each customer.",
     "customers_here": "{count, plural, one {# customer is here.} other {# customers are here.}}",
     "customers_none": "No customers here yet. This applies from your first invoice.",
     "way_peppol": "E-invoice",

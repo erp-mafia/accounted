@@ -11,10 +11,12 @@ import { availableSendOrderWays, type SendOrderWay } from '@/lib/invoices/send-o
 /**
  * The ways this company can use, read once: null until the two reads have
  * answered. The same two reads the invoice editor lists its channels by.
+ * With `enabled` false nothing is read and the answer stays null.
  */
-export function useSendOrderWays(): SendOrderWay[] | null {
+export function useSendOrderWays(enabled = true): SendOrderWay[] | null {
   const [ways, setWays] = useState<SendOrderWay[] | null>(null)
   useEffect(() => {
+    if (!enabled) return
     let cancelled = false
     void Promise.all([fetchPeppolSending(), fetchActiveSendingProviders()]).then(([peppol, providers]) => {
       if (!cancelled) setWays(availableSendOrderWays(peppol !== null, providers))
@@ -22,7 +24,7 @@ export function useSendOrderWays(): SendOrderWay[] | null {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [enabled])
   return ways
 }
 
