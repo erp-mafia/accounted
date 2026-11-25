@@ -18,6 +18,8 @@ import { isEntityType, requiresAuditorRegardlessOfSize, requiresHousingKeyRatios
 import { dividendExceedsFreeEquity } from './dividend-equity'
 import { exceedsFiscalYearCap } from '@/lib/bookkeeping/validate-period-duration'
 import type { ShareCapitalReconciliation } from '@/lib/bolaget/reconcile'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { signatureDate } from './signature-pages'
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 
@@ -325,7 +327,7 @@ export function validateAnnualReportCompleteness(
 ): AnnualReportValidationResult {
   const { report, profile, disclosures, eligibility, stage } = input
   const issues: AnnualReportComplianceIssue[] = [...eligibility.issues]
-  const today = parseIsoDate(input.todayIso ?? new Date().toISOString())
+  const today = parseIsoDate(input.todayIso ?? todayIsoStockholm())
   const periodStart = parseIsoDate(report.fiscal_period.period_start)
   const periodEnd = parseIsoDate(report.fiscal_period.period_end)
 
@@ -561,10 +563,12 @@ export function validateAnnualReportCompleteness(
     if (!report.forvaltningsberattelse.agm_date) {
       push(issues, 'AR-AGM-DATE', 'error', 'agm', 'Datum för årsstämman saknas.')
     }
+    // signed_at is an instant: its day is the Swedish one, as the PDF and the
+    // iXBRL print it (signatureDate), never its first ten UTC characters.
     const signedDates = report.signatures
-      .map((signature) => parseIsoDate(signature.signed_at))
+      .map((signature) => parseIsoDate(signatureDate(signature.signed_at)))
       .filter((date): date is Date => date !== null)
-    if (report.signatures.some((signature) => signature.signed_at && !parseIsoDate(signature.signed_at))) {
+    if (report.signatures.some((signature) => signature.signed_at && !parseIsoDate(signatureDate(signature.signed_at)))) {
       push(issues, 'AR-SIGNATURE-DATE-INVALID', 'error', 'signatures', 'Ett underskriftsdatum är ogiltigt.')
     }
     if (periodEnd && signedDates.some((date) => date <= periodEnd)) {
