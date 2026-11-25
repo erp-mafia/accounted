@@ -11,7 +11,7 @@ import {
   parseJsonResponse,
 } from '@/tests/helpers'
 
-const { supabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase, enqueue, reset, calls } = createQueuedMockSupabase()
 // Service-role client for the profiles lookup (profiles RLS is self-only).
 const service = createQueuedMockSupabase()
 
@@ -35,9 +35,10 @@ vi.mock('@/lib/supabase/server', () => ({
 
 import { GET } from '../route'
 
-const params = () => createMockRouteParams({ id: 'entry-1' })
-const makeGet = () =>
-  createMockRequest('/api/bookkeeping/journal-entries/entry-1/rattelse-log', { method: 'GET' })
+const ENTRY_ID = '7b0c1e2a-4d5f-4a6b-8c9d-0e1f2a3b4c5d'
+const params = (id = ENTRY_ID) => createMockRouteParams({ id })
+const makeGet = (id = ENTRY_ID) =>
+  createMockRequest(`/api/bookkeeping/journal-entries/${id}/rattelse-log`, { method: 'GET' })
 
 const linesRow = (id: string, actor: string | null, created_at: string) => ({
   id,
@@ -75,6 +76,18 @@ describe('GET /api/bookkeeping/journal-entries/[id]/rattelse-log', () => {
     expect(response.status).toBe(401)
   })
 
+  it('answers 404 for an id that is not a uuid, before any query', async () => {
+    // /bookkeeping/new opened by hand: Postgres refused the id with a uuid
+    // parse error, which this route answered as a 500 (JOURNAL_RATTELSE_LOG_FAILED).
+    const response = await GET(makeGet('new'), params('new'))
+    const { body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(response.status).toBe(404)
+    expect(body.error.code).toBe('JOURNAL_ENTRY_NOT_FOUND')
+    expect(calls).toEqual([])
+    expect(createServiceClientMock).not.toHaveBeenCalled()
+  })
+
   it('returns 404 when the entry belongs to another company', async () => {
     enqueue({ data: null, error: null }) // ownership check finds nothing
 
@@ -90,7 +103,7 @@ describe('GET /api/bookkeeping/journal-entries/[id]/rattelse-log', () => {
   })
 
   it('returns the rättelse rows newest first with the actor resolved from profiles', async () => {
-    enqueue({ data: { id: 'entry-1' }, error: null }) // ownership check
+    enqueue({ data: { id: ENTRY_ID }, error: null }) // ownership check
     enqueue({
       data: [
         linesRow('log-2', 'user-1', '2026-07-23T12:00:00Z'),
@@ -132,7 +145,7 @@ describe('GET /api/bookkeeping/journal-entries/[id]/rattelse-log', () => {
   })
 
   it('names who struck a line after their account was deleted, from the names this company keeps', async () => {
-    enqueue({ data: { id: 'entry-1' }, error: null }) // ownership check
+    enqueue({ data: { id: ENTRY_ID }, error: null }) // ownership check
     enqueue({ data: [linesRow('log-5', 'user-3', '2026-07-23T12:00:00Z')], error: null })
     // The deleted account's profile has no name or e-mail left.
     service.enqueue({ data: [{ id: 'user-3', email: null, full_name: null }], error: null })
@@ -150,7 +163,7 @@ describe('GET /api/bookkeeping/journal-entries/[id]/rattelse-log', () => {
   })
 
   it('leaves actor_label null and skips the profiles lookup when no row has an actor', async () => {
-    enqueue({ data: { id: 'entry-1' }, error: null }) // ownership check
+    enqueue({ data: { id: ENTRY_ID }, error: null }) // ownership check
     enqueue({ data: [linesRow('log-3', null, '2026-07-23T12:00:00Z')], error: null })
 
     const response = await GET(makeGet(), params())
@@ -164,7 +177,7 @@ describe('GET /api/bookkeeping/journal-entries/[id]/rattelse-log', () => {
   })
 
   it('still returns 200 with actor_label null when the profiles lookup fails', async () => {
-    enqueue({ data: { id: 'entry-1' }, error: null }) // ownership check
+    enqueue({ data: { id: ENTRY_ID }, error: null }) // ownership check
     enqueue({ data: [linesRow('log-4', 'user-2', '2026-07-23T12:00:00Z')], error: null })
     service.enqueue({ data: null, error: { message: 'permission denied' } })
 
@@ -177,7 +190,7 @@ describe('GET /api/bookkeeping/journal-entries/[id]/rattelse-log', () => {
   })
 
   it('still returns 200 with actor_label null when the service client cannot be created', async () => {
-    enqueue({ data: { id: 'entry-1' }, error: null }) // ownership check
+    enqueue({ data: { id: ENTRY_ID }, error: null }) // ownership check
     enqueue({ data: [linesRow('log-5', 'user-2', '2026-07-23T12:00:00Z')], error: null })
     createServiceClientMock.mockImplementation(() => {
       throw new Error('SUPABASE_SERVICE_ROLE_KEY missing')
@@ -191,7 +204,7 @@ describe('GET /api/bookkeeping/journal-entries/[id]/rattelse-log', () => {
   })
 
   it('returns 500 with a Swedish message when the query fails', async () => {
-    enqueue({ data: { id: 'entry-1' }, error: null }) // ownership check
+    enqueue({ data: { id: ENTRY_ID }, error: null }) // ownership check
     enqueue({ data: null, error: { message: 'boom' } })
 
     const response = await GET(makeGet(), params())
