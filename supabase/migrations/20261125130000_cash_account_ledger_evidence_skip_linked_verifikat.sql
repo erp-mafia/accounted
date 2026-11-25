@@ -1,31 +1,38 @@
--- cash_account_ledger_evidence: a verifikat a bank row is already linked to
--- is no evidence.
+-- cash_account_ledger_evidence: a verifikat line a booked bank row already
+-- carries is no evidence.
 --
 -- What happened. The 'transactions' kind counts a connected account's open
 -- bank rows that have a posted verifikat on the same day with a 19xx line
--- for the same signed amount, and says it is the exact tier of the
--- verifikat matcher. The matcher links only a verifikat no bank row is
--- linked to: bank_account_unlinked_lines leaves out every verifikat a
--- transactions.journal_entry_id points at, and every one with a
--- transaction_voucher_links row but a part payment's open rest, which
--- runReconciliation (lib/reconciliation/bank-reconciliation.ts) never
--- links either. This function did not ask. A bank movement delivered twice leaves one copy
+-- for the same signed amount. A bank movement delivered twice leaves one copy
 -- booked and one open, and the open copy then matched its twin's verifikat.
 -- When the account had booked on one ledger account for a while and was
 -- later moved to another on purpose, every such twin pointed back at the
 -- old account, and the bank page kept suggesting the move back, with
--- nothing the matcher could ever link.
+-- nothing the verifikat matcher could ever link: bank_account_unlinked_lines
+-- and runReconciliation (lib/reconciliation/bank-reconciliation.ts) never
+-- offer a verifikat a bank row is linked to.
 --
--- What changes. The verifikat read for the 'transactions' kind leaves out
--- a verifikat a bank row is linked to, by its pointer or through
--- transaction_voucher_links, as the matcher does. Both lookups are indexed
+-- What changes. A verifikat line is left out when a bank row linked to its
+-- verifikat, by its pointer or through transaction_voucher_links, has the
+-- line's signed amount: that row took the line, and an open row fitting it
+-- is a copy of the booked movement or a coincidence of day and amount. The
+-- rule asks the amount, not the account the linked row sits on, so it also
+-- holds when the booked copy sits on another cash account row of the same
+-- bank account (a broken reconnect) or on none (booked rows left on the
+-- primary account, 20261125120000). A transfer between two of the company's
+-- own accounts, booked from one side, still counts for the other side: its
+-- leg there has the opposite sign of the booked row, and it is real
+-- evidence of where that account belongs. Leaving every linked verifikat out
+-- would take those hits off an account's own ledger account and could raise
+-- a move or a swap that was rightly held back. Both lookups are indexed
 -- (idx_transactions_journal_entry_id,
--- idx_transaction_voucher_links_journal_entry_id) and run only for the
--- verifikat of a day that has open bank rows. The 'balance' kind is
--- unchanged.
+-- idx_transaction_voucher_links_journal_entry_id, then the transactions
+-- primary key) and run only for the lines of a day that some open row of
+-- the day fits. The 'balance' kind is unchanged.
 --
 -- Everything else in the body is copied from 20261031110900, the latest
--- migration that defines the function. SECURITY INVOKER, the grants and the
+-- migration that defines the function; the line read is wrapped so that it
+-- keeps the verifikat id the two lookups need. SECURITY INVOKER, the grants and the
 -- comment stay as they are (CREATE OR REPLACE keeps grants and comment).
 --
 -- pg-test: tests/pg/cash-account-ledger-evidence.pg.test.ts
@@ -82,44 +89,54 @@ AS $$
       -- amount.
       SELECT k.account_number, sum(cardinality(array_positions(d.unbooked, k.amount))) AS hits
       FROM (
-        SELECT DISTINCT
-          jel.account_number,
-          round(
-            CASE
-              WHEN d.currency = 'SEK' THEN COALESCE(jel.debit_amount, 0) - COALESCE(jel.credit_amount, 0)
-              WHEN jel.currency = d.currency AND jel.amount_in_currency IS NOT NULL THEN
-                CASE
-                  WHEN COALESCE(jel.debit_amount, 0) > 0 THEN abs(jel.amount_in_currency)
-                  WHEN COALESCE(jel.credit_amount, 0) > 0 THEN -abs(jel.amount_in_currency)
-                END
-            END, 2) AS amount
-        FROM public.journal_entries je
-        JOIN public.journal_entry_lines jel
-          ON jel.journal_entry_id = je.id
-         AND jel.account_number >= '1900'
-         AND jel.account_number < '2000'
-         AND jel.account_number ~ '^19[0-9]{2}$'
-        WHERE je.company_id = p_company_id
-          AND je.entry_date = d.day
-          AND je.status = 'posted'
-          AND je.source_type NOT IN ('opening_balance', 'storno')
-          -- A verifikat a bank row is already linked to, by its pointer or
-          -- through transaction_voucher_links, is no candidate for another
-          -- row: the matcher's own rule (bank_account_unlinked_lines and
-          -- runReconciliation). Its
-          -- twin row, the same bank movement delivered twice, says nothing
-          -- about where the account belongs.
+        SELECT DISTINCT line.account_number, line.amount
+        FROM (
+          SELECT
+            je.id AS journal_entry_id,
+            jel.account_number,
+            round(
+              CASE
+                WHEN d.currency = 'SEK' THEN COALESCE(jel.debit_amount, 0) - COALESCE(jel.credit_amount, 0)
+                WHEN jel.currency = d.currency AND jel.amount_in_currency IS NOT NULL THEN
+                  CASE
+                    WHEN COALESCE(jel.debit_amount, 0) > 0 THEN abs(jel.amount_in_currency)
+                    WHEN COALESCE(jel.credit_amount, 0) > 0 THEN -abs(jel.amount_in_currency)
+                  END
+              END, 2) AS amount
+          FROM public.journal_entries je
+          JOIN public.journal_entry_lines jel
+            ON jel.journal_entry_id = je.id
+           AND jel.account_number >= '1900'
+           AND jel.account_number < '2000'
+           AND jel.account_number ~ '^19[0-9]{2}$'
+          WHERE je.company_id = p_company_id
+            AND je.entry_date = d.day
+            AND je.status = 'posted'
+            AND je.source_type NOT IN ('opening_balance', 'storno')
+        ) line
+        WHERE line.amount = ANY (d.unbooked)
+          -- A line a bank row linked to its verifikat, by its pointer or
+          -- through transaction_voucher_links, carries with the same signed
+          -- amount is taken: an open row that fits it is the same movement
+          -- delivered twice, or a coincidence, and says nothing about where
+          -- the account belongs. The other leg of a transfer between own
+          -- accounts has the opposite sign and still counts.
           AND NOT EXISTS (
             SELECT 1
             FROM public.transactions linked
-            WHERE linked.journal_entry_id = je.id
+            WHERE linked.journal_entry_id = line.journal_entry_id
               AND linked.company_id = p_company_id
+              AND round(linked.amount, 2) = line.amount
           )
           AND NOT EXISTS (
             SELECT 1
             FROM public.transaction_voucher_links l
-            WHERE l.journal_entry_id = je.id
+            JOIN public.transactions linked
+              ON linked.id = l.transaction_id
+             AND linked.company_id = p_company_id
+            WHERE l.journal_entry_id = line.journal_entry_id
               AND l.company_id = p_company_id
+              AND round(linked.amount, 2) = line.amount
           )
       ) k
       WHERE k.amount = ANY (d.unbooked)
