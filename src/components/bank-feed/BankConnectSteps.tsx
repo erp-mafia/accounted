@@ -116,6 +116,7 @@ export function FlowSteps({ controller, session, banks, banksFailed, onRetryBank
           dispatch={dispatch}
           banks={banks}
           banksFailed={banksFailed}
+          sparbanker={controller.sparbanker}
           onRetryBanks={onRetryBanks}
           soleTrader={soleTrader}
           onContinue={() => dispatch({ type: 'to_bankid' })}

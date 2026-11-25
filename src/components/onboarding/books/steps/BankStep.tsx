@@ -28,6 +28,9 @@ import { BankConnectDialog } from '@/components/bank-feed/BankConnectDialog'
 import { useBankConnectFlow } from '@/components/bank-feed/use-bank-connect-flow'
 import { useBankConnectResume } from '@/components/bank-feed/use-bank-connect-resume'
 import { useOpenPaymentsAvailability } from '@/components/bank-feed/use-open-payments-availability'
+import { commonBanks } from '@/components/bank-feed/bank-help'
+import { flowBankFromList, standsForSparbanker } from '@/components/bank-feed/bank-search-results'
+import { bankLogoUrl } from '@/lib/cash-accounts/bank-logos'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 
 const EB = '/api/extensions/ext/enable-banking'
@@ -58,6 +61,7 @@ interface SyncSummary {
  */
 export function BankStep({ ctx }: { ctx: BooksCtx }) {
   const t = useTranslations('books')
+  const tBank = useTranslations('bank_connect')
   const { locale, formatDateLong } = useFormat()
   const { state, dispatch, flags, findings, loadingFindings, loadFindings, landedError } = ctx
   const phase = state.bankPhase
@@ -75,6 +79,9 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
   const bankFlow = useBankConnectFlow('onboarding')
   // Back from a bank that signs on its own page (?station=bank&bank_connect=<id>): reopen the flow, once.
   useBankConnectResume(bankFlow, openPayments.status === 'available')
+  // The most common banks, shown on the step itself in the second arrangement;
+  // empty (the single button) while the list is not there.
+  const quickBanks = useMemo(() => (flags.sourcesFlow === true && openPayments.banks ? commonBanks(openPayments.banks) : []), [flags.sourcesFlow, openPayments.banks])
   const [banks, setBanks] = useState<Bank[] | null>(null)
   // The bank list could not be read: unknown, not "no bank matches". Clearing
   // it re-runs the read.
@@ -437,6 +444,26 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
           </div>
         ) : openPayments.status === 'loading' ? (
           <Wait text={t('bank_loading')} height={96} />
+        ) : openPayments.status === 'available' && quickBanks.length > 0 ? (
+          <div className="jny-qactions is-stack">
+            <div className="bank-common">
+              {quickBanks.map((b, i) => {
+                const logo = bankLogoUrl(b.name) ?? b.logo_url ?? undefined
+                const label = standsForSparbanker(b) ? tBank('bank_swedbank_and_sparbanker') : b.name
+                return (
+                  <Pill key={b.bic} index={i} logo={logo} mark={logo ? undefined : initials(b.name)} onClick={() => bankFlow.open('new', { bank: flowBankFromList(b) })} ariaLabel={label}>
+                    <span className="lbl">{label}</span>
+                  </Pill>
+                )
+              })}
+            </div>
+            <Button variant="ghost" className="text-muted-foreground" onClick={() => bankFlow.open('new')}>
+              {t('bank_more_banks')}
+            </Button>
+            <Button variant="ghost" className="text-muted-foreground" onClick={() => dispatch({ type: 'BANK_SKIP', flags })}>
+              {t('bank_manual')}
+            </Button>
+          </div>
         ) : openPayments.status === 'available' ? (
           <div className="jny-qactions is-stack">
             <Button size="lg" onClick={() => bankFlow.open('new')}>

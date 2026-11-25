@@ -6,9 +6,11 @@ import { BuildingLibraryIcon, ChevronRightIcon, MagnifyingGlassIcon } from '@/co
 import { Input } from '@/components/ui/input'
 import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { bankLogoUrl } from '@/lib/cash-accounts/bank-logos'
-import { bankMatchesQuery, searchAliasHint } from '@/lib/bank-sync/bank-search'
+import { searchAliasHint } from '@/lib/bank-sync/bank-search'
 import { cn } from '@/lib/utils'
-import { bankSigningApproach, orderBanks } from './bank-help'
+import { bankSigningApproach } from './bank-help'
+import { searchBankRows, standsForSparbanker, type SparbankGroup } from './bank-search-results'
+import type { FlowAffiliate } from './connect-flow-reducer'
 import type { OpenPaymentsBank } from './open-payments-client'
 
 /**
@@ -37,6 +39,11 @@ interface BankListProps {
   banks: OpenPaymentsBank[] | null
   selectedBic: string | null
   onPick: (bank: OpenPaymentsBank) => void
+  /** The sparbanker behind the shared BIC, when known: a search then finds them too, and the bank's row says they are there. */
+  sparbanker?: SparbankGroup | null
+  selectedAffiliateId?: string | null
+  /** A sparbank result was chosen: the bank behind it and the sparbank, in one press. */
+  onPickAffiliate?: (parent: OpenPaymentsBank, affiliate: FlowAffiliate) => void
 }
 
 /**
@@ -44,16 +51,19 @@ interface BankListProps {
  * hairline rows of 48px with the bank's mark. A bank that signs only on its
  * own page is choosable with one muted line saying the person comes back
  * here; a bank we cannot sign at either way is listed but not choosable.
+ * Typing also lists the sparbanker (searchBankRows), so one search finds a
+ * savings bank without choosing Swedbank first.
  */
-export function BankList({ banks, selectedBic, onPick }: BankListProps) {
+export function BankList({ banks, selectedBic, onPick, sparbanker = null, selectedAffiliateId = null, onPickAffiliate }: BankListProps) {
   const t = useTranslations('bank_connect')
   const [query, setQuery] = useState('')
 
-  const shown = useMemo(() => {
-    if (!banks) return []
-    return orderBanks(banks.filter((bank) => bankMatchesQuery(bank, query)))
-  }, [banks, query])
-  const aliasHint = searchAliasHint(shown, query)
+  const shown = useMemo(() => (banks ? searchBankRows(banks, sparbanker, query) : []), [banks, sparbanker, query])
+  const aliasHint = searchAliasHint(
+    shown.flatMap((row) => (row.kind === 'bank' ? [row.bank] : [])),
+    query,
+  )
+  const searching = query.trim() !== ''
 
   return (
     <div className="space-y-3">
@@ -85,10 +95,36 @@ export function BankList({ banks, selectedBic, onPick }: BankListProps) {
       ) : (
         // max-h-96 is exactly eight 48px rows: a scroll box with a reason.
         <div role="listbox" aria-label={t('bank_search')} className="max-h-96 divide-y divide-border overflow-y-auto overscroll-contain border-y border-border">
-          {shown.map((bank) => {
+          {shown.map((row) => {
+            if (row.kind === 'affiliate') {
+              const selected = selectedBic === row.parent.bic && selectedAffiliateId === row.affiliate.id
+              return (
+                <button
+                  key={`affiliate:${row.affiliate.id}`}
+                  type="button"
+                  role="option"
+                  aria-selected={selected}
+                  onClick={() => onPickAffiliate?.(row.parent, row.affiliate)}
+                  className={cn(
+                    'flex w-full items-center gap-3 px-1 py-2 text-left transition-colors duration-150 hover:bg-secondary/60',
+                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+                    selected && 'bg-secondary/60',
+                  )}
+                >
+                  <OpenPaymentsBankMark bank={row.parent} />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[13px] text-foreground">{row.affiliate.name}</span>
+                    <span className="block truncate text-xs text-muted-foreground">{t('bank_sparbank_row')}</span>
+                  </span>
+                  <ChevronRightIcon className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                </button>
+              )
+            }
+            const { bank } = row
             const approach = bankSigningApproach(bank)
             const selectable = approach !== 'none'
-            const selected = bank.bic === selectedBic
+            // With a sparbank result on screen, the bank's own row is chosen only when no sparbank is.
+            const selected = bank.bic === selectedBic && (!searching || selectedAffiliateId === null)
             return (
               <button
                 key={`${bank.bic}:${bank.name}`}
@@ -108,7 +144,9 @@ export function BankList({ banks, selectedBic, onPick }: BankListProps) {
               >
                 <OpenPaymentsBankMark bank={bank} />
                 <span className="min-w-0 flex-1">
-                  <span className={cn('block truncate text-[13px]', selectable ? 'text-foreground' : 'text-muted-foreground')}>{bank.name}</span>
+                  <span className={cn('block truncate text-[13px]', selectable ? 'text-foreground' : 'text-muted-foreground')}>
+                    {standsForSparbanker(bank) ? t('bank_swedbank_and_sparbanker') : bank.name}
+                  </span>
                   {approach === 'redirect' && <span className="block truncate text-xs text-muted-foreground">{t('bank_redirect_only')}</span>}
                   {!selectable && <span className="block truncate text-xs text-muted-foreground">{t('bank_not_connectable')}</span>}
                 </span>
