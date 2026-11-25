@@ -51,13 +51,6 @@ const ROW = (status: 'pending' | 'active', ageMs = 0) => ({
   created_at: new Date(Date.now() - ageMs).toISOString(),
 })
 
-const ACTIVATED = {
-  id: 'conn-1',
-  company_id: 'company-1',
-  user_id: 'user-1',
-  store_url: 'https://shop.example.se',
-}
-
 describe('GET /api/extensions/woocommerce/return', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -81,16 +74,12 @@ describe('GET /api/extensions/woocommerce/return', () => {
     mockSession('user-1')
     vi.mocked(resolveRequestAppOrigin).mockResolvedValueOnce('https://app.testbrand.example')
     enqueue({ data: ROW('pending') })
-    enqueue({ data: null }) // browser_confirmed_at update
-    enqueue({ data: ACTIVATED }) // activateIfComplete
 
     const request = makeReturnRequest({ success: '1', user_id: STATE })
     const res = await GET(request)
 
     expect(resolveRequestAppOrigin).toHaveBeenCalledWith(request, { onLookupFailure: 'canonical' })
-    expect(res.headers.get('location')).toBe(
-      'https://app.testbrand.example/import?mode=woocommerce&woocommerce_connected=true',
-    )
+    expect(res.headers.get('location')).toBe('https://app.testbrand.example/import?mode=woocommerce')
   })
 
   it('sends a denial back to the brand host too', async () => {
@@ -149,52 +138,20 @@ describe('GET /api/extensions/woocommerce/return', () => {
       expect(updates[0][0]).toEqual({ oauth_state: null })
     })
 
-    it('records the initiator confirmation and activates a pending row whose keys are staged', async () => {
+    it('sends the initiator to the panel for the proof of store control, and neither confirms nor activates', async () => {
       const { enqueue, findCalls, calls } = mockServiceClient()
       const getUser = mockSession('user-1')
-      enqueue({ data: ROW('pending') }) // lookup by oauth_state
-      enqueue({ data: null }) // browser_confirmed_at update
-      enqueue({ data: ACTIVATED }) // activateIfComplete: keys already staged
+      enqueue({ data: ROW('pending') }) // lookup by oauth_state; the callback has staged the keys
 
       const res = await GET(makeReturnRequest({ success: '1', user_id: STATE }))
 
-      expect(res.headers.get('location')).toBe(CONNECTED)
-      expect(getUser).toHaveBeenCalledTimes(1)
-      const updates = findCalls('woocommerce_connections', 'update')
-      expect(updates).toHaveLength(2)
-      expect(Object.keys(updates[0][0] as object)).toEqual(['browser_confirmed_at'])
-      expect(updates[1][0]).toMatchObject({
-        status: 'active',
-        transaction_sync_enabled: true,
-        oauth_state: null,
-      })
-      // Activation is conditional on both signals, scoped to this pending row.
-      const notCalls = calls.filter((c) => c.method === 'not').map((c) => c.args)
-      expect(notCalls).toContainEqual(['consumer_key_encrypted', 'is', null])
-      expect(notCalls).toContainEqual(['browser_confirmed_at', 'is', null])
-      expect(eventBus.emit).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: 'woocommerce.connected',
-          payload: expect.objectContaining({ connectionId: 'conn-1', companyId: 'company-1' }),
-        }),
-      )
-    })
-
-    it('records the confirmation and waits (no connected toast) when the keys have not landed yet', async () => {
-      const { enqueue, findCalls } = mockServiceClient()
-      mockSession('user-1')
-      enqueue({ data: ROW('pending') })
-      enqueue({ data: null }) // browser_confirmed_at update
-      enqueue({ data: null }) // activateIfComplete: no keys yet, zero rows
-
-      const res = await GET(makeReturnRequest({ success: '1', user_id: STATE }))
-
+      // No "connected" toast: everything this redirect carries is in the
+      // authorize URL the initiator holds, so it proves nothing about the store.
       expect(res.headers.get('location')).toBe(`${BASE}/import?mode=woocommerce`)
-      const updates = findCalls('woocommerce_connections', 'update')
-      expect(updates).toHaveLength(2)
-      expect(Object.keys(updates[0][0] as object)).toEqual(['browser_confirmed_at'])
-      // The state is left on the row: the late callback still needs it.
-      expect(updates[0][0]).not.toHaveProperty('oauth_state')
+      expect(getUser).toHaveBeenCalledTimes(1)
+      expect(findCalls('woocommerce_connections', 'update')).toHaveLength(0)
+      // The row is only read: the state stays for a late callback.
+      expect(calls.map((c) => c.method)).not.toContain('update')
       expect(eventBus.emit).not.toHaveBeenCalled()
     })
 
@@ -222,25 +179,6 @@ describe('GET /api/extensions/woocommerce/return', () => {
         prices_include_tax: null,
         wc_version: null,
       })
-      expect(eventBus.emit).not.toHaveBeenCalled()
-    })
-
-    it('parks the row and reports a conflict when the store is already actively connected', async () => {
-      const { enqueue, findCalls } = mockServiceClient()
-      mockSession('user-1')
-      enqueue({ data: ROW('pending') })
-      enqueue({ data: null }) // browser_confirmed_at update
-      enqueue({ data: null, error: { code: '23505', message: 'duplicate key' } })
-      enqueue({ data: null }) // park update
-
-      const res = await GET(makeReturnRequest({ success: '1', user_id: STATE }))
-
-      expect(res.headers.get('location')).toBe(
-        `${BASE}/import?mode=woocommerce&woocommerce_error=conflict`,
-      )
-      const updates = findCalls('woocommerce_connections', 'update')
-      expect(updates).toHaveLength(3)
-      expect(updates[2][0]).toMatchObject({ status: 'error', consumer_key_encrypted: null })
       expect(eventBus.emit).not.toHaveBeenCalled()
     })
 
