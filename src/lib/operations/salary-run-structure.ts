@@ -380,6 +380,10 @@ const PayslipLineOut = z.object({
   one_off_tax_percent: z.number().nullable(),
   vacation_category: z.string().nullable(),
   vacation_saved_year: z.string().nullable(),
+  settles_variable_vacation_pay: z
+    .literal(true)
+    .optional()
+    .describe('Present on a line added as semesterlön for rörliga lönedelar paid with the salary under a kollektivavtal.'),
 })
 
 type PayslipLine = z.infer<typeof PayslipLineOut>
@@ -409,6 +413,7 @@ function toPayslipLine(
     one_off_tax_percent: row.one_off_tax_percent ?? null,
     vacation_category: row.vacation_category ?? null,
     vacation_saved_year: row.vacation_saved_year ?? null,
+    ...(row.settles_variable_vacation_pay === true ? { settles_variable_vacation_pay: true as const } : {}),
   }
 }
 
@@ -440,7 +445,7 @@ export const salaryRunsLinesCreate = defineOperation({
       'one_off_tax_percent is the percentage YOU verified against Skatteverket\'s engångsbelopp table for the employee\'s yearly income; it is never estimated. It is refused (VALIDATION_ERROR) on deductions, benefits, non-taxable rows and non-positive amounts. A valid jämkning decision on the employee overrides it. Equal percentages are summed before the öre are dropped, so splitting one bonus over two rows never changes the withholding.',
       'vacation_category is only valid on item_type vacation (VALIDATION_ERROR otherwise) and vacation_saved_year only with category saved. Omitted category = paid. The vacation ledger splits the booked run\'s days by category: saved consumes the named origin year, or the oldest saved year first when omitted; unpaid and advance consume their own pools.',
       'A vacation line with days and no amount is priced by the calculation from the employee\'s vacation rule, on rows of its own (calculation_source vacation_pay, never edited by hand): sammalöneregeln a semestertillägg per paid day, procentregeln a semesterlöneavdrag plus the semesterlön from the previous year\'s payslips, unpaid days a deduction, advance days nothing. An amount on the line replaces that and is paid as entered: send one only when the agreement prices the days differently. A procentregeln base Accounted does not hold refuses the calculation with SALARY_RUN_VACATION_PAY_UNDETERMINED.',
-      'Under sammalöneregeln the semesterlön of the variable pay (övertid, OB, bonus, provision) is accrued every run and paid after the semesterår by the calculation itself. A semesterersattning line does not change that unless it carries settles_variable_vacation_pay: true, which is the user\'s confirmation that a central kollektivavtal lets that semesterlön be paid with the salary (Semesterlagen 2 a § andra stycket); ask the user, never assume it. The line then counts as already paid: it lowers the accrual and the payout after the semesterår. Only on a positive semesterersattning line of an employee on sammalöneregeln (VALIDATION_ERROR otherwise); the confirmation is logged, and it cannot be changed by an update: delete the line and add it again.',
+      'Under sammalöneregeln the semesterlön of the variable pay (övertid, OB, bonus, provision) is accrued every run and paid after the semesterår by the calculation itself. A semesterersattning line does not change that unless it carries settles_variable_vacation_pay: true, which is the user\'s confirmation that a central kollektivavtal lets that semesterlön be paid with the salary (Semesterlagen 2 a § andra stycket); ask the user, never assume it. The line then counts as already paid: it lowers the accrual and the payout after the semesterår. Only on a positive semesterersattning line of an employee on sammalöneregeln (VALIDATION_ERROR otherwise), and on the same payslip as the variable pay it is for: gnubok_calculate_salary_run refuses with SALARY_RUN_VARIABLE_VACATION_PAY_WITH_SALARY_INVALID when it is more than that payslip\'s own variable pay earns. The confirmation is logged, and it cannot be changed by an update: delete the line and add it again.',
       'Adding a line does not recompute tax or totals: run gnubok_calculate_salary_run afterwards. Until then the calculation is stale, and approval and booking refuse the run.',
     ],
     example: {
@@ -539,7 +544,11 @@ export const salaryRunsLinesCreate = defineOperation({
       title: (input) => {
         if (isTextRow(input)) return `Lägg till lönebeskedsrad: Textrad "${normalizeTextRow(String(input.description ?? ''))}"`
         const amount = Number(input.amount)
-        const label = `Lägg till lönebeskedsrad: ${String(input.description)}`
+        // The approver confirms the kollektivavtal with this approval: say so.
+        const label =
+          input.settles_variable_vacation_pay === true
+            ? `Lägg till lönebeskedsrad: ${String(input.description)}, semesterlön rörliga lönedelar enligt centralt kollektivavtal`
+            : `Lägg till lönebeskedsrad: ${String(input.description)}`
         return Number.isFinite(amount) ? `${label} (${roundOre(amount)} kr)` : label
       },
     },

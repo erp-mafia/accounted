@@ -13596,7 +13596,7 @@
     "add_line_invalid_normalbelopp": "Ange landets normalbelopp per dag.",
     "add_line_kollektivavtal_confirm": "Vi har ett centralt kollektivavtal som tillåter att semesterlönen för rörliga lönedelar betalas ut med lönen (semesterlagen 2 a §). Bekräftelsen loggas med ditt namn och tidpunkt.",
     "add_line_invalid_kollektivavtal": "Bekräfta kollektivavtalet för att lägga till raden.",
-    "add_line_hint_variable_vacation_pay": "Raden räknas som redan utbetald semesterlön på rörliga lönedelar (övertid, OB, bonus, provision): semesteravsättningen och utbetalningen efter semesteråret minskar med beloppet. Utan centralt kollektivavtal betalas den ut senast en månad efter semesterårets slut, och det gör lönekörningen redan själv.",
+    "add_line_hint_variable_vacation_pay": "Lägg raden på samma lönebesked som de rörliga lönedelarna (övertid, OB, bonus, provision) den gäller, med högst semesterlönen på dem. Den räknas då som redan utbetald: semesteravsättningen och utbetalningen efter semesteråret minskar med beloppet. Utan centralt kollektivavtal betalas semesterlönen ut senast en månad efter semesterårets slut, och det gör lönekörningen redan själv.",
     "add_line_hint_vacation": "Antal är semesterdagarna som tas ut. De räknas av från semestersaldot, och utan belopp räknar lönekörningen fram vad dagarna ger enligt den anställdes semesterregel: semestertillägg, semesterlöneavdrag och semesterlön, eller avdrag för obetalda dagar. Ange à-pris eller belopp bara när avtalet räknar annorlunda; då betalas beloppet som det står (minus drar från lönen).",
     "add_line_invalid_vacation": "Ange antal semesterdagar.",
     "add_line_vacation_category": "Dagarna tas från",

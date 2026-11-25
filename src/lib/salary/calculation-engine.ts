@@ -5,7 +5,7 @@ import { calculateAgeAtYearStart, decryptPersonnummer } from './personnummer'
 import { avgiftAgeTier } from './avgift-tier'
 import { TAX_FREE_REIMBURSEMENT_TYPES } from './account-mapping'
 import { resolveVacationPayRate } from './vacation-pay-rate'
-import { sammaloneVariablePay, variableVacationPaidWithSalary } from './variable-vacation-pay'
+import { sammaloneVariablePay, settledWithSalary, variableVacationPaidWithSalary } from './variable-vacation-pay'
 import { roundOre } from '@/lib/money'
 import type { SalaryCalculationPolicy } from './calculation-policy'
 import { groupOneOffBasesByRate, oneOffTaxForGroup, validateOneOffTaxLine } from './one-off-tax'
@@ -940,15 +940,14 @@ export function calculateSalary(
     //
     // A central kollektivavtal may let it be paid with each salary instead
     // (2 a § andra stycket): what this payslip pays that way is no
-    // liability, so it lowers the variable part, at most to nothing. A
-    // payment for an earlier payslip's variable pay leaves this run's
-    // accrual alone; the payout after the semesterår and the year-end
-    // liability count it (variableVacationPayOwed).
+    // liability, so it lowers the variable part, at most to nothing
+    // (settledWithSalary, the figure the payout after the semesterår and the
+    // year-end liability subtract too; run-calculation refuses a larger one).
     const variablePay = sammaloneVariablePay(input.lineItems)
     if (variablePay !== 0) {
       const variableRate = resolveVacationPayRate(input.vacationDaysPerYear, input.vacationPayRate)
       const earned = roundOre(variablePay * variableRate)
-      const settled = Math.min(Math.max(0, variableVacationPaidWithSalary(input.lineItems)), Math.max(0, earned))
+      const settled = settledWithSalary(variableVacationPaidWithSalary(input.lineItems), variablePay, variableRate)
       const variablePart = roundOre(earned - settled)
       vacationAccrual = roundOre(tillagg + variablePart)
       steps.push({

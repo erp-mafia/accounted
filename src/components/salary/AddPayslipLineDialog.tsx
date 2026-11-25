@@ -437,7 +437,7 @@ export function AddPayslipLineDialog({
                   value={product !== undefined ? String(product) : amount}
                   onChange={(e) => { setAmount(e.target.value); setInvalid(false) }}
                   disabled={computed}
-                  aria-invalid={(invalid && !noDays) || !!aboveCap || undefined}
+                  aria-invalid={(invalid && !noDays && !noKollektivavtal) || !!aboveCap || undefined}
                 />
               </div>
             </div>

@@ -49,21 +49,28 @@
  * har slutits eller godkänts av en central arbetstagarorganisation, får
  * avvikelse göras från ... 16-16 b, 22, 26 ... §§", riksdagen.se, ändrad
  * t.o.m. SFS 2014:424, read 2026-11-25) and let the semesterlön of the
- * rörliga lönedelar be paid with each salary. Without one, an agreement that
- * does so is void (2 §) and the payout after the semesterår stands. Such a
- * payment is a manual semesterersättning row marked
- * settles_variable_vacation_pay, the operator's word that the agreement
- * applies (recorded in audit_log by payslip-lines.ts). It settles the
- * variable pay of the semesterår its payslip falls in: the run's accrual
- * (step 9) is lowered by it, at most to nothing, and the payout after the
- * year and the year-end liability count it as already paid. Without the mark
- * a hand-entered semesterersättning row is a wage the operator decided on
- * and settles nothing.
+ * rörliga lönedelar be paid with each salary. Without one, this module pays
+ * it after the semesterår, as 26 § andra stycket says. Such a payment is a
+ * manual semesterersättning row marked settles_variable_vacation_pay, the
+ * operator's word that the agreement applies (recorded in audit_log by
+ * payslip-lines.ts).
+ *
+ * A marked row settles the semesterlön of its own payslip's variable pay and
+ * nothing else (settledWithSalary): the run's accrual (step 9) is lowered by
+ * it, and the payout after the year and the year-end liability count it as
+ * already paid, all three from the same per-payslip figure. A payment larger
+ * than that, such as the semesterlön for last month's övertid paid on this
+ * month's payslip, could settle a year the payout has already paid or is
+ * about to pay, so the calculation refuses it (paidWithSalaryIssue): the row
+ * goes on the payslip that pays the variable pay. Without the mark a
+ * hand-entered semesterersättning row is a wage the operator decided on and
+ * settles nothing.
  */
 
 import { roundOre, sumOre } from '@/lib/money'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { formatCurrency } from '@/lib/utils'
 import type { SalaryLineItemType } from '@/types'
 import { VACATION_COMPENSATION_SOURCE } from './calculated-line-items'
 import { isBaseSalaryDisplayLine, lineTypesWithRole } from './line-item-roles'
@@ -162,11 +169,79 @@ export interface PaidWithSalaryLineLike {
  * engine's own payout row is never in it.
  */
 export function variableVacationPaidWithSalary(lines: readonly PaidWithSalaryLineLike[]): number {
-  return sumOre(
-    lines
-      .filter((line) => line.itemType === 'semesterersattning' && line.settlesVariableVacationPay === true)
-      .map((line) => line.amount),
-  )
+  return sumOre(lines.filter(isPaidWithSalaryLine).map((line) => line.amount))
+}
+
+function isPaidWithSalaryLine(line: PaidWithSalaryLineLike): boolean {
+  return line.itemType === 'semesterersattning' && line.settlesVariableVacationPay === true
+}
+
+/** The semesterlön of one payslip's own variable pay: the most a payment with that salary settles. */
+export function ownVariableVacationPay(variablePay: number, rate: number): number {
+  return Math.max(0, roundOre(variablePay * rate))
+}
+
+/**
+ * What a payslip's payment with the salary settles: its own variable pay's
+ * semesterlön at most, never below nothing. The one figure the accrual, the
+ * payout after the semesterår and the year-end liability all subtract, so
+ * the three agree payslip by payslip.
+ */
+export function settledWithSalary(paidWithSalary: number, variablePay: number, rate: number): number {
+  return Math.min(Math.max(0, paidWithSalary), ownVariableVacationPay(variablePay, rate))
+}
+
+export type PaidWithSalaryIssue =
+  | { reason: 'not_sammaloneregeln' }
+  | { reason: 'not_positive' }
+  | { reason: 'above_own'; paid: number; own: number }
+
+/**
+ * Why the calculation refuses a payslip's marked rows, or null: the mark
+ * means something only under sammalöneregeln, a payment is above 0 kr, and
+ * it settles nothing beyond the payslip's own variable pay
+ * (settledWithSalary), so a larger one would be paid again after the
+ * semesterår.
+ */
+export function paidWithSalaryIssue(input: {
+  vacationRule: string
+  lines: readonly PaidWithSalaryLineLike[]
+  variablePay: number
+  rate: number
+}): PaidWithSalaryIssue | null {
+  const marked = input.lines.filter(isPaidWithSalaryLine)
+  if (marked.length === 0) return null
+  if (input.vacationRule !== 'sammaloneregeln') return { reason: 'not_sammaloneregeln' }
+  if (marked.some((line) => !(line.amount > 0))) return { reason: 'not_positive' }
+  const paid = variableVacationPaidWithSalary(marked)
+  const own = ownVariableVacationPay(input.variablePay, input.rate)
+  return paid > own ? { reason: 'above_own', paid, own } : null
+}
+
+/** The refusal's sentences: what is wrong and the fix, in both languages. */
+export function paidWithSalaryIssueMessage(issue: PaidWithSalaryIssue): { message: string; message_en: string } {
+  if (issue.reason === 'not_sammaloneregeln') {
+    return {
+      message: 'Semesterlön rörliga lönedelar gäller bara en anställd med sammalöneregeln. Ta bort raden.',
+      message_en: 'Vacation pay on variable pay applies only to an employee on sammalöneregeln. Remove the line.',
+    }
+  }
+  if (issue.reason === 'not_positive') {
+    return {
+      message: 'Semesterlön rörliga lönedelar ska vara ett belopp över 0 kr. Ändra eller ta bort raden.',
+      message_en: 'Vacation pay on variable pay must be an amount above 0 kr. Change or remove the line.',
+    }
+  }
+  return {
+    message:
+      `Semesterlön rörliga lönedelar på lönebeskedet (${formatCurrency(issue.paid)}) är mer än semesterlönen på ` +
+      `lönebeskedets egna rörliga lönedelar (${formatCurrency(issue.own)}). Lägg raden på samma lönebesked som ` +
+      'övertiden, OB:n, bonusen eller provisionen den gäller, med högst det beloppet.',
+    message_en:
+      `Vacation pay on variable pay on this payslip (${formatCurrency(issue.paid)}) is more than the vacation pay on ` +
+      `its own variable pay (${formatCurrency(issue.own)}). Put the line on the same payslip as the overtime, OB, ` +
+      'bonus or commission it is for, at most that amount.',
+  }
 }
 
 /**
@@ -274,11 +349,11 @@ export interface VariableVacationPayOwed {
  * `extraVariablePay` (the variable pay of a final payslip still being
  * calculated). Paid: the engine-derived payout rows on payslips in the paid
  * window that were not superseded by a correction, whatever their status, so
- * two draft runs in the same month never both pay it; and what was paid with
- * the salary under a kollektivavtal on the payslips that earned it (the same
- * due, sammalöneregeln payslips of the earned window, with or without
- * variable pay of their own), plus `extraPaidWithSalary` (the final payslip's
- * own).
+ * two draft runs in the same month never both pay it; and what each of the
+ * earning payslips paid with the salary under a kollektivavtal, at most its
+ * own variable pay's semesterlön (settledWithSalary), plus
+ * `extraPaidWithSalary` (the final payslip's own, against
+ * `extraVariablePay`).
  */
 export function variableVacationPayOwed(input: {
   runs: readonly VariablePayRun[]
@@ -304,8 +379,8 @@ export function variableVacationPayOwed(input: {
       .map((run) => run.payout),
   )
   const paidWithSalary = sumOre([
-    ...dueInEarnedWindow.map((run) => run.paidWithSalary ?? 0),
-    input.extraPaidWithSalary ?? 0,
+    ...dueInEarnedWindow.map((run) => settledWithSalary(run.paidWithSalary ?? 0, run.variablePay, rate)),
+    settledWithSalary(input.extraPaidWithSalary ?? 0, extra, rate),
   ])
   const alreadyPaid = sumOre([paidOut, paidWithSalary])
   const owed = roundOre(variablePay * rate)

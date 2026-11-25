@@ -19,6 +19,8 @@ import {
   isVariablePayLine,
   payslipVariableVacationPay,
   summarizePayslip,
+  paidWithSalaryIssue,
+  settledWithSalary,
   unpaidVariableVacationPayAtYearEnd,
   vacationYearLabel,
   variableVacationPaidWithSalary,
@@ -285,14 +287,48 @@ describe('semesterlön for rörliga lönedelar paid with the salary under a koll
       rate: 0.12,
       runs: [
         run({ paymentDate: '2026-03-25', variablePay: 5000, paidWithSalary: 600 }),
-        // Paid a month after the overtime it was for: still the same year.
-        run({ paymentDate: '2026-06-25', variablePay: 2500 }),
-        run({ paymentDate: '2026-07-25', paidWithSalary: 300 }),
+        run({ paymentDate: '2026-06-25', variablePay: 2500, paidWithSalary: 300 }),
       ],
       finalSettlement: false,
       thisRunVariablePay: 0,
     })
     expect(result.owed).toMatchObject({ variablePay: 7500, owed: 900, paidWithSalary: 900, alreadyPaid: 900, unpaid: 0 })
+  })
+
+  it('a payment settles its own payslip\'s variable pay and nothing else', () => {
+    // 12 % of 5 000 is 600: a larger payment settles 600, a negative one nothing.
+    expect(settledWithSalary(600, 5000, 0.12)).toBe(600)
+    expect(settledWithSalary(400, 5000, 0.12)).toBe(400)
+    expect(settledWithSalary(900, 5000, 0.12)).toBe(600)
+    expect(settledWithSalary(600, 0, 0.12)).toBe(0)
+    expect(settledWithSalary(-600, 5000, 0.12)).toBe(0)
+    // A payment on a later payslip settles nothing of the earlier one's pay:
+    // the payout after the semesterår pays December's semesterlön in full.
+    const result = payslipVariableVacationPay({
+      paymentDate: '2027-01-25',
+      basis: 'calendar',
+      rate: 0.12,
+      runs: [
+        run({ paymentDate: '2026-12-25', variablePay: 5000 }),
+        run({ paymentDate: '2026-12-28', paidWithSalary: 600 }),
+      ],
+      finalSettlement: false,
+      thisRunVariablePay: 0,
+      thisRunPaidWithSalary: 600,
+    })
+    expect(result.owed).toMatchObject({ owed: 600, paidWithSalary: 0, unpaid: 600 })
+  })
+
+  it('the calculation refuses a payment it would pay again, and the mark outside sammalöneregeln', () => {
+    const marked = (amount: number) => ({ itemType: 'semesterersattning' as const, amount, settlesVariableVacationPay: true })
+    const base = { vacationRule: 'sammaloneregeln', variablePay: 5000, rate: 0.12 }
+    expect(paidWithSalaryIssue({ ...base, lines: [marked(600)] })).toBeNull()
+    expect(paidWithSalaryIssue({ ...base, lines: [{ itemType: 'semesterersattning', amount: 900 }] })).toBeNull()
+    expect(paidWithSalaryIssue({ ...base, lines: [marked(600), marked(0.01)] })).toEqual({ reason: 'above_own', paid: 600.01, own: 600 })
+    // Last month's variable pay, paid on this payslip.
+    expect(paidWithSalaryIssue({ ...base, variablePay: 0, lines: [marked(600)] })).toEqual({ reason: 'above_own', paid: 600, own: 0 })
+    expect(paidWithSalaryIssue({ ...base, lines: [marked(-600)] })).toEqual({ reason: 'not_positive' })
+    expect(paidWithSalaryIssue({ ...base, vacationRule: 'procentregeln', lines: [marked(600)] })).toEqual({ reason: 'not_sammaloneregeln' })
   })
 
   it('counts only payslips that have fallen due, under sammalöneregeln, in the year they settle', () => {
@@ -575,11 +611,6 @@ describe('runSalaryCalculation: semesterlön för rörliga lönedelar', () => {
     expect((await calculate(short)).ok).toBe(true)
     expect(currentRow(short).vacation_accrual).toBe(468.75)
 
-    clearTaxTableCache()
-    // Paid for an earlier payslip's variable pay: this run's accrual is left alone.
-    const more = createPayrollFakeDb(seed(samma, [], { paymentDate: '2026-10-25', lines: [BONUS(1000), PAID_WITH_SALARY(600)] }))
-    expect((await calculate(more)).ok).toBe(true)
-    expect(currentRow(more).vacation_accrual).toBe(268.75)
 
     clearTaxTableCache()
     const unmarked = createPayrollFakeDb(
@@ -587,5 +618,35 @@ describe('runSalaryCalculation: semesterlön för rörliga lönedelar', () => {
     )
     expect((await calculate(unmarked)).ok).toBe(true)
     expect(currentRow(unmarked).vacation_accrual).toBe(868.75)
+  })
+
+  it('refuses a payslip that pays more than its own variable pay earns, before anything is written', async () => {
+    // December's OB unpaid, its semesterlön paid with the January salary: the
+    // payout after the semesterår would pay it a second time.
+    const december = [payslipRows('run-2025-12', '2025-12-25', samma, [GRUNDLON, OB(5000)])]
+    const db = createPayrollFakeDb(seed(samma, december, { lines: [PAID_WITH_SALARY(600)] }))
+    const result = await calculate(db)
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.code).toBe('SALARY_RUN_VARIABLE_VACATION_PAY_WITH_SALARY_INVALID')
+      expect(result.messageSv).toContain('Lägg raden på samma lönebesked')
+    }
+    expect(currentLines(db).filter((li) => li.calculation_source === 'vacation_compensation')).toHaveLength(0)
+    // Nothing written: the roster row keeps its seeded figures.
+    expect(currentRow(db).gross_salary).toBe(0)
+
+    clearTaxTableCache()
+    const more = createPayrollFakeDb(seed(samma, [], { paymentDate: '2026-10-25', lines: [BONUS(1000), PAID_WITH_SALARY(600)] }))
+    const refused = await calculate(more)
+    expect(refused.ok).toBe(false)
+    if (!refused.ok) expect(refused.code).toBe('SALARY_RUN_VARIABLE_VACATION_PAY_WITH_SALARY_INVALID')
+  })
+
+  it('refuses the mark on an employee who is no longer on sammalöneregeln', async () => {
+    const procent = employee(COMPANY, EMP, { vacation_rule: 'procentregeln' })
+    const db = createPayrollFakeDb(seed(procent, [], { paymentDate: '2026-10-25', lines: [BONUS(5000), PAID_WITH_SALARY(600)] }))
+    const result = await calculate(db)
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('SALARY_RUN_VARIABLE_VACATION_PAY_WITH_SALARY_INVALID')
   })
 })

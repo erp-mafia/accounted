@@ -8036,6 +8036,27 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     retryable: false,
     thrown_message_sv: true,
   },
+  // A payslip row of semesterlön for rörliga lönedelar paid with the salary
+  // under a kollektivavtal (settles_variable_vacation_pay,
+  // lib/salary/variable-vacation-pay.ts) the calculation cannot accept: the
+  // employee is not on sammalöneregeln, the amount is not above 0 kr, or it
+  // is more than the payslip's own variable pay earns. The thrower's
+  // sentences name each employee and the fix; details.issues carries them
+  // per employee in both languages.
+  SALARY_RUN_VARIABLE_VACATION_PAY_WITH_SALARY_INVALID: {
+    httpStatus: 400,
+    message_sv:
+      'En rad med semesterlön för rörliga lönedelar kan inte räknas. Lägg den på samma lönebesked som de rörliga lönedelarna den gäller, och beräkna om.',
+    message_en:
+      'A line of vacation pay on variable pay cannot be calculated. Put it on the same payslip as the variable pay it is for, then calculate again.',
+    remediation: {
+      description:
+        'Read details.issues (employee, message_en). Change the amount of the semesterersattning line with settles_variable_vacation_pay (gnubok_update_payslip_line) to at most what the message names, or delete it and add it on the payslip that pays the variable pay. Then gnubok_calculate_salary_run.',
+      tool: 'gnubok_update_payslip_line',
+    },
+    retryable: false,
+    thrown_message_sv: true,
+  },
   SALARY_RUN_EMPLOYEE_DUPLICATE: {
     httpStatus: 409,
     message_sv: 'Den anställda finns redan i lönekörningen.',

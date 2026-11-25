@@ -77,6 +77,8 @@ import {
   loadVariablePayRuns,
   payslipVariableVacationPay,
   previousVacationYearStart,
+  paidWithSalaryIssue,
+  paidWithSalaryIssueMessage,
   sammaloneVariablePay,
   vacationYearLabel,
   variableVacationPaidWithSalary,
@@ -648,6 +650,9 @@ export async function runSalaryCalculation(
   // collected for the whole roster, then refused together before anything
   // is written.
   const vacationPayIssues: Array<{ employee: string; message: string; message_en: string }> = []
+  // Rows of semesterlön for rörliga lönedelar paid with the salary that the
+  // calculation cannot accept (variable-vacation-pay.ts paidWithSalaryIssue).
+  const variableVacationPayWithSalaryIssues: Array<{ employee: string; message: string; message_en: string }> = []
 
   // What the loop decides to write. Nothing is written until every employee
   // is priced (step 9), so a refusal part-way leaves the run as it was.
@@ -1049,6 +1054,25 @@ export async function runSalaryCalculation(
       if (vacationPay.rows.length > 0) vacationDaysPayEmployees.push(employeeName)
     }
 
+    // 8e0b. Semesterlön for rörliga lönedelar paid with the salary under a
+    //       kollektivavtal (variable-vacation-pay.ts): only under
+    //       sammalöneregeln, above 0 kr, and no more than this payslip's own
+    //       variable pay earns, since a larger payment would be paid again
+    //       after the semesterår. Refused by name below.
+    const paidWithSalaryProblem = paidWithSalaryIssue({
+      vacationRule: emp.vacation_rule,
+      lines: lineItems,
+      variablePay: sammaloneVariablePay(lineItems),
+      rate: resolveVacationPayRate(emp.vacation_days_per_year, emp.vacation_pay_rate),
+    })
+    if (paidWithSalaryProblem) {
+      variableVacationPayWithSalaryIssues.push({
+        employee: employeeName,
+        ...paidWithSalaryIssueMessage(paidWithSalaryProblem),
+      })
+      continue
+    }
+
     // 8e1. Semesterlön för rörliga lönedelar (Semesterlagen 16 a § tredje
     //      stycket, 26 § andra stycket, 29 §): under sammalöneregeln the
     //      variable pay that fell due during the semesterår earns the
@@ -1344,6 +1368,15 @@ export async function runSalaryCalculation(
       details: { reason: 'vacation_pay_undetermined', issues: vacationPayIssues },
       messageSv: vacationPayIssues.map((issue) => `${issue.employee}: ${issue.message}`).join(' '),
       messageEn: vacationPayIssues.map((issue) => `${issue.employee}: ${issue.message_en}`).join(' '),
+    }
+  }
+  if (variableVacationPayWithSalaryIssues.length > 0) {
+    return {
+      ok: false,
+      code: 'SALARY_RUN_VARIABLE_VACATION_PAY_WITH_SALARY_INVALID',
+      details: { reason: 'variable_vacation_pay_with_salary_invalid', issues: variableVacationPayWithSalaryIssues },
+      messageSv: variableVacationPayWithSalaryIssues.map((issue) => `${issue.employee}: ${issue.message}`).join(' '),
+      messageEn: variableVacationPayWithSalaryIssues.map((issue) => `${issue.employee}: ${issue.message_en}`).join(' '),
     }
   }
 
