@@ -7872,7 +7872,7 @@ export const tools: McpTool[] = [
       // state and its records per resource. Undeclared like underlag.
       const job = await migrationJobStatus(supabase, companyId, provider)
       const underlagStep = underlag
-        ? ` Underlag are a separate step on the same page, after the bookkeeping import: the user clicks "Hämta underlag" on the ${info.name} row${provider === 'fortnox' ? ' and approves Fortnox file access once' : ''}; files already there are skipped. underlag.status says where that step stands (not_fetched, incomplete, needs_reconnect or complete); call this tool again to check.`
+        ? ` Underlag are a separate step on the same page, after the bookkeeping import: the user clicks "Hämta underlag" on the ${info.name} row${provider === 'fortnox' ? ' and approves Fortnox file access once' : ''}; files already there are skipped.${provider === 'visma' ? ' From Visma that step fetches the PDF of each customer invoice the import brought in, nothing else: other underlag the user uploads ("Ladda upp underlag").' : ''} underlag.status says where that step stands (not_fetched, incomplete, needs_reconnect or complete); call this tool again to check.`
         : ` ${info.name} underlag are not fetched: the user uploads them ("Ladda upp underlag").`
       return {
         provider,

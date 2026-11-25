@@ -325,8 +325,8 @@ describe('ProviderStep, underlag left on reversed copies by a re-run migration (
 
   it('shows nothing before a ledger import, or without a connection that serves underlag', () => {
     expect(attnLine(render({ ...status(false), underlagOnReplacedCopies: 12 }))).toBeNull()
-    const visma = { ...FORTNOX_CONSENT, id: 'consent-3', provider: 'visma' as const }
-    expect(attnLine(render({ ...status(true, [visma]), underlagOnReplacedCopies: 12 }))).toBeNull()
+    const briox = { ...FORTNOX_CONSENT, id: 'consent-3', provider: 'briox' as const }
+    expect(attnLine(render({ ...status(true, [briox]), underlagOnReplacedCopies: 12 }))).toBeNull()
   })
 
   it('stays quiet while a run is moving on that connection', () => {

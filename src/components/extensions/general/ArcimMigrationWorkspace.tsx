@@ -2570,7 +2570,7 @@ export function DocumentImportFollowUp({
     (entry: ArcimUnreachableDocumentSource) => {
       const scope = t(`ext_arcim_documents_scope_${entry.scope}`)
       const answer = entry.providerMessage
-        ? t('ext_arcim_documents_provider_message', { provider: 'Fortnox', message: entry.providerMessage })
+        ? t('ext_arcim_documents_provider_message', { provider, message: entry.providerMessage })
         : null
       return (
         <DocumentNote
@@ -2579,18 +2579,20 @@ export function DocumentImportFollowUp({
           action={entry.scope === reconnectScope ? (
             <Button variant="outline" onClick={onReconnect}>
               <ArrowPathIcon className="h-3.5 w-3.5" />
-              {t('ext_arcim_documents_reconnect_action')}
+              {state.provider === 'fortnox'
+                ? t('ext_arcim_documents_reconnect_action')
+                : t('ext_arcim_documents_reconnect_provider', { provider })}
             </Button>
           ) : undefined}
         >
           <p>
             {entry.source === 'customer_invoice_files'
-              ? t(`ext_arcim_documents_customer_invoice_files_${entry.reason}`, { scope })
+              ? t(`ext_arcim_documents_customer_invoice_files_${entry.reason}`, { scope, provider })
               : t(`ext_arcim_documents_supplier_files_${entry.reason}`, { scope })}
           </p>
           {entry.reason === 'permission' ? (
             <DocumentDisclosure summary={t('ext_arcim_documents_supplier_files_how')}>
-              <p>{t('ext_arcim_documents_supplier_files_remedy', { provider: 'Fortnox', scope })}</p>
+              <p>{t('ext_arcim_documents_supplier_files_remedy', { provider, scope })}</p>
               {answer && <p>{answer}</p>}
             </DocumentDisclosure>
           ) : answer ? (
@@ -2713,7 +2715,7 @@ export function DocumentImportFollowUp({
       // leads, and only the counts above zero follow, each with its own way
       // forward.
       const { linked, skipped, unmatched, failed, customerInvoicePdfs } = state.result
-      // Customer invoice copies (Fortnox) say where they went: a copy on the
+      // Customer invoice copies (Fortnox, Visma) say where they went: a copy on the
       // invoice only is archived but not on a verifikat, so the lead, which
       // counts what is on the verifikat, leaves it out.
       const invoiceOnly = customerInvoicePdfs?.invoiceOnly ?? 0
@@ -2731,7 +2733,7 @@ export function DocumentImportFollowUp({
           : null,
       ].filter((part): part is string => part !== null)
       const customerSummary = customerParts.length > 0
-        ? t('ext_arcim_documents_customer_invoice_pdfs', { items: customerParts.join(', ') })
+        ? t('ext_arcim_documents_customer_invoice_pdfs', { provider, items: customerParts.join(', ') })
         : null
       const skippedLine = skipped > 0 ? t('ext_arcim_documents_result_skipped', { count: skipped }) : null
       body = (
@@ -3006,6 +3008,8 @@ export function ResultStep({
     // the underlag flow is the whole page.
     const documentProvider =
       ARCIM_PROVIDERS.find(p => p.id === documentImportState.provider)?.name ?? documentImportState.provider ?? ''
+    // From Visma the import reads only the customer invoices' own PDFs.
+    const invoicePdfsOnly = documentImportState.provider === 'visma'
     // One title, one short promise (the bookkeeping does not change), the
     // mechanics behind the "?": the page says what it does before the user
     // presses anything.
@@ -3021,11 +3025,17 @@ export function ResultStep({
                 {t('ext_arcim_documents_title_standalone', { provider: documentProvider })}
               </h2>
               <HelpPopover>
-                <p>{t('ext_arcim_documents_standalone_help', { provider: documentProvider })}</p>
+                <p>
+                  {t(invoicePdfsOnly ? 'ext_arcim_documents_standalone_help_invoice_pdfs' : 'ext_arcim_documents_standalone_help', {
+                    provider: documentProvider,
+                  })}
+                </p>
               </HelpPopover>
             </div>
             <p className="mt-1 text-[13px] leading-5 text-muted-foreground">
-              {t('ext_arcim_documents_standalone_lede', { provider: documentProvider })}
+              {t(invoicePdfsOnly ? 'ext_arcim_documents_standalone_lede_invoice_pdfs' : 'ext_arcim_documents_standalone_lede', {
+                provider: documentProvider,
+              })}
             </p>
           </div>
         </div>
@@ -4152,10 +4162,12 @@ export default function ArcimMigrationWorkspace({
 
   const handleDocumentReconnect = useCallback(() => {
     if (!consentId) return
-    // A Bokio integration token is replaced in the credential form, not in a
-    // Fortnox login (B11: a refused Bokio token stops the run too).
-    if (documentImportState.provider === 'bokio') {
-      void handleReconnect('bokio', consentId)
+    // Only Fortnox reconnects in the login that asks for the attachment
+    // scopes. Every other provider reconnects its own way: a Bokio integration
+    // token in the credential form, a Visma connection in Visma's login (B11:
+    // a refused token or login stops the run on either).
+    if (documentImportState.provider && documentImportState.provider !== 'fortnox') {
+      void handleReconnect(documentImportState.provider, consentId)
       return
     }
     const { resume: reconnectAction, returnTo } = arcimDocumentReconnectPlan(documentImportState.phase)

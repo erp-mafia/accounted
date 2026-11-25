@@ -30,6 +30,8 @@ import {
   recordImportedInvoiceDelivery,
 } from '@/lib/invoices/invoice-deliveries'
 import { BokioApiError } from '@/lib/providers/bokio/client'
+import { VismaApiError } from '@/lib/providers/visma/client'
+import { fetchVismaInvoicePdf, VismaFileDownloadError } from '@/lib/providers/visma/attachments'
 import { ProviderCallError } from '@/lib/providers/with-provider-call'
 import {
   FortnoxDocumentScopesRequiredError,
@@ -48,6 +50,14 @@ vi.mock('@/lib/providers/bokio/client', async (importOriginal) => {
 vi.mock('@/lib/providers/fortnox/client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/providers/fortnox/client')>()
   return { ...actual, FortnoxClient: class {} }
+})
+vi.mock('@/lib/providers/visma/client', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/providers/visma/client')>()
+  return { ...actual, VismaClient: class {} }
+})
+vi.mock('@/lib/providers/visma/attachments', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/providers/visma/attachments')>()
+  return { ...actual, fetchVismaInvoicePdf: vi.fn() }
 })
 vi.mock('@/lib/providers/resolve-consent', () => ({ resolveConsent: vi.fn() }))
 vi.mock('@/lib/providers/bokio/attachments', () => ({
@@ -98,6 +108,7 @@ const mockInvoicePreview = vi.mocked(fetchFortnoxInvoicePreview)
 const mockDeleteDocument = vi.mocked(deleteDocument)
 const mockInvoicesWithImportedCopy = vi.mocked(fetchInvoicesWithImportedCopy)
 const mockRecordImportedDelivery = vi.mocked(recordImportedInvoiceDelivery)
+const mockVismaInvoicePdf = vi.mocked(fetchVismaInvoicePdf)
 
 const COMPANY = 'company-1'
 const USER = 'user-1'
@@ -1805,6 +1816,7 @@ describe('Fortnox customer invoice copies (#165)', () => {
     id: string
     status: string
     journal_entry_id: string | null
+    invoice_number?: string
   }
 
   /**
@@ -2329,5 +2341,128 @@ describe('Fortnox customer invoice copies (#165)', () => {
     expect(mockInvoiceBookingVoucher).not.toHaveBeenCalled()
     expect(mockInvoicePreview).not.toHaveBeenCalled()
     expect(mockUpload).not.toHaveBeenCalled()
+  })
+
+  describe('from a Visma connection', () => {
+    // Visma keys an invoice by its Id: the source record holds it, the
+    // printed number is the invoice's own.
+    const VISMA_PAID: ImportedInvoiceRow = { id: 'inv-1', status: 'paid', journal_entry_id: 'je-b7', invoice_number: '15240' }
+    const VISMA_UNLINKED: ImportedInvoiceRow = { id: 'inv-2', status: 'sent', journal_entry_id: null, invoice_number: '15241' }
+    const VISMA_IDS = { 'inv-1': 'visma-guid-1', 'inv-2': 'visma-guid-2' }
+
+    function wireVisma(...accessTokens: string[]) {
+      for (const accessToken of accessTokens.length ? accessTokens : ['visma-token']) {
+        mockResolveConsent.mockResolvedValueOnce({
+          consent: { provider: 'visma', org_number: '559123-4567' },
+          accessToken,
+        } as never)
+      }
+      return rangeMockSupabase({ fiscal_periods: PERIODS, journal_entries: [ENTRY_B7], document_attachments: [] })
+    }
+
+    beforeEach(() => {
+      mockVismaInvoicePdf.mockResolvedValue({ bytes: bytesOf('VISMA-PDF'), contentType: 'application/pdf' })
+    })
+
+    it('archives Visma\'s PDF on the invoice and on the verifikat the migration linked it to', async () => {
+      const { supabase, anchors } = withCustomerInvoices(wireVisma(), [VISMA_PAID], { documentNumbers: VISMA_IDS })
+
+      const result = await run(supabase)
+
+      expect(result.customerInvoicePdfs).toEqual({ scanned: 1, linked: 1, invoiceOnly: 0, skipped: 0, locked: 0, failed: 0, refused: 0 })
+      expect(mockVismaInvoicePdf).toHaveBeenCalledWith(expect.anything(), 'visma-token', 'visma-guid-1')
+      const [, , , file] = mockUpload.mock.calls[0]
+      expect(file).toMatchObject({ name: 'Faktura 15240.pdf', type: 'application/pdf' })
+      expect(mockRecordImportedDelivery).toHaveBeenCalledWith({
+        companyId: COMPANY,
+        userId: USER,
+        invoiceId: 'inv-1',
+        provider: 'visma',
+        providerMessageId: 'invoice:15240:inv-1',
+        documentId: 'doc-1',
+      })
+      expect(anchors).toEqual([expect.objectContaining({ id: 'doc-1', values: expect.objectContaining({ journal_entry_id: 'je-b7' }) })])
+      // Nothing of Fortnox's is asked.
+      expect(mockInvoicePreview).not.toHaveBeenCalled()
+      expect(mockInvoiceBookingVoucher).not.toHaveBeenCalled()
+    })
+
+    it('keeps the copy on the invoice only when the migration linked no verifikat: no guess from Visma\'s voucher number', async () => {
+      const { supabase, anchors } = withCustomerInvoices(wireVisma(), [VISMA_UNLINKED], { documentNumbers: VISMA_IDS })
+
+      const result = await run(supabase)
+
+      expect(result.customerInvoicePdfs).toMatchObject({ scanned: 1, linked: 0, invoiceOnly: 1, failed: 0 })
+      expect(mockVismaInvoicePdf).toHaveBeenCalledWith(expect.anything(), 'visma-token', 'visma-guid-2')
+      expect(mockRecordImportedDelivery).toHaveBeenCalledWith(expect.objectContaining({ invoiceId: 'inv-2', provider: 'visma' }))
+      expect(anchors).toEqual([])
+      expect(mockUpload.mock.calls[0][4]).toEqual({ upload_source: 'api', extractionOwner: 'none' })
+    })
+
+    it('counts both kinds in the dry run without a download', async () => {
+      const { supabase } = withCustomerInvoices(wireVisma(), [VISMA_PAID, VISMA_UNLINKED], { documentNumbers: VISMA_IDS })
+
+      const result = await run(supabase, true)
+
+      expect(result.customerInvoicePdfs).toMatchObject({ scanned: 2, linked: 1, invoiceOnly: 1 })
+      expect(mockVismaInvoicePdf).not.toHaveBeenCalled()
+      expect(mockUpload).not.toHaveBeenCalled()
+    })
+
+    it('skips an invoice that already holds its imported copy, without asking Visma', async () => {
+      mockInvoicesWithImportedCopy.mockResolvedValue(new Set(['inv-1']))
+      const { supabase } = withCustomerInvoices(wireVisma(), [VISMA_PAID], { documentNumbers: VISMA_IDS })
+
+      const result = await run(supabase)
+
+      expect(result.customerInvoicePdfs).toMatchObject({ scanned: 1, skipped: 1 })
+      expect(mockVismaInvoicePdf).not.toHaveBeenCalled()
+    })
+
+    it('reports a refused register once and asks for no more copies', async () => {
+      mockVismaInvoicePdf.mockRejectedValue(new VismaApiError('forbidden', 403))
+      const { supabase } = withCustomerInvoices(wireVisma(), [VISMA_PAID, VISMA_UNLINKED], { documentNumbers: VISMA_IDS })
+
+      const result = await run(supabase)
+
+      expect(mockVismaInvoicePdf).toHaveBeenCalledTimes(1)
+      expect(result.unreachableSources).toEqual([
+        { source: 'customer_invoice_files', scope: 'invoice', reason: 'permission', providerMessage: null },
+      ])
+      expect(mockRecordImportedDelivery).not.toHaveBeenCalled()
+    })
+
+    it('counts a link Visma\'s storage would not serve as one failed copy, not a refusal', async () => {
+      mockVismaInvoicePdf.mockRejectedValueOnce(new VismaFileDownloadError('VISMA_INVOICE_PDF_DOWNLOAD_FAILED: 404', 404))
+      const { supabase } = withCustomerInvoices(wireVisma(), [VISMA_PAID, VISMA_UNLINKED], { documentNumbers: VISMA_IDS })
+
+      const result = await run(supabase)
+
+      expect(result.customerInvoicePdfs).toMatchObject({ scanned: 2, failed: 1, invoiceOnly: 1 })
+      expect(result.unreachableSources).toEqual([])
+    })
+
+    it('refreshes a token Visma refuses and carries on with the new one', async () => {
+      mockVismaInvoicePdf
+        .mockRejectedValueOnce(new VismaApiError('unauthorized', 401))
+        .mockResolvedValue({ bytes: bytesOf('VISMA-PDF'), contentType: 'application/pdf' })
+      const { supabase } = withCustomerInvoices(wireVisma('old-token', 'new-token'), [VISMA_PAID], { documentNumbers: VISMA_IDS })
+
+      const result = await run(supabase)
+
+      expect(mockResolveConsent).toHaveBeenLastCalledWith(COMPANY, 'c1', { rejectedAccessToken: 'old-token' })
+      expect(mockVismaInvoicePdf).toHaveBeenLastCalledWith(expect.anything(), 'new-token', 'visma-guid-1')
+      expect(result.customerInvoicePdfs).toMatchObject({ linked: 1, failed: 0 })
+    })
+
+    it('stops the sweep when the refreshed token is refused too', async () => {
+      mockVismaInvoicePdf.mockRejectedValue(new VismaApiError('unauthorized', 401))
+      const { supabase } = withCustomerInvoices(wireVisma('old-token', 'refused-token'), [VISMA_PAID], { documentNumbers: VISMA_IDS })
+
+      const error = await run(supabase).catch((e) => e)
+
+      expect(error).toBeInstanceOf(ProviderConnectionRefusedError)
+      expect(error).toMatchObject({ provider: 'visma', code: 'PROVIDER_AUTH_EXPIRED' })
+    })
   })
 })
