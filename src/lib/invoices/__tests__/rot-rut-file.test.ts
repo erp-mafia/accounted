@@ -665,7 +665,8 @@ describe('eligibility blockers', () => {
     // whole kronor and the deduction may never exceed the 50 % cap, so the
     // begäran must ask for 62 (floor), not 63 (half-up), which would exceed
     // the cap and trip DEDUCTION_EXCEEDS_PAYMENT on a perfectly correct
-    // invoice. Regression for the 2026-08-25 support case.
+    // invoice. Regression for the 2026-08-25 support case. The buyer paid
+    // 62,50, stated 62 with the öre dropped (lag 2009:194, 5 §).
     const invoice = makeRotInvoice({}, [
       makeItem({
         deduction_type: 'rut',
@@ -683,7 +684,7 @@ describe('eligibility blockers', () => {
     if (evaluated.ok) {
       expect(evaluated.value.arende.pris_for_arbete).toBe(125)
       expect(evaluated.value.arende.begart_belopp).toBe(62)
-      expect(evaluated.value.arende.betalt_belopp).toBe(63)
+      expect(evaluated.value.arende.betalt_belopp).toBe(62)
     }
 
     const xml = buildRotRutFile({
@@ -693,7 +694,7 @@ describe('eligibility blockers', () => {
       today: TODAY,
     }).xml!
     expect(xml).toContain('<ns2:PrisForArbete>125</ns2:PrisForArbete>')
-    expect(xml).toContain('<ns2:BetaltBelopp>63</ns2:BetaltBelopp>')
+    expect(xml).toContain('<ns2:BetaltBelopp>62</ns2:BetaltBelopp>')
     expect(xml).toContain('<ns2:BegartBelopp>62</ns2:BegartBelopp>')
   })
 
@@ -701,7 +702,7 @@ describe('eligibility blockers', () => {
     // 500 kr labor + 125 moms = 625 kr; ROT 30 % = 187,50. Half-up rounding
     // emitted 188, which exceeded both the statutory cap and the 1513 fordran
     // (and, unlike the RUT-at-50 % case, passed the begärt > betalt guard).
-    // The floor emits 187/438. Skeptic finding on PR #1910: pins that the fix
+    // The floor emits 187/437 (paid 437,50, öre dropped). Skeptic finding on PR #1910: pins that the fix
     // deliberately lowers this class of previously-passing ROT files by 1 kr.
     const result = evaluateInvoiceForFile(
       'rot',
@@ -713,7 +714,48 @@ describe('eligibility blockers', () => {
     if (result.ok) {
       expect(result.value.arende.pris_for_arbete).toBe(625)
       expect(result.value.arende.begart_belopp).toBe(187)
-      expect(result.value.arende.betalt_belopp).toBe(438)
+      expect(result.value.arende.betalt_belopp).toBe(437)
+    }
+  })
+
+  it('drops the öre from PrisForArbete and BetaltBelopp instead of rounding them up', () => {
+    // "Uppgifter om belopp ska anges i hela krontal så att öretal faller
+    // bort" (lag 2009:194 om förfarandet vid skattereduktion för
+    // hushållsarbete, 5 §). 802,80 kr labor + 200,70 moms = 1 003,50 kr;
+    // the invoice credits ROT 301 kr, so the buyer paid 702,50 kr. The file
+    // states 1 003 and 702, never 1 004 and 703.
+    const invoice = makeRotInvoice({ deduction_total: 301 }, [
+      makeItem({ line_total: 802.8, vat_amount: 200.7, deduction_amount: 301, labor_hours: 5 }),
+    ])
+    const result = evaluateInvoiceForFile('rot', invoice)
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.value.arende.pris_for_arbete).toBe(1003)
+      expect(result.value.arende.betalt_belopp).toBe(702)
+      expect(result.value.arende.begart_belopp).toBe(301)
+    }
+
+    const xml = buildRotRutFile({ type: 'rot', name: 'Halv krona', invoices: [invoice], today: TODAY }).xml!
+    expect(xml).toContain('<ns2:PrisForArbete>1003</ns2:PrisForArbete>')
+    expect(xml).toContain('<ns2:BetaltBelopp>702</ns2:BetaltBelopp>')
+  })
+
+  it('states BetaltBelopp as what the buyer paid, öre dropped, when the credit carries öre', () => {
+    // A foreign invoice keeps öre on its SEK credit. 100 EUR labor + 25 EUR
+    // moms at 10,0264 = 1 253,30 kr; credit 37,50 EUR = 375,99 kr, so the
+    // buyer paid 877,31 kr. Begärt 375, betalt 877, pris 1 253: begärt +
+    // betalt stays within the cost. Subtracting the truncated begärt from the
+    // price instead would state 878, a krona the buyer never paid.
+    const invoice = makeRotInvoice(
+      { currency: 'EUR', exchange_rate: 10.0264, subtotal: 100, vat_amount: 25, total: 125, deduction_total: 37.5 },
+      [makeItem({ unit_price: 100, line_total: 100, vat_amount: 25, deduction_amount: 37.5, labor_hours: 2 })],
+    )
+    const result = evaluateInvoiceForFile('rot', invoice)
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.value.arende.pris_for_arbete).toBe(1253)
+      expect(result.value.arende.begart_belopp).toBe(375)
+      expect(result.value.arende.betalt_belopp).toBe(877)
     }
   })
 
