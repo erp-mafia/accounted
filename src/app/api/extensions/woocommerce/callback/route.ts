@@ -1,7 +1,6 @@
 import { UUID_RE } from '@/lib/invariants/uuid'
 import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
-import { eventBus } from '@/lib/events/bus'
 import { extensionRegistry } from '@/lib/extensions/registry'
 import { createLogger } from '@/lib/logger'
 import {
@@ -14,7 +13,7 @@ import {
   probeFailureLogFields,
   probeFailureMessage,
 } from '@/extensions/general/woocommerce/lib/probe-failure'
-import { activateIfComplete } from '@/extensions/general/woocommerce/lib/connect'
+import { parkHandshake } from '@/extensions/general/woocommerce/lib/connect'
 
 const log = createLogger('woocommerce/callback')
 
@@ -32,17 +31,18 @@ export const maxDuration = 60
  * pending row, and the received keys are verified against that row's stored
  * store_url before anything is persisted.
  *
- * This leg has no browser session, so it can only STAGE the verified keys on
- * the pending row. The row becomes active when the initiator's session has
- * confirmed on the return leg as well (activateIfComplete, either order).
- * A pending row never syncs, so keys staged for a handshake nobody confirms
- * are inert until the nightly sweep wipes them.
+ * This leg has no browser session and says nothing about who approved, so it
+ * only STAGES the verified keys on the pending row. The row becomes active
+ * once the initiator has proved control of the store by typing the key's
+ * last characters (POST /verify-store, lib/connect). A pending row never
+ * syncs, so keys staged for a handshake nobody proves are inert until the
+ * nightly sweep wipes them.
  *
  * No TTL refusal here on purpose: WooCommerce treats any non-200 as a
  * failed handshake (deletes the key it just minted and shows the merchant an
  * error page on the store, no redirect back), so refusing a slow approval
  * here would strand a legitimate merchant. The TTL lives in the activation
- * predicate and on the session-bound return leg, and the nightly sweep parks
+ * predicate and on the session-bound routes, and the nightly sweep parks
  * what is left; a stale pending row cannot flip and never syncs.
  */
 export async function POST(request: Request) {
@@ -105,35 +105,18 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Unknown or expired state' }, { status: 404 })
   }
 
-  const markError = (message: string) =>
-    supabase
-      .from('woocommerce_connections')
-      .update({
-        status: 'error',
-        error_message: message,
-        oauth_state: null,
-        consumer_key_encrypted: null,
-        consumer_secret_encrypted: null,
-        store_name: null,
-        currency: null,
-        prices_include_tax: null,
-        wc_version: null,
-        key_permissions: null,
-      })
-      .eq('id', pending.id)
-      .eq('status', 'pending')
+  const markError = (message: string) => parkHandshake(supabase, pending.id, message)
 
   // WooCommerce posts once per approval. A second POST for the same state is
   // a replay of something we already hold: never re-probe or overwrite staged
-  // keys on its say-so. It still runs the activation flip, so a callback that
-  // was cut off between staging and activating is completed by its retry, and
-  // it answers 200 either way so the status code does not double as an "has
-  // the merchant approved yet" oracle for whoever holds the state.
+  // keys on its say-so. It answers 200 like the first, so the status code
+  // does not double as an "has the merchant approved yet" oracle for whoever
+  // holds the state.
   if (pending.consumer_key_encrypted) {
     log.warn('duplicate handshake callback for a state that already holds keys', {
       connectionId: pending.id,
     })
-    return finishActivation(supabase, pending.id, markError)
+    return staged200()
   }
 
   // Authenticity check: the keys must actually work against the store URL the
@@ -163,10 +146,12 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Credential verification failed' }, { status: 502 })
   }
 
-  // Stage the verified keys. Status stays pending: this POST has no browser
-  // session, so the initiator binding happens on the return leg, and the row
-  // only flips to active once that leg has confirmed too. oauth_state stays
-  // until activation so the return leg can still find the row.
+  // Stage the verified keys. Status stays pending: the row only flips to
+  // active once the initiator has proved control of the store
+  // (POST /verify-store). oauth_state stays until activation so the return
+  // leg can still find the row. Only into an empty slot: keys once staged
+  // are the ones the proof is checked against and the ones that go live, so
+  // a concurrent callback for the same state can never swap them.
   const { data: staged, error: stageError } = await supabase
     .from('woocommerce_connections')
     .update({
@@ -181,12 +166,15 @@ export async function POST(request: Request) {
     })
     .eq('id', pending.id)
     .eq('status', 'pending')
+    .is('consumer_key_encrypted', null)
     .select('id')
     .maybeSingle()
 
   if (stageError || !staged) {
     // The row left 'pending' between lookup and here (superseded, denied on
-    // the return leg, or expired by the sweep): nothing to stage against.
+    // the return leg, or expired by the sweep), or a concurrent callback
+    // staged its keys first: nothing to stage against. The non-200 makes
+    // WooCommerce delete the key it just minted.
     log.error('failed to stage verified credentials', {
       connectionId: pending.id,
       code: stageError?.code,
@@ -198,64 +186,14 @@ export async function POST(request: Request) {
     )
   }
 
-  return finishActivation(supabase, pending.id, markError)
+  return staged200()
 }
 
 /**
- * Run the conditional flip for a row whose keys are staged and answer
- * WooCommerce. Shared by the first callback and by a replayed one.
+ * The answer WooCommerce needs to redirect the merchant back (any non-200
+ * deletes the key it just minted). Nothing is active yet: the store goes
+ * live only after the proof of store control.
  */
-async function finishActivation(
-  supabase: Awaited<ReturnType<typeof createServiceClient>>,
-  connectionId: string,
-  markError: (message: string) => PromiseLike<unknown>,
-): Promise<Response> {
-  const activation = await activateIfComplete(supabase, connectionId)
-
-  if (activation.outcome === 'incomplete') {
-    // Browser has not confirmed yet (the usual order: WooCommerce posts here
-    // before it redirects the merchant). The return leg finishes the job.
-    return NextResponse.json({ success: true, activated: false })
-  }
-
-  if (activation.outcome !== 'activated') {
-    // 23505 = a partial unique index: the store is already actively connected
-    // (to this or another company), or the company connected in a parallel tab.
-    const isConflict = activation.outcome === 'conflict'
-    log.error('failed to activate connection', {
-      connectionId,
-      code: activation.error.code,
-      message: activation.error.message,
-    })
-    await markError(
-      isConflict
-        ? 'Butiken är redan ansluten till ett företag.'
-        : 'Anslutningen kunde inte slutföras.',
-    )
-    return NextResponse.json(
-      { error: isConflict ? 'Store already connected' : 'Activation failed' },
-      { status: isConflict ? 409 : 500 },
-    )
-  }
-
-  const activated = activation.connection
-  try {
-    await eventBus.emit({
-      type: 'woocommerce.connected',
-      payload: {
-        connectionId: activated.id,
-        storeUrl: activated.store_url,
-        userId: activated.user_id,
-        companyId: activated.company_id,
-      },
-    })
-  } catch (emitError) {
-    // Non-fatal: the DB state (source of truth) is already committed.
-    log.error('failed to emit woocommerce.connected', {
-      connectionId: activated.id,
-      message: emitError instanceof Error ? emitError.message : String(emitError),
-    })
-  }
-
-  return NextResponse.json({ success: true, activated: true })
+function staged200(): Response {
+  return NextResponse.json({ success: true, activated: false })
 }

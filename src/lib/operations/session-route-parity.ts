@@ -1079,6 +1079,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   // woocommerce
   'POST /api/extensions/ext/woocommerce/connect': uiOnly(OAUTH_CONNECT),
   'POST /api/extensions/ext/woocommerce/manual-connect': uiOnly('enters a third-party store credential'),
+  'POST /api/extensions/ext/woocommerce/verify-store': uiOnly('finishes the store authorization in the browser: the person types what only the store admin shows'),
   'DELETE /api/extensions/ext/woocommerce/disconnect': gap('P3'),
   'POST /api/extensions/ext/woocommerce/sync': gap('P3', EXT_SYNC),
   'POST /api/extensions/ext/woocommerce/backfill': covered(['gnubok_backfill_feed']),

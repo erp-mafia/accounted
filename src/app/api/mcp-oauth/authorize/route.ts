@@ -395,8 +395,9 @@ export async function GET(request: Request) {
   //     approves under Att göra › Rutin. A user who wants the agent to
   //     approve its own proposals ticks approve themselves, and only then does
   //     the page show the segregation-of-duties sentence and /token record the
-  //     acknowledgement. The full scope list stays on the page (collapsed but
-  //     expandable) with every row untickable, the warn box explains each
+  //     acknowledgement. The approve box stays unfolded in the warn box's
+  //     Godkänn line, the rest of the scope list stays on the page (collapsed
+  //     but expandable) with every row untickable, the warn box explains each
   //     level above the button, and the grant is revocable under
   //     Agenter › Koppla en agent. RFC 6749 §3.3 lets the resource owner
   //     authorise the set presented; the consent is the click on a page that
@@ -433,12 +434,17 @@ export async function GET(request: Request) {
   const ceilingHasWrite = roleCapped.some((s) => scopeKind(s) === 'write')
   const ceilingHasStaging = roleCapped.some((s) => STAGING_SCOPES.includes(s))
   const approveOffered = grantCeiling.has('pending_operations:approve')
-  const scopeCheckboxesHtml = renderScopeCheckboxes(preChecked, grantCeiling)
+  // Approve is the one choice the user makes themselves, so its box sits
+  // unfolded in the warn box's Godkänn line (below) and the fold holds the
+  // rest. A fold left with no rows (a client that asked for approve alone)
+  // is not rendered.
+  const foldCeiling = new Set([...grantCeiling].filter((s) => s !== 'pending_operations:approve'))
+  const scopeCheckboxesHtml = renderScopeCheckboxes(preChecked, foldCeiling)
 
   // preCheckedHasWrite implies the client-or-built-in branch above, so
   // preChecked is then the ceiling minus approve: "allt utom Godkänn". A
-  // client that asked for approve alone gets nothing pre-checked; the fold
-  // then opens so the one box to tick is in view.
+  // client that asked for approve alone gets nothing pre-checked and no fold;
+  // a fold with nothing pre-checked opens.
   const nothingPreChecked = preChecked.size === 0
   const ledeHtml = !ceilingHasWrite
     ? `${escapeHtml(client.name)} begär läsåtkomst till ditt ${appNameLower}-konto. Inga skrivbehörigheter ingår.`
@@ -476,7 +482,7 @@ export async function GET(request: Request) {
       ? `<li><strong>Skriv:</strong> ${agentName} förbereder bokföring som förslag som du godkänner under Att göra &rsaquo; Rutin. Enklare saker, som att ladda upp underlag, görs direkt.</li>`
       : '',
     approveOffered
-      ? `<li><strong>Godkänn:</strong> ${agentName} får godkänna sina egna förslag och då bokförs det utan din granskning.</li>`
+      ? `<li class="warn-choice"><input type="checkbox" id="${scopeInputId('pending_operations:approve')}" name="scopes" value="pending_operations:approve" data-kind="write"><label for="${scopeInputId('pending_operations:approve')}"><strong>Godkänn:</strong> ${agentName} får godkänna sina egna förslag och då bokförs det utan din granskning.</label></li>`
       : '',
   ].join('')
   // Segregation of duties: a key that can both stage and approve lets the
@@ -639,7 +645,6 @@ export async function GET(request: Request) {
       padding: 0.75rem 0;
       cursor: pointer;
       list-style: none;
-      user-select: none;
     }
     .scopes-details summary::-webkit-details-marker { display: none; }
     .scopes-details summary:focus-visible {
@@ -796,6 +801,25 @@ export async function GET(request: Request) {
       gap: 0.25rem;
     }
     .warn-levels strong { font-weight: 600; }
+    .warn-choice {
+      display: flex;
+      gap: 0.5rem;
+      align-items: flex-start;
+    }
+    .warn-choice input[type="checkbox"] {
+      margin-top: 0.1875rem;
+      width: 15px;
+      height: 15px;
+      accent-color: var(--primary);
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .warn-choice input[type="checkbox"]:focus-visible {
+      outline: 2px solid var(--ring);
+      outline-offset: 2px;
+      border-radius: 2px;
+    }
+    .warn-choice label { cursor: pointer; }
     .warn-sod { font-weight: 500; }
     .warn-sod[hidden] { display: none; }
     .warn-icon {
@@ -941,7 +965,7 @@ export async function GET(request: Request) {
       <input type="hidden" name="scope_binding_sig" value="${escapeHtml(scopeBindingSignature)}">
       ${companyPickerHtml}
 
-      <details class="scopes-details"${nothingPreChecked ? ' open' : ''}>
+      ${foldCeiling.size === 0 ? '' : `<details class="scopes-details"${nothingPreChecked ? ' open' : ''}>
         <summary>
           <span class="scopes-title">Behörigheter</span>
           <span class="scopes-summary-hint">${summaryHintHtml}</span>
@@ -956,7 +980,7 @@ export async function GET(request: Request) {
           </div>
         </div>
         <div class="scope-groups">${scopeCheckboxesHtml}</div>
-      </details>
+      </details>`}
 
       <div class="warn">
         <svg class="warn-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
@@ -1007,13 +1031,19 @@ export async function GET(request: Request) {
         syncSod();
       }
       syncSod();
-      document.getElementById('select-read').addEventListener('click', function() {
+      // The shortcut buttons live in the fold, which is absent when approve
+      // is the only permission on offer.
+      function onClick(id, fn) {
+        var button = document.getElementById(id);
+        if (button) button.addEventListener('click', fn);
+      }
+      onClick('select-read', function() {
         setAll(function(b) { return b.dataset.kind === 'read'; });
       });
-      document.getElementById('select-all').addEventListener('click', function() {
+      onClick('select-all', function() {
         setAll(function() { return true; });
       });
-      document.getElementById('select-none').addEventListener('click', function() {
+      onClick('select-none', function() {
         setAll(function() { return false; });
       });
       // Company picker (multi-company users only): the server refuses a
@@ -1389,9 +1419,13 @@ function renderCompanyPicker(companies: PickerCompany[], activeCompanyId: string
       </div>`
 }
 
+function scopeInputId(scope: ApiKeyScope): string {
+  return `scope-${scope.replace(/[^a-z0-9]/gi, '-')}`
+}
+
 function scopeRow(scope: ApiKeyScope, checked: boolean, kind: 'read' | 'write'): string {
   const meta = API_KEY_SCOPES[scope]
-  const id = `scope-${scope.replace(/[^a-z0-9]/gi, '-')}`
+  const id = scopeInputId(scope)
   // Marks the scopes that stage agent proposals, so the inline script can show
   // the segregation-of-duties sentence for exactly the combination
   // findStageApproveConflict flags.

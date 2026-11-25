@@ -1,7 +1,8 @@
+import { timingSafeEqual } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { WooCredentials } from './api-client'
 import { decryptCredential } from './credentials'
-import type { WooCommerceConnection } from '../types'
+import { KEY_SUFFIX_LENGTH, type WooCommerceConnection } from '../types'
 
 /**
  * WooCommerce "Auth Endpoint" handshake helpers.
@@ -14,26 +15,25 @@ import type { WooCommerceConnection } from '../types'
  *
  * There is no signature on the callback POST, so possession of the
  * single-use state is the CSRF defense, and authenticity is proven by
- * probing the STORED store_url with the received keys before activation: a
+ * probing the STORED store_url with the received keys before staging them: a
  * forged POST would need working read credentials for the exact store the
  * user asked to connect.
  *
- * Activation itself needs TWO signals on the pending row: the verified keys
- * (callback leg, no browser session) and browser_confirmed_at (return leg,
- * bound to the initiator's session). Either leg may land first; both run
- * activateIfComplete() after writing their own signal, and the row flips to
- * active exactly once, under the DB CHECK that forbids an active row missing
- * either signal (migration 20260907143000). Every credential consumer selects
- * status = 'active', so staged keys on a pending row can never sync.
- *
- * Scope of the guarantee: a connection can never go live headless (callback
- * alone) or under a session other than the initiator's, and abandoned
- * handshakes are parked with their keys wiped. It is NOT a defense against a
- * store admin approving a link the initiator generated for them: wc-auth
- * cannot tell us who approved, and the initiator legitimately supplies the
- * second signal. The confirmation column is member-writable through RLS
- * like every other column on this row-scoped table; it records that the
- * handshake completed under a session, it is not a trust boundary.
+ * wc-auth never says who approved. All the return leg receives (the success
+ * flag and our own state) is in the authorize URL the initiator holds, so the
+ * initiator's browser coming back proves nothing about the store: a store
+ * admin who approved a link someone else generated would connect their store
+ * to that someone's company. The store therefore goes live only after the
+ * initiator proves control of it: they type the last KEY_SUFFIX_LENGTH
+ * characters of the new consumer key, which WooCommerce shows only in the
+ * store's own admin. POST /verify-store compares them with the staged key
+ * under the initiator's session, records browser_confirmed_at and runs the
+ * flip (activateIfComplete). The DB CHECK (migration 20260907143000) forbids
+ * an active row without stored keys and that confirmation, and only the
+ * server may write the confirmation or move a row into active
+ * (20260907150000). Every credential consumer selects status = 'active', so
+ * staged keys on a pending row never sync, and abandoned handshakes are
+ * parked with their keys wiped.
  */
 
 const APP_NAME = 'Accounted'
@@ -63,9 +63,10 @@ export function buildAuthorizeUrl(storeUrl: string, state: string, appOrigin: st
 }
 
 /**
- * A pending handshake older than this is dead: the return leg refuses it,
- * activateIfComplete() will not flip it, and the nightly cron parks it with
- * its staged keys wiped. The callback leg does NOT refuse it: WooCommerce
+ * A pending handshake older than this is dead: the return leg and the proof
+ * route refuse it, activateIfComplete() will not flip it, and the nightly cron
+ * parks it with its staged keys wiped. The proof of store control has to land
+ * inside it too. The callback leg does NOT refuse it: WooCommerce
  * turns any non-200 into a store-side error page and deletes the freshly
  * minted key, which would strand a slow but legitimate approval; staging on
  * a stale row is harmless because a pending row never syncs and the flip
@@ -76,8 +77,59 @@ export const HANDSHAKE_TTL_MS = 15 * 60_000
 export const HANDSHAKE_EXPIRED_MESSAGE =
   'Anslutningen gick ut innan den slutfördes. Starta om anslutningen och ta bort den oanvända API-nyckeln i butikens WooCommerce-inställningar.'
 
+export const HANDSHAKE_EXPIRED_MESSAGE_EN =
+  "The connection timed out before it was completed. Start it again and remove the unused API key in the store's WooCommerce settings."
+
 export function isHandshakeExpired(createdAt: string, now = Date.now()): boolean {
   return now - new Date(createdAt).getTime() > HANDSHAKE_TTL_MS
+}
+
+/**
+ * The typed key suffix as it is compared, or null unless exactly
+ * KEY_SUFFIX_LENGTH characters remain. The store's admin prints the suffix
+ * behind a mask ("***" in the key list, an ellipsis on the key's own page)
+ * that a copy may carry along, so masks and whitespace go; case is ignored
+ * because the key is lower-case hex.
+ */
+export function normalizeKeySuffix(input: string): string | null {
+  const cleaned = input.replace(/[\s*.\u2026]/g, '').toLowerCase()
+  return cleaned.length === KEY_SUFFIX_LENGTH ? cleaned : null
+}
+
+/**
+ * Whether a normalized suffix ends the consumer key, compared in constant
+ * time: it is the proof that the person typing it can open the store's
+ * admin, where WooCommerce shows it and nowhere else.
+ */
+export function keySuffixMatches(consumerKey: string, suffix: string): boolean {
+  const expected = Buffer.from(consumerKey.slice(-KEY_SUFFIX_LENGTH).toLowerCase())
+  const given = Buffer.from(suffix)
+  return expected.length === given.length && timingSafeEqual(expected, given)
+}
+
+/**
+ * Park a handshake that will not complete: status error with the reason
+ * shown on the panel, the state consumed, and the staged keys and the store
+ * settings the probe read wiped. Scoped to a still-pending row, so a row
+ * that moved on meanwhile is never touched.
+ */
+export function parkHandshake(supabase: SupabaseClient, connectionId: string, message: string) {
+  return supabase
+    .from('woocommerce_connections')
+    .update({
+      status: 'error',
+      error_message: message,
+      oauth_state: null,
+      consumer_key_encrypted: null,
+      consumer_secret_encrypted: null,
+      store_name: null,
+      currency: null,
+      prices_include_tax: null,
+      wc_version: null,
+      key_permissions: null,
+    })
+    .eq('id', connectionId)
+    .eq('status', 'pending')
 }
 
 export interface ActivatedConnection {
@@ -96,21 +148,17 @@ export type ActivationResult =
   | { outcome: 'failed'; error: { code?: string; message: string } }
 
 /**
- * Flip a pending row to active if, and only if, both signals are present.
+ * Flip a pending row to active if, and only if, both signals are present:
+ * the keys the callback verified and staged, and the confirmation the proof
+ * route records once the initiator has typed the key's suffix.
  *
- * Both handshake legs call this after writing their own signal. Postgres
- * serializes the two UPDATEs on the row, and the WHERE is re-evaluated
- * against the latest committed version, so whichever leg runs last sees both
- * signals and activates; the other matches zero rows and reports incomplete.
+ * Only the proof route calls this, right after recording the confirmation.
  * The status = 'pending' scope makes it idempotent and blocks replay: an
  * active row can never be activated again.
  *
- * The TTL is part of the predicate, not only of the return leg: the
- * initiator can confirm early (the return URL is theirs to open), so
- * without it a row confirmed at minute 1 would still flip when the keys
- * land hours later. Past the TTL the flip matches zero rows and the sweep
- * parks the row; the callback still answers 200 so the store does not
- * wp_die on the merchant.
+ * The TTL is part of the predicate, not only of the routes that check it
+ * first: a proof that lands after the handshake expired matches zero rows,
+ * and the sweep parks the row.
  */
 export async function activateIfComplete(
   supabase: SupabaseClient,
