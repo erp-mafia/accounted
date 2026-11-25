@@ -566,12 +566,13 @@ const MAX_EXTRACTION_TEXT_LENGTH = 50_000
  * the model budget; the mail-body underlag renders with a larger one.
  */
 export function htmlToText(html: string, maxLength: number = MAX_EXTRACTION_TEXT_LENGTH): string {
-  // Markup that is never closed is read in time that grows with the body (html-markup.ts).
+  // Markup that is never closed is read in time that grows with the body
+  // (html-markup.ts). A comment ends at --> or at --!>, as browsers end it.
   const withoutBlocks = replaceUpToLastCloser(
     replaceBlocks(html, ['script', 'style', 'head', 'title'], 'spaces', ' '),
-    /<!--[\s\S]*?-->/g,
+    /<!--[\s\S]*?--!?>/g,
     ' ',
-    '-->',
+    /--!?>/g,
   )
   const withBreaks = replaceUpToLastCloser(
     withoutBlocks.replace(/<\/(p|div|tr|li|h[1-6]|table|thead|tbody|section|article|blockquote|pre)\s*>/gi, '\n'),

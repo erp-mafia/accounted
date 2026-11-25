@@ -19,24 +19,27 @@ describe('replaceUpToLastCloser', () => {
     expect(replaceUpToLastCloser('a<b', /<[^>]+>/g, ' ', '>')).toBe('a<b')
     expect(replaceUpToLastCloser('a<!-- x -->b<!-- y --!>c<!-- z', /<!--[\s\S]*?--!?>/g, ' ', /--!?>/g)).toBe('a b c<!-- z')
     expect(replaceUpToLastCloser('<!-->x-->', /<!--[\s\S]*?--!?>/g, ' ', /--!?>/g)).toBe(' ')
-    expect(replaceUpToLastCloser('a<!--x-->b<!--', /<!--[\s\S]*?-->/g, ' ', '-->')).toBe('a b<!--')
     expect(replaceUpToLastCloser('<STYLE>a</Style>b<style>c', /<style[\s\S]*?<\/style>/gi, ' ', /<\/style>/gi)).toBe(' b<style>c')
     expect(replaceUpToLastCloser('a<br>b</p >c<br', /<br\b[^>]*>|<\/(?:p|div|li|tr|h[1-6]|table|section|article)\s*>/gi, '\n', '>')).toBe('a\nb\nc<br')
     expect(replaceUpToLastCloser('a<br/>b<hr class="x">c<bra>d<br', /<(br|hr)\b[^>]*\/?>/gi, '\n', '>')).toBe('a\nb\nc<bra>d<br')
   })
 
-  // Each used to search the rest of the text again from every opening.
+  // Each used to search the rest of the text again from every opening. The
+  // bound is checked after each size, the smaller first, so a slow helper
+  // fails on 256 KB instead of taking minutes on 2 MB.
   it.each([
     ['<', /<[^>]*>/g, '>'],
     ['<a', /<[^>]+>/g, '>'],
     ['<br ', /<(br|hr)\b[^>]*\/?>/gi, '>'],
-    ['<!--', /<!--[\s\S]*?-->/g, '-->'],
+    ['<!--', /<!--[\s\S]*?--!?>/g, /--!?>/g],
     ['<style', /<style[\s\S]*?<\/style>/gi, /<\/style>/gi],
-  ] as const)('answers at once for 2 MB of %j that is never closed', (unit, pattern, closer) => {
-    const text = unit.repeat(Math.floor((2 * 1024 * 1024) / unit.length))
+  ] as const)('answers at once for up to 2 MB of %j that is never closed', (unit, pattern, closer) => {
     const started = Date.now()
-    expect(replaceUpToLastCloser(text, pattern, ' ', closer)).toBe(text)
-    expect(Date.now() - started).toBeLessThan(1000)
+    for (const kb of [256, 2048]) {
+      const text = unit.repeat(Math.floor((kb * 1024) / unit.length))
+      expect(replaceUpToLastCloser(text, pattern, ' ', closer)).toBe(text)
+      expect(Date.now() - started).toBeLessThan(1000)
+    }
   })
 })
 
@@ -65,10 +68,12 @@ describe('replaceBlocks', () => {
     ['</script <script', ['script'], 'attributes'],
     ['<head>', ['script', 'style', 'head', 'title'], 'spaces'],
     ['<script <style <head <title ', ['script', 'style', 'head', 'title'], 'spaces'],
-  ] as const)('answers at once for 2 MB of %j that is never closed', (unit, tags, end) => {
-    const text = `${unit.repeat(Math.floor((2 * 1024 * 1024) / unit.length))}>`
+  ] as const)('answers at once for up to 2 MB of %j that is never closed', (unit, tags, end) => {
     const started = Date.now()
-    expect(replaceBlocks(text, tags, end, ' ')).toBe(text)
-    expect(Date.now() - started).toBeLessThan(1000)
+    for (const kb of [256, 2048]) {
+      const text = `${unit.repeat(Math.floor((kb * 1024) / unit.length))}>`
+      expect(replaceBlocks(text, tags, end, ' ')).toBe(text)
+      expect(Date.now() - started).toBeLessThan(1000)
+    }
   })
 })
