@@ -6,21 +6,13 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { findCounterpartyTemplate } from '@/lib/bookkeeping/counterparty-templates'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { renameCounterpartyTemplate } from '@/lib/rules/service'
 import type { CategorizationTemplate, Transaction } from '@/types'
 
 const RenameCounterpartyTemplateSchema = z.object({
   id: z.string().uuid(),
   counterparty_name: z.string().trim().min(1).max(100),
 })
-
-/**
- * Stored names are lowercase, single-spaced keys (the matcher compares them
- * against normalized bank descriptions). A user-typed name gets the same
- * shape; display re-capitalizes through formatCounterpartyName().
- */
-function toTemplateKey(input: string): string {
-  return input.toLowerCase().replace(/\s+/g, ' ').trim()
-}
 
 export const GET = withRouteContext(
   'counterparty_template.list',
@@ -94,9 +86,10 @@ export const DELETE = withRouteContext(
 
 /**
  * PATCH /api/settings/counterparty-templates
- * Rename a learned template. The old name is kept as an alias so both the
- * matcher (alias tier) and the learn path (findTemplateByKey) keep landing on
- * this row for the merchant it was learned from.
+ * Rename a learned template (lib/rules/service.ts renameCounterpartyTemplate,
+ * the same rename gnubok_rename_counterparty_template stages). The old name
+ * is kept as an alias so the matcher and the learn path keep landing on this
+ * row for the merchant it was learned from.
  */
 export const PATCH = withRouteContext(
   'counterparty_template.rename',
@@ -104,94 +97,32 @@ export const PATCH = withRouteContext(
     const validation = await validateBody(request, RenameCounterpartyTemplateSchema)
     if (!validation.success) return validation.response
 
-    const { id } = validation.data
-    const newName = toTemplateKey(validation.data.counterparty_name)
-    if (newName.length < 2) {
+    let outcome: Awaited<ReturnType<typeof renameCounterpartyTemplate>>
+    try {
+      outcome = await renameCounterpartyTemplate(supabase, companyId, validation.data.id, validation.data.counterparty_name)
+    } catch (error) {
+      return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
+    }
+    if (outcome.ok) return NextResponse.json({ data: outcome.template })
+    if (outcome.reason === 'NAME_TOO_SHORT') {
       return errorResponseFromCode('VALIDATION_ERROR', log, {
         requestId,
         messageSv: 'Namnet måste vara minst två tecken',
         messageEn: 'The name must be at least two characters',
       })
     }
-
-    const { data: existing, error: fetchError } = await supabase
-      .from('categorization_templates')
-      .select('*')
-      .eq('id', id)
-      .eq('company_id', companyId)
-      .eq('is_active', true)
-      .maybeSingle()
-    if (fetchError) {
-      return NextResponse.json({ error: getUserErrorMessage(fetchError) }, { status: 500 })
-    }
-    if (!existing) {
+    if (outcome.reason === 'NOT_FOUND') {
       return errorResponseFromCode('NOT_FOUND', log, {
         requestId,
         messageSv: 'Mallen hittades inte',
         messageEn: 'Template not found',
       })
     }
-    const current = existing as CategorizationTemplate
-    if (current.counterparty_name === newName) {
-      return NextResponse.json({ data: current })
-    }
-
-    // (company_id, counterparty_name) is UNIQUE and includes soft-deleted
-    // rows. An active twin is a real conflict the user can see and resolve;
-    // an inactive twin is invisible to them, so it is removed instead of
-    // blocking the rename (a learned pattern, not a retention-bound record).
-    const { data: twin, error: twinError } = await supabase
-      .from('categorization_templates')
-      .select('id, is_active')
-      .eq('company_id', companyId)
-      .eq('counterparty_name', newName)
-      .neq('id', id)
-      .maybeSingle()
-    if (twinError) {
-      return NextResponse.json({ error: getUserErrorMessage(twinError) }, { status: 500 })
-    }
-    if (twin?.is_active) {
-      return errorResponseFromCode('CONFLICT', log, {
-        requestId,
-        messageSv: 'Det finns redan en mall med det här namnet',
-        messageEn: 'A template with this name already exists',
-      })
-    }
-    if (twin) {
-      const { error: purgeError } = await supabase
-        .from('categorization_templates')
-        .delete()
-        .eq('id', twin.id)
-        .eq('company_id', companyId)
-      if (purgeError) {
-        return NextResponse.json({ error: getUserErrorMessage(purgeError) }, { status: 500 })
-      }
-    }
-
-    const aliases = [...(current.counterparty_aliases || [])]
-    if (!aliases.includes(current.counterparty_name)) aliases.push(current.counterparty_name)
-
-    const { data: updated, error: updateError } = await supabase
-      .from('categorization_templates')
-      .update({ counterparty_name: newName, counterparty_aliases: aliases })
-      .eq('id', id)
-      .eq('company_id', companyId)
-      .select('*')
-      .single()
-    if (updateError) {
-      // Lost the race against another rename or the learn path: the unique
-      // (company_id, counterparty_name) index rejected the new name.
-      if ((updateError as { code?: string }).code === '23505') {
-        return errorResponseFromCode('CONFLICT', log, {
-          requestId,
-          messageSv: 'Det finns redan en mall med det här namnet',
-          messageEn: 'A template with this name already exists',
-        })
-      }
-      return NextResponse.json({ error: getUserErrorMessage(updateError) }, { status: 500 })
-    }
-
-    return NextResponse.json({ data: updated })
+    return errorResponseFromCode('CONFLICT', log, {
+      requestId,
+      messageSv: 'Det finns redan en mall med det här namnet',
+      messageEn: 'A template with this name already exists',
+    })
   },
   { requireWrite: true },
 )

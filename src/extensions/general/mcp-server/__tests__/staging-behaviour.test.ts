@@ -1428,6 +1428,17 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
     args: { is_active: false },
     rows: { account_dimension_rules: { rule_type: 'required', value_id: null } },
   },
+  // A learned booking rule: renamed, or paused. Every read of the table
+  // answers the same row, so the rename's name-twin read finds an inactive
+  // one, which never refuses (the active-template read filters in SQL).
+  gnubok_rename_counterparty_template: {
+    args: { counterparty_name: 'Hallon' },
+    rows: { categorization_templates: { counterparty_name: 'hallon ab 4471', counterparty_aliases: [], debit_account: '6211', credit_account: '1930', is_active: false, mode: 'paused', always_review: false } },
+  },
+  gnubok_update_counterparty_template: {
+    args: { mode: 'paused' },
+    rows: { categorization_templates: { counterparty_name: 'hallon ab 4471', counterparty_aliases: [], debit_account: '6211', credit_account: '1930', is_active: true, mode: 'propose', always_review: false } },
+  },
   // Settings are owner/admin only on every door: the preview reads the caller's role.
   gnubok_update_company_settings: { args: { phone: '08-123 45 67' }, rows: { company_members: { role: 'owner' } } },
   gnubok_update_recurring_schedule: { args: { name: 'Hyra' } },

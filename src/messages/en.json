@@ -1608,6 +1608,8 @@
     "type_withdraw_not_momsredovisning": "Remove correction mark",
     "type_mark_agi_period_filed": "Mark AGI period as filed",
     "type_complete_deadline": "Tick off deadline",
+    "type_rename_counterparty_template": "Rename booking rule",
+    "type_update_counterparty_template": "Update booking rule",
     "type_send_payslips": "Send payslips",
     "type_revert_salary_run": "Revert payroll run to draft",
     "type_unapprove_salary_run": "Recall payroll run approval",

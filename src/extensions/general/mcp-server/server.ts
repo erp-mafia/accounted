@@ -188,6 +188,8 @@ import { resolveInvoicePaymentAccount, resolveInvoiceSettlementAccount } from '@
 import { isPaidAtIssueAccount } from '@/lib/invoices/paid-at-issue'
 import { supplierInvoiceReference } from '@/lib/bookkeeping/supplier-invoice-description'
 import { contradictsLearnedDirection, findCounterpartyTemplatesBatch, formatCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
+import { counterpartyTemplateKey } from '@/lib/rules/service'
+import { escapeLikePattern } from '@/lib/supabase/like-pattern'
 import { bankRowRefusalCode, decideBankRowRebooking } from '@/lib/transactions/is-booked'
 import { setTransactionIgnored } from '@/lib/transactions/ignore'
 import { BULK_IGNORE_MAX_ROWS, findBulkIgnoreCandidates } from '@/lib/transactions/bulk-ignore'
@@ -13978,12 +13980,14 @@ export const tools: McpTool[] = [
     catalogVisibility: 'search',
     keywords: ['motpart', 'konteringsmall', 'mallar'],
     title: 'List Counterparty Templates',
-    description: 'List active counterparty categorization templates: learned patterns from prior categorizations used for auto-matching new transactions.',
+    description: 'List counterparty categorization templates (learned booking rules) used for matching new transactions: active ones, or paused too with include_paused; query narrows by name. Change one with gnubok_update_counterparty_template or gnubok_rename_counterparty_template.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
         limit: { type: 'number', description: 'Max results 1-200 (default 100)' },
+        include_paused: { type: 'boolean', description: 'Also list paused templates (mode paused), e.g. to resume one. Default false.' },
+        query: { type: 'string', maxLength: 100, description: 'Case-insensitive substring of the counterparty name, to find one rule beyond the limit.' },
       },
     },
     outputSchema: {
@@ -13998,11 +14002,16 @@ export const tools: McpTool[] = [
     async execute(args, companyId, userId, supabase) {
       const limit = Math.min(Math.max(1, Number(args.limit) || 100), 200)
 
-      const { data, error } = await supabase
+      let query = supabase
         .from('categorization_templates')
-        .select('id, counterparty_name, counterparty_aliases, debit_account, credit_account, vat_treatment, vat_account, category, line_pattern, occurrence_count, confidence, last_seen_date, source')
+        .select('id, counterparty_name, counterparty_aliases, debit_account, credit_account, vat_treatment, vat_account, category, line_pattern, occurrence_count, confidence, last_seen_date, source, mode, always_review')
         .eq('company_id', companyId)
-        .eq('is_active', true)
+      if (args.include_paused !== true) query = query.eq('is_active', true)
+      // Ranked by occurrence and capped at 200, a rare rule (often a paused
+      // one) can sit past the limit: the name filter reaches it.
+      const needle = typeof args.query === 'string' ? counterpartyTemplateKey(args.query) : ''
+      if (needle) query = query.ilike('counterparty_name', `%${escapeLikePattern(needle)}%`)
+      const { data, error } = await query
         .order('occurrence_count', { ascending: false })
         .limit(limit)
 
