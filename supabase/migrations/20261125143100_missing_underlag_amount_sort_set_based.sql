@@ -241,6 +241,7 @@ COMMENT ON FUNCTION public.verifikat_display_amounts(uuid, uuid[]) IS
 
 -- 2. The per-row column goes -------------------------------------------------
 
-DROP FUNCTION public.display_amount(public.journal_entries);
+-- IF EXISTS: the file can run again, like every other statement in it.
+DROP FUNCTION IF EXISTS public.display_amount(public.journal_entries);
 
 NOTIFY pgrst, 'reload schema';

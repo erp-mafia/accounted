@@ -19,4 +19,7 @@ export default {
     /\.order\(\s*['"`](?:total_amount|display_amount)['"`]/,
   ],
   sanctioned: ['lib/bookkeeping/voucher-display-amount.ts'],
+  // Where verifikat lists are read. Other tables (payment orders, receipts,
+  // payment batches) have a total_amount of their own that is theirs to sort by.
+  scan: ['app/api/bookkeeping/', 'app/(dashboard)/bookkeeping/', 'components/bookkeeping/', 'lib/bookkeeping/'],
 }

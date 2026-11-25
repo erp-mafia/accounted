@@ -606,11 +606,15 @@ describe('list_verifikat_missing_underlag sorted by Belopp', () => {
     expect(refused).toEqual({ ok: false, code: 'LIST_VERIFIKAT_MISSING_UNDERLAG_FORBIDDEN' })
   })
 
-  it('reads the amounts through the set function: display_amount, the per-row column, is gone', async () => {
-    const { rows } = await getPool().query<{ per_row: boolean; set: boolean }>(
+  it('reads the amounts through the set function, and display_amount, the per-row column, is gone', async () => {
+    const { rows } = await getPool().query<{ per_row: boolean; set: boolean; definition: string }>(
       `SELECT to_regprocedure('public.display_amount(public.journal_entries)') IS NOT NULL AS per_row,
-              to_regprocedure('public.verifikat_display_amounts(uuid, uuid[])') IS NOT NULL AS set`,
+              to_regprocedure('public.verifikat_display_amounts(uuid, uuid[])') IS NOT NULL AS set,
+              pg_get_functiondef('public.list_verifikat_missing_underlag(uuid, uuid, text, date, date, text, text, integer, text[], integer, integer)'::regprocedure) AS definition`,
     )
-    expect(rows[0]).toEqual({ per_row: false, set: true })
+    expect({ per_row: rows[0].per_row, set: rows[0].set }).toEqual({ per_row: false, set: true })
+    // No body of the rule of its own: the amounts come from the set function.
+    expect(rows[0].definition).toContain('public.verifikat_display_amounts($1,')
+    expect(rows[0].definition).not.toMatch(/money_net|debit_total|cash_accounts/)
   })
 })
