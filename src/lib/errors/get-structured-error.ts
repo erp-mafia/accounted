@@ -450,9 +450,13 @@ export function getStructuredError(
   const thrown = extractEnglishMessage(error)
   const unworded = entry !== undefined && (thrown.trim() === '' || thrown === code)
   const message_en = classified.message_en ?? (unworded ? entry.message_en : thrown)
-  // getErrorMessage skips an empty message, and answers a plain object
-  // { code, message: code } with that message: the bare code again.
-  const said = classified.message_sv ?? (unworded && thrown.trim() === '' ? '' : getErrorMessage(error))
+  // getErrorMessage skips the empty message of a thrown Error, and answers a
+  // plain object { code, message: code } with that message: the bare code
+  // again. An envelope { error: { code, message: '', details } } still goes
+  // through it: it words the details (the debit and credit totals, the date).
+  const said =
+    classified.message_sv ??
+    (unworded && thrown.trim() === '' && error instanceof Error ? '' : getErrorMessage(error))
   const message_sv = unworded && (said === '' || said === code) ? entry.message_sv : said
 
   let remediation = classified.remediation ?? entry?.remediation

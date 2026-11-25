@@ -7,6 +7,7 @@ import { badArgument, codedRefusal } from '../refusal'
 import { userFacing } from '../user-facing'
 import { gatewayErrorMessage } from '@/lib/supabase/gateway-error-page'
 import { getErrorEntry } from '../structured-errors'
+import { getErrorMessage } from '../get-error-message'
 
 describe('getStructuredError', () => {
   it.each([
@@ -330,6 +331,14 @@ describe('getStructuredError: a typed error thrown without a sentence', () => {
   it('keeps a sentence the thrower wrote', () => {
     const err = Object.assign(new Error('Asset 1224 was sold in March'), { code: 'ASSET_ALREADY_DISPOSED' })
     expect(getStructuredError(err).message_en).toBe('Asset 1224 was sold in March')
+  })
+
+  it('keeps the Swedish sentence built from the details of an envelope with an empty message', () => {
+    const envelope = {
+      error: { code: 'JOURNAL_ENTRY_NOT_BALANCED', message: '', details: { totalDebit: 100, totalCredit: 90 } },
+    }
+    expect(getStructuredError(envelope).message_sv).toBe(getErrorMessage(envelope))
+    expect(getStructuredError(envelope).message_sv).toMatch(/100/)
   })
 })
 
