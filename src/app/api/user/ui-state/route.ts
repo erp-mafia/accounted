@@ -60,6 +60,11 @@ const BodySchema = z
     first_thing_closed: z
       .record(z.string().uuid(), z.string().datetime())
       .optional(),
+    // Hem's question walk gone through, per company: companyId -> ISO
+    // timestamp. Merged per key like first_thing_closed.
+    hem_questions_passed: z
+      .record(z.string().uuid(), z.string().datetime())
+      .optional(),
     // One-time Discord invite card: when it was closed or used. Plain
     // top-level value, so the default spread below replaces it.
     discord_invite_dismissed_at: z.string().datetime().optional(),
@@ -128,6 +133,9 @@ export async function POST(request: Request) {
       : {}),
     ...(patch.first_thing_closed
       ? { first_thing_closed: { ...current.first_thing_closed, ...patch.first_thing_closed } }
+      : {}),
+    ...(patch.hem_questions_passed
+      ? { hem_questions_passed: { ...current.hem_questions_passed, ...patch.hem_questions_passed } }
       : {}),
     ...(patch.setup_skipped
       ? { setup_skipped: { ...current.setup_skipped, ...patch.setup_skipped } }

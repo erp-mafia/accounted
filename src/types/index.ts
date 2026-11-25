@@ -271,6 +271,9 @@ export interface UserUiState {
   // Hem's first-thing block closed by this user, keyed per company
   // (companyId -> ISO timestamp of the close, lib/onboarding/first-thing).
   first_thing_closed?: Record<string, string>
+  // When this user last went through Hem's question walk, keyed per company
+  // (companyId -> ISO timestamp); only questions filed later are walked again.
+  hem_questions_passed?: Record<string, string>
   // One-time Discord invite card (components/community/DiscordInviteCard):
   // ISO timestamp of when the user closed it or clicked through. Per user,
   // not per company: it is one community.

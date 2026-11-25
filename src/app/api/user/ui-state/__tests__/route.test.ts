@@ -259,6 +259,39 @@ describe('POST /api/user/ui-state', () => {
     expect(res.status).toBe(400)
   })
 
+  it('merges hem_questions_passed per company', async () => {
+    enqueue({
+      data: {
+        ui_state: { hem_questions_passed: { '11111111-1111-4111-8111-111111111111': '2026-11-20T10:00:00.000Z' } },
+      },
+    })
+    enqueue({ data: null })
+
+    const { status, body } = await parseJsonResponse<{
+      data: { ui_state: { hem_questions_passed: Record<string, string> } }
+    }>(
+      await POST(
+        request({ hem_questions_passed: { '22222222-2222-4222-8222-222222222222': '2026-11-25T09:00:00.000Z' } }),
+      ),
+    )
+
+    expect(status).toBe(200)
+    expect(body.data.ui_state.hem_questions_passed).toEqual({
+      '11111111-1111-4111-8111-111111111111': '2026-11-20T10:00:00.000Z',
+      '22222222-2222-4222-8222-222222222222': '2026-11-25T09:00:00.000Z',
+    })
+  })
+
+  it('returns 400 when hem_questions_passed has a key that is not a company UUID', async () => {
+    const res = await POST(request({ hem_questions_passed: { 'not-a-uuid': '2026-11-25T09:00:00.000Z' } }))
+    expect(res.status).toBe(400)
+  })
+
+  it('returns 400 when hem_questions_passed is not a timestamp', async () => {
+    const res = await POST(request({ hem_questions_passed: { '11111111-1111-4111-8111-111111111111': 'yes' } }))
+    expect(res.status).toBe(400)
+  })
+
   it('returns 500 when the upsert fails', async () => {
     enqueue({ data: null })
     enqueue({ data: null, error: { message: 'boom' } })
