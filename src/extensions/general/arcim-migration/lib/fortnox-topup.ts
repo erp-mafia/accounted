@@ -16,6 +16,11 @@
  * import came from a Fortnox SIE file and that are neither closed nor locked.
  * A new voucher dated behind the company lock date is refused by the plan.
  *
+ * What the books received from Fortnox and reversed since, by storno or by
+ * undoing its import, is left out of the night's file and never added again
+ * (withoutSourceVouchers): the append matches posted entries only, so it
+ * would come back every night after every storno.
+ *
  * Stopping. A refusal answers the same the next night: a changed voucher, an
  * #IB that differs, a new voucher behind the lock date, an unbalanced or
  * unmapped new voucher, no open year left, a connection Fortnox refuses or one
@@ -63,6 +68,7 @@ import {
   SIEJobValidationError,
   submitSIEJob,
 } from '@/lib/import/sie-jobs'
+import type { ParsedSIEFile, SIEVoucher } from '@/lib/import/types'
 import { FiscalYearSelectionError, fetchProviderSieFiles, type ProviderSieFile } from './sie-fetcher'
 
 const log = createLogger('extensions/arcim-migration/fortnox-topup')
@@ -120,6 +126,12 @@ export interface FortnoxTopupRun {
   added: number
   /** Vouchers left out for looking like posted ones (same date and lines, no matching number). */
   skippedDuplicates: number
+  /**
+   * Vouchers left out because the books received them from Fortnox before
+   * and they have been reversed here since (by storno, or by undoing their
+   * import): the top-up never brings back what was taken out.
+   */
+  skippedReversed: number
   /** Failed nights in a row, this one included. */
   failures: number
   reason: FortnoxTopupReason | null
@@ -201,9 +213,22 @@ function plainStatus(error: unknown): number | null {
 }
 
 /**
+ * The database's refusals of an import that the next night meets again: the
+ * year or the lock date, an import or a correction in the way, a member
+ * without write access, a year or an input it does not take (jobDatabaseError
+ * names them). Any other code (a statement timeout, a dropped connection, a
+ * deadlock) is a night that failed.
+ */
+const REFUSING_DATABASE_CODES: ReadonlySet<string> = new Set([
+  'SIE_IMPORT_PERIOD_LOCKED', 'SIE_IMPORT_PERIOD_HAS_OPENING_BALANCE', 'SIE_IMPORT_PERIOD_ALREADY_IMPORTED',
+  'SIE_IMPORT_APPEND_NO_BASE', 'SIE_IMPORT_HAS_LIVE_APPEND', 'SIE_IMPORT_HAS_LIVE_CORRECTION',
+  'SIE_IMPORT_LEGACY_REVIEW_REQUIRED', 'DB_PERMISSION_DENIED', 'NOT_FOUND', 'VALIDATION_ERROR', 'CONFLICT',
+])
+
+/**
  * Whether a run's error stops the top-up, and the reason the connection
- * shows. A stop is an answer that will be the same tomorrow; everything else
- * is tried again the next night.
+ * shows. A stop is a refusal that will be the same tomorrow; everything else
+ * is a night that failed, tried again the next night.
  */
 export function fortnoxTopupErrorVerdict(error: unknown): { stop: boolean; reason: FortnoxTopupReason } {
   if (error instanceof TopupStop) return { stop: true, reason: error.reason }
@@ -212,10 +237,12 @@ export function fortnoxTopupErrorVerdict(error: unknown): { stop: boolean; reaso
   // closed period or the lock date), or a file the import does not take.
   if (error instanceof SIEJobValidationError) return { stop: true, reason: errorReason(error.code, error) }
   if (error instanceof SIEJobDatabaseError) {
-    // Another import of the company still going, or a lock that was not free:
-    // both free themselves. Every other database refusal is the books' state.
-    const passing = error.code === 'SIE_IMPORT_UNFINISHED' || error.code === 'TRANSIENT_ERROR'
-    return { stop: !passing, reason: errorReason(error.code ?? 'CONFLICT', error) }
+    if (error.code && REFUSING_DATABASE_CODES.has(error.code)) return { stop: true, reason: errorReason(error.code, error) }
+    // Another import of the company still going, a lock that was not free.
+    if (error.code === 'SIE_IMPORT_UNFINISHED' || error.code === 'TRANSIENT_ERROR') {
+      return { stop: false, reason: errorReason(error.code, error) }
+    }
+    return { stop: false, reason: OWN_REASONS.unexpected }
   }
   if (error instanceof FiscalYearSelectionError) {
     const years = error.unknownYears.join(', ')
@@ -228,12 +255,14 @@ export function fortnoxTopupErrorVerdict(error: unknown): { stop: boolean; reaso
       },
     }
   }
-  // resolveConsent's own answers: the connection is gone or unfinished, or
-  // holds no token.
+  // resolveConsent's own answers: no connection, or no token. It answers a
+  // read that failed the same way, so they are tried again and stop on the
+  // third night.
   const status = plainStatus(error)
-  if (status === 401) return { stop: true, reason: registryReason('PROVIDER_AUTH_EXPIRED') }
-  if (status !== null && status >= 400 && status < 500) return { stop: true, reason: registryReason('PROVIDER_CONSENT_NOT_FOUND') }
-  // A dead token, a closed register, a missing licence: Fortnox refused.
+  if (status === 401) return { stop: false, reason: registryReason('PROVIDER_AUTH_EXPIRED') }
+  if (status !== null && status >= 400 && status < 500) return { stop: false, reason: registryReason('PROVIDER_CONSENT_NOT_FOUND') }
+  // A dead token (also after the one replacement), a closed register, a
+  // missing licence: Fortnox refused.
   const providerCode = classifyProviderError(error)
   if (providerCode && isProviderRefusal(error)) return { stop: true, reason: registryReason(providerCode) }
   if (error instanceof ExecutionBudgetExceeded) return { stop: false, reason: OWN_REASONS.unfinished }
@@ -263,6 +292,7 @@ function parseRun(value: unknown): FortnoxTopupRun | null {
     outcome: v.outcome,
     added: count(v.added),
     skippedDuplicates: count(v.skippedDuplicates),
+    skippedReversed: count(v.skippedReversed),
     failures: count(v.failures),
     reason,
     ...(typeof v.importId === 'string' ? { importId: v.importId } : {}),
@@ -288,20 +318,36 @@ function appendCounts(job: SIEJob): { added: number; skippedDuplicates: number }
   return { added: number(append?.added ?? result.journalEntriesCreated), skippedDuplicates: number(append?.possibleDuplicatesSkipped) }
 }
 
-/** A run that left an import going, once that import has ended. */
-function settledRun(run: FortnoxTopupRun, job: SIEJob): FortnoxTopupRun {
-  if (job.job_state === 'failed') return { ...run, outcome: 'failed', reason: OWN_REASONS.importFailed }
+/**
+ * A run as it ended, once what it left behind has: an import it left going
+ * reads as what that import came to, and a run the platform ended before it
+ * finished (claimed long ago, never finished) is a failed night. A run still
+ * going, or an import whose state cannot be read now, is left as it is.
+ * `failures` of a run left going is the count before it, so a night whose
+ * import fails later still counts.
+ */
+async function settledRun(supabase: SupabaseClient, companyId: string, run: FortnoxTopupRun, now: number): Promise<FortnoxTopupRun> {
+  if (run.outcome !== 'running') return run
+  if (run.finishedAt === null) {
+    return now - Date.parse(run.startedAt) >= CLAIM_STALE_MS
+      ? { ...run, outcome: 'failed', failures: run.failures + 1, reason: OWN_REASONS.unfinished }
+      : run
+  }
+  if (!run.importId) return run
+  const job = await getSIEJob(supabase, companyId, run.importId).catch((error: unknown) => {
+    // Read again next time; until then the run shows as going.
+    log.warn('fortnox top-up import state unreadable', { companyId, reason: error instanceof Error ? error.message : String(error) })
+    return null
+  })
+  if (!job || isSIEJobUnresolved(job.job_state)) return run
+  if (job.job_state === 'failed') return { ...run, outcome: 'failed', failures: run.failures + 1, reason: OWN_REASONS.importFailed }
   const counts = appendCounts(job)
   const added = run.added + counts.added
-  return { ...run, outcome: added > 0 ? 'added' : 'nothing_new', added,
+  return { ...run, outcome: added > 0 ? 'added' : 'nothing_new', added, failures: 0,
     skippedDuplicates: run.skippedDuplicates + counts.skippedDuplicates }
 }
 
-/**
- * The connection's top-up for the status route, or null when it was never
- * turned on. A run that ended with its import still going reads that import:
- * it has most often finished since.
- */
+/** The connection's top-up for the status route, or null when it was never turned on. */
 export async function readFortnoxTopup(
   settings: ExtensionSettings,
   supabase: SupabaseClient,
@@ -311,20 +357,28 @@ export async function readFortnoxTopup(
     parseSetting(await settings.get(FORTNOX_TOPUP_KEY)),
     parseRun(await settings.get(FORTNOX_TOPUP_RUN_KEY)),
   )
-  const run = view?.lastRun
-  if (view && run?.outcome === 'running' && run.finishedAt && run.importId) {
-    const job = await getSIEJob(supabase, companyId, run.importId)
-    if (job && !isSIEJobUnresolved(job.job_state)) view.lastRun = settledRun(run, job)
-  }
+  if (view?.lastRun) view.lastRun = await settledRun(supabase, companyId, view.lastRun, Date.now())
   return view
 }
 
-/** The failed nights in a row before this one: a run the platform ended counts as one. */
+/** The failed nights in a row before this one, under the same choice; `previous` is settled. */
 function priorFailures(setting: FortnoxTopupSetting, previous: FortnoxTopupRun | null): number {
   if (!previous || previous.settingChangedAt !== setting.changedAt) return 0
-  if (previous.outcome === 'failed') return previous.failures
-  if (previous.outcome === 'running' && previous.finishedAt === null) return previous.failures + 1
-  return 0
+  return previous.outcome === 'failed' ? previous.failures : 0
+}
+
+/**
+ * Whether the setting is still the choice a run was started under: on, for
+ * the same connection, and not changed since. Read again right before the
+ * run is claimed and before each year is imported, so a member who switches
+ * it off while the night's run waits or goes on stops what is not booked yet.
+ */
+async function stillOn(supabase: SupabaseClient, companyId: string, setting: FortnoxTopupSetting): Promise<boolean> {
+  const { data, error } = await supabase.from('extension_data').select('value').eq('company_id', companyId)
+    .eq('extension_id', EXTENSION_ID).eq('key', FORTNOX_TOPUP_KEY).maybeSingle()
+  if (error) throw new Error(`fortnox top-up setting read failed: ${error.message}`)
+  const current = parseSetting((data as { value?: unknown } | null)?.value)
+  return !!current && current.enabled && current.changedAt === setting.changedAt && current.consentId === setting.consentId
 }
 
 function isDue(run: FortnoxTopupRun | null, now: number): boolean {
@@ -347,7 +401,8 @@ function sourceSelectionYear(year: SIEAppendYear): number {
 async function fetchFortnoxYears(companyId: string, consentId: string, years: number[]): Promise<ProviderSieFile[]> {
   const attempt = async (accessToken: string, providerCompanyId: string | undefined) => {
     const fetched = await fetchProviderSieFiles('fortnox', accessToken, providerCompanyId, { years })
-    const failure = fetched.failedYears[0]
+    // A refused token first: it is the failure a new token can cure.
+    const failure = fetched.failedYears.find((year) => year.code === 'PROVIDER_AUTH_EXPIRED') ?? fetched.failedYears[0]
     if (failure) {
       throw failure.code === 'PROVIDER_SIE_FETCH_FAILED'
         ? new Error(`Fortnox SIE export failed for ${failure.year}: ${failure.error}`)
@@ -409,11 +464,97 @@ async function settleImport(worker: Worker, companyId: string, importId: string,
     // The SIE worker cron carries the job on; the reads below see where it got.
     log.warn('fortnox top-up import not run here', { companyId, importId, reason: error instanceof Error ? error.message : String(error) })
   })
+  let job: SIEJob | null = null
   for (;;) {
-    const job = await getSIEJob(supabase, companyId, importId)
-    if (!job || !isSIEJobUnresolved(job.job_state) || now() + JOB_POLL_MS >= until) return job
+    try {
+      job = await getSIEJob(supabase, companyId, importId)
+      if (job && !isSIEJobUnresolved(job.job_state)) return job
+    } catch (error) {
+      // A read that failed says nothing about the import: read again, and
+      // past the run's time the connection reads it from the job.
+      log.warn('fortnox top-up import state unreadable', { companyId, importId, reason: error instanceof Error ? error.message : String(error) })
+    }
+    if (now() + JOB_POLL_MS >= until) return job
     await sleep(JOB_POLL_MS)
   }
+}
+
+const sourceRef = (series: string, number: number) => `${series}\u0000${number}`
+
+/**
+ * The vouchers a year received from Fortnox and has reversed since, by
+ * storno or by undoing their import, that no posted entry of a Fortnox import
+ * holds. The append matches source numbers among posted entries only (so an
+ * undone append can be made again by hand), so the night would book each of
+ * them again, and again after every storno of it.
+ */
+async function reversedFortnoxVouchers(supabase: SupabaseClient, companyId: string, year: SIEAppendYear): Promise<Set<string>> {
+  const batches = await fetchAllRows<{ id: string }>(({ from, to }) => supabase.from('sie_imports').select('id')
+    .eq('company_id', companyId).eq('fiscal_period_id', year.fiscalPeriodId)
+    .eq('migration_documentation->>sourceSystem', FORTNOX_SIE_PROGRAM).order('id').range(from, to))
+  if (!batches.length) return new Set()
+  const entries = (status: 'reversed' | 'posted', numbers?: number[]) =>
+    fetchAllRows<{ source_voucher_series: string | null; source_voucher_number: number }>(({ from, to }) => {
+      let query = supabase.from('journal_entries').select('source_voucher_series,source_voucher_number')
+        .eq('company_id', companyId).eq('fiscal_period_id', year.fiscalPeriodId).eq('status', status)
+        .in('import_batch_id', batches.map((batch) => batch.id)).not('source_voucher_number', 'is', null)
+      if (numbers) query = query.in('source_voucher_number', numbers)
+      return query.order('id').range(from, to)
+    })
+  const reversed = await entries('reversed')
+  if (!reversed.length) return new Set()
+  const posted = new Set((await entries('posted', [...new Set(reversed.map((e) => e.source_voucher_number))]))
+    .map((e) => sourceRef(e.source_voucher_series ?? '', e.source_voucher_number)))
+  return new Set(reversed.map((e) => sourceRef(e.source_voucher_series ?? '', e.source_voucher_number))
+    .filter((ref) => !posted.has(ref)))
+}
+
+/** A #VER line's series and number as fields 1 and 2, quoted or not; null for any other line. */
+function verLineRef(line: string): string | null {
+  const fields = line.trim().match(/"(?:[^"\\]|\\.)*"|\S+/g) ?? []
+  if (fields[0]?.toUpperCase() !== '#VER' || fields.length < 3) return null
+  const unquote = (field: string) => field.length >= 2 && field.startsWith('"') && field.endsWith('"') ? field.slice(1, -1) : field
+  const number = unquote(fields[2])
+  return /^\d+$/.test(number) ? sourceRef(unquote(fields[1]), Number(number)) : null
+}
+
+/**
+ * The file without the vouchers `drop` names: each such #VER line and its
+ * block, up to the line that closes it. Read back by the parser, which must
+ * find exactly the other vouchers, or the file is not used: a voucher the
+ * books reversed is never booked again because a file was laid out in a way
+ * this did not expect.
+ */
+export function withoutSourceVouchers(raw: string, parsed: ParsedSIEFile, drop: ReadonlySet<string>, yearName: string):
+  { raw: string; parsed: ParsedSIEFile; dropped: number } {
+  const dropped = parsed.vouchers.filter((v) => !v.numberOmitted && drop.has(sourceRef(v.series, v.number)))
+  if (!dropped.length) return { raw, parsed, dropped: 0 }
+  const kept: string[] = []
+  let skipping = false
+  for (const line of raw.split(/(?<=\n)/)) {
+    if (skipping) {
+      if (line.trim() === '}') skipping = false
+      continue
+    }
+    const ref = verLineRef(line)
+    if (ref && drop.has(ref)) {
+      skipping = true
+      continue
+    }
+    kept.push(line)
+  }
+  const text = kept.join('')
+  const reread = parseSIEFile(text)
+  const left = (v: SIEVoucher) => !(!v.numberOmitted && drop.has(sourceRef(v.series, v.number)))
+  if (reread.vouchers.length !== parsed.vouchers.length - dropped.length || !reread.vouchers.every(left)) {
+    const refs = dropped.map((v) => `${v.series}${v.number}`).join(', ')
+    throw new TopupStop({
+      code: 'FORTNOX_TOPUP_REVERSED_NOT_SKIPPED',
+      message: `Verifikationerna ${refs} i ${yearName} hämtades från Fortnox förut och är makulerade här, men kunde inte lämnas utanför Fortnox fil. Hämtningen stoppades så att de inte bokförs igen.`,
+      message_en: `Vouchers ${refs} in ${yearName} were fetched from Fortnox before and are reversed here, but could not be left out of the Fortnox file. The fetch was stopped so that they are not booked again.`,
+    })
+  }
+  return { raw: text, parsed: reread, dropped: dropped.length }
 }
 
 interface Candidate {
@@ -430,9 +571,10 @@ async function topUpCompany(worker: Worker, candidate: Candidate, startedAt: str
   const until = Math.min(worker.hardDeadline, now() + COMPANY_BUDGET_MS)
   let added = 0
   let skippedDuplicates = 0
+  let skippedReversed = 0
   const end = (outcome: FortnoxTopupOutcome, reason: FortnoxTopupReason | null, extra: Partial<FortnoxTopupRun> = {}): FortnoxTopupRun =>
-    ({ settingChangedAt: setting.changedAt, startedAt, finishedAt: iso(now()), outcome, added, skippedDuplicates, failures: 0,
-      reason, ...extra })
+    ({ settingChangedAt: setting.changedAt, startedAt, finishedAt: iso(now()), outcome, added, skippedDuplicates, skippedReversed,
+      failures: 0, reason, ...extra })
   // Tried again the next night, until the third failed night in a row.
   const fail = (reason: FortnoxTopupReason): FortnoxTopupRun => {
     const failures = failuresBefore + 1
@@ -451,7 +593,11 @@ async function topUpCompany(worker: Worker, candidate: Candidate, startedAt: str
     const files = fetched.map((file) => ({ raw: file.rawContent, parsed: parseSIEFile(file.rawContent) }))
     const stored = await loadMappings(supabase, companyId)
     for (const year of years) {
-      const file = fileForYear(year, files)
+      const found = fileForYear(year, files)
+      const file = withoutSourceVouchers(found.raw, found.parsed, await reversedFortnoxVouchers(supabase, companyId, year), year.name)
+      skippedReversed += file.dropped
+      // Switched off or changed since the run began: nothing more is booked.
+      if (!(await stillOn(supabase, companyId, setting))) return end(added > 0 ? 'added' : 'nothing_new', null)
       let job: SIEJob
       try {
         job = await submitSIEJob(supabase, companyId, setting.changedBy, file.raw,
@@ -467,7 +613,11 @@ async function topUpCompany(worker: Worker, candidate: Candidate, startedAt: str
         continue
       }
       const settled = await settleImport(worker, companyId, job.id, until)
-      if (!settled || isSIEJobUnresolved(settled.job_state)) return end('running', null, { importId: job.id })
+      // Left to the SIE worker: the connection reads what it comes to, and an
+      // import that fails then counts on top of the nights before.
+      if (!settled || isSIEJobUnresolved(settled.job_state)) {
+        return end('running', null, { importId: job.id, failures: failuresBefore })
+      }
       if (settled.job_state === 'failed') {
         log.warn('fortnox top-up import failed', { companyId, importId: job.id, reason: settled.error_message })
         return fail(OWN_REASONS.importFailed)
@@ -585,17 +735,21 @@ export async function runFortnoxTopups(options: FortnoxTopupSweepOptions): Promi
   for (const candidate of candidates) {
     if (now() >= worker.deadline) break
     try {
+      // Switched off or changed since the list was read: not tonight.
+      if (!(await stillOn(supabase, candidate.companyId, candidate.setting))) continue
+      const previous = candidate.run ? await settledRun(supabase, candidate.companyId, candidate.run, now()) : null
+      const failuresBefore = priorFailures(candidate.setting, previous)
       const startedAt = iso(now())
       const settingChangedAt = candidate.setting.changedAt
-      const failuresBefore = priorFailures(candidate.setting, candidate.run)
       const claimedId = await claimRun(supabase, candidate, { settingChangedAt, startedAt, finishedAt: null, outcome: 'running',
-        added: 0, skippedDuplicates: 0, failures: failuresBefore, reason: null })
+        added: 0, skippedDuplicates: 0, skippedReversed: 0, failures: failuresBefore, reason: null })
       if (!claimedId) continue
       result.ran++
       const run: FortnoxTopupRun = failuresBefore >= FORTNOX_TOPUP_MAX_FAILURES
-        // The platform ended the last runs before they finished.
+        // The last night failed after it ended (the platform ended it, or the
+        // import it left going failed), and it was the third in a row.
         ? { settingChangedAt, startedAt, finishedAt: iso(now()), outcome: 'stopped', added: 0, skippedDuplicates: 0,
-            failures: failuresBefore, reason: repeated(OWN_REASONS.unfinished) }
+            skippedReversed: 0, failures: failuresBefore, reason: repeated(previous?.reason ?? OWN_REASONS.unfinished) }
         : await topUpCompany(worker, candidate, startedAt, failuresBefore)
       const { error } = await supabase.from('extension_data').update({ value: run }).eq('id', claimedId)
       if (error) throw new Error(`fortnox top-up result not saved: ${error.message}`)

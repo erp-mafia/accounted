@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { Switch } from '@/components/ui/switch'
 import { useToast } from '@/components/ui/use-toast'
@@ -11,13 +11,21 @@ import type { FortnoxTopupView } from '@/extensions/general/arcim-migration/lib/
 /**
  * The nightly top-up's switch on a Fortnox connection, and what its latest
  * run did (lib/fortnox-topup.ts): vouchers added, nothing new, a night that
- * failed and is tried again, or why it stopped.
+ * failed and is tried again, or why it stopped. After a change the page reads
+ * the connections again (`onChanged`): the key's line depends on it too.
  */
-export function FortnoxTopupSwitch({ consentId, initial }: { consentId: string; initial: FortnoxTopupView | null }) {
+export function FortnoxTopupSwitch({ consentId, initial, onChanged }: {
+  consentId: string
+  initial: FortnoxTopupView | null
+  onChanged?: () => void
+}) {
   const t = useTranslations('extensions')
   const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
-  const [view, setView] = useState<FortnoxTopupView | null>(initial?.consentId === consentId ? initial : null)
+  const own = (value: FortnoxTopupView | null) => (value?.consentId === consentId ? value : null)
+  const [view, setView] = useState<FortnoxTopupView | null>(own(initial))
+  // The connections read again: the server's answer is the one shown.
+  useEffect(() => setView(initial?.consentId === consentId ? initial : null), [initial, consentId])
   const [saving, setSaving] = useState(false)
   const enabled = view?.enabled ?? false
   const run = view?.lastRun ?? null
@@ -40,7 +48,8 @@ export function FortnoxTopupSwitch({ consentId, initial }: { consentId: string; 
         })
         return
       }
-      setView((body as { data: FortnoxTopupView | null }).data)
+      setView(own((body as { data: FortnoxTopupView | null }).data))
+      onChanged?.()
     } catch (error) {
       toast({ title: t('ext_arcim_topup_save_failed'), description: getErrorMessage(error, { locale }), variant: 'destructive' })
     } finally {
@@ -50,7 +59,10 @@ export function FortnoxTopupSwitch({ consentId, initial }: { consentId: string; 
 
   const reason = run?.reason ? getErrorMessage(run.reason, { locale }) : ''
   const date = run ? formatDate(run.finishedAt ?? run.startedAt) : ''
-  const duplicates = run && run.skippedDuplicates > 0 ? t('ext_arcim_topup_duplicates', { count: run.skippedDuplicates }) : null
+  const left = run
+    ? [run.skippedDuplicates > 0 ? t('ext_arcim_topup_duplicates', { count: run.skippedDuplicates }) : null,
+        run.skippedReversed > 0 ? t('ext_arcim_topup_reversed', { count: run.skippedReversed }) : null]
+    : []
   let line: string
   if (!enabled && run?.outcome === 'stopped') {
     line = [t('ext_arcim_topup_stopped', { date, reason }), run.added > 0 ? t('ext_arcim_topup_stopped_added', { count: run.added }) : null]
@@ -66,7 +78,7 @@ export function FortnoxTopupSwitch({ consentId, initial }: { consentId: string; 
   } else {
     line = [run.outcome === 'added'
       ? t('ext_arcim_topup_last_added', { date, count: run.added })
-      : t('ext_arcim_topup_last_nothing_new', { date }), duplicates].filter(Boolean).join(' ')
+      : t('ext_arcim_topup_last_nothing_new', { date }), ...left].filter(Boolean).join(' ')
   }
 
   return (

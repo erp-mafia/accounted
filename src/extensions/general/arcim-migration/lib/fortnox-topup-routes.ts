@@ -33,25 +33,29 @@ export const fortnoxTopupRoutes: ApiRouteDefinition[] = [
       if (!body.success) return body.response
       const { consentId, enabled } = body.data
       try {
-        const { data: consent, error } = await ctx.supabase.from('provider_consents').select('id,provider,status')
-          .eq('id', consentId).eq('company_id', ctx.companyId).maybeSingle()
-        if (error) throw new Error(error.message)
-        const row = consent as { provider: string | null; status: number | null } | null
-        if (!row || row.status !== 1) {
-          return errorResponseFromCode('PROVIDER_CONSENT_NOT_FOUND', log, { requestId: ctx.requestId, details: { consentId } })
-        }
-        if (row.provider !== 'fortnox') {
-          return errorResponseFromCode('VALIDATION_ERROR', log, {
-            requestId: ctx.requestId,
-            messageSv: 'Nattlig hämtning av nya verifikationer finns bara för en Fortnox-anslutning.',
-            messageEn: 'The nightly fetch of new vouchers is only available for a Fortnox connection.',
-            details: { field: 'consentId', reason: 'not_fortnox' },
-          })
-        }
-        // Refused at once rather than at night: a top-up with no year to add
-        // to would only stop.
-        if (enabled && (await appendableSIEYears(ctx.supabase, ctx.companyId, FORTNOX_SIE_PROGRAM)).length === 0) {
-          return errorResponseFromCode('PROVIDER_TOPUP_NO_OPEN_YEAR', log, { requestId: ctx.requestId })
+        // Turning it on needs a working Fortnox connection and a year to add
+        // to; turning it off needs nothing, also when the connection is gone.
+        if (enabled) {
+          const { data: consent, error } = await ctx.supabase.from('provider_consents').select('id,provider,status')
+            .eq('id', consentId).eq('company_id', ctx.companyId).maybeSingle()
+          if (error) throw new Error(error.message)
+          const row = consent as { provider: string | null; status: number | null } | null
+          if (!row || row.status !== 1) {
+            return errorResponseFromCode('PROVIDER_CONSENT_NOT_FOUND', log, { requestId: ctx.requestId, details: { consentId } })
+          }
+          if (row.provider !== 'fortnox') {
+            return errorResponseFromCode('VALIDATION_ERROR', log, {
+              requestId: ctx.requestId,
+              messageSv: 'Nattlig hämtning av nya verifikationer finns bara för en Fortnox-anslutning.',
+              messageEn: 'The nightly fetch of new vouchers is only available for a Fortnox connection.',
+              details: { field: 'consentId', reason: 'not_fortnox' },
+            })
+          }
+          // Refused at once rather than at night: a top-up with no year to
+          // add to would only stop.
+          if ((await appendableSIEYears(ctx.supabase, ctx.companyId, FORTNOX_SIE_PROGRAM)).length === 0) {
+            return errorResponseFromCode('PROVIDER_TOPUP_NO_OPEN_YEAR', log, { requestId: ctx.requestId })
+          }
         }
         const setting: FortnoxTopupSetting = { enabled, consentId, changedBy: ctx.userId, changedAt: new Date().toISOString() }
         await ctx.settings.set(FORTNOX_TOPUP_KEY, setting)

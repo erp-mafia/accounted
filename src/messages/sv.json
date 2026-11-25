@@ -10275,6 +10275,7 @@
     "ext_arcim_topup_stopped": "Stoppad {date}: {reason}",
     "ext_arcim_topup_stopped_added": "{count, plural, one {# ny verifikation hann läggas till innan.} other {# nya verifikationer hann läggas till innan.}}",
     "ext_arcim_topup_duplicates": "{count, plural, one {# verifikation liknar en bokförd och lades inte till.} other {# verifikationer liknar bokförda och lades inte till.}}",
+    "ext_arcim_topup_reversed": "{count, plural, one {# verifikation som hämtats förut och makulerats här lades inte till igen.} other {# verifikationer som hämtats förut och makulerats här lades inte till igen.}}",
     "ext_arcim_topup_save_failed": "Inställningen kunde inte sparas.",
     "ext_arcim_documents_title_standalone": "Underlag från {provider}",
     "ext_arcim_documents_standalone_lede": "Kvitton och fakturor från {provider} läggs på verifikaten du redan har importerat. Bokföringen ändras inte.",

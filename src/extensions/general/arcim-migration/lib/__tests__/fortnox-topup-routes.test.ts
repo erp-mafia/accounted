@@ -72,7 +72,7 @@ describe('PUT /fortnox-topup', () => {
     expect(settings.set).not.toHaveBeenCalled()
   })
 
-  it('answers 404 for a connection the company does not have, or one not accepted', async () => {
+  it('answers 404 to turning it on for a connection the company does not have, or one not accepted', async () => {
     for (const consent of [null, { id: CONSENT, provider: 'fortnox', status: 0 }]) {
       const { ctx, settings, findCalls } = context(consent)
       const { status, body } = await parseJsonResponse<{ error: { code: string } }>(await handler(put({ consentId: CONSENT, enabled: true }), ctx))
@@ -119,6 +119,14 @@ describe('PUT /fortnox-topup', () => {
     expect(status).toBe(200)
     expect(appendableSIEYears).not.toHaveBeenCalled()
     expect(body.data).toEqual({ consentId: CONSENT, enabled: false, lastRun: null })
+  })
+
+  it('turns it off also when the connection is gone', async () => {
+    const { ctx, stored, tables } = context(null)
+    const { status } = await parseJsonResponse(await handler(put({ consentId: CONSENT, enabled: false }), ctx))
+    expect(status).toBe(200)
+    expect(tables()).not.toContain('provider_consents')
+    expect(stored[FORTNOX_TOPUP_KEY]).toMatchObject({ enabled: false, consentId: CONSENT, changedBy: 'user-1' })
   })
 })
 

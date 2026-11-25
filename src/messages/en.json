@@ -10275,6 +10275,7 @@
     "ext_arcim_topup_stopped": "Stopped {date}: {reason}",
     "ext_arcim_topup_stopped_added": "{count, plural, one {# new voucher was added before that.} other {# new vouchers were added before that.}}",
     "ext_arcim_topup_duplicates": "{count, plural, one {# voucher matches a posted one and was not added.} other {# vouchers match posted ones and were not added.}}",
+    "ext_arcim_topup_reversed": "{count, plural, one {# voucher fetched before and reversed here was not added again.} other {# vouchers fetched before and reversed here were not added again.}}",
     "ext_arcim_topup_save_failed": "The setting could not be saved.",
     "ext_arcim_documents_title_standalone": "Documents from {provider}",
     "ext_arcim_documents_standalone_lede": "Receipts and invoices from {provider} are attached to the vouchers you already imported. Your bookkeeping does not change.",
