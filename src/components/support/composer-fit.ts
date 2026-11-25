@@ -1,7 +1,5 @@
 'use client'
 
-import { useSyncExternalStore, type CSSProperties } from 'react'
-
 /**
  * Sizing for the support dialog's message box (PH 216).
  *
@@ -13,8 +11,9 @@ import { useSyncExternalStore, type CSSProperties } from 'react'
  * does not shrink for the keyboard, only the visual viewport does.
  *
  * Now the box grows with its text as far as the dialog's own max height
- * allows, then scrolls inside, and the dialog is told the visual viewport, so
- * it sits and ends inside what is actually visible.
+ * allows, then scrolls inside, and the dialog is told the visual viewport
+ * (components/ui/visual-viewport.ts), so it sits and ends inside what is
+ * actually visible.
  *
  * Nothing here knows where a dialog sits or how tall it may be: the shared
  * DialogContent owns that (components/ui/dialog.tsx). This module once kept
@@ -22,11 +21,6 @@ import { useSyncExternalStore, type CSSProperties } from 'react'
  * when dialogs became top anchored the copy put the dialog's top edge at the
  * middle of the screen and its lower half below it (crm#1973).
  */
-
-export interface ViewportBox {
-  height: number
-  offsetTop: number
-}
 
 export interface TextareaHeightInput {
   /** Height that shows every line: scrollHeight plus the border. */
@@ -80,68 +74,14 @@ export function fitTextarea(el: FittableTextarea, panel: FitPanel | null, dialog
   return height
 }
 
-let cachedBox: ViewportBox | null = null
-
-function readViewport(): ViewportBox | null {
-  const vv = typeof window === 'undefined' ? null : window.visualViewport
-  if (!vv) return null
-  if (!cachedBox || cachedBox.height !== vv.height || cachedBox.offsetTop !== vv.offsetTop) {
-    cachedBox = { height: vv.height, offsetTop: vv.offsetTop }
-  }
-  return cachedBox
-}
-
-function subscribeViewport(onChange: () => void): () => void {
-  const vv = window.visualViewport
-  if (!vv) return () => {}
-  vv.addEventListener('resize', onChange)
-  vv.addEventListener('scroll', onChange)
-  return () => {
-    vv.removeEventListener('resize', onChange)
-    vv.removeEventListener('scroll', onChange)
-  }
-}
-
-const noSubscription = () => () => {}
-const noViewport = () => null
-
-/**
- * The visual viewport (what is actually visible: the keyboard and a pinch
- * zoom shrink it) while `active`, else null. Inactive subscribes to nothing,
- * so a closed dialog's trigger does not re-render on every viewport change.
- */
-export function useVisualViewport(active: boolean): ViewportBox | null {
-  return useSyncExternalStore(
-    active ? subscribeViewport : noSubscription,
-    active ? readViewport : noViewport,
-    noViewport,
-  )
-}
-
 /**
  * The tallest the dialog may be right now, read from the dialog itself: its
  * max height is the shared DialogContent's to decide, and it already follows
- * the visual viewport (dialogViewportStyle). `fallback` answers before the
- * panel is mounted or when it has no max height.
+ * the visual viewport (dialogViewportStyle in components/ui/visual-viewport.ts).
+ * `fallback` answers before the panel is mounted or when it has no max height.
  */
 export function dialogMaxHeight(panel: Element | null, fallback: number): number {
   if (!panel) return fallback
   const max = parseFloat(getComputedStyle(panel).maxHeight)
   return Number.isFinite(max) ? max : fallback
-}
-
-/**
- * The visual viewport, handed to the shared DialogContent as the two custom
- * properties its own placement reads (components/ui/dialog.tsx): the dialog
- * keeps its normal top anchor, measured from the top of what is visible, and
- * its max height counts from the visible height. No `top` and no `maxHeight`
- * of our own. With nothing offset or shrunk the result equals the dialog's
- * default placement.
- */
-export function dialogViewportStyle(box: ViewportBox | null): CSSProperties | undefined {
-  if (!box) return undefined
-  return {
-    '--dialog-viewport-top': `${box.offsetTop}px`,
-    '--dialog-viewport-height': `${box.height}px`,
-  } as CSSProperties
 }

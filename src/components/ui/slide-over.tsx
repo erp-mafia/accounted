@@ -7,6 +7,7 @@ import { XMarkIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { useDashShellInert } from './dialog'
+import { useKeyboardFit } from './visual-viewport'
 
 /**
  * Right slide-over for reviewing an object (UI-migration convention 13):
@@ -37,14 +38,33 @@ function DashShellInert() {
 const SlideOverContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content>
->(({ className, children, onInteractOutside, onFocusOutside, ...props }, ref) => (
+>((props, ref) => (
   <DialogPrimitive.Portal>
     {/* A non-modal root renders no Radix Overlay, so the veil is ours. z-40
         sits under the panel (z-50), the assistant trigger (z-[45]) and the
         sheet (z-[60]); a click on it is outside the panel and closes it. */}
     <div aria-hidden="true" className="fixed inset-0 z-40 bg-veil animate-in fade-in-0 duration-300" />
+    <SlideOverPanel ref={ref} {...props} />
+  </DialogPrimitive.Portal>
+))
+SlideOverContent.displayName = 'SlideOverContent'
+
+/**
+ * The drawer itself, mounted by the portal only while it is open, like
+ * DialogContent's panel: while an on-screen keyboard is up on a touch screen
+ * it is told the visible box (useKeyboardFit), so it ends above the keyboard,
+ * its body scrolls in what is left and the footer stays in sight.
+ */
+const SlideOverPanel = React.forwardRef<
+  React.ElementRef<typeof DialogPrimitive.Content>,
+  React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content>
+>(({ className, children, onInteractOutside, onFocusOutside, style, ...props }, ref) => {
+  const fit = useKeyboardFit(style)
+  return (
     <DialogPrimitive.Content
       ref={ref}
+      style={fit.style}
+      data-keyboard-fit={fit.fitted ? '' : undefined}
       // Companion overlays portaled to <body> (data-dialog-companion) and the
       // agent sheet and its trigger (data-agent-ui) count as inside, as in
       // DialogContent: writing to the assistant must never close a review.
@@ -69,7 +89,14 @@ const SlideOverContent = React.forwardRef<
         // 10px frame inset, flush with the page panel's edge (Stil v3: the
         // drawer is a floating layer on the panel's right side). Below md
         // the sheet covers the screen and is closable.
-        'fixed top-2.5 right-2.5 bottom-2.5 z-50 flex w-[480px] max-w-[calc(100vw-20px)] flex-col',
+        // top and max-h read the visible box useKeyboardFit hands over while
+        // an on-screen keyboard is up (--dialog-viewport-*, as in
+        // DialogContent): the drawer then starts 10px below the top of what
+        // is visible and ends 10px above the keyboard (with a max height,
+        // bottom is ignored). Unset, top is the plain 0.625rem (top-2.5) and
+        // the max height, with no fallback, is invalid and so none: the
+        // drawer spans top to bottom as before.
+        'fixed top-[calc(var(--dialog-viewport-top,0px)+0.625rem)] right-2.5 bottom-2.5 max-h-[calc(var(--dialog-viewport-height)-1.25rem)] z-50 flex w-[480px] max-w-[calc(100vw-20px)] flex-col',
         'md:right-[calc(10px+var(--agent-sheet-w,0px))] md:max-w-[calc(100vw-20px-var(--agent-sheet-w,0px))]',
         'rounded-xl bg-popover text-popover-foreground shadow-drawer',
         'data-[state=open]:animate-in data-[state=open]:slide-in-from-right-full data-[state=open]:fade-in-0 data-[state=open]:duration-300 data-[state=open]:ease-drawer',
@@ -81,9 +108,9 @@ const SlideOverContent = React.forwardRef<
       <DashShellInert />
       {children}
     </DialogPrimitive.Content>
-  </DialogPrimitive.Portal>
-))
-SlideOverContent.displayName = 'SlideOverContent'
+  )
+})
+SlideOverPanel.displayName = 'SlideOverPanel'
 
 /**
  * Header block (Stil v3): a 48px bar over a hairline with the optional
