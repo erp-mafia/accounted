@@ -39,7 +39,6 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { supplierInvoiceDisplayFigures } from '@/lib/bookkeeping/supplier-invoice-display-figures'
 import { dbError } from '@/lib/errors/db-error'
-import { normalizeCurrencyCode } from '@/lib/invoices/duplicate-guard-currency'
 import { normalizeOcrReference } from '@/lib/invariants/reference-number'
 import { equalOre } from '@/lib/money'
 import { loadOpenPaymentInstructions } from './lifecycle-stages'
@@ -174,20 +173,23 @@ interface DocumentAsked {
   currency: string | null | undefined
 }
 
+/** A currency code as the twin rule compares it: no code is SEK, and case does not count. */
+const currencyCode = (code: string | null | undefined): string => (code || 'SEK').trim().toUpperCase()
+
 /**
  * The same document again: an invoice that shares the reference and has the
- * same invoice date, the same currency (normalizeCurrencyCode: no code is
- * SEK) and the same amount to pay, to the öre. The amount is the one the
- * invoice list shows for it (supplierInvoiceDisplayFigures, öresavrundning
- * applied), which is the payable the editor shows for the one being
- * registered. There is no invoice period to weigh: an invoice has none of
- * its own, only its rows' periodisering.
+ * same invoice date, the same currency and the same amount to pay, to the
+ * öre. The amount is the one the invoice list shows for it
+ * (supplierInvoiceDisplayFigures, öresavrundning applied), which is the
+ * payable the editor shows for the one being registered. There is no
+ * invoice period to weigh: an invoice has none of its own, only its rows'
+ * periodisering.
  */
 function isSameDocumentAgain(row: InvoiceRow, asked: DocumentAsked): boolean {
-  const currency = normalizeCurrencyCode(row.currency)
+  const currency = currencyCode(row.currency)
   return (
     row.invoice_date === asked.invoiceDate &&
-    currency === normalizeCurrencyCode(asked.currency) &&
+    currency === currencyCode(asked.currency) &&
     equalOre(supplierInvoiceDisplayFigures({ total: Number(row.total), currency, ore_rounding: row.ore_rounding }).toPay, asked.total)
   )
 }
@@ -215,6 +217,12 @@ export async function lookupSupplierInvoiceDuplicates(
 ): Promise<SupplierInvoiceDuplicateLookup> {
   const number = (input.number ?? '').trim()
   const referenceDigits = normalizeOcrReference(input.reference)
+  // The digits in order with anything between them: every reference that is
+  // equal on its digits, and few others. Equality is decided below.
+  const referencePattern = `%${[...referenceDigits].join('%')}%`
+  // Under another number: the invoice with this number is the number's hit.
+  const sharesTheReference = (row: InvoiceRow) =>
+    normalizeOcrReference(row.payment_reference) === referenceDigits && (!number || row.supplier_invoice_number !== number)
 
   const [numberRes, referenceRes] = await Promise.all([
     number
@@ -234,9 +242,7 @@ export async function lookupSupplierInvoiceDuplicates(
           .eq('company_id', companyId)
           .eq('supplier_id', input.supplierId)
           .not('status', 'in', '(credited,reversed)')
-          // The digits in order with anything between them: every reference
-          // that is equal on its digits, and few others. Equality is decided below.
-          .like('payment_reference', `%${[...referenceDigits].join('%')}%`)
+          .like('payment_reference', referencePattern)
           .order('invoice_date', { ascending: false })
           .order('arrival_number', { ascending: false })
           .limit(REFERENCE_CANDIDATE_LIMIT)
@@ -246,19 +252,31 @@ export async function lookupSupplierInvoiceDuplicates(
   if (referenceRes.error) throw dbError(referenceRes.error)
 
   const numberRow = ((numberRes.data ?? []) as InvoiceRow[])[0] ?? null
-  // Under another number: the invoice with this number is the number's hit.
-  const sharing = ((referenceRes.data ?? []) as InvoiceRow[]).filter(
-    (row) =>
-      normalizeOcrReference(row.payment_reference) === referenceDigits &&
-      (!number || row.supplier_invoice_number !== number),
-  )
+  const candidates = (referenceRes.data ?? []) as InvoiceRow[]
+  const sharing = candidates.filter(sharesTheReference)
   const referenceRow = sharing[0] ?? null
   const asked: DocumentAsked | null =
     input.invoiceDate && typeof input.total === 'number' && Number.isFinite(input.total)
       ? { invoiceDate: input.invoiceDate, total: input.total, currency: input.currency }
       : null
   // The newest one, as the rows are read.
-  const twinRow = asked ? (sharing.find((row) => isSameDocumentAgain(row, asked)) ?? null) : null
+  let twinRow = asked ? (sharing.find((row) => isSameDocumentAgain(row, asked)) ?? null) : null
+  if (asked && !twinRow && candidates.length >= REFERENCE_CANDIDATE_LIMIT) {
+    // The candidates stop at the newest few hundred: a twin older than them
+    // is looked for on its own invoice date.
+    const { data, error } = await supabase
+      .from('supplier_invoices')
+      .select(INVOICE_COLUMNS)
+      .eq('company_id', companyId)
+      .eq('supplier_id', input.supplierId)
+      .not('status', 'in', '(credited,reversed)')
+      .eq('invoice_date', asked.invoiceDate)
+      .like('payment_reference', referencePattern)
+      .order('arrival_number', { ascending: false })
+      .limit(REFERENCE_CANDIDATE_LIMIT)
+    if (error) throw dbError(error)
+    twinRow = ((data ?? []) as InvoiceRow[]).find((row) => sharesTheReference(row) && isSameDocumentAgain(row, asked)) ?? null
+  }
 
   const namedRows = [numberRow, referenceRow, twinRow].filter((row): row is InvoiceRow => !!row)
   const voucherIds = namedRows.map(bookedOn).filter((id): id is string => !!id)
@@ -308,6 +326,9 @@ export async function lookupSupplierInvoiceDuplicates(
   }
 }
 
+/** Rows one number can name: the live holder and the credited originals it re-issues. */
+const HOLDER_CANDIDATE_LIMIT = 20
+
 /** The invoice a refused registration's number belongs to: details.existing of 409 SI_CREATE_DUPLICATE_INVOICE_NUMBER. */
 export interface DuplicateNumberHolder {
   id: string
@@ -340,18 +361,23 @@ export async function readDuplicateNumberHolder(
 ): Promise<DuplicateNumberHolder | null> {
   // A registration without a number cannot meet the index.
   if (!number) return null
-  const { data: existing } = await supabase
+  const { data } = await supabase
     .from('supplier_invoices')
     .select('id, supplier_invoice_number, status, paid_at, remaining_amount, registration_journal_entry_id, payment_journal_entry_id')
     .eq('company_id', companyId)
     .eq('supplier_id', supplierId)
     .eq('supplier_invoice_number', number)
-    .maybeSingle()
-  if (!existing) return null
-  const row = existing as Pick<
-    InvoiceRow,
-    'id' | 'supplier_invoice_number' | 'status' | 'paid_at' | 'remaining_amount' | 'registration_journal_entry_id' | 'payment_journal_entry_id'
+    .limit(HOLDER_CANDIDATE_LIMIT)
+  const rows = (data ?? []) as Array<
+    Pick<
+      InvoiceRow,
+      'id' | 'supplier_invoice_number' | 'status' | 'paid_at' | 'remaining_amount' | 'registration_journal_entry_id' | 'payment_journal_entry_id'
+    >
   >
+  // The index's holder is the live one: a credited original of a re-issue
+  // carries the same number, so one number can name several rows.
+  const row = rows.find((candidate) => candidate.status !== 'credited' && candidate.status !== 'reversed') ?? rows[0]
+  if (!row) return null
 
   let creditNoteId: string | null = null
   if (row.status === 'credited') {

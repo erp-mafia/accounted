@@ -46,7 +46,11 @@ export function createSupplierInvoiceRowsDb(tables: Record<string, Row[]>) {
       }
       return 0
     })
-    if (single) return { data: out[0] ?? null, error: null }
+    if (single) {
+      // PostgREST refuses maybeSingle() on more than one row (PGRST116) and answers no data.
+      if (out.length > 1) return { data: null, error: { code: 'PGRST116', message: 'JSON object requested, multiple (or no) rows returned' } }
+      return { data: out[0] ?? null, error: null }
+    }
     return { data: limit === null ? out : out.slice(0, limit), error: null }
   }
   const resolvers: Record<string, TableMockResolver> = {}

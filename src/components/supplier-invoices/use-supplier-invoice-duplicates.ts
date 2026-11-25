@@ -53,8 +53,10 @@ export function useSupplierInvoiceDuplicates(fields: DuplicateLookupFields) {
     const request = asked.current
     const found = await request.found
     if (!found) {
-      // Asked again next time.
+      // Asked again next time. An answer kept for another date or amount
+      // does not stand for these: no warning, as for any failed lookup.
       if (asked.current === request) asked.current = null
+      if (latestQuery.current === wanted) setAnswer(null)
     } else if (latestQuery.current === wanted) {
       setAnswer({ subject: wantedSubject, found })
     }

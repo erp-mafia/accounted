@@ -79,6 +79,12 @@ describe('duplicateLookupQuery', () => {
     )
   })
 
+  it('sends no date or amount in a currency no invoice is registered in: the route would refuse the whole lookup', () => {
+    expect(duplicateLookupQuery(fields({ payment_reference: '12345678', invoice_date: '2026-11-05', total: 2185, currency: 'PLN' }))).toBe(
+      'supplier_id=supplier-1&reference=12345678',
+    )
+  })
+
   it('sends no date or amount without a reference, or before the date is a date', () => {
     expect(duplicateLookupQuery(fields({ supplier_invoice_number: 'F-1', invoice_date: '2026-11-05', total: 2185 }))).toBe(
       'supplier_id=supplier-1&number=F-1',
@@ -542,6 +548,28 @@ describe('lookupSupplierInvoiceDuplicates: the same document again (a twin)', ()
     expect((await found).reference).toMatchObject({ count: 1, needs_acknowledgement: true, twin: { id: only.id }, invoice: { id: only.id } })
   })
 
+  it('finds a twin older than the newest candidates the reference read returns, on its own date', async () => {
+    // A supplier that has invoiced on the reference every day: 200 newer invoices fill the read.
+    const newer = Array.from({ length: 200 }, (_, i) =>
+      period(new Date(Date.UTC(2026, 0, 1 + i)).toISOString().slice(0, 10), { total: 999 }),
+    )
+    const older = period('2025-06-05', { status: 'paid', paid_at: '2025-06-20T10:00:00Z', remaining_amount: 0 })
+    const { db, found } = lookup({ supplier_invoices: [...newer, older] }, { reference: '5550001', invoiceDate: '2025-06-05', total: 2185 })
+
+    expect((await found).reference).toMatchObject({ count: 200, needs_acknowledgement: true, twin: { id: older.id, payment: { state: 'paid' } } })
+    expect(db.findCalls('supplier_invoices', 'eq')).toContainEqual(['invoice_date', '2025-06-05'])
+  })
+
+  it('asks no second read while the reference read holds every candidate', async () => {
+    const { db, found } = lookup(
+      { supplier_invoices: [period('2026-09-05'), period('2026-10-05')] },
+      { reference: '5550001', invoiceDate: '2026-12-05', total: 2185 },
+    )
+
+    expect((await found).reference?.twin).toBeNull()
+    expect(db.findCalls('supplier_invoices', 'eq').filter(([column]) => column === 'invoice_date')).toEqual([])
+  })
+
   it('looks for no twin without both the date and the amount', async () => {
     const rows = [period('2026-09-05'), period('2026-10-05')]
     expect((await lookup({ supplier_invoices: rows }, { reference: '5550001', invoiceDate: '2026-10-05' }).found).reference?.twin).toBeNull()
@@ -575,7 +603,20 @@ describe('readDuplicateNumberHolder: what the 409 names', () => {
     })
   })
 
-  it('a credited one names its credit note, so the editor can offer to undo the crediting', async () => {
+  it('names the live re-issue when a credited original carries the number too', async () => {
+    const original = invoiceRow({ supplier_invoice_number: 'EX-1042', status: 'credited' })
+    const reissue = invoiceRow({ supplier_invoice_number: 'EX-1042', status: 'approved', remaining_amount: 1250 })
+
+    expect(await read({ supplier_invoices: [original, reissue] })).toMatchObject({
+      id: reissue.id,
+      status: 'approved',
+      credit_note_id: null,
+      paid_at: null,
+      remaining_amount: 1250,
+    })
+  })
+
+  it('a credited one alone names its credit note, so the editor can offer to undo the crediting', async () => {
     const holder = invoiceRow({ supplier_invoice_number: 'EX-1042', status: 'credited' })
     const creditNote = invoiceRow({ supplier_invoice_number: 'KR-1', is_credit_note: true, credited_invoice_id: holder.id })
 

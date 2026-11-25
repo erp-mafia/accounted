@@ -236,15 +236,17 @@ describe('POST /items/:id/convert', () => {
     // Lookup of the existing (non-credited) invoice for the conflict payload,
     // then the verifikat it is booked on.
     enqueue({
-      data: {
-        id: 'existing-1',
-        supplier_invoice_number: 'F-2024-001',
-        status: 'paid',
-        paid_at: '2026-10-28T09:12:00Z',
-        remaining_amount: 0,
-        registration_journal_entry_id: 'je-71',
-        payment_journal_entry_id: null,
-      },
+      data: [
+        {
+          id: 'existing-1',
+          supplier_invoice_number: 'F-2024-001',
+          status: 'paid',
+          paid_at: '2026-10-28T09:12:00Z',
+          remaining_amount: 0,
+          registration_journal_entry_id: 'je-71',
+          payment_journal_entry_id: null,
+        },
+      ],
     })
     enqueue({ data: { id: 'je-71', voucher_series: 'A', voucher_number: 71 } })
 

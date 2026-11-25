@@ -733,7 +733,7 @@ describe('POST /api/supplier-invoices', () => {
     stubRegistration({ arrival: 8 })
     setTable('supplier_invoices', [
       { data: null, error: DUPLICATE_ERROR }, // insert: unique-index violation
-      { data: { id: 'existing-1', supplier_invoice_number: 'LF-DUP', status: 'credited' } }, // existing row
+      { data: [{ id: 'existing-1', supplier_invoice_number: 'LF-DUP', status: 'credited' }] }, // existing row
       { data: { id: 'credit-1' } }, // its credit note
     ])
 
@@ -779,7 +779,7 @@ describe('POST /api/supplier-invoices', () => {
     stubRegistration({ arrival: 9 })
     setTable('supplier_invoices', [
       { data: null, error: DUPLICATE_ERROR },
-      { data: { id: 'existing-2', supplier_invoice_number: 'LF-DUP-2', status: 'approved' } },
+      { data: [{ id: 'existing-2', supplier_invoice_number: 'LF-DUP-2', status: 'approved' }] },
     ])
 
     const request = createMockRequest('/api/supplier-invoices', {
@@ -808,15 +808,17 @@ describe('POST /api/supplier-invoices', () => {
     setTable('supplier_invoices', [
       { data: null, error: DUPLICATE_ERROR },
       {
-        data: {
-          id: 'existing-3',
-          supplier_invoice_number: 'LF-PAID',
-          status: 'paid',
-          paid_at: '2026-10-28T09:12:00Z',
-          remaining_amount: 0,
-          registration_journal_entry_id: 'je-71',
-          payment_journal_entry_id: 'je-80',
-        },
+        data: [
+          {
+            id: 'existing-3',
+            supplier_invoice_number: 'LF-PAID',
+            status: 'paid',
+            paid_at: '2026-10-28T09:12:00Z',
+            remaining_amount: 0,
+            registration_journal_entry_id: 'je-71',
+            payment_journal_entry_id: 'je-80',
+          },
+        ],
       },
     ])
     setTable('journal_entries', { data: { id: 'je-71', voucher_series: 'A', voucher_number: 71 } })

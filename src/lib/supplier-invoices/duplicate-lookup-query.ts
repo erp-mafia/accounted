@@ -11,6 +11,7 @@ import { isPersonPayer } from '@/lib/expenses/payer'
 import { isIsoDateShaped } from '@/lib/invariants/iso-date'
 import { normalizeOcrReference } from '@/lib/invariants/reference-number'
 import type { SupplierInvoiceFormData } from '@/lib/supplier-invoices/form-payload'
+import { CURRENCIES } from '@/types'
 
 /** The editor fields the lookup is asked about. */
 export type DuplicateLookupFields = Pick<
@@ -32,6 +33,8 @@ export type DuplicateLookupFields = Pick<
  * With a reference, the invoice date, the amount to pay and the currency go
  * along when the date is filled in: among the invoices that share the
  * reference they tell the same document registered again (duplicate-lookup.ts).
+ * Only in a currency an invoice can be registered in (the route takes no
+ * other): a reading's other code would otherwise cost every warning.
  */
 export function duplicateLookupQuery(fields: DuplicateLookupFields): string | null {
   const number = (fields.supplier_invoice_number ?? '').trim()
@@ -44,10 +47,17 @@ export function duplicateLookupQuery(fields: DuplicateLookupFields): string | nu
   if (number) params.set('number', number)
   if (reference) params.set('reference', reference)
   const date = (fields.invoice_date ?? '').trim()
-  if (reference && isIsoDateShaped(date) && typeof fields.total === 'number' && Number.isFinite(fields.total)) {
+  const currency = fields.currency || 'SEK'
+  if (
+    reference &&
+    isIsoDateShaped(date) &&
+    typeof fields.total === 'number' &&
+    Number.isFinite(fields.total) &&
+    (CURRENCIES as readonly string[]).includes(currency)
+  ) {
     params.set('invoice_date', date)
     params.set('total', String(fields.total))
-    params.set('currency', fields.currency || 'SEK')
+    params.set('currency', currency)
   }
   return params.toString()
 }
