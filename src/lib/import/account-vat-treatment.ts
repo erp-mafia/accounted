@@ -171,6 +171,36 @@ function withoutRcMomskod(mapping: AccountMapping, rate: number | null): Account
 }
 
 /**
+ * Whether the source system's momskod re-opens a row whose momskod is already
+ * settled (`settled`, from the company chart or an earlier confirm): only when
+ * it names a different treatment the vouchers do not rule out. The one rule
+ * for both orders the import runs in: applySourceVatCodes on a row the chart
+ * already settled (a chart file added in the mapping step), and
+ * enrichAccountMappingsWithVat on a row that already carries the code (the
+ * Fortnox path, or a row the user re-points). DECISIONS.md 2026-09-15.
+ */
+function sourceCodeReopens(
+  mapping: AccountMapping,
+  settled: AccountVatTreatment | null | undefined,
+  treatment: AccountVatTreatment | null | undefined,
+  finding: RcBasisPairFinding | null,
+): treatment is AccountVatTreatment {
+  return Boolean(treatment) && treatment !== settled && !ruledOutByRcBasisPair(mapping, treatment, finding)
+}
+
+/** The row with the source system's momskod as its suggestion, for the user to confirm. */
+function suggestingSourceCode(mapping: AccountMapping, treatment: AccountVatTreatment): AccountMapping {
+  return {
+    ...mapping,
+    defaultVatTreatment: treatment,
+    defaultVatRate: providerSuggestedRate(treatment, Number(mapping.sourceAccount.charAt(0)), mapping.sourceName),
+    vatTreatmentSuggested: true,
+    vatTreatmentReviewed: false,
+    requiresVatTreatmentReview: true,
+  }
+}
+
+/**
  * Attach the momskod the source system has on each account to its identity
  * mapping. SIE4 carries no VAT code, so this runs server-side after the
  * provider's chart was fetched next to the SIE export (Fortnox /accounts);
@@ -234,29 +264,24 @@ export function applySourceVatCodes(
     const coded = codedByAccount.get(mapping.sourceAccount)
     if (!coded) return mapping
     const { code, treatment } = coded
-    const accountClass = Number(mapping.sourceAccount.charAt(0))
     const withFacts = { ...mapping, providerVatCode: code, providerVatTreatment: treatment }
     if (!treatment) return withFacts
-    // The file agrees with the treatment the account already carries: record
-    // that it spoke, and leave the row settled rather than asking again.
-    if (mapping.vatTreatmentReviewed && mapping.defaultVatTreatment === treatment) return withFacts
+    const finding = findingOf(mapping)
+    // A settled row: the file records that it spoke and re-opens the row only
+    // when it disagrees, so a re-read chart does not ask again.
+    if (mapping.vatTreatmentReviewed && !sourceCodeReopens(mapping, mapping.defaultVatTreatment, treatment, finding)) {
+      return withFacts
+    }
     // A reverse-charge code on a cost account does not say where the source
     // reported the basis; the vouchers do, and a pair beside the account that
     // reports ruta 20-24 means the code would count it twice (crm#1096). The
-    // code then says nothing usable: a row the company chart settled keeps
-    // the chart's answer, any other is left without a momskod to confirm.
-    if (ruledOutByRcBasisPair(mapping, treatment, findingOf(mapping))) {
-      return mapping.vatTreatmentReviewed ? withFacts : withoutRcMomskod(withFacts, mapping.defaultVatRate ?? null)
+    // code then says nothing usable: the row is left without a momskod to
+    // confirm (a settled row kept its answer above).
+    if (ruledOutByRcBasisPair(mapping, treatment, finding)) {
+      return withoutRcMomskod(withFacts, mapping.defaultVatRate ?? null)
     }
 
-    return {
-      ...withFacts,
-      defaultVatTreatment: treatment,
-      defaultVatRate: providerSuggestedRate(treatment, accountClass, mapping.sourceName),
-      vatTreatmentSuggested: true,
-      vatTreatmentReviewed: false,
-      requiresVatTreatmentReview: true,
-    }
+    return suggestingSourceCode(withFacts, treatment)
   })
 }
 
@@ -266,7 +291,10 @@ export function applySourceVatCodes(
  * when the provider reported one (applySourceVatCodes), else from the
  * account label; either way it is not reviewed until the user confirms the
  * row or continues from the mapping step. A treatment the company already
- * set on the account in its chart outranks both and needs no review.
+ * set on the account in its chart outranks the label and needs no review; a
+ * source momskod that names a different one puts the row back in review with
+ * that code, by the same rule applySourceVatCodes uses (sourceCodeReopens),
+ * so the order the two run in does not change the answer.
  *
  * On an account the file ends up booking beside a separate basis pair that
  * reports ruta 20-24 (ruledOutByRcBasisPair), a reverse-charge momskod is not
@@ -313,7 +341,11 @@ export function enrichAccountMappingsWithVat(
     if (accountClass < 3 || accountClass > 6) return mapping
 
     const existing = existingByNumber.get(mapping.targetAccount)
+    const finding = findingOf(mapping)
     if (existing?.default_vat_treatment) {
+      if (sourceCodeReopens(mapping, existing.default_vat_treatment, mapping.providerVatTreatment, finding)) {
+        return suggestingSourceCode(mapping, mapping.providerVatTreatment)
+      }
       return {
         ...mapping,
         defaultVatTreatment: existing.default_vat_treatment,
@@ -324,7 +356,6 @@ export function enrichAccountMappingsWithVat(
       }
     }
 
-    const finding = findingOf(mapping)
     if (ruledOutByRcBasisPair(mapping, mapping.providerVatTreatment, finding)) {
       return withoutRcMomskod(mapping, existing?.default_vat_rate ?? null)
     }

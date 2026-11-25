@@ -318,7 +318,27 @@ describe('applySourceVatCodes (#2585)', () => {
     })
   })
 
-  it('yields to a treatment the company already set on the account', () => {
+  it('yields to a treatment the company already set on the account while the code agrees', () => {
+    const chart = [{
+      account_number: '3041',
+      default_vat_treatment: 'standard_25',
+      default_vat_rate: 0.25,
+    } as never]
+    const [prefilled] = applySourceVatCodes(
+      [mapping('3041', 'Försäljning')],
+      new Map([['3041', 'MP1']]),
+      () => 'standard_25',
+    )
+    expect(enrichAccountMappingsWithVat([prefilled], chart)[0]).toMatchObject({
+      defaultVatTreatment: 'standard_25',
+      defaultVatRate: 0.25,
+      providerVatCode: 'MP1',
+      vatTreatmentReviewed: true,
+      requiresVatTreatmentReview: false,
+    })
+  })
+
+  it('puts the row back in review when the code names another treatment than the company set', () => {
     const [prefilled] = applySourceVatCodes(
       [mapping('3041', 'Försäljning')],
       new Map([['3041', 'MF']]),
@@ -330,11 +350,12 @@ describe('applySourceVatCodes (#2585)', () => {
       default_vat_rate: 0.25,
     } as never])
     expect(enriched).toMatchObject({
-      defaultVatTreatment: 'standard_25',
-      defaultVatRate: 0.25,
+      defaultVatTreatment: 'exempt',
+      defaultVatRate: 0,
       providerVatCode: 'MF',
-      vatTreatmentReviewed: true,
-      requiresVatTreatmentReview: false,
+      vatTreatmentSuggested: true,
+      vatTreatmentReviewed: false,
+      requiresVatTreatmentReview: true,
     })
   })
 
