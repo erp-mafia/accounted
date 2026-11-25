@@ -981,6 +981,7 @@ describe('GET /api/bookkeeping/journal-entries', () => {
         | Record<string, unknown>
         | undefined
     const listQuery = () => logChildContexts.find((c) => 'list_query' in c)?.list_query
+    const noParams = { params: Promise.resolve({}) }
 
     it('returns 401 when not authenticated, before any read', async () => {
       mockSupabase.auth.getUser.mockResolvedValue({ data: { user: null } })
@@ -988,7 +989,7 @@ describe('GET /api/bookkeeping/journal-entries', () => {
       const request = createMockRequest('/api/bookkeeping/journal-entries', {
         searchParams: { sort_by: 'total_desc', exclude_draft: 'true' },
       })
-      const { status } = await parseJsonResponse(await GET(request))
+      const { status } = await parseJsonResponse(await GET(request, noParams))
 
       expect(status).toBe(401)
       expect(mockSupabase.rpc).not.toHaveBeenCalled()
@@ -1004,7 +1005,7 @@ describe('GET /api/bookkeeping/journal-entries', () => {
       const request = createMockRequest('/api/bookkeeping/journal-entries', {
         searchParams: { sort_by: 'total_desc', period_id: 'inte-ett-id' },
       })
-      const { status, body } = await parseJsonResponse<{ error: { code: string } }>(await GET(request))
+      const { status, body } = await parseJsonResponse<{ error: { code: string } }>(await GET(request, noParams))
 
       expect(status).toBe(400)
       expect(body.error.code).toBe('VALIDATION_ERROR')
@@ -1022,7 +1023,7 @@ describe('GET /api/bookkeeping/journal-entries', () => {
       const request = createMockRequest('/api/bookkeeping/journal-entries', {
         searchParams: { sort_by: 'total_desc', exclude_draft: 'true', collapse_corrections: 'true', limit: '3', offset: '20' },
       })
-      const { status, body } = await parseJsonResponse<{ data: { id: string }[]; count: number }>(await GET(request))
+      const { status, body } = await parseJsonResponse<{ data: { id: string }[]; count: number }>(await GET(request, noParams))
 
       expect(status).toBe(200)
       expect(body.data.map((e) => e.id)).toEqual([E3, E1, E2])
@@ -1056,7 +1057,7 @@ describe('GET /api/bookkeeping/journal-entries', () => {
         const request = createMockRequest('/api/bookkeeping/journal-entries', {
           searchParams: { sort_by: sortBy, period_id: 'period-1', exclude_draft: 'true' },
         })
-        const { status } = await parseJsonResponse(await GET(request))
+        const { status } = await parseJsonResponse(await GET(request, noParams))
         expect(status).toBe(200)
         expect({ sortBy, order: rpcArgs()?.p_order }).toEqual({ sortBy, order })
       }
@@ -1080,7 +1081,7 @@ describe('GET /api/bookkeeping/journal-entries', () => {
           offset: '100',
         },
       })
-      const { status, body } = await parseJsonResponse(await GET(request))
+      const { status, body } = await parseJsonResponse(await GET(request, noParams))
 
       expect(status).toBe(200)
       expect(body).toEqual({ data: [], count: 0 })
@@ -1121,7 +1122,7 @@ describe('GET /api/bookkeeping/journal-entries', () => {
           search: 'a*b 50%',
         },
       })
-      await GET(request)
+      await GET(request, noParams)
 
       expect(rpcArgs()).toMatchObject({
         p_period_id: null,
@@ -1150,7 +1151,7 @@ describe('GET /api/bookkeeping/journal-entries', () => {
           offset: '40',
         },
       })
-      const { status, body } = await parseJsonResponse<{ error: { code: string } }>(await GET(request))
+      const { status, body } = await parseJsonResponse<{ error: { code: string } }>(await GET(request, noParams))
 
       expect(status).toBe(503)
       expect(body.error.code).toBe('TRANSIENT_ERROR')
@@ -1171,7 +1172,7 @@ describe('GET /api/bookkeeping/journal-entries', () => {
       const request = createMockRequest('/api/bookkeeping/journal-entries', {
         searchParams: { sort_by: 'total_desc', period_id: 'period-1', search: '1930' },
       })
-      await GET(request)
+      await GET(request, noParams)
 
       expect(listQuery()).toEqual({ sort_by: 'total_desc', period: true, search: ['text', 'account', 'amount'], offset: 0, limit: 50 })
     })
@@ -1182,7 +1183,7 @@ describe('GET /api/bookkeeping/journal-entries', () => {
       const request = createMockRequest('/api/bookkeeping/journal-entries', {
         searchParams: { sort_by: 'total_desc' },
       })
-      const { status, body } = await parseJsonResponse<{ error: { code: string } }>(await GET(request))
+      const { status, body } = await parseJsonResponse<{ error: { code: string } }>(await GET(request, noParams))
 
       expect(status).toBe(500)
       expect(body.error.code).toBe('INTERNAL_ERROR')
