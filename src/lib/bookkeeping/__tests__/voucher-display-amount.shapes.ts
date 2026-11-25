@@ -1,10 +1,10 @@
 /**
  * Voucher shapes for the verifikat list's Belopp (crm#1280), shared by the
- * helper's unit test and the pg test of its SQL mirror, the display_amount
- * computed column (migration 20261018135300) that the list's amount sort
- * orders by. Both must give `expected` for every shape, so the number on
- * screen and the sort order cannot drift apart. Add a shape here when the
- * rule in voucher-display-amount.ts changes.
+ * helper's unit test and the pg test of its SQL mirror,
+ * verifikat_display_amounts (migration 20261125130100), that the list's
+ * amount sorts order by. Both must give `expected` for every shape, so the
+ * number on screen and the sort order cannot drift apart. Add a shape here
+ * when the rule in voucher-display-amount.ts changes.
  */
 import type { VoucherDisplayAmount } from '../voucher-display-amount'
 

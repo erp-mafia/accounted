@@ -6,7 +6,7 @@
  * transient user activation. Browsers expire that activation after ~5 seconds
  * (Safari sooner), so popup blocking kicks in exactly when the request is
  * slow: a cold serverless start made "Förhandsgranska PDF" silently do
- * nothing (support: cbysea.se). Opening the tab synchronously keeps the
+ * nothing. Opening the tab synchronously keeps the
  * trusted gesture; the tab is then navigated to the real URL, or closed again
  * if the request fails. Same pattern as AGIPanel's signing tab.
  */

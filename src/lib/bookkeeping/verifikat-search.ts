@@ -238,10 +238,10 @@ export function applyVerifikatSearch<Q extends { [K in keyof VerifikatSearchQuer
   // A line carries one side, so its amount is its debit or its credit. The
   // amount the list's Belopp column shows is such a line's amount, except
   // for a verifikat with several lines on both sides and no single money
-  // line: its omslutning sits on no line and only the display_amount
-  // computed column knows it. That column is a function call per verifikat,
-  // made twice per request (the count and the page), where this is an index
-  // probe: it orders the list, it does not filter it.
+  // line: its omslutning sits on no line and only the Belopp rule
+  // (verifikat_display_amounts) knows it. That rule reads every verifikat in
+  // scope, where this is an index probe: it orders the list, it does not
+  // filter it.
   if (needle.amount !== null) {
     q = q.or(`debit_amount.eq.${needle.amount},credit_amount.eq.${needle.amount}`, {
       referencedTable: 'amount_match',

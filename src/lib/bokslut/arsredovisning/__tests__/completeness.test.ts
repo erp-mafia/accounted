@@ -203,6 +203,51 @@ describe('validateAnnualReportCompleteness', () => {
     )
   })
 
+  describe('reads today and each signature on the Swedish calendar', () => {
+    afterEach(() => vi.useRealTimers())
+
+    function codesAt(instant: string, value: ReturnType<typeof input>) {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      vi.setSystemTime(new Date(instant))
+      return validateAnnualReportCompleteness({ ...value, todayIso: undefined }).issues.map((issue) => issue.code)
+    }
+
+    it('takes a signature and a stämma dated today as today right after Swedish midnight', () => {
+      // 00:30 on 2026-03-21 in Stockholm is still 2026-03-20 in UTC.
+      const value = input('filing')
+      value.report.signatures[0].signed_at = '2026-03-21'
+      value.report.forvaltningsberattelse.agm_date = '2026-03-21'
+      const codes = codesAt('2026-03-20T23:30:00Z', value)
+      expect(codes).not.toContain('AR-SIGNATURE-IN-FUTURE')
+      expect(codes).not.toContain('AR-AGM-IN-FUTURE')
+    })
+
+    it('still finds a date after the Swedish today in the future', () => {
+      const value = input('filing')
+      value.report.signatures[0].signed_at = '2026-03-22'
+      value.report.forvaltningsberattelse.agm_date = '2026-03-22'
+      const codes = codesAt('2026-03-20T23:30:00Z', value)
+      expect(codes).toEqual(expect.arrayContaining(['AR-SIGNATURE-IN-FUTURE', 'AR-AGM-IN-FUTURE']))
+    })
+
+    it('dates a signature given after Swedish midnight by its Swedish day', () => {
+      // 00:30 on 2026-01-01 in Stockholm: after the year ended, though UTC says 2025-12-31.
+      const value = input('filing')
+      value.report.signatures[0].signed_at = '2025-12-31T23:30:00+00:00'
+      const codes = validateAnnualReportCompleteness(value).issues.map((issue) => issue.code)
+      expect(codes).not.toContain('AR-SIGNATURE-BEFORE-PERIOD-END')
+    })
+
+    it('finds a stämma held the day before a signature given after Swedish midnight', () => {
+      // 00:30 on 2026-03-16 in Stockholm, the day after the stämma.
+      const value = input('filing')
+      value.report.forvaltningsberattelse.agm_date = '2026-03-15'
+      value.report.signatures[0].signed_at = '2026-03-15T23:30:00+00:00'
+      const codes = validateAnnualReportCompleteness(value).issues.map((issue) => issue.code)
+      expect(codes).toContain('AR-AGM-BEFORE-SIGNATURES')
+    })
+  })
+
   it('keeps K3 output draft-only until the complete K3 disclosure matrix exists', () => {
     const value = input('signing')
     value.report.accounting_framework = 'k3'

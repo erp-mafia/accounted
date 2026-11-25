@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'vitest'
-import { invoiceTotalsCrosscheck, isWholeKronaRoundingOf, rowNetFromInvoiceTotals, totalFirstFill } from '../total-first'
+import {
+  invoiceTotalsCrosscheck,
+  isInputVatAccountRow,
+  isWholeKronaRoundingOf,
+  rowNetFromInvoiceTotals,
+  rowsAgainstInvoiceTotals,
+  totalFirstFill,
+  vatGuidanceApplies,
+} from '../total-first'
 import { supplierInvoiceEditorAmounts } from '../editor-amounts'
+import { bookLimitedDeduction } from '../limited-deduction'
+import { roundOre } from '@/lib/money'
 
 const row = (amount: number, vat_rate: number) => ({ amount, account_number: '4010', vat_rate })
 
@@ -91,6 +101,129 @@ describe('invoiceTotalsCrosscheck', () => {
 
   it('has no moms difference when the invoice states no moms', () => {
     expect(invoiceTotalsCrosscheck({ ...rows, invoiceVat: null })).toMatchObject({ vatDiff: null, vatMatches: true })
+  })
+
+  it('says the rows carry no moms when the invoice states moms and rows with amounts carry none', () => {
+    const handTyped = { invoiceTotal: 4900, toPay: 4900, totalVat: 0, deductibleVat: 0 }
+    expect(invoiceTotalsCrosscheck({ ...handTyped, invoiceVat: 1000 })).toMatchObject({
+      totalMatches: true,
+      vatDiff: 1000,
+      vatMatches: false,
+      rowsCarryNoVat: true,
+    })
+  })
+
+  it('leaves every other moms difference to the general line', () => {
+    // Rows that carry moms, however far off, and the matching cases.
+    expect(invoiceTotalsCrosscheck({ ...rows, invoiceVat: 500 }).rowsCarryNoVat).toBe(false)
+    expect(invoiceTotalsCrosscheck({ ...rows, invoiceVat: 1011.25 }).rowsCarryNoVat).toBe(false)
+    // No moms on the invoice: nothing is missing from the rows.
+    const zeroRows = { invoiceTotal: 4900, toPay: 4900, totalVat: 0, deductibleVat: 0 }
+    expect(invoiceTotalsCrosscheck({ ...zeroRows, invoiceVat: null }).rowsCarryNoVat).toBe(false)
+    expect(invoiceTotalsCrosscheck({ ...zeroRows, invoiceVat: 0 }).rowsCarryNoVat).toBe(false)
+    expect(invoiceTotalsCrosscheck({ ...zeroRows, invoiceVat: -1000 }).rowsCarryNoVat).toBe(false)
+    // Rows without amounts are still being filled in.
+    expect(invoiceTotalsCrosscheck({ invoiceTotal: 5000, invoiceVat: 1000, toPay: 0, totalVat: 0 }).rowsCarryNoVat).toBe(false)
+  })
+})
+
+describe('isInputVatAccountRow', () => {
+  it('is a row on the account a moms sats books ingående moms on, without a moms sats', () => {
+    expect(isInputVatAccountRow({ account_number: '2641', vat_rate: 0 })).toBe(true)
+    expect(isInputVatAccountRow({ account_number: '2641' })).toBe(true)
+  })
+
+  it('leaves the other ruta 48 accounts: a moms sats on the cost row would not book what they carry', () => {
+    // Reverse charge (beräknad ingående moms), frivillig skattskyldighet,
+    // uthyrning, blandad verksamhet, and the group account.
+    for (const account of ['2645', '2647', '2642', '2646', '2649', '2640']) {
+      expect(isInputVatAccountRow({ account_number: account, vat_rate: 0 })).toBe(false)
+    }
+  })
+
+  it('is no other row', () => {
+    expect(isInputVatAccountRow({ account_number: '2641', vat_rate: 0.25 })).toBe(false)
+    expect(isInputVatAccountRow({ account_number: '5615', vat_rate: 0 })).toBe(false)
+    expect(isInputVatAccountRow({ account_number: '2611', vat_rate: 0 })).toBe(false)
+    expect(isInputVatAccountRow({ account_number: '2650', vat_rate: 0 })).toBe(false)
+    expect(isInputVatAccountRow({ account_number: '2648', vat_rate: 0 })).toBe(false)
+    expect(isInputVatAccountRow({ account_number: '', vat_rate: 0 })).toBe(false)
+  })
+})
+
+describe('vatGuidanceApplies', () => {
+  const swedish = { vatRegistered: true, reverseCharge: false, selfBilled: false, supplierType: 'swedish_business' }
+
+  it('applies to Swedish moms the company deducts from the rows', () => {
+    expect(vatGuidanceApplies(swedish)).toBe(true)
+    // Before a supplier is chosen.
+    expect(vatGuidanceApplies({ ...swedish, supplierType: undefined })).toBe(true)
+  })
+
+  it('stays out where the invoice has no Swedish moms to deduct from its rows', () => {
+    expect(vatGuidanceApplies({ ...swedish, vatRegistered: false })).toBe(false)
+    expect(vatGuidanceApplies({ ...swedish, reverseCharge: true })).toBe(false)
+    // A foreign supplier's moms is never Swedish ingående moms.
+    expect(vatGuidanceApplies({ ...swedish, supplierType: 'eu_business' })).toBe(false)
+    expect(vatGuidanceApplies({ ...swedish, supplierType: 'non_eu_business' })).toBe(false)
+    // A self-billing invoice has no Begränsat momsavdrag.
+    expect(vatGuidanceApplies({ ...swedish, selfBilled: true })).toBe(false)
+  })
+})
+
+describe('a personbil lease invoice with a fee taken off after the moms', () => {
+  // Made-up invoice: 4 000,00 + 1 000,00 moms = 5 000,00, a fee of 100,00
+  // taken off after the moms, 4 900,00 to pay. Half the moms is deductible
+  // (ML 2023:200 13 kap. 22 §).
+  const invoiceTotal = 4900
+  const invoiceVat = 1000
+  type EditorRow = { account_number: string; amount: number; vat_rate: number; vat_deduction_share?: number }
+
+  /** The cross-check as the editor composes it: rows as booked, moms as the invoice shows it. */
+  function editorCrosscheck(items: EditorRow[]) {
+    const { items: booked, nonDeductibleVat } = bookLimitedDeduction(items, true)
+    const { amounts } = rowsAgainstInvoiceTotals({
+      items: booked,
+      currency: 'SEK',
+      reverseCharge: false,
+      invoiceTotal,
+      invoiceVat,
+    })
+    const totalVat = roundOre(amounts.totalVat + nonDeductibleVat.reduce((sum, vat) => sum + vat, 0))
+    return invoiceTotalsCrosscheck({
+      invoiceTotal,
+      invoiceVat,
+      toPay: amounts.figures.toPay,
+      totalVat,
+      deductibleVat: amounts.totalVat,
+    })
+  }
+
+  it('booked with the moms typed by hand on rows at 0 %: the rows carry no moms, and the moms row is flagged', () => {
+    const handTyped: EditorRow[] = [
+      { account_number: '5615', amount: 4400, vat_rate: 0 },
+      { account_number: '2641', amount: 500, vat_rate: 0 },
+    ]
+    expect(editorCrosscheck(handTyped)).toMatchObject({ totalMatches: true, vatDiff: 1000, rowsCarryNoVat: true })
+    expect(handTyped.map(isInputVatAccountRow)).toEqual([false, true])
+  })
+
+  it('booked with the moms sats on the cost row and half the moms deducted: everything matches', () => {
+    const supported: EditorRow[] = [
+      { account_number: '5615', amount: 4000, vat_rate: 0.25, vat_deduction_share: 0.5 },
+      { account_number: '5615', amount: -100, vat_rate: 0 },
+    ]
+    expect(editorCrosscheck(supported)).toMatchObject({ totalMatches: true, vatMatches: true, rowsCarryNoVat: false })
+    expect(supported.some(isInputVatAccountRow)).toBe(false)
+  })
+
+  it('booked with none of the moms deducted through Begränsat momsavdrag: everything matches', () => {
+    // The car used only in ringa omfattning in the business (13 kap. 21 §).
+    const nothingDeducted: EditorRow[] = [
+      { account_number: '5615', amount: 4000, vat_rate: 0.25, vat_deduction_share: 0 },
+      { account_number: '5615', amount: -100, vat_rate: 0 },
+    ]
+    expect(editorCrosscheck(nothingDeducted)).toMatchObject({ totalMatches: true, vatMatches: true, rowsCarryNoVat: false })
   })
 })
 

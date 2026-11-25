@@ -1265,6 +1265,118 @@ describe('buildArsredovisningData: write-downs in the anläggningar note (ÅRL 5
   })
 })
 
+// An opening amount dated inside the year (in-year-opening.ts): the part the
+// books took in during the year is årets avskrivningar (ÅRL 5 kap. 8 §
+// första stycket 4), and the note opens with what the books closed the year
+// before with (2 kap. 4 § första stycket 7).
+describe('buildArsredovisningData: an opening amount dated inside the year', () => {
+  const PERIODS = [{ id: 'fp1', name: '2025', period_start: '2025-01-01', period_end: '2025-12-31' }]
+  // 60 000 kr over 60 months from 2023-01-01, taken over with 30 000 kr
+  // depreciated per 2025-06-30: the books opened 2025 with 24 000 on 1229 and
+  // the previous system booked 6 000 more before July.
+  const machine = {
+    id: 'a1',
+    name: 'Maskin',
+    category: 'equipment',
+    acquisition_date: '2023-01-01',
+    acquisition_cost: 60_000,
+    salvage_value: 0,
+    useful_life_months: 60,
+    depreciation_method: 'linear',
+    bas_asset_account: '1220',
+    bas_accumulated_account: '1229',
+    bas_expense_account: '7832',
+    disposed_at: null,
+    k3_components: null,
+    components: [],
+    value_adjustments: [],
+    opening_accumulated_depreciation: 30_000,
+    opening_depreciation_date: '2025-06-30',
+  }
+  const ledgerRow = (account: string, opening: number, debit = 0, credit = 0) => {
+    const closing = opening + debit - credit
+    return {
+      account_number: account,
+      account_name: account,
+      account_class: 1,
+      opening_debit: Math.max(opening, 0),
+      opening_credit: Math.max(-opening, 0),
+      period_debit: debit,
+      period_credit: credit,
+      closing_debit: Math.max(closing, 0),
+      closing_credit: Math.max(-closing, 0),
+    }
+  }
+  /** 1229 credited `booked` in the year: 12 049 is the previous system's 6 000 and the plan's 6 049 from July. */
+  function plant(booked: number) {
+    mockFetchAllRows.mockResolvedValue(PERIODS)
+    mockedListAssets.mockResolvedValue([machine] as never)
+    mockedTrialBalance.mockResolvedValue({
+      rows: [ledgerRow('1220', 60_000), ledgerRow('1229', -24_000, 0, booked)],
+      totalDebit: 0,
+      totalCredit: 0,
+      isBalanced: true,
+    } as never)
+  }
+  const noteWarnings = (warnings: string[]) => warnings.filter((warning) => warning.startsWith('Anläggningsnot'))
+
+  for (const framework of ['k2', 'k3'] as const) {
+    const opening = framework === 'k2' ? 'Ingående avskrivningar' : 'Ingående ackumulerade avskrivningar'
+
+    it(`${framework.toUpperCase()}: opens at the books and shows the whole year's avskrivningar`, async () => {
+      plant(12_049)
+      // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+      const data = await buildArsredovisningData(makeSupabase({ accountingFramework: framework }), 'co1', 'fp1')
+      const note = data.noter.find((n) => n.title === 'Anläggningstillgångar')
+      expect(note?.body).toMatch(new RegExp(`${opening}: \\u221224\\s000 kr`))
+      expect(note?.body).toMatch(/Årets avskrivningar: −12\s049 kr/)
+      expect(noteWarnings(data.warnings)).toEqual([])
+    })
+
+    it(`${framework.toUpperCase()}: keeps the register's figures, with a warning, when the year's end does not agree with the books`, async () => {
+      // The year is not booked to its end: 1229 holds only the first half.
+      plant(6_000)
+      // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+      const data = await buildArsredovisningData(makeSupabase({ accountingFramework: framework }), 'co1', 'fp1')
+      const note = data.noter.find((n) => n.title === 'Anläggningstillgångar')
+      expect(note?.body).toMatch(new RegExp(`${opening}: \\u221230\\s000 kr`))
+      expect(note?.body).toMatch(/Årets avskrivningar: −6\s049 kr/)
+      const warnings = noteWarnings(data.warnings)
+      expect(warnings).toContainEqual(expect.stringMatching(/^Anläggningsnotens utgående redovisade värde/))
+      // K3 ties only the note's total: the post is named on its own.
+      if (framework === 'k3') {
+        expect(warnings).toContainEqual(
+          expect.stringMatching(/^Anläggningsnoten för Inventarier, verktyg och installationer: ackumulerade avskrivningar vid årets ingång \(30\s000 kr\) stämmer inte med postens bokförda \(24\s000 kr\)/),
+        )
+      } else {
+        expect(warnings).toHaveLength(1)
+      }
+    })
+
+    it(`${framework.toUpperCase()}: warns when the post's anskaffningsvärden differ from the books while the move is made`, async () => {
+      // The books also held a machine of 10 000 with 4 000 depreciated that
+      // the register lacks, sold in the year: the year's rows net it.
+      mockFetchAllRows.mockResolvedValue(PERIODS)
+      mockedListAssets.mockResolvedValue([machine] as never)
+      mockedTrialBalance.mockResolvedValue({
+        rows: [ledgerRow('1220', 70_000, 0, 10_000), ledgerRow('1229', -28_000, 4_000, 12_049)],
+        totalDebit: 0,
+        totalCredit: 0,
+        isBalanced: true,
+      } as never)
+      // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+      const data = await buildArsredovisningData(makeSupabase({ accountingFramework: framework }), 'co1', 'fp1')
+      const note = data.noter.find((n) => n.title === 'Anläggningstillgångar')
+      expect(note?.body).toMatch(new RegExp(`${opening}: \\u221228\\s000 kr`))
+      expect(noteWarnings(data.warnings)).toEqual([
+        framework === 'k3'
+          ? expect.stringMatching(/^Anläggningsnoten för Inventarier, verktyg och installationer: ingående anskaffningsvärden \(60\s000 kr\) stämmer inte med postens bokförda \(70\s000 kr\)/)
+          : expect.stringMatching(/^Anläggningsnoten för Inventarier, verktyg och installationer: ingående redovisat värde \(32\s000 kr\) stämmer inte med postens bokförda värde vid årets ingång \(42\s000 kr\)/),
+      ])
+    })
+  }
+})
+
 // The merge of Phases 1 and 2: each nedskrivning has one source. Posted
 // through the register, it is in the roll-forward; the ledger's write-down
 // accounts beyond that (booked by hand, or before Accounted) are in the

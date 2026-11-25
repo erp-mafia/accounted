@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import {
   createMockRequest,
@@ -15,6 +15,11 @@ vi.mock('@/lib/auth/require-auth', () => ({
 }))
 
 vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
+
+const resolveDueDateMock = vi.fn()
+vi.mock('@/lib/payments/orders/skattekonto-sources', () => ({
+  resolveSkattekontoDueDate: (...args: unknown[]) => resolveDueDateMock(...args),
+}))
 
 vi.mock('@/lib/company/context', () => ({
   getActiveCompanyId: vi.fn().mockResolvedValue('company-1'),
@@ -82,7 +87,7 @@ describe('GET /api/skatteverket/tax-payments/[period]', () => {
 
     expect(status).toBe(200)
     // 12 September 2026 is a Saturday: the money is due on the Monday.
-    expect(body.data).toEqual({ ...AGI, payment_due_date: '2026-09-14', period_conflict: null })
+    expect(body.data).toEqual({ ...AGI, payment_due_date: '2026-09-14', period_conflict: null, bank_payment: null })
     expect(findCalls('agi_declarations', 'eq')).toEqual([
       ['company_id', 'company-1'],
       ['period_year', 2026],
@@ -107,6 +112,387 @@ describe('GET /api/skatteverket/tax-payments/[period]', () => {
 
     expect(body.data.payment_due_date).toBe('2026-08-12')
   })
+  describe('a bank payment to the skattekonto on the day the period is paid on', () => {
+    const FILED = { ...AGI, status: 'submitted', salary_run_id: 'run-own' }
+    const SETTINGS = { vat_registered: true, vat_taxable_base_over_40m: false }
+
+    beforeEach(() => {
+      // The November AGI the evening it was filed and paid: due Saturday
+      // 12 December, so Monday the 14th, and paid the Friday before.
+      vi.useFakeTimers({ toFake: ['Date'] })
+      vi.setSystemTime(new Date('2026-11-24T21:10:00+01:00'))
+    })
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    it('carries a payment already signed for that day, so the panel offers no second one', async () => {
+      enqueue({ data: FILED }) // agi_declarations
+      enqueue({ data: SETTINGS }) // company_settings
+      enqueue({
+        data: [{ id: 'order-1', status: 'accepted', amount: '24568.00', batch_id: 'batch-1', requested_execution_date: '2026-12-11' }],
+      }) // payment_orders
+
+      const { status, body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await get('2026-11'))
+
+      expect(status).toBe(200)
+      expect(body.data.payment_due_date).toBe('2026-12-14')
+      expect(body.data.bank_payment).toEqual({
+        status: 'accepted',
+        amount: 24568,
+        requested_execution_date: '2026-12-11',
+        pays_declaration: true,
+      })
+      expect(findCalls('payment_orders', 'eq')).toEqual([
+        ['company_id', 'company-1'],
+        ['purpose', 'skattekonto'],
+      ])
+      // From the Friday before the due date through the due date itself.
+      expect(findCalls('payment_orders', 'gte')).toEqual([['requested_execution_date', '2026-12-11']])
+      expect(findCalls('payment_orders', 'lte')).toEqual([['requested_execution_date', '2026-12-14']])
+      // Cancelled, failed and rejected orders pay nothing: never read.
+      expect(findCalls('payment_orders', 'in')[0]).toEqual([
+        'status',
+        ['draft', 'approved', 'submitted', 'awaiting_signature', 'awaiting_second_signer', 'accepted', 'executed'],
+      ])
+    })
+
+    // Everything declared due on Monday 14 December: the quarter's moms and the November AGI.
+    const DUE_DAY = {
+      ok: true,
+      combined: {
+        due_date: '2026-12-14',
+        total: 84568,
+        components: [
+          { source: 'vat_declaration', period: '2026-Q3', amount: 60000 },
+          { source: 'agi', period: '2026-11', amount: 24568 },
+        ],
+        excluded: [],
+      },
+      parts: [],
+    }
+    const accepted = (amount: string) => ({
+      data: [{ id: 'order-1', status: 'accepted', amount, batch_id: 'batch-1', requested_execution_date: '2026-12-11' }],
+    })
+
+    it('asks nothing more of a payment of exactly the declaration', async () => {
+      enqueue({ data: FILED })
+      enqueue({ data: SETTINGS })
+      enqueue(accepted('24568.00'))
+
+      const { body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await get('2026-11'))
+
+      expect(body.data.bank_payment).toMatchObject({ pays_declaration: true })
+      expect(resolveDueDateMock).not.toHaveBeenCalled()
+    })
+
+    it('shows a larger payment of the same day without reading it as this declaration\'s', async () => {
+      // The momsdeklaration due the same day, paid on its own: 60 000 kr.
+      resolveDueDateMock.mockResolvedValue(DUE_DAY)
+      enqueue({ data: FILED })
+      enqueue({ data: SETTINGS })
+      enqueue(accepted('60000.00'))
+
+      const { body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await get('2026-11'))
+
+      expect(body.data.bank_payment).toEqual({
+        status: 'accepted',
+        amount: 60000,
+        requested_execution_date: '2026-12-11',
+        pays_declaration: false,
+      })
+      expect(resolveDueDateMock).toHaveBeenCalledWith(mockSupabase, 'company-1', '2026-12-14', '2026-11-24')
+    })
+
+    it('reads a payment of everything due that day as paying it', async () => {
+      // Betala allt som förfaller: the moms and the AGI as one payment.
+      resolveDueDateMock.mockResolvedValue(DUE_DAY)
+      enqueue({ data: FILED })
+      enqueue({ data: SETTINGS })
+      enqueue(accepted('84568.00'))
+
+      const { body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await get('2026-11'))
+
+      expect(body.data.bank_payment).toMatchObject({ amount: 84568, pays_declaration: true })
+    })
+
+    it('does not read the day\'s sum as paying an AGI that is not part of it', async () => {
+      resolveDueDateMock.mockResolvedValue({
+        ...DUE_DAY,
+        combined: { ...DUE_DAY.combined, components: [{ source: 'vat_declaration', period: '2026-Q3', amount: 84568 }] },
+      })
+      enqueue({ data: FILED })
+      enqueue({ data: SETTINGS })
+      enqueue(accepted('84568.00'))
+
+      const { body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await get('2026-11'))
+
+      expect(body.data.bank_payment).toMatchObject({ pays_declaration: false })
+    })
+
+    it('still shows the payment when the day cannot be read, and offers the button', async () => {
+      resolveDueDateMock.mockRejectedValue(new Error('vat report failed'))
+      enqueue({ data: FILED })
+      enqueue({ data: SETTINGS })
+      enqueue(accepted('84568.00'))
+
+      const { status, body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await get('2026-11'))
+
+      expect(status).toBe(200)
+      expect(body.data.bank_payment).toMatchObject({ amount: 84568, pays_declaration: false })
+    })
+
+    it('still finds a payment made on the last day once the due date has passed', async () => {
+      // Signed on Friday 11 December, so it went out on Monday the 14th;
+      // read on the Tuesday after, once the bank has executed it.
+      vi.setSystemTime(new Date('2026-12-15T09:00:00+01:00'))
+      enqueue({ data: FILED })
+      enqueue({ data: SETTINGS })
+      enqueue({
+        data: [{ id: 'order-1', status: 'executed', amount: '24568.00', batch_id: 'batch-1', requested_execution_date: '2026-12-14' }],
+      })
+
+      const { body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await get('2026-11'))
+
+      expect(body.data.bank_payment).toEqual({
+        status: 'executed',
+        amount: 24568,
+        requested_execution_date: '2026-12-14',
+        pays_declaration: true,
+      })
+      // The days read do not move with today.
+      expect(findCalls('payment_orders', 'gte')).toEqual([['requested_execution_date', '2026-12-11']])
+      expect(findCalls('payment_orders', 'lte')).toEqual([['requested_execution_date', '2026-12-14']])
+    })
+
+    it('shows the payment of this declaration when another of the window comes first', async () => {
+      // The quarter's moms paid alone on the Friday, the AGI late on the Monday.
+      enqueue({ data: FILED })
+      enqueue({ data: SETTINGS })
+      enqueue({
+        data: [
+          { id: 'order-agi', status: 'accepted', amount: '24568.00', batch_id: 'batch-2', requested_execution_date: '2026-12-14' },
+          { id: 'order-moms', status: 'executed', amount: '60000.00', batch_id: 'batch-1', requested_execution_date: '2026-12-11' },
+        ],
+      })
+
+      const { body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await get('2026-11'))
+
+      expect(body.data.bank_payment).toEqual({
+        status: 'accepted',
+        amount: 24568,
+        requested_execution_date: '2026-12-14',
+        pays_declaration: true,
+      })
+      expect(resolveDueDateMock).not.toHaveBeenCalled()
+    })
+
+    it('reads only its own due date\'s days for an overdue period', async () => {
+      // October, due Thursday 12 November and still unpaid on 10 December:
+      // the November AGI's payment on Friday 11 December is not October's.
+      vi.setSystemTime(new Date('2026-12-10T09:00:00+01:00'))
+      enqueue({ data: FILED })
+      enqueue({ data: SETTINGS })
+      enqueue({ data: [] })
+
+      const { body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await get('2026-10'))
+
+      expect(body.data.payment_due_date).toBe('2026-11-12')
+      expect(body.data.bank_payment).toBeNull()
+      expect(findCalls('payment_orders', 'gte')).toEqual([['requested_execution_date', '2026-11-11']])
+      expect(findCalls('payment_orders', 'lte')).toEqual([['requested_execution_date', '2026-11-12']])
+    })
+
+    it('leaves out a draft nobody signed: a new payment joins it', async () => {
+      enqueue({ data: FILED })
+      enqueue({ data: SETTINGS })
+      enqueue({ data: [{ id: 'order-1', status: 'draft', amount: '24568.00', batch_id: null, requested_execution_date: '2026-12-11' }] })
+
+      const { body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await get('2026-11'))
+
+      expect(body.data.bank_payment).toBeNull()
+    })
+
+    it('shows an approved payment once it is claimed for signing, and keeps the button: it is not signed yet', async () => {
+      enqueue({ data: FILED })
+      enqueue({ data: SETTINGS })
+      enqueue({ data: [{ id: 'order-1', status: 'approved', amount: '24568.00', batch_id: 'batch-1', requested_execution_date: '2026-12-11' }] })
+
+      const { body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await get('2026-11'))
+
+      expect(body.data.bank_payment).toEqual({
+        status: 'approved',
+        amount: 24568,
+        requested_execution_date: '2026-12-11',
+        pays_declaration: false,
+      })
+    })
+
+    it('shows a payment that reached the bank unsigned, and keeps the button: it never executes', async () => {
+      // A BankID nobody finished: the order sits at the bank as submitted.
+      enqueue({ data: FILED })
+      enqueue({ data: SETTINGS })
+      enqueue({ data: [{ id: 'order-1', status: 'submitted', amount: '24568.00', batch_id: 'batch-1', requested_execution_date: '2026-12-11' }] })
+
+      const { status, body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await get('2026-11'))
+
+      expect(status).toBe(200)
+      expect(body.data.bank_payment).toEqual({
+        status: 'submitted',
+        amount: 24568,
+        requested_execution_date: '2026-12-11',
+        pays_declaration: false,
+      })
+    })
+
+    // Now is 21:10 on 24 November (the describe's clock).
+    it.each([
+      ['awaiting_signature', 'its BankID open for five minutes', { status: 'awaiting_signature', signing_started_at: '2026-11-24T21:05:00+01:00' }],
+      ['awaiting_signature', 'its BankID finished, the bank confirming', { status: 'signed', signing_started_at: '2026-11-24T19:00:00+01:00' }],
+      ['awaiting_second_signer', 'signed once', null],
+      ['accepted', 'signed', null],
+      ['executed', 'paid', null],
+    ])(
+      'leaves the button out for a %s payment of the declaration (%s)',
+      async (orderStatus, _what, signing) => {
+        enqueue({ data: FILED })
+        enqueue({ data: SETTINGS })
+        enqueue({
+          data: [{ id: 'order-1', status: orderStatus, amount: '24568.00', batch_id: 'batch-1', requested_execution_date: '2026-12-11', signing }],
+        })
+
+        const { body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await get('2026-11'))
+
+        expect(body.data.bank_payment).toEqual({
+          status: orderStatus,
+          amount: 24568,
+          requested_execution_date: '2026-12-11',
+          pays_declaration: true,
+        })
+      },
+    )
+
+    it('keeps the button for a BankID nobody finished once it can no longer finish, though the bank was never read', async () => {
+      // Abandoned at 19:30; the status sync could not read the bank, so the
+      // order still says awaiting_signature 100 minutes on. It never executes.
+      enqueue({ data: FILED })
+      enqueue({ data: SETTINGS })
+      enqueue({
+        data: [
+          {
+            id: 'order-1',
+            status: 'awaiting_signature',
+            amount: '24568.00',
+            batch_id: 'batch-1',
+            requested_execution_date: '2026-12-11',
+            signing: { status: 'awaiting_signature', signing_started_at: '2026-11-24T19:30:00+01:00' },
+          },
+        ],
+      })
+
+      const { body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await get('2026-11'))
+
+      expect(body.data.bank_payment).toEqual({
+        status: 'awaiting_signature',
+        amount: 24568,
+        requested_execution_date: '2026-12-11',
+        pays_declaration: false,
+      })
+    })
+
+    it('reads no due day for an unsigned payment larger than the declaration: it pays nothing', async () => {
+      // The whole day's sum, but never signed.
+      resolveDueDateMock.mockResolvedValue(DUE_DAY)
+      enqueue({ data: FILED })
+      enqueue({ data: SETTINGS })
+      enqueue({ data: [{ id: 'order-1', status: 'submitted', amount: '84568.00', batch_id: 'batch-1', requested_execution_date: '2026-12-11' }] })
+
+      const { body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await get('2026-11'))
+
+      expect(body.data.bank_payment).toMatchObject({ status: 'submitted', amount: 84568, pays_declaration: false })
+      expect(resolveDueDateMock).not.toHaveBeenCalled()
+    })
+
+    it('shows the signed payment of the declaration over an unsigned one of the same days', async () => {
+      // The Friday's payment was left unsigned at the bank; the declaration
+      // was then paid again, signed, for the Monday.
+      enqueue({ data: FILED })
+      enqueue({ data: SETTINGS })
+      enqueue({
+        data: [
+          { id: 'order-unsigned', status: 'submitted', amount: '24568.00', batch_id: 'batch-1', requested_execution_date: '2026-12-11' },
+          { id: 'order-signed', status: 'accepted', amount: '24568.00', batch_id: 'batch-2', requested_execution_date: '2026-12-14' },
+        ],
+      })
+
+      const { body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await get('2026-11'))
+
+      expect(body.data.bank_payment).toEqual({
+        status: 'accepted',
+        amount: 24568,
+        requested_execution_date: '2026-12-14',
+        pays_declaration: true,
+      })
+    })
+
+    it('shows the declaration\'s own unsigned payment when nothing pays it, not another declaration\'s', async () => {
+      // The quarter's moms paid alone on the Friday; the AGI's own payment
+      // for the Monday was left unsigned at the bank.
+      resolveDueDateMock.mockResolvedValue(DUE_DAY)
+      enqueue({ data: FILED })
+      enqueue({ data: SETTINGS })
+      enqueue({
+        data: [
+          { id: 'order-agi', status: 'submitted', amount: '24568.00', batch_id: 'batch-2', requested_execution_date: '2026-12-14' },
+          { id: 'order-moms', status: 'executed', amount: '60000.00', batch_id: 'batch-1', requested_execution_date: '2026-12-11' },
+        ],
+      })
+
+      const { body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await get('2026-11'))
+
+      expect(body.data.bank_payment).toEqual({
+        status: 'submitted',
+        amount: 24568,
+        requested_execution_date: '2026-12-14',
+        pays_declaration: false,
+      })
+    })
+
+    it('keeps the button when the declarations due that day cannot be summed', async () => {
+      resolveDueDateMock.mockResolvedValue({ ok: false, code: 'VAT_REPORT_GENERATION_FAILED' })
+      enqueue({ data: FILED })
+      enqueue({ data: SETTINGS })
+      enqueue(accepted('84568.00'))
+
+      const { status, body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await get('2026-11'))
+
+      expect(status).toBe(200)
+      expect(body.data.bank_payment).toMatchObject({ amount: 84568, pays_declaration: false })
+      expect(resolveDueDateMock).toHaveBeenCalledTimes(1)
+    })
+
+    it('reads no payments for a period marked paid', async () => {
+      enqueue({ data: { ...FILED, tax_paid_at: '2026-11-24T20:00:00Z' } })
+      enqueue({ data: SETTINGS })
+
+      const { body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await get('2026-11'))
+
+      expect(body.data.bank_payment).toBeNull()
+      expect(findCalls('payment_orders', 'select')).toEqual([])
+    })
+
+    it('answers without it when the payments cannot be read: it only informs', async () => {
+      enqueue({ data: FILED })
+      enqueue({ data: SETTINGS })
+      enqueue({ data: null, error: { message: 'connection reset', code: '08006' } })
+
+      const { status, body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await get('2026-11'))
+
+      expect(status).toBe(200)
+      expect(body.data).toMatchObject({ total_tax: 12000, payment_due_date: '2026-12-14', bank_payment: null })
+    })
+  })
+
   describe('a declaration holding one run of its month (crm#1768)', () => {
     const UNFILED = { ...AGI, status: 'generated', salary_run_id: 'run-own' }
     const OWN = { id: 'run-own', status: 'booked', period_year: 2026, period_month: 10, payment_date: '2026-10-25', corrects_run_id: null }

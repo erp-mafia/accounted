@@ -220,17 +220,23 @@ export const K2_BALANSRAKNING_TILLGANGAR: StatementNode[] = [
  * post carries the same name. Null for a concept that is no asset post.
  */
 export function k2AssetPostLabel(concept: string): string | null {
-  const find = (nodes: readonly StatementNode[]): string | null => {
-    for (const node of nodes) {
-      if (node.kind === 'post' && node.concept === concept) return node.label
-      if (node.kind === 'group') {
-        const label = find(node.children)
-        if (label) return label
-      }
+  return postLabelIn(K2_BALANSRAKNING_TILLGANGAR, concept)
+}
+
+/** The label the K3 balance sheet prints an asset post with, or null. */
+export function k3AssetPostLabel(concept: string): string | null {
+  return postLabelIn(K3_BALANSRAKNING_TILLGANGAR, concept)
+}
+
+function postLabelIn(nodes: readonly StatementNode[], concept: string): string | null {
+  for (const node of nodes) {
+    if (node.kind === 'post' && node.concept === concept) return node.label
+    if (node.kind === 'group') {
+      const label = postLabelIn(node.children, concept)
+      if (label) return label
     }
-    return null
   }
-  return find(K2_BALANSRAKNING_TILLGANGAR)
+  return null
 }
 
 /** K2 AB risbs 2024-09-12: equity and liabilities. */

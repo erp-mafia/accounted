@@ -57,6 +57,11 @@ import {
 import { ORE_ROUNDING_ACCOUNT, roundOre } from '@/lib/money'
 import { VOUCHER_WARNING_CODES } from '@/lib/bookkeeping/voucher-plausibility'
 import { isPaidAtIssueAccount } from '@/lib/invoices/paid-at-issue'
+import {
+  INVOICE_COLOR_PATTERN,
+  INVOICE_FOOTER_TEXT_MAX_LENGTH,
+  INVOICE_HEADER_TEXT_MAX_LENGTH,
+} from '@/lib/invoices/branding-constants'
 import { DIMENSION_RULE_TYPES, ruleValueProblem } from '@/lib/dimensions/rule-value'
 import { validateEmployeeBankAccount } from '@/lib/payments/bank-account'
 import { validateJamkning } from '@/lib/salary/jamkning-rules'
@@ -2237,12 +2242,17 @@ export const CreateSupplierInvoiceSchema = z.object({
 // (company_id, supplier_id, supplier_invoice_number), which excludes
 // credited/reversed invoices, so the advisory never warns on the re-issue
 // pattern the index was widened to allow. The payment reference is looked
-// for among the same live invoices; the number, the reference or both.
+// for among the same live invoices; the number, the reference or both. The
+// invoice date and the amount to pay (with its currency, SEK when omitted)
+// look for the same document again among the invoices with the reference.
 export const SupplierInvoiceExistsQuerySchema = z
   .object({
     supplier_id: uuid,
     number: z.string().min(1).max(200).optional(),
     reference: z.string().min(1).max(200).optional(),
+    invoice_date: isoDate.optional(),
+    total: z.coerce.number().finite().optional(),
+    currency: CurrencySchema.optional(),
   })
   .refine((query) => query.number !== undefined || query.reference !== undefined, {
     path: ['number'],
@@ -4235,22 +4245,22 @@ export const UpdateSettingsSchema = z.object({
   // sending user. Owner/admin only, like the copy lists (settings route).
   invoice_email_reply_to: invoiceEmailAddress.nullable().optional(),
   // Invoice branding: colors enforced as #RRGGBB at the DB level too
-  // (see migration 20260526120200_invoice_branding.sql). The dedicated
-  // /api/settings/invoicing/branding route is the primary path; these
-  // entries let the generic PUT /api/settings also accept the same fields.
+  // (see migration 20260526120200_invoice_branding.sql). Set under
+  // Inställningar > Fakturor (PdfPrintSettings) through this PUT, and by the
+  // v1 settings operation and its MCP tool.
   invoice_primary_color: z
     .string()
-    .regex(/^#[0-9A-Fa-f]{6}$/, 'Ange en giltig hex-färg (#RRGGBB)')
+    .regex(INVOICE_COLOR_PATTERN, 'Ange en giltig hex-färg (#RRGGBB)')
     .optional(),
   invoice_accent_color: z
     .string()
-    .regex(/^#[0-9A-Fa-f]{6}$/, 'Ange en giltig hex-färg (#RRGGBB)')
+    .regex(INVOICE_COLOR_PATTERN, 'Ange en giltig hex-färg (#RRGGBB)')
     .optional(),
   invoice_font_family: z
     .enum(['Helvetica', 'Times-Roman', 'Courier', 'Source Sans 3', 'Source Serif 4', 'Custom'])
     .optional(),
-  invoice_header_text: z.string().max(200).nullable().optional(),
-  invoice_footer_text: z.string().max(500).nullable().optional(),
+  invoice_header_text: z.string().max(INVOICE_HEADER_TEXT_MAX_LENGTH).nullable().optional(),
+  invoice_footer_text: z.string().max(INVOICE_FOOTER_TEXT_MAX_LENGTH).nullable().optional(),
   // Automation
   send_invoice_reminders: z.boolean().optional(),
   reminder_days_level_1: z.number().int().min(1).max(365).optional(),

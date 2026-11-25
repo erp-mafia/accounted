@@ -8,9 +8,12 @@
 import { describe, expect, it } from 'vitest'
 import type { PendingOperation } from '@/types'
 import {
+  APPROVAL_PREVIEW_ROWS,
+  approvalPreviewOf,
   headlineAmount,
   isAutoExpired,
   missingFields,
+  postedVerifikat,
   proposalFacts,
   reviewHistory,
   reviewReason,
@@ -617,5 +620,146 @@ describe('the review template of the types a person checks against a file', () =
       transaction_amount: 7000,
     }) ?? [[]]
     expect(rows.map((fact) => fact.id)).toEqual(['invoice_number', 'customer_name', 'invoice_date', 'invoice_total'])
+  })
+})
+
+describe('postedVerifikat: every verifikat approving a proposal posts', () => {
+  const lines = (debit: number, account = '6110') => [
+    { account_number: account, debit_amount: debit, credit_amount: 0 },
+    { account_number: '1930', debit_amount: 0, credit_amount: debit },
+  ]
+
+  it('are the staged rows wherever the preview keeps one verifikat', () => {
+    expect(postedVerifikat({ lines: VOUCHER_LINES })).toEqual([VOUCHER_LINES])
+    expect(postedVerifikat({ journal_entry: { lines: VOUCHER_LINES } })).toEqual([VOUCHER_LINES])
+    const payment = [{ account_number: '1930', description: 'Inbetalning', debit: 7000, credit: 0 }, { account_number: '1510', description: 'Kundfordran', debit: 0, credit: 7000 }]
+    expect(postedVerifikat({ invoice_number: '186', expected_lines: payment })).toEqual([payment])
+    expect(postedVerifikat({ name: 'Provkund Äng AB' })).toEqual([])
+  })
+
+  it('a rättelse or a storno: the verifikat it posts, never the one it replaces', () => {
+    expect(postedVerifikat({ original: { lines: lines(1890.5) }, correction: { lines: lines(735) } })).toEqual([lines(735)])
+    expect(postedVerifikat({ original: { lines: lines(125) }, reversal: { lines: lines(-125) } })).toEqual([lines(-125)])
+  })
+
+  it('several: in the order they are posted, whatever order the jsonb keeps the keys in', () => {
+    const sale = lines(7000, '1510')
+    const payment = [{ account_number: '1930', debit: 7000, credit: 0 }, { account_number: '1510', debit: 0, credit: 7000 }]
+    expect(postedVerifikat({ expected_lines: payment, sale_entry: { lines: sale } })).toEqual([sale, payment])
+    expect(postedVerifikat({ corrected: { lines: lines(300) }, storno: { lines: lines(-300) } })).toEqual([lines(-300), lines(300)])
+    expect(postedVerifikat({ journal_entries: [{ lines: lines(10) }, { lines: lines(20) }] })).toEqual([lines(10), lines(20)])
+    // A supplier invoice's registration, booked before the link to the payment's verifikat.
+    expect(postedVerifikat({ voucher_label: 'A88', registration_entry: { lines: lines(400, '5410') } })).toEqual([lines(400, '5410')])
+    // A batch: each invoice's sale, then the samlingsverifikation.
+    expect(
+      postedVerifikat({
+        expected_lines: payment,
+        sale_entries: [
+          { invoice_id: 'i-1', journal_entry: { lines: lines(3000, '1510') } },
+          { invoice_id: 'i-2', journal_entry: { lines: lines(4000, '1510') } },
+        ],
+      }),
+    ).toEqual([lines(3000, '1510'), lines(4000, '1510'), payment])
+  })
+
+  it('reads nothing it does not post: moms rows again, a booked verifikat, an inline rättelse', () => {
+    expect(postedVerifikat({ lines: VOUCHER_LINES, vat_lines: [VOUCHER_LINES[1]] })).toEqual([VOUCHER_LINES])
+    expect(postedVerifikat({ voucher_lines: VOUCHER_LINES })).toEqual([])
+    expect(postedVerifikat({ struck_lines: lines(5), added_lines: lines(6), resulting_lines: lines(6) })).toEqual([])
+    // Rows of a settlement that state amounts but no debit or credit are no kontering.
+    expect(postedVerifikat({ lines: [{ account_number: '1580', amount: 120 }] })).toEqual([])
+    // A kontantmetod cutoff also posts corrections staged in a shape of their own: none of it is read.
+    expect(postedVerifikat({ entries: [{ lines: lines(50) }], corrections: [{ corrected_lines: lines(50) }] })).toEqual([])
+  })
+})
+
+describe('approvalPreviewOf: what the row\'s Godkänn shows before the click', () => {
+  const CATEGORISED = {
+    date: '2026-11-18',
+    amount: 245,
+    currency: 'SEK',
+    lines: [
+      { account_number: '6110', debit_amount: 196, credit_amount: 0, description: 'Kontorsmaterial' },
+      { account_number: '2641', debit_amount: 49, credit_amount: 0, description: 'Ingående moms 25%' },
+      { account_number: '1930', debit_amount: 0, credit_amount: 245, description: 'Företagskonto' },
+    ],
+  }
+
+  it('a categorised bank row: its date, and the rows it posts as staged', () => {
+    const preview = approvalPreviewOf(op({ operation_type: 'categorize_transaction', preview_data: CATEGORISED }))
+    expect(preview.facts.map((fact) => fact.id)).toEqual(['date'])
+    expect(preview.verifikat).toEqual([{ lines: CATEGORISED.lines, listed: 3 }])
+    expect(preview.hiddenVerifikat).toBe(0)
+    expect(preview.truncated).toBe(false)
+  })
+
+  it('a supplier invoice: who, which invoice and when, and its total; no rows when the preview states none', () => {
+    const preview = approvalPreviewOf(
+      op({
+        operation_type: 'create_supplier_invoice_from_inbox',
+        preview_data: {
+          supplier_name: 'Simulerad Telekom AB',
+          supplier_invoice_number: '4411',
+          invoice_date: '2026-11-04',
+          due_date: '2026-12-04',
+          subtotal: 3528.8,
+          vat_amount: 882.2,
+          total: 4411,
+          currency: 'SEK',
+        },
+      }),
+    )
+    expect(preview.facts.map((fact) => fact.id)).toEqual(['supplier_name', 'supplier_invoice_number', 'invoice_date', 'due_date', 'total'])
+    expect(preview.facts.at(-1)).toMatchObject({ strong: true, value: { kind: 'money', amount: 4411, currency: 'SEK' } })
+    expect(preview.verifikat).toEqual([])
+  })
+
+  it('a proposal that books nothing: its facts only', () => {
+    const preview = approvalPreviewOf(op({ operation_type: 'create_customer', preview_data: { name: 'Provkund Äng AB', customer_type: 'swedish_business' } }))
+    expect(preview.facts.map((fact) => fact.id)).toEqual(['name', 'customer_type'])
+    expect(preview.verifikat).toEqual([])
+  })
+
+  it('a payment matched to an invoice whose sale is booked first: both verifikat, the sale first', () => {
+    const sale = [
+      { account_number: '1510', debit_amount: 7000, credit_amount: 0 },
+      { account_number: '3001', debit_amount: 0, credit_amount: 5600 },
+      { account_number: '2611', debit_amount: 0, credit_amount: 1400 },
+    ]
+    const payment = [{ account_number: '1930', debit: 7000, credit: 0 }, { account_number: '1510', debit: 0, credit: 7000 }]
+    const preview = approvalPreviewOf(
+      op({ operation_type: 'match_transaction_invoice', preview_data: { invoice_number: '186', expected_lines: payment, sale_entry: { lines: sale } } }),
+    )
+    expect(preview.verifikat).toEqual([
+      { lines: sale, listed: 3 },
+      { lines: payment, listed: 2 },
+    ])
+    expect(preview.truncated).toBe(false)
+  })
+
+  it('lists at most eight rows over all the verifikat, counts the rest, and keeps every row for each Summa', () => {
+    const many = Array.from({ length: APPROVAL_PREVIEW_ROWS + 6 }, (_, i) => ({ account_number: '6110', debit_amount: i + 1, credit_amount: 0 }))
+    const batch = approvalPreviewOf(op({ operation_type: 'bulk_book_transactions', preview_data: { lines: many } }))
+    expect(batch.verifikat).toEqual([{ lines: many, listed: APPROVAL_PREVIEW_ROWS }])
+    expect(batch.truncated).toBe(true)
+
+    const entry = (amount: number) => ({
+      lines: [
+        { account_number: '2510', debit_amount: amount, credit_amount: 0 },
+        { account_number: '1630', debit_amount: 0, credit_amount: amount },
+        { account_number: '8423', debit_amount: 0, credit_amount: 0 },
+      ],
+    })
+    const rows = approvalPreviewOf(
+      op({ operation_type: 'book_skattekonto_rows', preview_data: { journal_entries: [entry(1), entry(2), entry(3), entry(4)] } }),
+    )
+    expect(rows.verifikat.map((v) => v.listed)).toEqual([3, 3, 2])
+    expect(rows.hiddenVerifikat).toBe(1)
+    expect(rows.truncated).toBe(true)
+  })
+
+  it('a type without typed fields: no facts, and never a row the preview does not state', () => {
+    const preview = approvalPreviewOf(op({ operation_type: 'attach_document_to_transaction', preview_data: { document_file_name: 'kvitto.pdf' } }))
+    expect(preview).toEqual({ facts: [], verifikat: [], hiddenVerifikat: 0, truncated: false })
   })
 })
