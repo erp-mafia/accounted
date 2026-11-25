@@ -29,6 +29,7 @@ import { postingPort } from '@/lib/posting/port'
 import type { BusinessEventDraft } from '@/lib/posting/types'
 import { roundOre } from '@/lib/money'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { ensureCompanyImpairmentAccount } from './asset-chart-accounts'
 import { AssetAlreadyDisposedError, AssetNotFoundError, getAsset } from './asset-service'
 import { depreciationStartOf, isLand, plainAssetUnit, usesUnitEngine } from './asset-units'
 import {
@@ -434,6 +435,15 @@ export async function postValueAdjustment(
 ): Promise<ValueAdjustmentResult> {
   const preview = await previewValueAdjustment(supabase, companyId, assetId, input)
   const reason = input.reason.trim()
+  if (preview.kind === 'impairment') {
+    await ensureCompanyImpairmentAccount(
+      supabase,
+      companyId,
+      userId,
+      preview.accumulatedAccount,
+      preview.asset.bas_accumulated_account,
+    )
+  }
   const draft = await postingPort.draftJournalEntry({
     supabase,
     companyId,

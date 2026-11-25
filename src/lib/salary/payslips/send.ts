@@ -65,6 +65,8 @@ export interface PayslipDeliveryResult {
   employee_id: string
   employee_name: string
   status: PayslipDeliveryStatus
+  /** The mailbox that reached the employee, or email for the link (sent, failed or skipped). */
+  channel: PayslipChannel
   error: string | null
 }
 
@@ -259,8 +261,8 @@ export async function sendPayslips(
   const companyName = displayName ?? (company as { name: string }).name
 
   const result: SendPayslipsResult = { sent: 0, skipped: 0, failed: 0, total: runEmployees.length, errors: [], deliveries: [] }
-  const record = (row: RunEmployeeRow, status: PayslipDeliveryStatus, error: string | null) =>
-    result.deliveries.push({ employee_id: row.employee_id, employee_name: nameOf(row), status, error })
+  const record = (row: RunEmployeeRow, status: PayslipDeliveryStatus, error: string | null, channel: PayslipChannel = 'email') =>
+    result.deliveries.push({ employee_id: row.employee_id, employee_name: nameOf(row), status, channel, error })
 
   // Digital mailbox first: whoever it reaches is done; the rest get the
   // email link below, as without the channel.
@@ -281,7 +283,7 @@ export async function sendPayslips(
       const row = runEmployees.find((r) => r.employee_id === delivered.employee_id)
       if (!row) continue
       result.sent++
-      record(row, 'sent', null)
+      record(row, 'sent', null, mailbox)
     }
   }
 

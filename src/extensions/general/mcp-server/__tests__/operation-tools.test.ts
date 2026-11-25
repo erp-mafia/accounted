@@ -25,9 +25,10 @@ describe('toolInputSchema', () => {
     expect(schema.required).toEqual(['id', 'nested'])
   })
 
-  it('names the types of an enum that lists numbers, and leaves a string enum bare', () => {
+  it('names the types of every enum', () => {
     // A bare enum is a parameter without a type, which clients send as a
-    // string: default_vat_rate 0 arrived as "0" (agent feedback seq 1088767).
+    // string: default_vat_rate 0 arrived as "0" (agent feedback seq 1088767),
+    // and a connector directory review refuses it.
     const schema = toolInputSchema(
       z.object({
         rate: z.literal([0, 0.06, 0.12, 0.25, null]).optional(),
@@ -38,7 +39,7 @@ describe('toolInputSchema', () => {
     const properties = schema.properties as Record<string, Record<string, unknown>>
     expect(properties.rate).toEqual({ type: ['number', 'null'], enum: [0, 0.06, 0.12, 0.25, null] })
     expect(properties.flag).toEqual({ type: 'number', enum: [0, 1] })
-    expect(properties.box).toEqual({ enum: ['10', '11', null] })
+    expect(properties.box).toEqual({ type: ['string', 'null'], enum: ['10', '11', null] })
   })
 })
 

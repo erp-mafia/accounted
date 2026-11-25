@@ -67,7 +67,7 @@ export function attestQueueOf(
   leftOut: boolean,
 ): AttestQueueKind | null {
   // Only a company the policy governs has queues: the policy on, faktureringsmetoden.
-  if (!policy.enabled || !companyAttestsSupplierInvoices(accountingMethod)) return null
+  if (!companyAttestsSupplierInvoices(accountingMethod, policy.enabled)) return null
   // Held back by the policy: waiting for attest while it can still be given.
   if (paymentWaitsForAttest(policy, accountingMethod, invoice)) {
     return invoice.remaining_amount > FULLY_PAID_EPSILON && canApproveSupplierInvoice(invoice) ? 'waiting' : null
@@ -180,7 +180,7 @@ export async function loadAttestQueues(
     }
   }
   // Kontantmetoden has no attest step: no queues, as if there were no policy.
-  const governed = [...policies.keys()].filter((id) => companyAttestsSupplierInvoices(methods.get(id) ?? null))
+  const governed = [...policies.entries()].filter(([id, policy]) => companyAttestsSupplierInvoices(methods.get(id) ?? null, policy.enabled)).map(([id]) => id)
   if (governed.length === 0) return result
 
   const invoices = await readOwedInvoices(supabase, governed)

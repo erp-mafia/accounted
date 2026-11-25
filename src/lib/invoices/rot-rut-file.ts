@@ -494,10 +494,11 @@ export function evaluateInvoiceForFile(
   // BegartBelopp mirrors the deduction the invoice actually credited (1513);
   // BetaltBelopp = what the buyer paid for the work. Each amount converts on
   // its own (öre-rounded) exactly like the ledger's per-item 1513 debit, then
-  // the sum rounds to whole kronor for the file.
-  const prisForArbete = Math.round(
-    typeLines.reduce((sum, l) => sum + toSek(l.line_total ?? 0) + toSek(l.vat_amount ?? 0), 0),
-  )
+  // drops its öre for the file: "Uppgifter om belopp ska anges i hela krontal
+  // så att öretal faller bort" (lag 2009:194, 5 §), so 1 003,50 is 1 003.
+  const price = typeLines.reduce((sum, l) => sum + toSek(l.line_total ?? 0) + toSek(l.vat_amount ?? 0), 0)
+  const credited = typeLines.reduce((sum, l) => sum + toSek(l.deduction_amount ?? 0), 0)
+  const prisForArbete = truncateToWholeKronor(price)
   // BegartBelopp rounds DOWN (truncateToWholeKronor, the Skatteverket-bound
   // amount rule): skattereduktionen is capped at a share of the work price
   // (HUSFL: 50 % RUT / 30 % ROT), so a deduction with öre, 62,50 or 187,50,
@@ -506,10 +507,11 @@ export function evaluateInvoiceForFile(
   // begärt > betalt and blocked a correct invoice; below the cap (ROT 30 %)
   // it over-requested by up to a krona. The helper öre-rounds before
   // truncating so float noise (62.499999...) cannot drop a whole krona.
-  const begartBelopp = truncateToWholeKronor(
-    typeLines.reduce((sum, l) => sum + toSek(l.deduction_amount ?? 0), 0),
-  )
-  const betaltBelopp = prisForArbete - begartBelopp
+  const begartBelopp = truncateToWholeKronor(credited)
+  // What the buyer paid, öre dropped (5 §), not prisForArbete - begärt: a
+  // credit with öre (a foreign invoice) would state a krona never paid.
+  // Begärt + betalt never exceeds PrisForArbete, as the e-tjänst requires.
+  const betaltBelopp = truncateToWholeKronor(price - credited)
   if (prisForArbete < 2) {
     return block('PRICE_BELOW_MINIMUM', 'Arbetskostnaden måste vara minst 2 kr (Skatteverkets filformat).')
   }
@@ -519,10 +521,10 @@ export function evaluateInvoiceForFile(
     return block('ZERO_DEDUCTION', 'Fakturans ROT/RUT-avdrag är 0 kr: det finns inget belopp att begära.')
   }
   // The buyer must have paid at least as much as is being requested
-  // (skattereduktionen är max 50 % av arbetskostnaden). With begärt floored,
-  // any invoice whose ledger deduction respects the cap passes by
-  // construction (2*floor(D) is an integer <= pris <= round(pris)); this
-  // guard now only catches corrupted deduction data, where BetaltBelopp
+  // (skattereduktionen är max 50 % av arbetskostnaden). With both floored,
+  // any invoice whose ledger deduction D respects the cap passes by
+  // construction (floor(D) <= D <= pris - D, so floor(D) <= floor(pris - D));
+  // this guard now only catches corrupted deduction data, where BetaltBelopp
   // could even go negative, which Skatteverkets schema rejects outright.
   if (begartBelopp > betaltBelopp) {
     return block(

@@ -27,7 +27,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { consentCovers, readOpenConsents } from '@/lib/usage/consent'
 import { billedUsageKinds, USAGE_PRICES } from '@/lib/usage/kinds'
-import { readCompanyPays } from '@/lib/usage/paying'
+import { readCompanyPayerState } from '@/lib/usage/paying'
 import { countsAsUsedBankPayment } from './orders/status'
 
 /** Payments per company and Stockholm calendar month, unless company_bank_payment_allowances says otherwise. A hard cap. */
@@ -69,8 +69,10 @@ export interface BankPaymentsUsage {
   extra_offered: boolean
   /** Whether the charge is open: payments above included_payments are then billed instead of refused. */
   billed_above_included: boolean
-  /** Whether more would be offered with a subscription: billed, but nobody pays for the company (lib/usage/paying.ts). */
+  /** Whether more would be offered with a subscription: billed, but nobody pays for the company and it has none (lib/usage/paying.ts). */
   subscription_required: boolean
+  /** Whether more will be offered once the company's subscription, started during the trial, has its first charge (subscriptionStarting). */
+  subscription_starting: boolean
   /** Öre exkl. moms per payment above included_payments (lib/usage/kinds.ts). */
   unit_price_ore: number
   /** Payments the company may still send this month (0 when the cap is reached). */
@@ -90,6 +92,7 @@ export interface BankPaymentsMonth {
   extra_offered: boolean
   billed_above_included: boolean
   subscription_required: boolean
+  subscription_starting: boolean
 }
 
 const PERIOD = /^\d{4}-(0[1-9]|1[0-2])$/
@@ -205,7 +208,9 @@ export async function readBankPaymentsMonth(supabase: SupabaseClient, companyId:
     .map(({ id, cash_account_id }) => ({ id, cash_account_id }))
   const included = await includedBankPayments(supabase, companyId)
   const billed = bankPaymentsBilled()
-  const offered = billed && (await readCompanyPays(supabase, companyId))
+  const payer = billed ? await readCompanyPayerState(supabase, companyId) : null
+  const offered = !!payer?.payer
+  const starting = billed && !offered && payer?.subscriptionStarting === true
   const accepted = offered && consentCovers((await readOpenConsents(supabase, companyId)).get('bank_payment'), 'bank_payment')
   return {
     period: month,
@@ -214,7 +219,8 @@ export async function readBankPaymentsMonth(supabase: SupabaseClient, companyId:
     cap_payments: bankPaymentsCap(included, accepted),
     extra_offered: offered,
     billed_above_included: accepted,
-    subscription_required: billed && !offered,
+    subscription_required: billed && !offered && !starting,
+    subscription_starting: starting,
   }
 }
 
@@ -233,6 +239,7 @@ export async function getBankPaymentsUsage(supabase: SupabaseClient, companyId: 
     extra_offered: month.extra_offered,
     billed_above_included: month.billed_above_included,
     subscription_required: month.subscription_required,
+    subscription_starting: month.subscription_starting,
     unit_price_ore: USAGE_PRICES.bank_payment.unitPriceOre ?? 0,
     remaining_payments: Math.max(0, month.cap_payments - paymentsSent),
     extra_payments: Math.max(0, paymentsSent - included),

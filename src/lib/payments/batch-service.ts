@@ -278,7 +278,8 @@ export async function resolveFileDebtor(supabase: SupabaseClient, companyId: str
 
 /**
  * Whether the company attests supplier invoices at all (the attest gate:
- * kontantmetoden has no attest step, crm#1141). Asked only when one of the
+ * only faktureringsmetoden with the attest policy on has an attest step,
+ * crm#1141). Asked only when one of the
  * rows lacks attest: for attested rows the answer changes nothing, since it
  * decides only the unattested warning (batch-eligibility.ts).
  */

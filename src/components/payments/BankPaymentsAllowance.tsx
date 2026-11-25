@@ -320,12 +320,14 @@ export function BankPaymentsAllowanceLine({ usage, count, refusal = null, canReq
   const acceptable = (refusal ? refusal.extra_offered && !refusal.billed : usage?.extra_offered === true && !usage.billed_above_included)
   // More would be on offer with a subscription of its own: the way on is to start one.
   const needsSubscription = refusal ? refusal.subscription_required : usage?.subscription_required === true
+  // The subscription is started and waits for its first charge: more opens then, and there is nothing to do now.
+  const startingSubscription = refusal ? refusal.subscription_starting : usage?.subscription_starting === true
   const unitPriceOre = refusal?.unit_price_ore ?? usage?.unit_price_ore ?? 0
-  const { view: packs } = usePaymentPacks(canRequest && over && !acceptable && !needsSubscription)
+  const { view: packs } = usePaymentPacks(canRequest && over && !acceptable && !needsSubscription && !startingSubscription)
   const buyable = packs !== null && packs !== 'failed' && packs.can_buy ? packs : null
   // No action until the offer is known, so the link does not change under the cursor.
   const action =
-    !canRequest
+    !canRequest || startingSubscription
       ? undefined
       : acceptable
         ? { label: t('request_more'), onClick: () => setRequesting(true) }
@@ -356,6 +358,8 @@ export function BankPaymentsAllowanceLine({ usage, count, refusal = null, canReq
     // Billed above what is included: the stop is the safety ceiling, said as such.
     const text = acceptable
       ? t('offered_none_left', numbers)
+      : startingSubscription
+      ? t('subscription_starting_none_left', numbers)
       : needsSubscription
       ? t('subscription_none_left', numbers)
       : refusal.billed
@@ -385,6 +389,8 @@ export function BankPaymentsAllowanceLine({ usage, count, refusal = null, canReq
         <AttnLine action={action}>
           {acceptable
             ? t('offered_none_left', { used: usage.payments_sent, included: usage.included_payments, month, price })
+            : startingSubscription
+            ? t('subscription_starting_none_left', { used: usage.payments_sent, included: usage.included_payments, month, price })
             : needsSubscription
             ? t('subscription_none_left', { used: usage.payments_sent, included: usage.included_payments, month, price })
             : remaining > 0

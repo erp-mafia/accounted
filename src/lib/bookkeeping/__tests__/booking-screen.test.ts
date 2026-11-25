@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   BOOKING_SCREEN_PATH,
+  bankRowBookHref,
   bookingScreenHref,
   bookingScreenOrigin,
   parseBookingScreenBack,
@@ -144,5 +145,21 @@ describe('bookingScreenOrigin', () => {
   it('without one, a bank row came from Bankrader and a verifikation from Verifikat', () => {
     expect(bookingScreenOrigin(null, true)).toBe('/transactions')
     expect(bookingScreenOrigin(null, false)).toBe('/bookkeeping')
+  })
+})
+
+describe('bankRowBookHref', () => {
+  it("opens the row on the booking screen where it is switched on, the address Att bokföra opens", () => {
+    expect(bankRowBookHref(TX, true)).toBe(bookingScreenHref({ kind: 'transaction', transactionId: TX, account: null }))
+    expect(bankRowBookHref(TX, true)).toBe(`/bokfor?transaktion=${TX}`)
+  })
+
+  it('opens the row in Bankrader where the screen is not switched on', () => {
+    expect(bankRowBookHref(TX, false)).toBe(`/transactions?highlight=${TX}`)
+  })
+
+  it('lands back on Bankrader after booking, the screen default for a bank row', () => {
+    const back = parseBookingScreenBack(Object.fromEntries(new URL(bankRowBookHref(TX, true), 'https://x.test').searchParams))
+    expect(bookingScreenOrigin(back, true)).toBe('/transactions')
   })
 })

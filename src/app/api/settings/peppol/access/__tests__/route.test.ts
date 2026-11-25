@@ -8,6 +8,9 @@ const requireAuthMock = vi.fn()
 const sendEmailMock = vi.fn()
 const isConfiguredMock = vi.fn()
 const logErrorMock = vi.hoisted(() => vi.fn())
+const planRuleMock = vi.hoisted(() => vi.fn())
+const paysMock = vi.hoisted(() => vi.fn())
+const memberEmailMock = vi.hoisted(() => vi.fn())
 
 vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 vi.mock('@/lib/auth/require-auth', () => ({
@@ -28,8 +31,16 @@ vi.mock('@/lib/email/service', () => ({
     isConfigured: () => isConfiguredMock(),
   }),
 }))
-vi.mock('@/lib/support', () => ({
-  getSupportRecipientEmail: () => 'support@example.test',
+vi.mock('@/lib/invoices/peppol-plan-rule', () => ({
+  applyPeppolPlanRule: (...args: unknown[]) => planRuleMock(...args),
+  peppolCompanyPays: (...args: unknown[]) => paysMock(...args),
+}))
+vi.mock('@/lib/notifications/member-email', () => ({
+  resolveMemberEmail: (...args: unknown[]) => memberEmailMock(...args),
+}))
+vi.mock('@/lib/email/brand-sender', () => ({
+  getSenderForCompany: vi.fn().mockResolvedValue({ fromName: null, fromAddress: null, replyTo: null, brand: null }),
+  getBaseUrlForBrand: () => 'https://app.example.test',
 }))
 vi.mock('@/lib/logger', () => {
   const logger = {
@@ -45,6 +56,22 @@ import { POST } from '../route'
 
 const user = { id: 'user-1', email: 'owner@example.test' }
 const companySettings = { company_name: 'Kund AB', org_number: '556677-8899', entity_type: 'aktiebolag' }
+const enabledRow = (extra: Record<string, unknown> = {}) => ({
+  company_id: 'company-1',
+  status: 'enabled',
+  max_sends: 10,
+  receive_enabled: true,
+  requested_at: '2026-08-21T15:00:00.000Z',
+  requested_by: 'user-1',
+  request_note: 'Vi fakturerar Region Skåne',
+  enabled_at: '2026-08-21T15:00:01.000Z',
+  enabled_by: 'automatic: paid plan',
+  disabled_at: null,
+  note: null,
+  created_at: '2026-08-21T15:00:00.000Z',
+  updated_at: '2026-08-21T15:00:01.000Z',
+  ...extra,
+})
 const requestedRow = {
   company_id: 'company-1',
   status: 'requested',
@@ -68,6 +95,9 @@ describe('POST /api/settings/peppol/access', () => {
     service.reset()
     isConfiguredMock.mockReturnValue(true)
     sendEmailMock.mockResolvedValue({ success: true })
+    planRuleMock.mockResolvedValue({ enabled: [], paused: [], failed: [] })
+    paysMock.mockResolvedValue(false)
+    memberEmailMock.mockResolvedValue('owner@example.test')
     requireAuthMock.mockResolvedValue({ user, supabase: mockSupabase, error: null })
   })
 
@@ -96,28 +126,75 @@ describe('POST /api/settings/peppol/access', () => {
     expect((await response.json()).error.code).toBe('PEPPOL_SANDBOX_NOT_ALLOWED')
   })
 
-  it('records the request, mails the operators and returns the locked summary', async () => {
+  it('switches Peppol on at once for a paying company, with its receiving choice, and mails nobody', async () => {
     enqueue({ data: { is_sandbox: false }, error: null })                         // sandbox check
+    enqueue({ data: companySettings, error: null })                               // company settings
     service.enqueue({ data: null, error: null })                                  // no access row
     service.enqueue({ data: requestedRow, error: null })                          // upsert
-    enqueue({ data: companySettings, error: null })                               // company settings
-    service.enqueue({ data: requestedRow, error: null })                          // summary read
+    service.enqueue({ data: enabledRow(), error: null })                          // summary read
+    service.enqueue({ data: null, error: null, count: 0 })                        // sends this month
+    service.enqueue({ data: null, error: null, count: 0 })
+    planRuleMock.mockResolvedValue({ enabled: ['company-1'], paused: [], failed: [] })
 
     const response = await post({ note: 'Vi fakturerar Region Skåne', wants_receiving: true })
     const body = await response.json()
 
     expect(response.status).toBe(201)
-    expect(body.data.access).toMatchObject({ status: 'requested', send_enabled: false })
-    expect(sendEmailMock).toHaveBeenCalledTimes(1)
-    const mail = sendEmailMock.mock.calls[0][0] as { to: string; subject: string; text: string }
-    expect(mail.to).toBe('support@example.test')
-    expect(mail.subject).toContain('Kund AB')
-    expect(mail.subject).toContain('mottagning')
-    expect(mail.text).toContain('company-1')
-    expect(mail.text).toContain('Region Skåne')
-    expect(mail.text).toContain('--receive')
+    expect(body.data.access).toMatchObject({ status: 'enabled', send_enabled: true, receive_enabled: true, max_sends: 10 })
+    expect(body.data.plan_required).toBe(false)
+    expect(planRuleMock).toHaveBeenCalledWith({ service: service.supabase, companyIds: ['company-1'] })
+    expect(sendEmailMock).not.toHaveBeenCalled()
     const upsert = service.calls.find((c) => c.method === 'upsert')?.args[0] as Record<string, unknown>
-    expect(upsert.request_note).toBe('[vill ta emot e-fakturor] Vi fakturerar Region Skåne')
+    expect(upsert).toMatchObject({ request_note: 'Vi fakturerar Region Skåne', receive_enabled: true })
+  })
+
+  it('keeps the request of a company without a paid plan, says so, and mails the person who asked', async () => {
+    enqueue({ data: { is_sandbox: false }, error: null })
+    enqueue({ data: companySettings, error: null })
+    service.enqueue({ data: null, error: null })                                  // no access row
+    service.enqueue({ data: requestedRow, error: null })                          // upsert
+    service.enqueue({ data: requestedRow, error: null })                          // summary read
+
+    const response = await post()
+    const body = await response.json()
+
+    expect(response.status).toBe(201)
+    expect(body.data.access).toMatchObject({ status: 'requested', send_enabled: false })
+    expect(body.data.plan_required).toBe(true)
+    expect(memberEmailMock).toHaveBeenCalledWith(service.supabase, 'company-1', 'user-1')
+    expect(sendEmailMock).toHaveBeenCalledTimes(1)
+    const mail = sendEmailMock.mock.calls[0][0] as { to: string; subject: string; text: string; html: string; idempotencyKey: string }
+    expect(mail.to).toBe('owner@example.test')
+    expect(mail.subject).toBe('Peppol kräver ett betalt abonnemang')
+    expect(mail.text).toContain('Kund AB')
+    expect(mail.text).toContain('https://app.example.test/settings/billing')
+    expect(mail.html).toContain('https://app.example.test/settings/billing')
+    expect(mail.idempotencyKey).toBe('peppol_plan_required:company-1:user-1')
+  })
+
+  it('still answers the request when the mail fails: the page says the same', async () => {
+    enqueue({ data: { is_sandbox: false }, error: null })
+    enqueue({ data: companySettings, error: null })
+    service.enqueue({ data: null, error: null })
+    service.enqueue({ data: requestedRow, error: null })
+    service.enqueue({ data: requestedRow, error: null })
+    sendEmailMock.mockRejectedValue(new Error('provider down'))
+
+    const response = await post()
+    expect(response.status).toBe(201)
+    expect((await response.json()).data.plan_required).toBe(true)
+  })
+
+  it('refuses again a company the operators switched off', async () => {
+    enqueue({ data: { is_sandbox: false }, error: null })
+    enqueue({ data: companySettings, error: null })
+    service.enqueue({ data: { ...requestedRow, status: 'disabled', disabled_at: '2026-11-14T10:00:00.000Z' }, error: null })
+
+    const response = await post()
+    expect(response.status).toBe(403)
+    expect((await response.json()).error.code).toBe('PEPPOL_ACCESS_DISABLED')
+    expect(service.calls.some((c) => c.method === 'upsert')).toBe(false)
+    expect(planRuleMock).not.toHaveBeenCalled()
   })
 
   it('refuses a sole trader identified by personnummer: nothing recorded, nobody mailed', async () => {
@@ -168,6 +245,7 @@ describe('POST /api/settings/peppol/access', () => {
     service.enqueue({ data: requestedRow, error: null })
     const again = await post()
     expect(again.status).toBe(200)
+    expect((await again.json()).data.plan_required).toBe(true)
     expect(sendEmailMock).not.toHaveBeenCalled()
 
     reset(); service.reset()

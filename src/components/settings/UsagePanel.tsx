@@ -113,7 +113,7 @@ export function UsagePanel() {
       {offered.length > 0 && (
         <SettingsGroup className="mt-6" label={t('usage_charges_label')} help={t('usage_charges_help')}>
           {offered.map((line) => (
-            <UsageChargeRow key={line.kind} line={line} paying={usage.paying} />
+            <UsageChargeRow key={line.kind} line={line} paying={usage.paying} starting={usage.subscription_starting === true} />
           ))}
         </SettingsGroup>
       )}
@@ -124,10 +124,12 @@ export function UsagePanel() {
 /**
  * One service on offer: stopping at what is included, with Begär fler, or
  * open at its price since a date. Nobody paying for the company (a trial)
- * stops it at what is included, and the row says so instead. Bank payments
+ * stops it at what is included, and the row says so instead: that a
+ * subscription is needed, or that more opens once the subscription started
+ * during the trial has its first charge. Bank payments
  * ask through their own request, which also asks how many a month.
  */
-function UsageChargeRow({ line, paying }: { line: CompanyUsageLine; paying: boolean }) {
+function UsageChargeRow({ line, paying, starting }: { line: CompanyUsageLine; paying: boolean; starting: boolean }) {
   const t = useTranslations('settings_billing')
   const { role } = useCompany()
   const { canWrite, lockedTitle } = useViewerLock()
@@ -142,7 +144,9 @@ function UsageChargeRow({ line, paying }: { line: CompanyUsageLine; paying: bool
     <SettingsRow label={t(`usage_kind_${line.kind}`)}>
       <SettingsRowNote className="tabular-nums">
         {!paying
-          ? t('usage_charge_needs_subscription', { included, price })
+          ? starting
+            ? t('usage_charge_subscription_starting', { included, price })
+            : t('usage_charge_needs_subscription', { included, price })
           : line.accepted && line.accepted_at
             ? t('usage_charge_on', { price, included, date: formatDateLong(line.accepted_at) })
             : t('usage_charge_off', { included, price })}

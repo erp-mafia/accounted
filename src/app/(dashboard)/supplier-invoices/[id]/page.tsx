@@ -78,6 +78,7 @@ import { DetailPager } from '@/components/common/DetailPager'
 import { SupplierPaymentDialog } from '@/components/supplier-invoices/SupplierPaymentDialog'
 import { PaymentReferenceDialog } from '@/components/supplier-invoices/PaymentReferenceDialog'
 import { SupplierInvoiceAttestPanel, useSupplierInvoiceAttest } from '@/components/supplier-invoices/SupplierInvoiceAttestPanel'
+import { useAttestPolicyOn } from '@/components/supplier-invoices/use-attest-policy-on'
 import { listContextKey } from '@/lib/navigation/list-context'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import type { SupplierInvoice, SupplierInvoiceItem, SupplierInvoicePayment } from '@/types'
@@ -190,6 +191,10 @@ function SupplierInvoiceDocument({ documentId, openLabel }: { documentId: string
 export default function SupplierInvoiceDetailPage() {
   const { canWrite } = useCanWrite()
   const { settings: companySettings } = useCompanySettings()
+  // Attest is a step only with the company's attest policy on
+  // (companyAttestsSupplierInvoices); without one a registered invoice is
+  // ready to pay as it stands.
+  const attestPolicyOn = useAttestPolicyOn()
   // The invoice's place on the flow (UI v2 PR 6), derived server-side.
   const routeParams = useParams()
   const invoiceIdParam = typeof routeParams.id === 'string' ? routeParams.id : ''
@@ -683,9 +688,8 @@ export default function SupplierInvoiceDetailPage() {
   // One status element, the same as the list row and the supplier page
   // (lib/supplier-invoices/status-display.ts): approved and paid render as
   // muted text, everything that deviates gets a chip.
-  const statusDisplay = supplierInvoiceStatusDisplay(invoice.status, {
-    attests: companyAttestsSupplierInvoices(companySettings?.accounting_method),
-  })
+  const attests = companyAttestsSupplierInvoices(companySettings?.accounting_method, attestPolicyOn)
+  const statusDisplay = supplierInvoiceStatusDisplay(invoice.status, { attests })
   const status: { label: string; exception: boolean; variant?: StatusChip } =
     invoice.status === 'paid' && invoice.paid_at
       ? { label: tList('status_paid_date', { date: formatDate(invoice.paid_at) }), exception: false }
@@ -704,14 +708,15 @@ export default function SupplierInvoiceDetailPage() {
   // Attest keys off approved_at, not the status: the overdue cron flips
   // unbooked invoices to 'overdue' just by aging, and gating on 'registered'
   // alone left them with no way through attest (#1206).
-  // Kontantmetod companies never attest: the debt is not booked before payment.
-  // The same rule keeps them out of the Att göra attest count (crm#1156).
-  // With the attest policy governing the invoice, only the people it lets
-  // attest see the button (the server refuses everyone else anyway).
+  // Only a company with an attest step is asked to attest
+  // (companyAttestsSupplierInvoices: faktureringsmetoden with the attest
+  // policy on). The same rule keeps the rest out of the Att göra attest count
+  // (crm#1156). With the attest policy governing the invoice, only the people
+  // it lets attest see the button (the server refuses everyone else anyway).
   const canApprove =
     canApproveSupplierInvoice(invoice) &&
     !invoice.is_credit_note &&
-    companyAttestsSupplierInvoices(companySettings?.accounting_method) &&
+    attests &&
     (!attestState?.required || attestState.viewer.may_approve)
   // A viewer the policy names attests too (crm#1569); everyone else with
   // read access sees the button locked, as before.
@@ -738,19 +743,19 @@ export default function SupplierInvoiceDetailPage() {
     }
   }
   // Markera som betald (and with it Befintlig verifikation): past attest, or
-  // registered where the company has no attest step (kontantmetoden), as
-  // Lägg i betalfil below already allowed (crm#1141).
-  const canMarkPaid = canMarkSupplierInvoicePaid(invoice, companySettings?.accounting_method)
+  // registered where the company has no attest step (kontantmetoden, or no
+  // attest policy on), as Lägg i betalfil below (crm#1141).
+  const canMarkPaid = canMarkSupplierInvoicePaid(invoice, companySettings?.accounting_method, attestPolicyOn)
   // After attest the next step is the betalfil to the bank, so that is the
   // header's one primary while the invoice is attested and in no open file.
   // Markera betald stays for the person who paid by hand, as a secondary.
-  // Kontantmetod companies have no attest step (canApprove above): their
-  // registered invoice is ready to pay as it stands, as on the list.
+  // A company without an attest step (canApprove above) has its registered
+  // invoice ready to pay as it stands, as on the list.
   const canAddToFile =
     !invoice.is_credit_note &&
     !invoice.auto_debit &&
     ['registered', 'approved', 'overdue'].includes(invoice.status) &&
-    (!!invoice.approved_at || !companyAttestsSupplierInvoices(companySettings?.accounting_method)) &&
+    (!!invoice.approved_at || !attests) &&
     !lifecycle?.batch &&
     !lifecycle?.payment_order
   // With bank payments on, Betala via banken comes first and the betalfil
@@ -760,7 +765,7 @@ export default function SupplierInvoiceDetailPage() {
   // it is the step right before it. Viewers see the bock only when it is set.
   const showBankEntered =
     !invoice.auto_debit &&
-    canMarkSupplierInvoiceBankEntered(invoice, companySettings?.accounting_method) &&
+    canMarkSupplierInvoiceBankEntered(invoice, companySettings?.accounting_method, attestPolicyOn) &&
     (canWrite || !!invoice.bank_entered_at)
   // "Dras automatiskt" (crm#1463): changeable while the invoice is unsettled
   // and no payment file or bank payment covers it; shown when set.
@@ -771,11 +776,11 @@ export default function SupplierInvoiceDetailPage() {
     !lifecycle?.batch &&
     !lifecycle?.payment_order
   // Kreditera on the statuses the shared rule names (creditable-statuses.ts);
-  // a kontantmetod company has no attest step, so its registered invoice is
-  // creditable as it stands, as it is payable (payableSupplierInvoiceStatuses).
+  // a company without an attest step has its registered invoice creditable
+  // as it stands, as it is payable (payableSupplierInvoiceStatuses).
   const canCredit =
     isCreditableSupplierInvoiceStatus(invoice.status) ||
-    (invoice.status === 'registered' && !companyAttestsSupplierInvoices(companySettings?.accounting_method))
+    (invoice.status === 'registered' && !attests)
   const canUncredit = invoice.status === 'credited' && !invoice.is_credit_note
   // Delete is allowed while nothing would be orphaned: no booking, no
   // payments (server re-checks). 'approved'/'overdue' are included because
@@ -857,7 +862,11 @@ export default function SupplierInvoiceDetailPage() {
         mask
         help={
           <HelpPopover>
-            {companyAttestsSupplierInvoices(companySettings?.accounting_method) ? t('help_body') : t('help_body_cash')}
+            {attests
+              ? t('help_body')
+              : companySettings?.accounting_method === 'cash'
+                ? t('help_body_cash')
+                : t('help_body_no_attest')}
           </HelpPopover>
         }
         status={statusChips}
@@ -989,7 +998,7 @@ export default function SupplierInvoiceDetailPage() {
 
       {lifecycle && (
         <StageSteps
-          stages={stagesFor(companySettings?.accounting_method)}
+          stages={stagesFor(companySettings?.accounting_method, attestPolicyOn)}
           current={lifecycle.stage}
           dateOf={stageDate}
         />

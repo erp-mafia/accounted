@@ -91,6 +91,19 @@ export function bookingScreenHref(subject: BookingScreenSubject, back?: string |
 }
 
 /**
+ * Bokför on a bank row listed outside Bankrader and Att bokföra (Avstämning's
+ * bank rows): the booking screen for that row where it is switched on, the
+ * same address Att bokföra opens; else the row in Bankrader, where it is
+ * booked. The screen returns to Bankrader: Avstämning is not a page it
+ * returns to.
+ */
+export function bankRowBookHref(transactionId: string, bookingScreen: boolean): string {
+  return bookingScreen
+    ? bookingScreenHref({ kind: 'transaction', transactionId, account: null })
+    : `/transactions?highlight=${encodeURIComponent(transactionId)}`
+}
+
+/**
  * What the address asks to book. A transaction id or inbox item id that is
  * not a uuid, or an account that is not four digits, is dropped rather than
  * trusted: a broken link opens an empty verifikation (or the row without

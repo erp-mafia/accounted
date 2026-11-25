@@ -10,6 +10,7 @@ import path from 'node:path'
  */
 const read = (rel: string) => fs.readFileSync(path.resolve(__dirname, rel), 'utf8')
 const CARD_SRC = read('../TransactionInboxCard.tsx')
+const HISTORY_SRC = read('../TransactionHistoryList.tsx')
 const PAGE_SRC = read('../../../app/(dashboard)/transactions/page.tsx')
 
 describe('Bankrader Bokför with the booking screen', () => {
@@ -43,5 +44,12 @@ describe('Bankrader Bokför with the booking screen', () => {
     expect(PAGE_SRC).toContain(
       "router.push(bookingScreenHref({ kind: 'transaction', transactionId: transaction.id, account: null }, `/transactions${window.location.search}`))",
     )
+  })
+
+  it("opens the Alla view's Bokför on the booking screen too, the picker only without the switch", () => {
+    expect(HISTORY_SRC).toContain('onClick={() => (onOpenBookingScreen ?? onOpenCategoryDialog)(transaction)}')
+    expect(HISTORY_SRC).toContain('onOpenBookingScreen={onOpenBookingScreen}')
+    const alla = PAGE_SRC.slice(PAGE_SRC.indexOf('<TransactionHistoryList'))
+    expect(alla.slice(0, alla.indexOf('/>'))).toContain('onOpenBookingScreen={bookingScreen ? openRowOnBookingScreen : undefined}')
   })
 })

@@ -85,20 +85,25 @@ export const K2_RR_MAPPINGS: PostMapping[] = [
     balance: 'credit',
     // Lagerförändring for own production + pågående arbeten. Changes in
     // råvarulager (4910-4929) belong to RavarorFornodenheterKostnader and
-    // handelsvaror (4960-4969) to HandelsvarorKostnader per K2 RR.
-    ranges: [r('4930', '4959'), r('4970', '4999')],
+    // handelsvaror (4960-4969) and värdepapper held as handelsvaror
+    // (4980-4989) to HandelsvarorKostnader per K2 RR.
+    ranges: [r('4930', '4959'), r('4970', '4979'), r('4990', '4999')],
   },
   { concept: 'AktiveratArbeteEgenRakning', balance: 'credit', ranges: [...AKTIVERAT_ARBETE_RANGES] },
   { concept: 'OvrigaRorelseintakter', balance: 'credit', ranges: [...OVRIGA_RORELSEINTAKTER_RANGES] },
+  // Class 4 split as BAS 2026 (bas.se BAS_kontoplan_2026_v2) tags the groups:
+  // 40 "Inköp av handelsvaror", 42 "Sålda handelsvaror VMB" and 498x
+  // "(Handelsvaror)" are handelsvaror; 43-48 carry "(Råvaror och
+  // förnödenheter)", 46 tjänster, underentreprenader och legoarbeten included.
   {
     concept: 'RavarorFornodenheterKostnader',
     balance: 'debit',
-    ranges: [r('4000', '4599'), r('4700', '4899'), r('4910', '4929')],
+    ranges: [r('4300', '4899'), r('4910', '4929')],
   },
   {
     concept: 'HandelsvarorKostnader',
     balance: 'debit',
-    ranges: [r('4600', '4699'), r('4960', '4969')],
+    ranges: [r('4000', '4299'), r('4960', '4969'), r('4980', '4989')],
   },
   { concept: 'OvrigaExternaKostnader', balance: 'debit', ranges: [r('5000', '6999')] },
   { concept: 'Personalkostnader', balance: 'debit', ranges: [r('7000', '7699')] },

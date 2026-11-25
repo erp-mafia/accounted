@@ -43,8 +43,8 @@ describe('buildFinancialFixedAssetsNote', () => {
     expect(plain(note?.body)).toContain('Andelar i koncernföretag\n  Ingående anskaffningsvärde: 100 000 kr')
     expect(plain(note?.body)).toContain('  Tillkommande: 50 000 kr')
     expect(plain(note?.body)).toContain('  Utgående anskaffningsvärde: 150 000 kr')
-    expect(plain(note?.body)).toContain('  Årets nedskrivningar: -10 000 kr')
-    expect(plain(note?.body)).toContain('  Utgående nedskrivningar: -30 000 kr')
+    expect(plain(note?.body)).toContain('  Årets nedskrivningar: \u221210 000 kr')
+    expect(plain(note?.body)).toContain('  Utgående nedskrivningar: \u221230 000 kr')
     expect(plain(note?.body)).toContain('  Utgående redovisat värde: 120 000 kr')
     expect(plain(note?.body)).toContain('Andra långfristiga värdepappersinnehav\n  Ingående anskaffningsvärde: 5 000 kr')
     expect(plain(note?.body)).not.toContain('Företagskonto')
@@ -71,7 +71,7 @@ describe('impairments of intangible and tangible fixed assets', () => {
     const note = buildTangibleImpairmentNote(rows, 5)
     expect(note?.title).toBe('Nedskrivningar av anläggningstillgångar')
     expect(plain(note?.body)).toContain('Ackumulerade nedskrivningar på inventarier och verktyg')
-    expect(plain(note?.body)).toContain('  Årets nedskrivningar: -5 000 kr')
+    expect(plain(note?.body)).toContain('  Årets nedskrivningar: \u22125 000 kr')
     expect(plain(note?.body)).not.toContain('avskrivningar på inventarier')
   })
 
@@ -89,7 +89,7 @@ describe('impairments of intangible and tangible fixed assets', () => {
 
     const note = buildTangibleImpairmentNote(rows, 5, booked(3000))
     expect(plain(note?.body)).toContain('utanför anläggningsregistret')
-    expect(plain(note?.body)).toContain('  Årets nedskrivningar: -2 000 kr')
+    expect(plain(note?.body)).toContain('  Årets nedskrivningar: \u22122 000 kr')
     expect(tangibleImpairmentBalance(rows, booked(3000))).toBe(-2000)
   })
 

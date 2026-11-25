@@ -44,15 +44,21 @@ export function CategoryPopover({
     if (!anchor) return
     const place = () => {
       const r = anchor.getBoundingClientRect()
+      // The part of the screen that is visible: an on-screen keyboard
+      // shrinks the visual viewport, not innerHeight, so the list would
+      // otherwise extend under the keyboard once the search is tapped.
+      const vv = window.visualViewport
+      const visibleTop = vv ? Math.max(0, vv.offsetTop) : 0
+      const visibleBottom = vv ? Math.min(window.innerHeight, vv.offsetTop + vv.height) : window.innerHeight
       // Below the anchor when there is room for a useful list, else above;
       // the panel shrinks to the side it lands on instead of covering the
       // anchor, so it works from a button low in a tall form too.
-      const spaceBelow = window.innerHeight - MARGIN - (r.bottom + GAP)
-      const spaceAbove = r.top - GAP - MARGIN
+      const spaceBelow = visibleBottom - MARGIN - (r.bottom + GAP)
+      const spaceAbove = r.top - visibleTop - GAP - MARGIN
       const useBelow = spaceBelow >= Math.min(MAX_HEIGHT, 320) || spaceBelow >= spaceAbove
       const maxHeight = Math.max(160, Math.min(MAX_HEIGHT, useBelow ? spaceBelow : spaceAbove))
       const height = Math.min(maxHeight, panelRef.current?.offsetHeight ?? maxHeight)
-      const top = useBelow ? r.bottom + GAP : Math.max(MARGIN, r.top - GAP - height)
+      const top = useBelow ? r.bottom + GAP : Math.max(visibleTop + MARGIN, r.top - GAP - height)
       // A phone is narrower than the panel: it takes the width that is there.
       const width = Math.min(WIDTH, window.innerWidth - 2 * MARGIN)
       const left = Math.max(MARGIN, Math.min(r.left, window.innerWidth - width - MARGIN))
@@ -61,9 +67,12 @@ export function CategoryPopover({
     place()
     window.addEventListener('scroll', place, true)
     window.addEventListener('resize', place)
+    // The keyboard opening or closing resizes only the visual viewport.
+    window.visualViewport?.addEventListener('resize', place)
     return () => {
       window.removeEventListener('scroll', place, true)
       window.removeEventListener('resize', place)
+      window.visualViewport?.removeEventListener('resize', place)
     }
   }, [anchor])
 
@@ -74,6 +83,16 @@ export function CategoryPopover({
           ref={panelRef}
           data-dialog-companion=""
           aria-describedby={undefined}
+          // Radix focuses the first field, the list's search. On a touch
+          // screen that raises the keyboard over the list the moment the
+          // panel opens: there the panel holds focus, and the keyboard comes
+          // when the search is tapped. With a mouse the search takes focus,
+          // so typing filters at once.
+          onOpenAutoFocus={(e) => {
+            if (!window.matchMedia('(pointer: coarse)').matches) return
+            e.preventDefault()
+            panelRef.current?.focus({ preventScroll: true })
+          }}
           onInteractOutside={(e) => {
             // The anchor's own click toggles the panel; treating it as an
             // outside click would close and reopen it in the same gesture.

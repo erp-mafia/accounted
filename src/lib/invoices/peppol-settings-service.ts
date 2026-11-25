@@ -11,11 +11,17 @@
  * them in the order the dashboard has always applied.
  *
  * Dry runs (the MCP staging preview too) read and never touch the network:
- * no pending row, no call to the access point, no operator mail.
+ * no pending row, no call to the access point, no mail.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { z } from 'zod'
-import { getBranding } from '@/lib/branding/service'
+import { getBaseUrlForBrand, getSenderForCompany } from '@/lib/email/brand-sender'
+import {
+  generatePeppolPlanRequiredEmailHtml,
+  generatePeppolPlanRequiredEmailSubject,
+  generatePeppolPlanRequiredEmailText,
+  PEPPOL_PLAN_REQUIRED_TEMPLATE,
+} from '@/lib/email/peppol-plan-required-templates'
 import { getEmailService } from '@/lib/email/service'
 import {
   getPeppolAccess,
@@ -23,6 +29,7 @@ import {
   requestPeppolAccess,
   type PeppolAccessSummary,
 } from '@/lib/invoices/peppol-access'
+import { applyPeppolPlanRule, peppolCompanyPays } from '@/lib/invoices/peppol-plan-rule'
 import {
   countLivePeppolRegistrations,
   describePeppolParticipantEligibility,
@@ -43,8 +50,8 @@ import {
 } from '@/lib/invoices/peppol-transport'
 import { requireCompanyAdmin } from '@/lib/operations/access'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
+import { resolveMemberEmail } from '@/lib/notifications/member-email'
 import { isSandboxCompany } from '@/lib/sandbox/guard'
-import { getSupportRecipientEmail } from '@/lib/support'
 import type { CompanySettings } from '@/types'
 
 type ParticipantSettings = Pick<CompanySettings, 'org_number' | 'company_name' | 'vat_number' | 'city' | 'country' | 'entity_type'>
@@ -69,8 +76,20 @@ export interface PeppolRegistrationStatus {
   transport: PeppolTransportAvailability
   receiving_supported: boolean
   access: PeppolAccessSummary
+  /**
+   * The company has no Peppol yet (`none` or `requested`) and does not pay:
+   * Peppol needs a paid plan first, and is switched on by itself once there
+   * is one (lib/invoices/peppol-plan-rule.ts).
+   */
+  plan_required: boolean
   participant: PeppolParticipantEligibility
   registration: PeppolRegistrationRow | null
+}
+
+/** Whether a company without Peppol must start paying before it can have it. */
+async function planRequired(service: SupabaseClient, companyId: string, access: PeppolAccessSummary): Promise<boolean> {
+  if (access.status !== 'none' && access.status !== 'requested') return false
+  return !(await peppolCompanyPays(service, companyId))
 }
 
 /** Receiving status for the company: transport, access grant, eligibility and the registration row. */
@@ -107,6 +126,7 @@ export async function getPeppolRegistrationStatus(
         transport: availability,
         receiving_supported: !!resolved?.transport.registerRecipient,
         access,
+        plan_required: await planRequired(service, companyId, access),
         participant,
         registration,
       },
@@ -150,10 +170,10 @@ export async function registerPeppolParticipant(
   if (!resolved) return { ok: false, code: 'PEPPOL_TRANSPORT_UNAVAILABLE' }
   if (await isSandboxCompany(supabase, companyId)) return { ok: false, code: 'PEPPOL_SANDBOX_NOT_ALLOWED' }
 
-  // Receiving consumes a contracted tenant slot: operators grant it per company.
+  // Receiving comes with access (a paid plan): whether to use it is the
+  // company's own choice, recorded below when it switches receiving on.
   const access = await getPeppolAccess(service, companyId)
   if (!access || access.status !== 'enabled') return { ok: false, code: 'PEPPOL_ACCESS_REQUIRED' }
-  if (!access.receive_enabled) return { ok: false, code: 'PEPPOL_RECEIVING_NOT_ENABLED' }
 
   const { data: settings, error: settingsError } = await supabase
     .from('company_settings')
@@ -165,6 +185,21 @@ export async function registerPeppolParticipant(
 
   try {
     if (options.dryRun) return await previewRegistration(service, companyId, resolved, participantSettings)
+
+    // The choice is kept on the access row, where the inbound cron reads it:
+    // a plan that ends withdraws the identifier, and one that comes back
+    // keeps the choice. Guarded on `enabled` so a pause in between wins.
+    if (!access.receive_enabled) {
+      const { data: recorded, error } = await service
+        .from('peppol_access')
+        .update({ receive_enabled: true })
+        .eq('company_id', companyId)
+        .eq('status', 'enabled')
+        .select('company_id')
+      if (error) throw new Error(`Failed to record the receiving choice: ${error.message}`)
+      // Paused since it was read: nothing is published without access.
+      if ((recorded ?? []).length === 0) return { ok: false, code: 'PEPPOL_ACCESS_REQUIRED' }
+    }
 
     const result = await registerCompanyForPeppolReceiving({
       service,
@@ -230,9 +265,9 @@ async function previewRegistration(
 
 /** The access request body, shared by the dashboard route and the operation. */
 export const PeppolAccessRequestSchema = z.object({
-  note: z.string().trim().max(1800).optional().describe('Free text for the operators (what the company needs Peppol for).'),
-  /** The company also wants to receive (one of the contracted tenant slots). */
-  wants_receiving: z.boolean().optional().describe('True when the company also wants to receive e-invoices (a receiving slot).'),
+  note: z.string().trim().max(1800).optional().describe('Free text kept with the request (what the company needs Peppol for).'),
+  /** The company also wants to receive: published as soon as access is on. */
+  wants_receiving: z.boolean().optional().describe('True when the company also wants to receive e-invoices via Peppol (opt-in; can also be switched on later).'),
 })
 
 export type PeppolAccessRequestInput = z.infer<typeof PeppolAccessRequestSchema>
@@ -240,18 +275,17 @@ export type PeppolAccessRequestInput = z.infer<typeof PeppolAccessRequestSchema>
 export interface PeppolAccessRequestResult {
   access: PeppolAccessSummary
   created: boolean
-}
-
-function escapeHtml(value: string): string {
-  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+  /** The company does not pay: Peppol is switched on by itself once it does. */
+  plan_required: boolean
 }
 
 /**
- * The company asks the operators for Peppol access: writes the request row
- * (service role; nobody can grant themselves anything) and tells the
- * operators by e-mail. The e-mail is best-effort: the row is the source of
- * truth and the operators' script lists open requests. `requesterEmail` is
- * the reply-to address when the door knows it (the dashboard session).
+ * The company asks for Peppol. The request row is written (service role;
+ * nobody can grant themselves anything) and the plan rule decides at once
+ * (lib/invoices/peppol-plan-rule.ts): a paying company has Peppol when this
+ * returns; one that does not pay keeps its request, the answer says a paid
+ * plan is needed, and the person who asked is mailed the same. Nobody at
+ * Accounted is mailed: the daily Peppol report lists what happened.
  *
  * Sending and receiving both identify the company by its 0007 participant
  * id, so a company that cannot be one (a personnummer, no org number, no
@@ -261,17 +295,23 @@ function escapeHtml(value: string): string {
 export async function requestPeppolAccessForCompany(
   ctx: OperationContext,
   input: PeppolAccessRequestInput,
-  options: DoorOptions & { dryRun?: boolean; requesterEmail?: string | null } = {},
+  options: DoorOptions & { dryRun?: boolean; requireAdminForReceiving?: boolean } = {},
 ): Promise<OperationOutcome<PeppolAccessRequestResult>> {
-  const { supabase, companyId, userId } = ctx
+  const { supabase, companyId, userId, log } = ctx
   const service = options.service ?? supabase
   const wantsReceiving = input.wants_receiving === true
-  const userNote = input.note?.trim() || null
-  // The receiving wish travels in the request note so the operators see it
-  // in `access.ts list` and in the mail, and grant it with --receive.
-  const note = [wantsReceiving ? '[vill ta emot e-fakturor]' : null, userNote]
-    .filter((part): part is string => !!part)
-    .join(' ') || null
+  const note = input.note?.trim() || null
+
+  // Receiving publishes the company in the Peppol directory once access is
+  // on, so a door that reserves registering for owners and admins
+  // (peppol.register) reserves choosing it here too.
+  if (wantsReceiving && options.requireAdminForReceiving) {
+    const denied = await requireCompanyAdmin(
+      ctx,
+      'Bara ägare och administratörer kan välja Peppol-mottagning för bolaget.',
+    )
+    if (denied) return denied
+  }
 
   if (await isSandboxCompany(supabase, companyId)) return { ok: false, code: 'PEPPOL_SANDBOX_NOT_ALLOWED' }
 
@@ -291,6 +331,8 @@ export async function requestPeppolAccessForCompany(
     if (options.dryRun) {
       const existing = await getPeppolAccess(service, companyId)
       if (existing?.status === 'enabled') return { ok: false, code: 'PEPPOL_ACCESS_ALREADY_ENABLED' }
+      if (existing?.status === 'disabled') return { ok: false, code: 'PEPPOL_ACCESS_DISABLED' }
+      const pays = await peppolCompanyPays(service, companyId)
       return {
         ok: true,
         dryRun: true,
@@ -299,50 +341,62 @@ export async function requestPeppolAccessForCompany(
           would_create_request: existing?.status !== 'requested',
           wants_receiving: wantsReceiving,
           note,
-          // The operators are told by e-mail on commit, and only for a new request.
-          notifies_operators: existing?.status !== 'requested',
+          // A paying company has Peppol on commit; one that does not pay
+          // keeps the request and is told a paid plan is needed.
+          switches_on_now: pays,
+          plan_required: !pays,
         },
       }
     }
 
-    const result = await requestPeppolAccess({ service, companyId, userId, note })
+    const result = await requestPeppolAccess({ service, companyId, userId, note, wantsReceiving })
     if (!result.ok) return { ok: false, code: result.code }
-    if (result.created) await notifyOperators(ctx, { company, note, wantsReceiving, requesterEmail: options.requesterEmail ?? null })
+
+    const rule = await applyPeppolPlanRule({ service, companyIds: [companyId] })
+    // Not the caller's failure: the request is recorded, and the inbound
+    // cron applies the rule again within ten minutes.
+    if (rule.failed.length > 0) log.error('peppol plan rule failed after a request', { companyId, failed: rule.failed })
 
     const summary = await getPeppolAccessSummary({ supabase: service, service, companyId })
-    return { ok: true, created: result.created, data: { access: summary, created: result.created } }
+    const plan_required = await planRequired(service, companyId, summary)
+    if (plan_required && result.created) await mailPlanRequired(ctx, service, company)
+    return { ok: true, created: result.created, data: { access: summary, created: result.created, plan_required } }
   } catch (err) {
     return { ok: false, code: 'INTERNAL_ERROR', error: err }
   }
 }
 
-async function notifyOperators(
-  ctx: OperationContext,
-  args: { company: ParticipantSettings; note: string | null; wantsReceiving: boolean; requesterEmail: string | null },
-): Promise<void> {
+/**
+ * Tells the person who asked, at once, that Peppol needs a paid plan, and
+ * where to get one. Best-effort: the answer to the request and the settings
+ * page say the same, so a mail that fails is logged and nothing else.
+ */
+async function mailPlanRequired(ctx: OperationContext, service: SupabaseClient, company: ParticipantSettings): Promise<void> {
   const { companyId, userId, log } = ctx
-  const { company, note, wantsReceiving, requesterEmail } = args
-  const emailService = await getEmailService()
-  if (!emailService.isConfigured()) {
-    log.warn('peppol access request: e-mail service not configured, request recorded only', { companyId })
-    return
+  try {
+    const email = await getEmailService()
+    if (!email.isConfigured()) return
+    const address = await resolveMemberEmail(service, companyId, userId)
+    if (!address) return
+    const sender = await getSenderForCompany(companyId)
+    const data = {
+      companyName: company.company_name?.trim() || 'bolaget',
+      billingUrl: `${getBaseUrlForBrand(sender.brand)}/settings/billing`,
+      appName: sender.brand?.appName,
+    }
+    const sent = await email.sendEmail({
+      to: address,
+      subject: generatePeppolPlanRequiredEmailSubject(),
+      html: generatePeppolPlanRequiredEmailHtml(data),
+      text: generatePeppolPlanRequiredEmailText(data),
+      fromName: sender.fromName ?? undefined,
+      fromAddress: sender.fromAddress ?? undefined,
+      replyTo: sender.replyTo ?? undefined,
+      idempotencyKey: `${PEPPOL_PLAN_REQUIRED_TEMPLATE}:${companyId}:${userId}`,
+    })
+    // The address is the recipient's: not logged.
+    if (!sent.success) log.warn('peppol plan-required mail failed', { companyId, template: PEPPOL_PLAN_REQUIRED_TEMPLATE, reason: sent.error })
+  } catch (err) {
+    log.warn('peppol plan-required mail failed', { companyId, template: PEPPOL_PLAN_REQUIRED_TEMPLATE, reason: err instanceof Error ? err.message : String(err) })
   }
-  const companyName = company.company_name ?? 'okänt bolag'
-  const orgNumber = company.org_number ?? 'saknas'
-  const requester = requesterEmail ?? ''
-  const enableCommand = `npx tsx --env-file=.env.local scripts/peppol/access.ts enable ${companyId} --max-sends 10${wantsReceiving ? ' --receive' : ''}`
-  const sent = await emailService.sendEmail({
-    to: getSupportRecipientEmail(),
-    subject: `[${getBranding().appName.toLowerCase()} peppol] Åtkomstbegäran${wantsReceiving ? ' (+ mottagning)' : ''}: ${companyName}`,
-    ...(requesterEmail ? { replyTo: requesterEmail } : {}),
-    html: [
-      `<p><strong>Bolag:</strong> ${escapeHtml(companyName)} (${escapeHtml(orgNumber)})</p>`,
-      `<p><strong>Company ID:</strong> ${companyId}</p>`,
-      `<p><strong>Begärd av:</strong> ${escapeHtml(requester)} (${userId})</p>`,
-      note ? `<hr /><p>${escapeHtml(note).replace(/\n/g, '<br />')}</p>` : '',
-      `<hr /><p>Aktivera: <code>${enableCommand}</code></p>`,
-    ].join('\n'),
-    text: `Bolag: ${companyName} (${orgNumber})\nCompany ID: ${companyId}\nBegärd av: ${requester} (${userId})\n\n${note ?? ''}\n\nAktivera: ${enableCommand}`,
-  })
-  if (!sent.success) log.warn('peppol access request e-mail failed', { companyId, reason: sent.error })
 }

@@ -9,6 +9,7 @@ import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
 import {
   chartAwareDefaultAccounts,
   ensureAssetAccountsInChart,
+  ensureCompanyImpairmentAccount,
   unusableAssetAccounts,
 } from '../asset-chart-accounts'
 import { createAsset, DEFAULT_ACCOUNTS_BY_CATEGORY, updateAsset } from '../asset-service'
@@ -112,6 +113,40 @@ describe('ensureAssetAccountsInChart', () => {
     await expect(
       ensureAssetAccountsInChart(supabase, COMPANY, USER, ['1250', '1259', '7833']),
     ).rejects.toMatchObject({ accountNumbers: ['7833'] })
+  })
+})
+
+describe('ensureCompanyImpairmentAccount', () => {
+  it('adds 1128 beside 1129 in the post Förbättringsutgifter på annans fastighet', async () => {
+    mock.enqueue({ data: [] }) // chart state: 1128 missing
+    mock.enqueue({ data: null }) // upsert
+    await ensureCompanyImpairmentAccount(supabase, COMPANY, USER, '1128', '1129')
+    const upsert = mock.findCalls('chart_of_accounts', 'upsert')
+    expect(upsert).toHaveLength(1)
+    expect(upsert[0][0]).toMatchObject({
+      company_id: COMPANY,
+      account_number: '1128',
+      account_name: 'Ackumulerade nedskrivningar på förbättringsutgifter på annans fastighet',
+      account_type: 'asset',
+      normal_balance: 'credit',
+      sru_code: '7216',
+      is_active: true,
+    })
+  })
+
+  it('leaves a standard BAS account to the engine and an active account alone', async () => {
+    await ensureCompanyImpairmentAccount(supabase, COMPANY, USER, '1118', '1119')
+    mock.enqueue({ data: chartRows(['1128']) })
+    await ensureCompanyImpairmentAccount(supabase, COMPANY, USER, '1128', '1129')
+    expect(mock.findCalls('chart_of_accounts', 'upsert')).toHaveLength(0)
+  })
+
+  it('refuses an inactive account without reactivating it', async () => {
+    mock.enqueue({ data: chartRows([], ['1128']) })
+    await expect(
+      ensureCompanyImpairmentAccount(supabase, COMPANY, USER, '1128', '1129'),
+    ).rejects.toMatchObject({ accountNumbers: ['1128'] })
+    expect(mock.findCalls('chart_of_accounts', 'upsert')).toHaveLength(0)
   })
 })
 

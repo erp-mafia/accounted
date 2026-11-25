@@ -134,19 +134,19 @@ function foldNullable(obj: Record<string, unknown>): Record<string, unknown> {
 const jsonType = (value: unknown) => (value === null ? 'null' : typeof value)
 
 /**
- * A multi-value literal (`z.literal([0, 0.06, null])`) comes out as a bare
- * `enum` with no `type`, and MCP clients send a parameter whose type they
- * cannot read as a string: default_vat_rate 0 arrived as "0" and was refused
- * (agent feedback seq 1088767). An enum listing a number or boolean therefore
- * names its types. An enum of strings (plus null) stays bare: its values
- * already arrive as the strings they are, and every byte of it ships in
- * tools/list (coerceStringifiedScalars takes a stringified null back).
+ * A multi-value literal (`z.literal([0, 0.06, null])`) and a nullable enum
+ * come out as a bare `enum` with no `type`. Every enum or const names the
+ * types of its values: MCP clients send a parameter whose type they cannot
+ * read as a string (default_vat_rate 0 arrived as "0" and was refused, agent
+ * feedback seq 1088767), and a connector directory review refuses a property
+ * without a type (strict-schemas.test.ts walks every tool for it).
  */
 function typeEnum(obj: Record<string, unknown>): Record<string, unknown> {
-  if (!Array.isArray(obj.enum) || obj.type !== undefined) return obj
-  const types = [...new Set(obj.enum.map(jsonType))]
+  if (obj.type !== undefined) return obj
+  const values = Array.isArray(obj.enum) ? obj.enum : 'const' in obj ? [obj.const] : null
+  if (!values) return obj
+  const types = [...new Set(values.map(jsonType))]
   if (!types.every((t) => ['number', 'boolean', 'string', 'null'].includes(t))) return obj
-  if (types.every((t) => t === 'string' || t === 'null')) return obj
   return { type: types.length === 1 ? types[0] : types, ...obj }
 }
 

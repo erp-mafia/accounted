@@ -3,12 +3,11 @@ import { readFileSync } from 'fs'
 import path from 'path'
 import {
   dialogMaxHeight,
-  dialogViewportStyle,
   fitTextarea,
   textareaHeight,
   type FittableTextarea,
-  type ViewportBox,
 } from '../composer-fit'
+import { dialogViewportStyle, type ViewportBox } from '../../ui/visual-viewport'
 
 /**
  * PH 216: a customer writing a ten-line message in the support dialog saw

@@ -11,7 +11,7 @@ import { currentUsagePeriod, includedBankPayments } from '@/lib/payments/usage'
 import { consentCovers, readOpenConsents } from './consent'
 import { countCompanyUsage } from './counters'
 import { billedUsageKinds, includedThisMonth, USAGE_GATED_KINDS, USAGE_KINDS, USAGE_PRICES, usageLine, type UsageKind, type UsageLine } from './kinds'
-import { readCompanyPays } from './paying'
+import { readCompanyPayerState } from './paying'
 
 export interface CompanyUsageLine extends UsageLine {
   /** For a kind included once (signed documents), what the company's first units include in all; else null. */
@@ -30,6 +30,8 @@ export interface CompanyUsage {
   period: string
   /** Whether someone pays for the company (its own subscription, or its byrå's agreement): without that, nothing above the included amount can be opened (paying.ts). */
   paying: boolean
+  /** Nobody pays yet, but the company's subscription, started during the trial, waits for its first charge (subscriptionStarting). */
+  subscription_starting: boolean
   lines: CompanyUsageLine[]
 }
 
@@ -53,7 +55,8 @@ export async function getCompanyUsage(
   env: Record<string, string | undefined> = process.env,
 ): Promise<CompanyUsage> {
   const billedKinds = billedUsageKinds(env)
-  const [consents, paying] = await Promise.all([readOpenConsents(service, companyId), readCompanyPays(service, companyId)])
+  const [consents, payer] = await Promise.all([readOpenConsents(service, companyId), readCompanyPayerState(service, companyId)])
+  const paying = payer.payer !== null
   const lines = await Promise.all(
     USAGE_KINDS.map(async (kind): Promise<CompanyUsageLine> => {
       const [used, included] = await Promise.all([
@@ -73,5 +76,5 @@ export async function getCompanyUsage(
       }
     }),
   )
-  return { period, paying, lines }
+  return { period, paying, subscription_starting: !paying && payer.subscriptionStarting, lines }
 }

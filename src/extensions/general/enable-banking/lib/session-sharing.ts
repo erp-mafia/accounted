@@ -91,6 +91,15 @@ export function unclaimedAccountsFor(
 }
 
 /**
+ * Connection statuses that let go of the attaching company's OWN account: a
+ * session the bank ended ('expired') or a connection the user removed
+ * ('revoked') feeds nothing. Any other status may still feed the account, so
+ * attaching it to a second session would book its movements twice. The same
+ * rule as attach_shared_bank_session.
+ */
+const OWN_ACCOUNT_RELEASING_STATUSES: ReadonlySet<string> = new Set(['expired', 'revoked'])
+
+/**
  * Every IBAN a company is actually syncing. RLS scopes cash_accounts to
  * user_company_ids(), which is exactly the set that could collide, so no
  * explicit company filter is needed here.
@@ -105,6 +114,13 @@ export function unclaimedAccountsFor(
  * returns every account the user can see, and they uncheck the other
  * companies' accounts in the picker precisely because those do not belong in
  * this company's books. Those are the accounts the next company should get.
+ *
+ * The attaching company's own account is not a claim against itself unless a
+ * connection may still feed it. At a one-session bank (SEB) a sibling's new
+ * login ends this company's session, and the sibling's session then covers
+ * this company's account too: reusing it is the only way back that does not
+ * end the sibling's feed in turn. The picker then promotes the existing row
+ * by IBAN, the same way a renewal does.
  */
 /**
  * Returns null when the claimed set could not be read. An empty Set would be
@@ -112,10 +128,13 @@ export function unclaimedAccountsFor(
  * session offerable: the one outcome this feature must never produce. The
  * caller turns null into an empty offer list.
  */
-async function fetchClaimedIbans(supabase: SupabaseClient): Promise<Set<string> | null> {
+async function fetchClaimedIbans(
+  supabase: SupabaseClient,
+  activeCompanyId: string,
+): Promise<Set<string> | null> {
   const { data, error } = await supabase
     .from('cash_accounts')
-    .select('iban')
+    .select('iban, company_id, bank_connection_id, bank_connection:bank_connections(status)')
     .eq('enabled', true)
     .not('iban', 'is', null)
 
@@ -128,11 +147,32 @@ async function fetchClaimedIbans(supabase: SupabaseClient): Promise<Set<string> 
   }
 
   const claimed = new Set<string>()
-  for (const row of (data ?? []) as Array<{ iban: string | null }>) {
+  for (const row of (data ?? []) as unknown as Array<{
+    iban: string | null
+    company_id?: string | null
+    bank_connection_id?: string | null
+    bank_connection?: { status: string | null } | null
+  }>) {
+    if (row.company_id === activeCompanyId && ownAccountIsReleased(row)) continue
     const iban = normalizeIban(row.iban)
     if (iban) claimed.add(iban)
   }
   return claimed
+}
+
+/**
+ * Whether the active company's own enabled cash account is free to move onto
+ * a shared session: no connection holds it, or the one that does feeds
+ * nothing any more. A bound row whose connection cannot be read stays a claim
+ * (fail closed).
+ */
+function ownAccountIsReleased(row: {
+  bank_connection_id?: string | null
+  bank_connection?: { status: string | null } | null
+}): boolean {
+  if (!row.bank_connection_id) return true
+  const status = row.bank_connection?.status
+  return typeof status === 'string' && OWN_ACCOUNT_RELEASING_STATUSES.has(status)
 }
 
 /**
@@ -170,7 +210,7 @@ export async function findReusableSessions(
   }
   if (!rows || rows.length === 0) return []
 
-  const claimedIbans = await fetchClaimedIbans(supabase)
+  const claimedIbans = await fetchClaimedIbans(supabase, activeCompanyId)
   if (claimedIbans === null) {
     // Offer nothing rather than everything: see fetchClaimedIbans.
     return []

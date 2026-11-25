@@ -17,7 +17,13 @@ import { fileFakturaNr } from './rot-rut-file'
  * matches):
  *   - request: by previously stored skv_referensnummer (idempotent
  *     re-import), else by exact name (NamnPaBegaran round-trips through
- *     SKV's file unchanged). Ambiguity is an error, not a guess.
+ *     SKV's file unchanged). Two active requests can share a name (two files
+ *     made the same day carry the same default name), so when several do,
+ *     the one whose invoice numbers take every ärende is the request: the
+ *     trigger enforce_single_active_rot_rut_request keeps an invoice in one
+ *     active request, so the numbers name at most one. The personnummer
+ *     fallback is not used to choose between them (one buyer can have an
+ *     invoice in each). Ambiguity left after that is an error, not a guess.
  *   - ärende -> item: by fakturanummer against the invoice number, else by
  *     the buyer's personnummer. Exactly one candidate or the beslut errors.
  *     A grön teknik invoice with two installation types is two ärenden in
@@ -27,6 +33,8 @@ import { fileFakturaNr } from './rot-rut-file'
  *
  * A beslut applies all-or-nothing: if any ärende fails to match, nothing in
  * that beslut is written. Different beslut in the same file are independent.
+ * A beslut without ärenden (Skatteverket's schema allows one) records
+ * nothing: it is not an avslag.
  *
  * Settlement is deliberately NOT booked here: recording the beslut and
  * booking the bank payout are separate acts (the payout may not have landed
@@ -126,6 +134,12 @@ async function applyBeslut(
 ): Promise<RotRutBeslutOutcome> {
   const base = { namn: beslut.namn, referensnummer: beslut.referensnummer }
 
+  // Nothing decided, nothing to record: read as an avslag (0 kr in total)
+  // it would reject the request it names.
+  if (beslut.arenden.length === 0) {
+    return { ...base, status: 'error', error: 'Beslutet innehåller inga ärenden: inget har registrerats.' }
+  }
+
   // 1. Resolve the request. Referensnummer wins (set by a previous import of
   //    the same beslut); name matching only considers undecided, active
   //    requests without a stored referensnummer.
@@ -136,86 +150,57 @@ async function applyBeslut(
     return { ...base, status: 'already_imported', request_id: request.id }
   }
 
-  if (!request) {
-    const byName = allRequests.filter(
+  let candidates: RequestRow[]
+  if (request) {
+    candidates = [request]
+  } else {
+    candidates = allRequests.filter(
       (r) =>
         r.name === beslut.namn &&
         r.skv_referensnummer === null &&
         ['generated', 'submitted'].includes(r.status)
     )
-    if (byName.length === 0) {
+    if (candidates.length === 0) {
       return {
         ...base,
         status: 'error',
         error: `Ingen aktiv begäran med namnet "${beslut.namn}" hittades.`,
       }
     }
-    if (byName.length > 1) {
-      return {
-        ...base,
-        status: 'error',
-        error: `Flera begäran har namnet "${beslut.namn}": beslutet kan inte matchas entydigt.`,
-      }
-    }
-    request = byName[0]
-    if (request.decided_at) {
-      return { ...base, status: 'already_imported', request_id: request.id }
-    }
   }
 
-  // 2. Load the request's items with the invoice keys used for matching.
-  const { data: itemRows, error: itemsError } = await supabase
-    .from('rot_rut_payout_request_items')
-    .select(
-      'id, invoice_id, requested_amount, invoice:invoices(invoice_number, deduction_personnummer_encrypted)'
-    )
-    .eq('request_id', request.id)
-  if (itemsError) {
-    return { ...base, status: 'error', request_id: request.id, error: itemsError.message }
-  }
-
-  const items = ((itemRows ?? []) as unknown as ItemRow[]).map((item) => {
-    let personnummer: string | null = null
-    if (item.invoice?.deduction_personnummer_encrypted) {
-      try {
-        personnummer = decryptPersonnummer(item.invoice.deduction_personnummer_encrypted).replace(/\D/g, '')
-      } catch {
-        personnummer = null
-      }
+  // 2-3. Match every ärende to exactly one item of the request
+  //      (all-or-nothing per beslut). With several requests of the name, the
+  //      one whose invoice numbers take every ärende is the request.
+  const severalNamed = candidates.length > 1
+  const fits: { request: RequestRow; decidedByItem: Map<string, number> }[] = []
+  for (const candidate of candidates) {
+    const loaded = await loadRequestItems(supabase, candidate.id)
+    if (!loaded.ok) {
+      return { ...base, status: 'error', request_id: candidate.id, error: loaded.error }
     }
+    const result = matchArenden(loaded.items, beslut.arenden, { byNumberOnly: severalNamed })
+    if (result.ok) fits.push({ request: candidate, decidedByItem: result.decidedByItem })
+    else if (!severalNamed) {
+      return { ...base, status: 'error', request_id: candidate.id, error: result.error }
+    }
+  }
+  if (fits.length !== 1) {
     return {
-      ...item,
-      // What the file sent as FakturaNr, which Skatteverket's beslut repeats.
-      invoiceNumber: fileFakturaNr(item.invoice?.invoice_number),
-      personnummer,
+      ...base,
+      status: 'error',
+      error:
+        fits.length === 0
+          ? `Flera begäran har namnet "${beslut.namn}", och ingen av dem har fakturorna i beslutet. Inget har importerats.`
+          : `Flera begäran har namnet "${beslut.namn}": beslutet kan inte matchas entydigt.`,
     }
-  })
-
-  // 3. Match every ärende to exactly one item (all-or-nothing per beslut).
-  const consumed = new Set<string>()
-  const decidedByItem = new Map<string, number>()
-  for (const arende of beslut.arenden) {
-    let candidates = arende.fakturanummer
-      ? items.filter((i) => i.invoiceNumber === arende.fakturanummer)
-      : []
-    if (candidates.length !== 1) {
-      candidates = items.filter((i) => !consumed.has(i.id) && i.personnummer === arende.personnummer)
-    }
-    if (candidates.length !== 1) {
-      return {
-        ...base,
-        status: 'error',
-        request_id: request.id,
-        error:
-          `Ärendet (personnummer ...${arende.personnummer.slice(-4)}` +
-          `${arende.fakturanummer ? `, faktura ${arende.fakturanummer}` : ''}) ` +
-          `matchar ${candidates.length === 0 ? 'ingen' : 'flera'} fakturor i begäran. Inget har importerats.`,
-      }
-    }
-    consumed.add(candidates[0].id)
-    decidedByItem.set(candidates[0].id, (decidedByItem.get(candidates[0].id) ?? 0) + arende.godkantBelopp)
   }
-  const matches = Array.from(decidedByItem, ([itemId, godkantBelopp]) => ({ itemId, godkantBelopp }))
+  const matched = fits[0]
+  request = matched.request
+  if (request.decided_at) {
+    return { ...base, status: 'already_imported', request_id: request.id }
+  }
+  const matches = Array.from(matched.decidedByItem, ([itemId, godkantBelopp]) => ({ itemId, godkantBelopp }))
 
   // 4. Apply atomically: per-item decided amounts plus the request header go
   //    through one RPC (apply_rot_rut_beslut) so a mid-sequence failure can
@@ -260,4 +245,73 @@ async function applyBeslut(
     rejected,
     next: rejected ? undefined : SETTLE_HINT.replace('{request_id}', request.id),
   }
+}
+
+type MatchItem = ItemRow & { invoiceNumber: string | null; personnummer: string | null }
+
+/** A request's items with the invoice keys an ärende is matched on. */
+async function loadRequestItems(
+  supabase: SupabaseClient,
+  requestId: string
+): Promise<{ ok: true; items: MatchItem[] } | { ok: false; error: string }> {
+  const { data: itemRows, error: itemsError } = await supabase
+    .from('rot_rut_payout_request_items')
+    .select(
+      'id, invoice_id, requested_amount, invoice:invoices(invoice_number, deduction_personnummer_encrypted)'
+    )
+    .eq('request_id', requestId)
+  if (itemsError) return { ok: false, error: itemsError.message }
+
+  const items = ((itemRows ?? []) as unknown as ItemRow[]).map((item) => {
+    let personnummer: string | null = null
+    if (item.invoice?.deduction_personnummer_encrypted) {
+      try {
+        personnummer = decryptPersonnummer(item.invoice.deduction_personnummer_encrypted).replace(/\D/g, '')
+      } catch {
+        personnummer = null
+      }
+    }
+    return {
+      ...item,
+      // What the file sent as FakturaNr, which Skatteverket's beslut repeats.
+      invoiceNumber: fileFakturaNr(item.invoice?.invoice_number),
+      personnummer,
+    }
+  })
+  return { ok: true, items }
+}
+
+/**
+ * Each ärende on exactly one item, the godkänt belopp added up per item; the
+ * first ärende that matches no item, or several, fails the whole beslut.
+ * `byNumberOnly`: an ärende with a fakturanummer matches by it alone, never
+ * by the buyer's personnummer (choosing between requests of one name).
+ */
+function matchArenden(
+  items: MatchItem[],
+  arenden: RotRutBeslutFile['beslut'][number]['arenden'],
+  { byNumberOnly }: { byNumberOnly: boolean }
+): { ok: true; decidedByItem: Map<string, number> } | { ok: false; error: string } {
+  const consumed = new Set<string>()
+  const decidedByItem = new Map<string, number>()
+  for (const arende of arenden) {
+    let candidates = arende.fakturanummer
+      ? items.filter((i) => i.invoiceNumber === arende.fakturanummer)
+      : []
+    if (candidates.length !== 1 && !(byNumberOnly && arende.fakturanummer)) {
+      candidates = items.filter((i) => !consumed.has(i.id) && i.personnummer === arende.personnummer)
+    }
+    if (candidates.length !== 1) {
+      return {
+        ok: false,
+        error:
+          `Ärendet (personnummer ...${arende.personnummer.slice(-4)}` +
+          `${arende.fakturanummer ? `, faktura ${arende.fakturanummer}` : ''}) ` +
+          `matchar ${candidates.length === 0 ? 'ingen' : 'flera'} fakturor i begäran. Inget har importerats.`,
+      }
+    }
+    consumed.add(candidates[0].id)
+    decidedByItem.set(candidates[0].id, (decidedByItem.get(candidates[0].id) ?? 0) + arende.godkantBelopp)
+  }
+  return { ok: true, decidedByItem }
 }

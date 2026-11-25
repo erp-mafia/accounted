@@ -73,6 +73,8 @@ function enqueueEmpty(enqueue: (r: { data?: unknown; error?: unknown; count?: nu
   enqueue({ count: 0 })
   // 4b. the company's accounting method, read beside that count
   enqueue({ data: null })
+  // 4c. the company's attest policy, read beside it
+  enqueue({ data: null })
   // 5. pendingSupplierSamples
   enqueue({ data: [] })
   // 6. pendingOpsHead
@@ -131,6 +133,25 @@ describe('Accounted://attention', () => {
     enqueue({ data: [] })                                                  // overdueRows
     enqueue({ count: 2 })                                                  // pendingSupplierHead
     enqueue({ data: { accounting_method: 'cash' } })                       // accounting method
+    enqueue({ data: null })   // attest policy, read beside the method
+    enqueue({ data: [{ id: 'si-1', supplier_invoice_number: 'L-1', supplier_id: 's-1', total: 1000, currency: 'SEK', due_date: today }] })
+    for (let i = 6; i <= 14; i += 1) enqueue({ data: i === 13 || i === 14 ? null : [], count: 0 })
+    enqueue({ data: [] })                                                  // unlinked-document candidates
+
+    const result = (await attentionResource.read(ctx(supabase))) as AttentionResponse
+
+    expect(result.categories.find((c) => c.key === 'pending_supplier_invoices')).toBeUndefined()
+    expect(result.summary.total_items).toBe(0)
+  })
+
+  it('sends no agent to attest under faktureringsmetoden without an attest policy on: no attest step there either', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const today = new Date().toISOString().slice(0, 10)
+    enqueue({ data: [] })                                                  // unbookedSamples
+    enqueue({ data: [] })                                                  // overdueRows
+    enqueue({ count: 2 })                                                  // pendingSupplierHead
+    enqueue({ data: { accounting_method: 'accrual' } })                    // accounting method
+    enqueue({ data: { enabled: false } })                                  // attest policy, off
     enqueue({ data: [{ id: 'si-1', supplier_invoice_number: 'L-1', supplier_id: 's-1', total: 1000, currency: 'SEK', due_date: today }] })
     for (let i = 6; i <= 14; i += 1) enqueue({ data: i === 13 || i === 14 ? null : [], count: 0 })
     enqueue({ data: [] })                                                  // unlinked-document candidates
@@ -163,6 +184,7 @@ describe('Accounted://attention', () => {
     enqueue({ data: [] })            // overdueRows
     enqueue({ count: 0 })            // pendingSupplierHead
     enqueue({ data: null })          // accounting method
+    enqueue({ data: null })   // attest policy, read beside the method
     enqueue({ data: [] })            // pendingSupplierSamples
     enqueue({ count: 0 })            // pendingOpsHead
     enqueue({ data: [] })            // pendingOpsSamples
@@ -200,6 +222,7 @@ describe('Accounted://attention', () => {
     enqueue({ data: [] })                              // 3. overdueRows
     enqueue({ count: 0 })                              // 4. pendingSupplierHead
     enqueue({ data: null })                            // 4b. accounting method
+    enqueue({ data: null })   // attest policy, read beside the method
     for (let i = 5; i <= 14; i += 1) enqueue({ data: i === 13 || i === 14 ? null : [], count: 0 })
     enqueue({ data: [] })                              // 15. unlinked-document candidates
 
@@ -222,6 +245,7 @@ describe('Accounted://attention', () => {
     enqueue({ data: [] })                              // 3. overdueRows
     enqueue({ count: 0 })                              // 4. pendingSupplierHead
     enqueue({ data: null })                            // 4b. accounting method
+    enqueue({ data: null })   // attest policy, read beside the method
     for (let i = 5; i <= 14; i += 1) enqueue({ data: i === 13 || i === 14 ? null : [], count: 0 })
     enqueue({ data: [] })                              // 15. unlinked-document candidates
 
@@ -241,6 +265,7 @@ describe('Accounted://attention', () => {
     enqueue({ data: [] })                              // 3. overdueRows
     enqueue({ count: 0 })                              // 4. pendingSupplierHead
     enqueue({ data: null })                            // 4b. accounting method
+    enqueue({ data: null })   // attest policy, read beside the method
     for (let i = 5; i <= 14; i += 1) enqueue({ data: i === 13 || i === 14 ? null : [], count: 0 })
     enqueue({ data: [] })                              // 15. unlinked-document candidates
 
@@ -262,6 +287,7 @@ describe('Accounted://attention', () => {
     enqueue({ data: [] })
     enqueue({ count: 0 })
     enqueue({ data: null })                   // accounting method
+    enqueue({ data: null })   // attest policy, read beside the method
     enqueue({ data: [] })
     enqueue({ count: 0 })
     enqueue({ data: [] })
@@ -295,6 +321,7 @@ describe('Accounted://attention', () => {
     enqueue({ data: overdue })
     enqueue({ count: 0 })
     enqueue({ data: null })                   // accounting method
+    enqueue({ data: null })   // attest policy, read beside the method
     enqueue({ data: [] })
     enqueue({ count: 0 })
     enqueue({ data: [] })
@@ -344,6 +371,7 @@ describe('Accounted://attention', () => {
     enqueue({ data: [] })
     enqueue({ count: 0 })
     enqueue({ data: null })                   // accounting method
+    enqueue({ data: null })   // attest policy, read beside the method
     enqueue({ data: [] })
     enqueue({ count: 2 })
     enqueue({ data: ops })
@@ -371,8 +399,8 @@ describe('Accounted://attention', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     // Slots 1-14 empty, then this test's own candidate set in slot 15 and the
     // eight reference lookups behind it.
-    // (14 slots: the supplier count reads the accounting method beside it.)
-    for (let i = 0; i < 14; i += 1) enqueue({ data: i === 12 || i === 13 ? null : [], count: 0 })
+    // (15 slots: the supplier count reads the accounting method and the attest policy beside it.)
+    for (let i = 0; i < 15; i += 1) enqueue({ data: i === 13 || i === 14 ? null : [], count: 0 })
     enqueue({
       data: [
         { id: 'doc-new', file_name: 'kvitto.pdf', mime_type: 'application/pdf', file_size_bytes: 900, upload_source: 'api', created_at: '2026-08-20T00:00:00.000Z' },
@@ -394,8 +422,8 @@ describe('Accounted://attention', () => {
 
   it('omits the unlinked-documents category when every candidate is claimed', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    // (14 slots: the supplier count reads the accounting method beside it.)
-    for (let i = 0; i < 14; i += 1) enqueue({ data: i === 12 || i === 13 ? null : [], count: 0 })
+    // (15 slots: the supplier count reads the accounting method and the attest policy beside it.)
+    for (let i = 0; i < 15; i += 1) enqueue({ data: i === 13 || i === 14 ? null : [], count: 0 })
     enqueue({
       data: [
         { id: 'doc-1', file_name: 'kvitto.pdf', mime_type: 'application/pdf', file_size_bytes: 900, upload_source: 'api', created_at: '2026-08-20T00:00:00.000Z' },
@@ -418,6 +446,7 @@ describe('Accounted://attention', () => {
     enqueue({ data: [] })
     enqueue({ count: 0 })
     enqueue({ data: null })                   // accounting method
+    enqueue({ data: null })   // attest policy, read beside the method
     enqueue({ data: [] })
     enqueue({ count: 0 })
     enqueue({ data: [] })
@@ -454,6 +483,7 @@ describe('Accounted://attention', () => {
     enqueue({ data: [] })
     enqueue({ count: 0 })
     enqueue({ data: null })                   // accounting method
+    enqueue({ data: null })   // attest policy, read beside the method
     enqueue({ data: [] })
     enqueue({ count: 0 })
     enqueue({ data: [] })
@@ -484,6 +514,7 @@ describe('Accounted://attention', () => {
     enqueue({ data: [] })
     enqueue({ count: 0 })
     enqueue({ data: null })                   // accounting method
+    enqueue({ data: null })   // attest policy, read beside the method
     enqueue({ data: [] })
     enqueue({ count: 0 })
     enqueue({ data: [] })
@@ -509,6 +540,7 @@ describe('Accounted://attention', () => {
     enqueue({ data: [] })
     enqueue({ count: 0 })
     enqueue({ data: null })                   // accounting method
+    enqueue({ data: null })   // attest policy, read beside the method
     enqueue({ data: [] })
     enqueue({ count: 0 })
     enqueue({ data: [] })
@@ -535,6 +567,7 @@ describe('Accounted://attention', () => {
     enqueue({ data: [] })                                                  // overdueRows
     enqueue({ count: 1 })                                                  // pendingSupplierHead
     enqueue({ data: { accounting_method: 'accrual' } })                    // accounting method
+    enqueue({ data: { enabled: true } })   // attest policy, read beside the method
     enqueue({ data: [{ id: 'si-1', supplier_invoice_number: 'L-1', supplier_id: 's-1', total: 1000, currency: 'SEK', due_date: today }] })
     enqueue({ count: 0 })                                                  // pendingOpsHead
     enqueue({ data: [] })

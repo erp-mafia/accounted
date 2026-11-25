@@ -2,7 +2,7 @@ import type { NoteEntry } from './types'
 import type { DeferredTaxMovement } from '@/lib/bokslut/tax-provision/deferred-tax-service'
 import { roundOre } from '@/lib/money'
 import { MARK_NOT_DEPRECIATED } from './anlaggningstillgangar-note'
-import { formatPdfKronor } from './pdf-format'
+import { formatNoteKronor } from './pdf-format'
 
 /**
  * K3 noter builder (BFNAR 2012:1).
@@ -186,8 +186,7 @@ export function buildUppskjutenSkattNot(params: {
 }): NoteEntry {
   const { noteNumber, liability, asset, expense } = params
   // sv-SE thousand separator, no decimals: typical for ÅR notes.
-  // ASCII hyphen for negatives: PDF Helvetica/WinAnsi has no U+2212 glyph.
-  const fmt = (n: number) => formatPdfKronor(n)
+  const fmt = (n: number) => formatNoteKronor(n)
   const intro =
     liability && asset
       ? 'Posterna avser uppskjuten skatteskuld redovisad på konto 2240 och uppskjuten skattefordran redovisad på konto 1370.'
@@ -336,7 +335,7 @@ export function buildMateriellaAnlaggningsNot(params: {
   }
 
   // If any asset has components, render a per-component breakdown per asset.
-  const fmt = (n: number) => formatPdfKronor(n)
+  const fmt = (n: number) => formatNoteKronor(n)
   const withComponents = active.filter((a) => isComponentArray(a.k3_components))
   if (withComponents.length > 0) {
     linesOut.push('', 'Komponentuppdelning per tillgång:')

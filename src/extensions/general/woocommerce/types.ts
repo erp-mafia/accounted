@@ -7,6 +7,15 @@
  */
 export const MAX_BACKFILL_YEARS = 3
 
+/**
+ * How many trailing characters of the consumer key the store's admin shows:
+ * WooCommerce stores truncated_key = substr($consumer_key, -7) when it mints
+ * a key and lists it under REST API keys as "Consumer key ending in". Typing
+ * them proves control of the store after the wc-auth handshake
+ * (POST /verify-store). Lives here so the client panel can name the count.
+ */
+export const KEY_SUFFIX_LENGTH = 7
+
 /** Row shape of public.woocommerce_connections. */
 export interface WooCommerceConnection {
   id: string
@@ -21,9 +30,11 @@ export interface WooCommerceConnection {
   status: 'pending' | 'active' | 'revoked' | 'error'
   oauth_state: string | null
   /**
-   * Set by the session-bound leg (wc-auth return, or manual key entry).
-   * Together with stored credentials it is required for status 'active'
-   * (DB CHECK, migration 20260907143000).
+   * Set when the initiating user proved control of the store under their
+   * session: the consumer key's last characters typed after the wc-auth
+   * handshake (POST /verify-store), or the keys entered manually. Together
+   * with stored credentials it is required for status 'active' (DB CHECK,
+   * migration 20260907143000).
    */
   browser_confirmed_at: string | null
   currency: string | null

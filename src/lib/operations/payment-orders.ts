@@ -1121,7 +1121,8 @@ export const paymentsUsage = defineOperation({
       'is true and payments above what is included cost unit_price_ore each, billed in arrears. extra_offered says that charge ' +
       'can be accepted; only a person with the admin role accepts it, under Settings, Billing, Usage. subscription_required says ' +
       'it would be, but the company has no subscription of its own (a trial or a free period) and stops at what is included until a ' +
-      'person starts one under Settings, Billing. remaining_payments is what the ' +
+      'person starts one under Settings, Billing. subscription_starting says the company has one, started during the trial, and ' +
+      'stops at what is included until its first charge at the end of the trial; nothing is to be started. remaining_payments is what the ' +
       'month still takes, and a BankID signing that would pass the cap is refused with BANK_PAYMENTS_ALLOWANCE_EXCEEDED. ' +
       'Accounts are counted, not capped. Payment files are not counted. The month defaults to the current one.',
     useWhen: 'Before a batch of bank payments, to see how many the month still takes.',
@@ -1142,6 +1143,7 @@ export const paymentsUsage = defineOperation({
           extra_offered: false,
           billed_above_included: false,
           subscription_required: false,
+          subscription_starting: false,
           unit_price_ore: 200,
           remaining_payments: BANK_PAYMENTS_INCLUDED_PER_MONTH - 4,
           extra_payments: 0,
@@ -1168,6 +1170,7 @@ export const paymentsUsage = defineOperation({
     extra_offered: z.boolean(),
     billed_above_included: z.boolean(),
     subscription_required: z.boolean(),
+    subscription_starting: z.boolean(),
     unit_price_ore: z.number().int(),
     remaining_payments: z.number().int(),
     extra_payments: z.number().int(),

@@ -56,7 +56,7 @@ import {
   type AnlaggningAsset,
   type CategoryRollforward,
 } from './anlaggningstillgangar-note'
-import { formatPdfKronor } from './pdf-format'
+import { formatNoteKronor, formatPdfKronor } from './pdf-format'
 
 export type FixedAssetBlockKey = 'cost' | 'depreciation' | 'impairment'
 
@@ -638,11 +638,9 @@ export function fixedAssetRowDisplay(block: FixedAssetNoteBlock, row: FixedAsset
   return (block.contra ? -1 : 1) * row.effect * row.amount
 }
 
-// ASCII hyphen: the note body renders in the PDF with Helvetica/WinAnsi,
-// which has no U+2212 glyph. A zero never carries a sign.
+// The note's minus sign, as in every note body. A zero never carries a sign.
 function signedKronor(amount: number): string {
-  const whole = roundWhole(amount)
-  return whole < 0 ? `-${formatPdfKronor(-whole)}` : formatPdfKronor(whole)
+  return formatNoteKronor(roundWhole(amount))
 }
 
 /** The note body the PDF prints: the same rows as the tagged tables, as text. */

@@ -1117,7 +1117,7 @@ Example response `200`:
 **Bank payments sent and accounts used in a month, against the monthly cap.**
 `scope:suppliers:read · risk:low · idempotent`
 
-Counts the payments that reached the provider (an order with a provider payment id) and the accounts they left from, in one month in Stockholm time, against what the company may send per month. A payment counts in the month its signing sent it to the provider, not the month it was drafted. included_payments is what the month includes (10 unless raised for the company) and cap_payments the hard stop: the same number, or a higher safety ceiling once billed_above_included is true and payments above what is included cost unit_price_ore each, billed in arrears. extra_offered says that charge can be accepted; only a person with the admin role accepts it, under Settings, Billing, Usage. subscription_required says it would be, but the company has no subscription of its own (a trial or a free period) and stops at what is included until a person starts one under Settings, Billing. remaining_payments is what the month still takes, and a BankID signing that would pass the cap is refused with BANK_PAYMENTS_ALLOWANCE_EXCEEDED. Accounts are counted, not capped. Payment files are not counted. The month defaults to the current one.
+Counts the payments that reached the provider (an order with a provider payment id) and the accounts they left from, in one month in Stockholm time, against what the company may send per month. A payment counts in the month its signing sent it to the provider, not the month it was drafted. included_payments is what the month includes (10 unless raised for the company) and cap_payments the hard stop: the same number, or a higher safety ceiling once billed_above_included is true and payments above what is included cost unit_price_ore each, billed in arrears. extra_offered says that charge can be accepted; only a person with the admin role accepts it, under Settings, Billing, Usage. subscription_required says it would be, but the company has no subscription of its own (a trial or a free period) and stops at what is included until a person starts one under Settings, Billing. subscription_starting says the company has one, started during the trial, and stops at what is included until its first charge at the end of the trial; nothing is to be started. remaining_payments is what the month still takes, and a BankID signing that would pass the cap is refused with BANK_PAYMENTS_ALLOWANCE_EXCEEDED. Accounts are counted, not capped. Payment files are not counted. The month defaults to the current one.
 
 **Use when:** Before a batch of bank payments, to see how many the month still takes.
 **Do not use for:** Payment files (pain.001): they are not bank payments and are neither counted nor capped.
@@ -1144,6 +1144,7 @@ Response `200`:
     extra_offered: boolean,
     billed_above_included: boolean,
     subscription_required: boolean,
+    subscription_starting: boolean,
     unit_price_ore: number,
     remaining_payments: number,
     extra_payments: number,
@@ -1174,6 +1175,7 @@ Example response `200`:
     "extra_offered": false,
     "billed_above_included": false,
     "subscription_required": false,
+    "subscription_starting": false,
     "unit_price_ore": 200,
     "remaining_payments": 6,
     "extra_payments": 0,
@@ -2204,13 +2206,13 @@ Example response `200`:
 **Mark a supplier invoice as entered in the internet bank ("inlagd i banken"), or clear the mark.**
 `scope:suppliers:write · risk:low · idempotent · dry-run · reversible`
 
-Records that the payment was entered in the bank by hand, so the invoice stops showing as waiting to be paid. A mark, not a payment: it books nothing and changes no amount or status; the payment is still recorded by :mark-paid or the bank match, and the mark clears itself when one of those lands. entered=true needs an unpaid, payable invoice (approved, overdue, partially_paid, and registered under kontantmetoden, which has no attest step; never a credit note); entered=false clears it in any status. Marking an already marked invoice keeps the first timestamp. Idempotent. Dry-runnable.
+Records that the payment was entered in the bank by hand, so the invoice stops showing as waiting to be paid. A mark, not a payment: it books nothing and changes no amount or status; the payment is still recorded by :mark-paid or the bank match, and the mark clears itself when one of those lands. entered=true needs an unpaid, payable invoice (approved, overdue, partially_paid, and registered where the company has no attest step: kontantmetoden, or no attest policy on; never a credit note); entered=false clears it in any status. Marking an already marked invoice keeps the first timestamp. Idempotent. Dry-runnable.
 
 **Use when:** The user paid the invoice by typing it into the internet bank (not through a betalfil) and wants the list to say so until the bank transaction arrives.
 **Do not use for:** Recording the payment itself (POST /supplier-invoices/{id}/mark-paid) or payment batches (betalfil).
 
 **Pitfalls:**
-- A registered invoice still waiting for attest (faktureringsmetoden), a paid or credited invoice, or a credit note, answers 400 SI_BANK_ENTERED_NOT_PAYABLE with details.currentStatus.
+- A registered invoice still waiting for attest (faktureringsmetoden with the attest policy on), a paid or credited invoice, or a credit note, answers 400 SI_BANK_ENTERED_NOT_PAYABLE with details.currentStatus.
 - details.reason race means a payment landed between the read and the write: reload.
 
 | Parameter | In | Type | Required | Notes |

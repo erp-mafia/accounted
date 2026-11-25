@@ -296,12 +296,14 @@ export default function TransactionBookingDialog({
             }
           >
             {viewerDocId ? (
-              // The one object in the dialog: the raised surface.
+              // The one object in the dialog: the raised surface. Stacked
+              // (below lg) it is 35vh: a multi-page PDF scrolls inside it, and
+              // a taller box took most swipes on a phone before the form.
               <DocumentViewerPane
                 documentId={viewerDocId}
                 mime={viewerMime}
                 fileName={viewerName}
-                className="h-[45vh] rounded-lg bg-control shadow-raised lg:h-auto lg:min-h-0 lg:flex-1"
+                className="h-[35vh] rounded-lg bg-control shadow-raised lg:h-auto lg:min-h-0 lg:flex-1"
               />
             ) : (
               <>

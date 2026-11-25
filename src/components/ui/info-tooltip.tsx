@@ -71,10 +71,37 @@ function InfoTooltip({
   maxWidth = '280px',
 }: InfoTooltipProps) {
   const Icon = variant === 'help' ? QuestionMarkCircleIcon : InformationCircleIcon
+  // A touch screen has no hover, and Radix opens a tooltip only on hover and
+  // focus (its own click handler closes it), so a tap showed nothing. A tap,
+  // any press that is not a mouse, toggles it instead: it opens when it was
+  // closed at the press and closes when it was open. The state is read at
+  // the press because Radix closes an open tooltip on pointer down, and a
+  // tapped span takes focus (which opens it) between the press and the click.
+  // The click's default is prevented, which keeps Radix's close and a
+  // surrounding <label>'s jump into its field out of it: on a phone the tap
+  // is for the explanation, and the field is one tap away. A mouse never
+  // takes this path, so hover, focus and click behave as before.
+  const [open, setOpen] = React.useState(false)
+  const tap = React.useRef<{ wasOpen: boolean } | null>(null)
 
   return (
-      <Tooltip>
-        <TooltipTrigger asChild>
+      <Tooltip open={open} onOpenChange={setOpen}>
+        <TooltipTrigger
+          asChild
+          onPointerDown={(event) => {
+            tap.current = event.pointerType === 'mouse' ? null : { wasOpen: open }
+          }}
+          onPointerCancel={() => {
+            tap.current = null
+          }}
+          onClick={(event) => {
+            const press = tap.current
+            tap.current = null
+            if (!press) return
+            event.preventDefault()
+            setOpen(!press.wasOpen)
+          }}
+        >
           {children ? (
             // tabIndex is what makes this branch reachable at all. Radix opens a
             // tooltip on focus as well as hover, but TooltipTrigger with asChild

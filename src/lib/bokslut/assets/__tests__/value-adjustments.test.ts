@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createTableMockSupabase } from '@/tests/helpers'
 import { AssetValueAdjustmentBlockedError } from '@/lib/bookkeeping/errors'
-import type { Asset, AssetComponent, AssetValueAdjustment } from '@/types'
+import { computeSRUCode } from '@/lib/bookkeeping/bas-data/sru-mapping'
+import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-reference'
+import type { Asset, AssetCategory, AssetComponent, AssetValueAdjustment } from '@/types'
 
 /**
  * Nedskrivning (ÅRL 4:5, K3 27), mark and the depreciation start (K3 17.18):
@@ -169,8 +171,30 @@ describe('the register view of write-downs', () => {
       expense: '7720',
       reversal: '7770',
     })
+    // Förbättringsutgifter på annans fastighet: BAS 2026 has no 1128, and the
+    // category's 1118 sits in another balance-sheet post (Byggnader och mark).
+    expect(impairmentAccountsFor({ category: 'building', bas_accumulated_account: '1129' })).toEqual({
+      accumulated: '1128',
+      expense: '7720',
+      reversal: '7770',
+    })
     expect(isGoodwill({ bas_asset_account: '1070' })).toBe(true)
     expect(isGoodwill({ bas_asset_account: '1090' })).toBe(false)
+  })
+
+  it('keeps every write-down in the balance-sheet post of the asset\'s accumulated depreciation', () => {
+    const categories: AssetCategory[] = [
+      'immaterial', 'building', 'land', 'land_improvement', 'machinery', 'equipment', 'vehicle', 'computer', 'other_tangible',
+    ]
+    const depreciationAccounts = BAS_REFERENCE.map((account) => account.account_number).filter(
+      (number) => number >= '1000' && number <= '1299' && number.endsWith('9'),
+    )
+    for (const own of depreciationAccounts) {
+      for (const category of categories) {
+        const { accumulated } = impairmentAccountsFor({ category, bas_accumulated_account: own })
+        expect([own, category, computeSRUCode(accumulated)]).toEqual([own, category, computeSRUCode(own)])
+      }
+    }
   })
 })
 
@@ -370,6 +394,29 @@ describe('postValueAdjustment', () => {
         accumulated_account: '1118',
       },
     )
+  })
+})
+
+describe('postValueAdjustment on förbättringsutgifter på annans fastighet', () => {
+  it('adds 1128 to the chart and books the write-down there, in the asset\'s own post', async () => {
+    const improvement = building({ name: 'Ombyggnad hyrd lokal', bas_asset_account: '1120', bas_accumulated_account: '1129' })
+    const { supabase, payloads } = context(improvement, yearly(20_000, ['2024', '2025', '2026']))
+    vi.mocked(createDraftEntry).mockResolvedValue({ id: 'draft-1', fiscal_period_id: 'fp-2026' } as never)
+    vi.mocked(commitAssetValueAdjustment).mockResolvedValue({ entry: { id: 'draft-1' } } as never)
+    await postValueAdjustment(supabase as never, COMPANY, 'user-1', 'asset-1', {
+      kind: 'impairment',
+      fiscal_period_id: 'fp-2026',
+      recoverable_amount: 700_000,
+      reason: 'Hyresavtalet sägs upp i förtid.',
+    })
+    expect(payloads('chart_of_accounts', 'upsert')).toEqual([
+      expect.objectContaining({ account_number: '1128', sru_code: '7216', normal_balance: 'credit' }),
+    ])
+    const draftInput = vi.mocked(createDraftEntry).mock.calls[0][3]
+    expect(draftInput.lines).toContainEqual(
+      expect.objectContaining({ account_number: '1128', debit_amount: 0, credit_amount: 240_000 }),
+    )
+    expect(vi.mocked(commitAssetValueAdjustment).mock.calls[0][4]).toMatchObject({ accumulated_account: '1128' })
   })
 })
 

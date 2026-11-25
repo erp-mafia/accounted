@@ -648,7 +648,7 @@ describe('statedTranslationIssues', () => {
     expect(issues[0]).toContain(
       'Anläggningsnoten för Inventarier, verktyg och installationer: omräkningsdifferensen i anskaffningsvärdena är angiven till 20 000 kr, men postens anskaffningskonton har under året ändrats med 0 kr utöver anläggningsregistret.',
     )
-    expect(issues[1]).toContain('omräkningsdifferensen i avskrivningarna är angiven till -20 000 kr')
+    expect(issues[1]).toContain('omräkningsdifferensen i avskrivningarna är angiven till \u221220 000 kr')
     expect(issues[1]).toContain('har under året ändrats med 0 kr utöver anläggningsregistret')
   })
 
@@ -752,8 +752,8 @@ describe('fixedAssetNoteBody', () => {
         '  Inköp: 30 000 kr',
         '  Utgående anskaffningsvärden: 30 000 kr',
         '  Ingående avskrivningar: 0 kr',
-        '  Årets avskrivningar: -5 000 kr',
-        '  Utgående avskrivningar: -5 000 kr',
+        '  Årets avskrivningar: \u22125 000 kr',
+        '  Utgående avskrivningar: \u22125 000 kr',
         '  Redovisat värde: 25 000 kr',
       ].join('\n'),
     )
@@ -778,8 +778,8 @@ describe('fixedAssetNoteBody', () => {
       ),
     )
     expect(body).toContain('  Försäljningar/utrangeringar: 12 000 kr')
-    expect(body).toContain('  Omklassificeringar: -7 000 kr')
-    expect(body).toContain('  Årets avskrivningar: -4 000 kr')
+    expect(body).toContain('  Omklassificeringar: \u22127 000 kr')
+    expect(body).toContain('  Årets avskrivningar: \u22124 000 kr')
   })
 })
 
@@ -796,7 +796,7 @@ describe('fixedAssetNoteBody and the tagged table round alike', () => {
       }),
     ])
     expect(amounts(tables[0])['depreciation.omklassificeringar']).toBe(-5_000.5)
-    expect(plainSpaces(fixedAssetNoteBody(tables))).toContain('  Omklassificeringar: -5 001 kr')
+    expect(plainSpaces(fixedAssetNoteBody(tables))).toContain('  Omklassificeringar: \u22125 001 kr')
   })
 })
 

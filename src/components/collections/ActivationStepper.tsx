@@ -1,14 +1,14 @@
 'use client'
 
 import { useMemo, useState } from 'react'
+import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { BrandMark } from '@/components/parties/BrandMark'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Switch } from '@/components/ui/switch'
+import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import {
   SettingsGroup,
   SettingsInput,
-  SettingsReveal,
   SettingsRow,
   SettingsRowNote,
   SettingsSelect,
@@ -297,15 +297,26 @@ export function ActivationStepper({ data, onChanged }: ActivationStepperProps) {
           )}
           {fieldError('company.payout')}
         </SettingsRow>
-        <SettingsRow label={t('field_vat_registered')}>
-          <Switch checked={company.vatRegistered} onCheckedChange={(v) => setCompany({ ...company, vatRegistered: v })} aria-label={t('field_vat_registered')} />
+        {/* The company's moms registration as Moms och skatt holds it, its
+            one home: sent as saved there, never asked again here. */}
+        <SettingsRow label={t('field_vat_registered')} htmlFor="coll-vat" align="baseline">
+          <SettingsInput
+            id="coll-vat"
+            value={
+              company.vatRegistered
+                ? company.vatNumber.trim()
+                  ? t('vat_registered_with_number', { number: company.vatNumber.trim() })
+                  : t('vat_registered_yes')
+                : t('vat_registered_no')
+            }
+            className="basis-full"
+            disabled
+          />
+          <Link href="/settings/tax" className={QUIET_LINK_CLASS}>
+            {t('vat_registration_change')}
+          </Link>
+          {fieldError('company.vatNumber')}
         </SettingsRow>
-        <SettingsReveal open={company.vatRegistered}>
-          <SettingsRow label={t('field_vat_number')} htmlFor="coll-vat" align="baseline">
-            <SettingsInput id="coll-vat" value={company.vatNumber} onChange={(e) => setCompany({ ...company, vatNumber: e.target.value })} />
-            {fieldError('company.vatNumber')}
-          </SettingsRow>
-        </SettingsReveal>
       </SettingsGroup>
 
       <SettingsGroup label={t('step_kyc')} help={tp('kyc_intro')}>

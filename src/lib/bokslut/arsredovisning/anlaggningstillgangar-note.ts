@@ -40,7 +40,7 @@ import type { WriteDownMovement } from '@/lib/bokslut/assets/value-adjustments'
 import type { AssetAcquisitionType } from '@/types'
 import type { DepreciationPrinciple, NoteEntry } from './types'
 import type { AssetDepreciationFigures } from './asset-note-figures'
-import { formatPdfKronor } from './pdf-format'
+import { formatNoteKronor } from './pdf-format'
 
 export interface AnlaggningAsset {
   category: string
@@ -335,9 +335,7 @@ export function holdsWriteDowns(assets: readonly AnlaggningAsset[]): boolean {
   })
 }
 
-// ASCII hyphen for negatives: the note body renders in the ÅR PDF with
-// Helvetica/WinAnsi, which has no U+2212 glyph.
-const fmt = (n: number) => formatPdfKronor(n)
+const fmt = (n: number) => formatNoteKronor(n)
 
 /**
  * Build the anläggningstillgångar roll-forward note. Returns null when no
@@ -353,9 +351,10 @@ export function buildAnlaggningstillgangarNote(params: {
   const rows = buildRollforward(assets, periodStart, periodEnd)
   if (rows.length === 0) return null
 
-  // A reduction is written with a leading minus, except a zero one: "-0 kr"
-  // reads as a typo in the filed document.
-  const minus = (n: number) => (fmt(n) === fmt(0) ? fmt(0) : `-${fmt(n)}`)
+  // A reduction is written with the note's minus sign, except a zero one
+  // ("-0 kr" reads as a typo in the filed document): fmt never signs a zero.
+  // Rounded before the sign, so a half krona rounds as it does unsigned.
+  const minus = (n: number) => fmt(-Math.round(n))
   const lines: string[] = []
   for (const row of rows) {
     const label = CATEGORY_LABELS[row.category] ?? row.category

@@ -122,7 +122,8 @@ export const RELEASE_UNSIGNED_AFTER_MINUTES = 30
  * unsigned and refuses to cancel (crm#1282: Danske Bank takes neither a
  * cancel nor a new signing of a started payment through its API, so the
  * payment stays RCVD for good). The bank said so in this very answer (too
- * late, unsigned); the order never got past 'submitted' (an accepted order
+ * late, unsigned), or in its status read after a cancel it refused with an
+ * error or wants signed; the order never got past 'submitted' (an accepted order
  * never comes back to it), has no signature and no create in doubt; its
  * signing is neither open nor finished; and its last BankID started at least
  * RELEASE_UNSIGNED_AFTER_MINUTES ago. No signature, no money: the bank
@@ -330,7 +331,8 @@ export async function unapprovePaymentOrders(
  * The bank keeps an unsigned payment it never executes; the invoice is free
  * for a new payment. A bank that refuses the cancel with an error instead of
  * an answer says nothing of the payment: it is read once, and the same holds
- * when the bank reports it unsigned (crm#1757).
+ * when the bank reports it unsigned (crm#1757). So does a bank that wants the
+ * cancel signed (needs_authorisation) while its read shows the payment unsigned.
  */
 export async function cancelPaymentOrder(
   ctx: OperationContext,
@@ -519,8 +521,8 @@ export async function cancelPaymentOrder(
     ], ctx.log)
     if (answer.outcome === 'needs_authorisation' || answer.outcome === 'not_cancelled') {
       // The payment itself, read once (crm#1699). Every unsigned payment whose
-      // cancel a bank did not confirm so far was cancelled or rejected by the
-      // bank within minutes (often by the cancel asked a moment earlier), and
+      // cancel a bank answered "not cancelled" so far was cancelled or rejected
+      // by the bank within minutes (often by the cancel asked a moment earlier), and
       // only the 15-minute status sync picked that up: until then the person
       // was told to look in an online bank that does not show unsigned
       // payments. What the bank reports is applied as the sync applies it
@@ -533,12 +535,27 @@ export async function cancelPaymentOrder(
       }
       // The bank says, in this read, that it holds the payment unsigned (its
       // 'submitted': RCVD or PDNG), and no signature of it finished here:
-      // nothing is paid unless someone signs it, and the status sync applies
-      // the bank's cancel when it comes.
-      if (
+      // nothing is paid unless someone signs it.
+      if (state?.status === 'submitted' && answer.outcome === 'needs_authorisation') {
+        // The bank waits for a signed cancel, which is not offered here, and
+        // cancels nothing by itself (a payment answered this way stayed RCVD
+        // for weeks, through every retry): no status sync ever closes it, so
+        // it is the unsigned refusal, released here as crm#1282 allows.
+        // Read after the bank answered, so a signing started meanwhile counts.
+        const signing = await readSigning(ctx, order)
+        if (noSignatureHere(order, signing)) {
+          return releaseOrRefuseUnsigned(
+            signing,
+            { outcome: 'too_late', providerStatus: state.providerStatus, unsigned: true },
+            { answer: answer.outcome },
+          )
+        }
+      } else if (
         state?.status === 'submitted' &&
         noSignatureHere(order, order.status === 'awaiting_signature' ? await readSigning(ctx, order) : null)
       ) {
+        // Not cancelled, with nothing asked of the person: the status sync
+        // applies the bank's cancel when it comes.
         return {
           ok: false,
           code: 'PAYMENT_CANCEL_PENDING_UNSIGNED',

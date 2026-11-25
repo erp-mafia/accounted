@@ -161,6 +161,7 @@ import { requiresWebApproval, webOnlyRefusalCode } from '@/lib/pending-operation
 import { bookingReviewLimitCovers } from '@/lib/booking-review/operation-gate'
 import { stagedBookingReview } from '@/lib/pending-operations/staged-booking-review'
 import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
+import { sendInvoiceToDigitalMailbox } from '@/lib/invoices/digital-mailbox-send'
 import { createDimensionValue } from '@/lib/dimensions/registry-service'
 import { SIEJobDatabaseError, SIEJobValidationError, submitSIEJob } from '@/lib/import/sie-jobs'
 import { userFacingCode } from '@/lib/errors/user-facing'
@@ -3019,6 +3020,39 @@ function issueRefusalResult(refusal: IssueRefusal, currency: Invoice['currency']
   return { error: entry?.message_sv ?? refusal.code, errorCode: refusal.code, status: entry?.httpStatus ?? 400 }
 }
 
+/**
+ * send_invoice staged with channel kivra or billo: the invoice page's send to
+ * the customer's digital mailbox (lib/invoices/digital-mailbox-send.ts), every
+ * check, the usage gate and the dispatch log included. A delivery that fails
+ * after a draft was booked on issue leaves the verifikat posted: the op lands
+ * in failed_partial carrying it, and sending again resends the issued invoice.
+ */
+async function commitSendInvoiceToMailbox(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  invoiceId: string,
+  provider: 'kivra' | 'billo',
+): Promise<ExecutorResult> {
+  const outcome = await sendInvoiceToDigitalMailbox(
+    { supabase, service: createServiceClient(), companyId, userId, log },
+    invoiceId,
+    provider,
+  )
+  if (outcome.ok) return { data: { invoice_id: invoiceId, channel: provider, ...outcome.data } }
+  // The engine's own refusal: the dispatcher maps it with its Swedish text.
+  if (isBookkeepingError(outcome.bookingError)) throw outcome.bookingError
+  const entry = getErrorEntry(outcome.code)
+  const journalEntryId = outcome.details?.journal_entry_id
+  return {
+    error: outcome.messageSv ?? entry?.message_sv ?? outcome.code,
+    errorCode: outcome.code,
+    status: entry?.httpStatus ?? 400,
+    ...(outcome.details ? { data: outcome.details } : {}),
+    ...(typeof journalEntryId === 'string' ? { partialPostedIds: { journal_entry_id: journalEntryId } } : {}),
+  }
+}
+
 async function commitSendInvoice(
   supabase: SupabaseClient,
   userId: string,
@@ -3027,6 +3061,13 @@ async function commitSendInvoice(
   userEmail?: string
 ): Promise<ExecutorResult> {
   const invoiceId = params.invoice_id as string
+
+  // Staged by gnubok_send_invoice's channel; a row without one is an email send.
+  const channel = params.channel ?? 'email'
+  if (channel === 'kivra' || channel === 'billo') {
+    return commitSendInvoiceToMailbox(supabase, userId, companyId, invoiceId, channel)
+  }
+  if (channel !== 'email') return { error: 'Invalid channel', errorCode: 'VALIDATION_ERROR', status: 400 }
 
   const emailService = await getEmailService()
   if (!emailService.isConfigured()) {

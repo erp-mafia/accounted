@@ -8,7 +8,7 @@
  * existed, unchanged, with the same arguments: one read, the same answer, and
  * the same throw on a failed read. attestsSupplierInvoices is supplier
  * invoices' one attest rule (companyAttestsSupplierInvoices) over the
- * company's accounting method (crm#1141).
+ * company's accounting method and attest policy (crm#1141).
  */
 import type { PaymentAttestGate } from '@/lib/payments/attest-gate'
 import { loadAttestBlockedInvoiceIds, loadCompanyAttestsSupplierInvoices } from '@/lib/supplier-invoices/attest-policy-read'

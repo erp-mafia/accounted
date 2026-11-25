@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { backfillStandardBASAccounts } from '@/lib/bookkeeping/account-backfill'
-import { isStandardBASAccount } from '@/lib/bookkeeping/bas-reference'
+import { computeSRUCode } from '@/lib/bookkeeping/bas-data/sru-mapping'
+import { getBASReference, isStandardBASAccount } from '@/lib/bookkeeping/bas-reference'
 import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
 import type { AssetCategory } from '@/types'
 
@@ -147,4 +148,56 @@ export async function ensureAssetAccountsInChart(
   const seeded = new Set(await backfillStandardBASAccounts(supabase, companyId, userId, missing))
   const notSeeded = missing.filter((number) => !seeded.has(number))
   if (notSeeded.length > 0) throw new AccountsNotInChartError(notSeeded)
+}
+
+/**
+ * The write-down account outside BAS that impairmentAccountsFor picks when
+ * BAS has none in the asset's balance-sheet post (1128 beside 1129, whose
+ * post Förbättringsutgifter på annans fastighet BAS gives no 12x8). It is
+ * added to the chart on the first write-down, shaped like the asset's
+ * accumulated-depreciation account (same post and SRU code, credit
+ * balance) and named "Ackumulerade nedskrivningar ...", which is how the
+ * ledger note tells a write-down account (ledger-fixed-asset-notes.ts).
+ * A standard BAS number is left to the engine's backfill; an inactive
+ * account is refused, as everywhere in the register.
+ */
+export async function ensureCompanyImpairmentAccount(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  accountNumber: string,
+  accumulatedDepreciationAccount: string,
+): Promise<void> {
+  if (isStandardBASAccount(accountNumber)) return
+  const state = await loadChartState(supabase, companyId, [accountNumber])
+  const active = state.get(accountNumber)
+  if (active === true) return
+  if (active === false) throw new AccountsNotInChartError([accountNumber])
+
+  const depreciation = getBASReference(accumulatedDepreciationAccount)
+  const subject = depreciation?.account_name.match(/^Ackumulerade avskrivningar (på .+)$/)?.[1]
+  const name = subject ? `Ackumulerade nedskrivningar ${subject}` : `Ackumulerade nedskrivningar ${accountNumber}`
+  const { error } = await supabase.from('chart_of_accounts').upsert(
+    {
+      user_id: userId,
+      company_id: companyId,
+      account_number: accountNumber,
+      account_name: name,
+      account_class: Number(accountNumber.charAt(0)),
+      account_group: accountNumber.slice(0, 2),
+      account_type: 'asset',
+      normal_balance: 'credit',
+      sru_code: computeSRUCode(accountNumber),
+      k2_excluded: depreciation?.k2_excluded ?? false,
+      plan_type: 'full_bas',
+      is_active: true,
+      is_system_account: false,
+      description: name,
+      sort_order: Number(accountNumber),
+    },
+    { onConflict: 'company_id,account_number', ignoreDuplicates: true },
+  )
+  if (error) {
+    throw new Error(`Failed to add account ${accountNumber} for company ${companyId}: ${error.message}`)
+  }
 }

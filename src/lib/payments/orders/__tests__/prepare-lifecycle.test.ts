@@ -133,7 +133,7 @@ describe('preparePaymentOrders', () => {
     expect(db.findCall('rpc:create_payment_orders', 'rpc')).toBeUndefined()
   })
 
-  it('with the policy off, an unattested invoice is paid with the warning, as before', async () => {
+  it('with the policy off, an unattested invoice is paid, and nothing warns: there is no attest step', async () => {
     db.setTable('supplier_invoices', { data: [invoice('a', { status: 'registered', approved_at: null, user_id: 'user-1', total: 737.5 })] })
     db.setTable('rpc:create_payment_orders', { data: { ok: true, orders: [{ id: 'order-a', supplier_invoice_id: 'a' }] } })
 
@@ -141,7 +141,7 @@ describe('preparePaymentOrders', () => {
 
     if (!result.ok || result.dryRun) throw new Error('unexpected')
     expect(result.data.skipped).toEqual([])
-    expect(result.data.warnings).toContainEqual({ supplier_invoice_id: 'a', code: 'unattested' })
+    expect(result.data.warnings.filter((w) => w.code === 'unattested')).toEqual([])
   })
 
   // crm#1141: kontantmetoden has no attest step, so Betala via banken warned
@@ -162,8 +162,10 @@ describe('preparePaymentOrders', () => {
     expect(lines.map((l) => [l.supplier_invoice_id, l.warnings])).toEqual([['a', []]])
   })
 
-  it('faktureringsmetoden: the dry run line still says unattested', async () => {
+  // Below the policy's threshold the invoice is paid, but the company attests.
+  it('faktureringsmetoden with the attest policy on: the dry run line still says unattested', async () => {
     db.setTable('company_settings', { data: { accounting_method: 'accrual' } })
+    db.setTable('company_attest_policies', { data: { company_id: COMPANY, enabled: true, threshold_amount: 5000, mode: 'any', attesters: ['anna'], preparer_may_attest: false, updated_by: null, updated_at: null } })
     db.setTable('supplier_invoices', { data: [invoice('a', { status: 'registered', approved_at: null, user_id: 'user-1', total: 737.5 })] })
 
     const dry = await preparePaymentOrders(ctx, { supplierInvoiceIds: ['a'], cashAccountId: 'acct-1', today: '2026-09-30', dryRun: true })

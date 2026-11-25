@@ -41,6 +41,8 @@ export interface BankPaymentsAllowanceDetails {
   billed: boolean
   /** Whether more would be offered with a subscription of its own: the company has none (lib/usage/paying.ts). */
   subscription_required: boolean
+  /** Whether more will be offered once the company's subscription, started during the trial, has its first charge. */
+  subscription_starting: boolean
   /** Öre exkl. moms per payment above `included`. */
   unit_price_ore: number
   /** What this month still takes, up to the cap. */
@@ -61,6 +63,10 @@ export function swedishMonthName(period: string): string {
 export function allowanceExceededMessage(details: BankPaymentsAllowanceDetails): string {
   const month = swedishMonthName(details.period)
   const noun = details.remaining === 1 ? 'betalning' : 'betalningar'
+  if (details.subscription_starting) {
+    const head = `Ni har använt ${details.used} av ${details.included} betalningar som ingår i ${month}. Fler kostar ${formatOre(details.unit_price_ore)} st och går att begära efter abonnemangets första dragning.`
+    return details.remaining <= 0 ? head : `${head} Välj högst ${details.remaining} ${noun}.`
+  }
   if (details.subscription_required) {
     const head = `Ni har använt ${details.used} av ${details.included} betalningar som ingår i ${month}. Fler kostar ${formatOre(details.unit_price_ore)} st och kräver ett abonnemang.`
     return details.remaining <= 0
@@ -110,6 +116,7 @@ export async function bankPaymentsAllowanceRefusal(
     extra_offered: month.extra_offered,
     billed: month.billed_above_included,
     subscription_required: month.subscription_required,
+    subscription_starting: month.subscription_starting,
     unit_price_ore: USAGE_PRICES.bank_payment.unitPriceOre ?? 0,
     remaining: Math.max(0, cap - used),
     requested,

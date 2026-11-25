@@ -6,7 +6,7 @@ import { parseEntityType } from '@/lib/company/entity-type'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Extension, ExtensionContext } from '@/lib/extensions/types'
 import { NextResponse, after } from 'next/server'
-import { isTimeoutError, TimeoutError } from '@/lib/http/fetch-with-timeout'
+import { isTimeoutError, SKATTEVERKET_EXCHANGE_TIMEOUT_MS, TimeoutError } from '@/lib/http/fetch-with-timeout'
 import { capabilityBlockedResponse, requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { isMembershipActive } from '@/lib/entitlements/multi-user'
@@ -23,6 +23,8 @@ import {
   consumeOAuthFlowHandoff,
   consumeOAuthFlowState,
   createOAuthFlow,
+  inspectOAuthFlowHandoff,
+  inspectOAuthFlowState,
   mintOAuthFlowHandoff,
   newOAuthFlowId,
   peekOAuthFlowHandoff,
@@ -31,6 +33,7 @@ import {
   requestMatchesOrigin,
   resolveOAuthOrigin,
   type OAuthFlow,
+  type UsedOAuthFlow,
 } from '@/lib/auth/oauth-flows'
 import { storeTokens, getTokens, deleteTokens, getTokenHealth } from './lib/token-store'
 import { skvRequest, SkatteverketAuthError, getSkatteverketEnvironment, isApigwClientRefusal, skvUnreachable, skvUnavailableAnswer } from './lib/api-client'
@@ -130,9 +133,17 @@ const log = createLogger('skatteverket')
 
 // Every state or handoff failure on the unauthenticated callback gets this
 // one message: unknown, forged, expired, replayed, wrong origin. Telling the
-// caller which one would make the route an oracle for live flows.
+// caller which one would make the route an oracle for live flows; the server
+// log names the check that refused.
 const SKV_STATE_REJECTED_MESSAGE =
   'Anslutningen kunde inte verifieras (ogiltig eller förbrukad state). Stäng fliken och försök ansluta igen.'
+
+// How long after the first delivery consumed the state a second delivery
+// waits for that first one to store the connection: the token exchange's
+// own timeout plus the hops and the store around it. A phone that opens
+// Skatteverket's redirect in two tabs sends both within a few seconds.
+const SKV_REPLAY_WAIT_AFTER_USE_MS = SKATTEVERKET_EXCHANGE_TIMEOUT_MS + 7_000
+const SKV_REPLAY_POLL_MS = 500
 
 // Answered only when the session vanished between the identity check and
 // the consume (a race, not the normal path: a session-less arrival is sent
@@ -695,6 +706,9 @@ export const skatteverketExtension: Extension = {
         const state = url.searchParams.get('state')
         const error = url.searchParams.get('error')
         const handoffId = url.searchParams.get('handoff')
+        // A second delivery of a spent state, bounced here from the
+        // registered callback host (refuseOrReplayState below).
+        const replayState = url.searchParams.get('replay')
         // Where the opener tab lives. The canonical app origin until the flow
         // row says otherwise; never derived from the request itself.
         let responseOrigin = new URL(appUrl).origin
@@ -800,8 +814,12 @@ export const skatteverketExtension: Extension = {
 
         const defaultErrorPath = (msg: string) =>
           `/reports?tab=vat-declaration&skv_error=${encodeURIComponent(msg)}`
+        const successPathFor = (returnTo: string | null) =>
+          returnTo
+            ? `${returnTo}${returnTo.includes('?') ? '&' : '?'}skv_connected=true`
+            : `/reports?tab=vat-declaration&skv_connected=true`
 
-        if (!handoffId && ((!code && !error) || !state)) {
+        if (!handoffId && !replayState && ((!code && !error) || !state)) {
           return respondWithError('Saknar auktoriseringskod', defaultErrorPath('Saknar auktoriseringskod'), { closeTab: true })
         }
 
@@ -813,7 +831,9 @@ export const skatteverketExtension: Extension = {
         // provider's state. Both consumes are atomic and single-use, and
         // every failure (unknown, forged, expired, replayed, wrong origin) is
         // the same answer: this route is unauthenticated and must not be an
-        // oracle. The handoff is claimed for the validated origin this
+        // oracle. The one exception is answerReplay below: a second delivery
+        // of a spent state, for its own signed-in initiator whose connection
+        // that flow stored. The handoff is claimed for the validated origin this
         // request arrived on: decided by host with the scheme from
         // configuration, so a proxy that drops x-forwarded-proto cannot make
         // hop 2 disagree with what /authorize recorded.
@@ -834,6 +854,15 @@ export const skatteverketExtension: Extension = {
         // can be revoked between /authorize and this callback (#1091), and
         // a revoked initiator must not burn the one-shot provider code on
         // the way to being refused.
+        const isCompanyMember = async (companyId: string, userId: string) => {
+          const { data: membership } = await db
+            .from('company_members')
+            .select('user_id')
+            .eq('company_id', companyId)
+            .eq('user_id', userId)
+            .maybeSingle()
+          return Boolean(membership)
+        }
         const bindInitiator = async (identity: { userId: string; companyId: string; origin: string }) => {
           responseOrigin = identity.origin
           const initiator = await requireFlowInitiator(request, identity.userId, {
@@ -850,13 +879,7 @@ export const skatteverketExtension: Extension = {
               ),
             }
           }
-          const { data: membership } = await db
-            .from('company_members')
-            .select('user_id')
-            .eq('company_id', identity.companyId)
-            .eq('user_id', initiator.userId)
-            .maybeSingle()
-          if (!membership) {
+          if (!(await isCompanyMember(identity.companyId, initiator.userId))) {
             return {
               userId: null,
               response: respondWithError(
@@ -868,6 +891,95 @@ export const skatteverketExtension: Extension = {
           return { userId: initiator.userId, response: null }
         }
 
+        // Every refused state or handoff: the same page whatever the check
+        // (no oracle), and one log line naming the check. Never the state
+        // or handoff value, never whose flow it was.
+        const refuseFlow = (check: string, detail: Record<string, string> = {}) => {
+          log.warn('skatteverket callback refused the flow', { check, ...detail })
+          return respondWithError(SKV_STATE_REJECTED_MESSAGE, defaultErrorPath(SKV_STATE_REJECTED_MESSAGE), { closeTab: true })
+        }
+
+        // The connection a spent flow stored: tokens for its user and
+        // company stored after it started. A first delivery still
+        // exchanging is waited for, up to SKV_REPLAY_WAIT_AFTER_USE_MS
+        // after it consumed the state. An unreadable token is no connection.
+        const connectionStoredBy = async (spent: UsedOAuthFlow): Promise<boolean> => {
+          const waitUntil = spent.usedAt + SKV_REPLAY_WAIT_AFTER_USE_MS
+          for (;;) {
+            let storedAt: number | null
+            try {
+              storedAt = (await getTokens(db, spent.userId, spent.companyId))?.stored_at ?? null
+            } catch (err) {
+              log.warn('stored connection unreadable for a second callback delivery', {
+                error: (err as Error).message,
+              })
+              return false
+            }
+            if (storedAt !== null && storedAt >= spent.startedAt) return true
+            if (Date.now() + SKV_REPLAY_POLL_MS > waitUntil) return false
+            await new Promise((resolve) => setTimeout(resolve, SKV_REPLAY_POLL_MS))
+          }
+        }
+
+        // A second delivery of a provider redirect whose state is already
+        // spent: a phone that opens Skatteverket's redirect in a second tab
+        // sends the same URL twice, one tab connects and the other used to
+        // show the refusal. It never consumes, exchanges or stores anything.
+        // It lands where the first delivery landed only for the signed-in
+        // initiator, still a member, once the connection that flow stored
+        // exists. A signed-out arrival is not sent to login: it is refused.
+        const answerReplay = async (spent: UsedOAuthFlow): Promise<Response> => {
+          const initiator = await requireFlowInitiator(request, spent.userId, {
+            flow: 'skatteverket.callback.replay',
+            returnOrigin: spent.origin,
+          })
+          if (!initiator.ok) {
+            return refuseFlow('used', { replay: initiator.reason === 'no_session' ? 'signed_out' : 'other_user' })
+          }
+          if (!(await isCompanyMember(spent.companyId, initiator.userId))) {
+            return refuseFlow('used', { replay: 'not_member' })
+          }
+          if (!(await connectionStoredBy(spent))) return refuseFlow('used', { replay: 'not_connected' })
+          responseOrigin = spent.origin
+          log.info('skatteverket callback answered a second delivery of a connected flow', {
+            companyId: spent.companyId,
+          })
+          return respondWithSuccess(successPathFor(spent.returnTo))
+        }
+
+        // A state the peek or the consume refused: name the check, and
+        // recognise a second delivery of a spent flow. On the origin the
+        // flow started on the session is here, so it is answered here. On
+        // the registered callback host no session can be: the browser goes
+        // to that origin with the spent state (never the provider code),
+        // where the branch below answers it.
+        const refuseOrReplayState = async (): Promise<Response> => {
+          const inspected = await inspectOAuthFlowState(db, state as string, 'skatteverket')
+          if (inspected.status !== 'used') {
+            return refuseFlow(inspected.status === 'live' ? 'lookup_failed' : inspected.status)
+          }
+          if (requestMatchesOrigin(request, inspected.flow.origin)) return answerReplay(inspected.flow)
+          const target = new URL('/api/extensions/ext/skatteverket/callback', inspected.flow.origin)
+          target.searchParams.set('replay', inspected.flow.id)
+          return new Response(null, {
+            status: 302,
+            headers: {
+              Location: target.toString(),
+              'Cache-Control': 'no-store',
+              'Referrer-Policy': 'no-referrer',
+            },
+          })
+        }
+
+        if (replayState) {
+          const inspected = await inspectOAuthFlowState(db, replayState, 'skatteverket')
+          if (inspected.status !== 'used') return refuseFlow(inspected.status, { replay: 'bounced' })
+          if (inspected.flow.origin !== (await resolveOAuthOrigin(request))) {
+            return refuseFlow('used', { replay: 'wrong_origin' })
+          }
+          return answerReplay(inspected.flow)
+        }
+
         let flow: OAuthFlow
         let providerError: string | null = null
         let boundUserId: string | null = null
@@ -875,23 +987,21 @@ export const skatteverketExtension: Extension = {
           const arrivedOn = await resolveOAuthOrigin(request)
           const identity = await peekOAuthFlowHandoff(db, handoffId, arrivedOn, 'skatteverket')
           if (!identity) {
-            return respondWithError(SKV_STATE_REJECTED_MESSAGE, defaultErrorPath(SKV_STATE_REJECTED_MESSAGE), { closeTab: true })
+            return refuseFlow(await inspectOAuthFlowHandoff(db, handoffId, arrivedOn, 'skatteverket'))
           }
           const bound = await bindInitiator(identity)
           if (bound.response) return bound.response
           boundUserId = bound.userId
           const handoff = await consumeOAuthFlowHandoff(db, handoffId, arrivedOn, 'skatteverket')
           if (!handoff) {
-            return respondWithError(SKV_STATE_REJECTED_MESSAGE, defaultErrorPath(SKV_STATE_REJECTED_MESSAGE), { closeTab: true })
+            return refuseFlow(await inspectOAuthFlowHandoff(db, handoffId, arrivedOn, 'skatteverket'))
           }
           flow = handoff
           code = handoff.providerCode
           providerError = handoff.providerError
         } else {
           const identity = await peekOAuthFlowState(db, state as string, 'skatteverket')
-          if (!identity) {
-            return respondWithError(SKV_STATE_REJECTED_MESSAGE, defaultErrorPath(SKV_STATE_REJECTED_MESSAGE), { closeTab: true })
-          }
+          if (!identity) return refuseOrReplayState()
           // Single hop (the callback host is the initiating host): bind here.
           // Hop 1 on the registered host has no session to bind; hop 2 does.
           if (requestMatchesOrigin(request, identity.origin)) {
@@ -900,9 +1010,9 @@ export const skatteverketExtension: Extension = {
             boundUserId = bound.userId
           }
           const consumed = await consumeOAuthFlowState(db, state as string, 'skatteverket')
-          if (!consumed) {
-            return respondWithError(SKV_STATE_REJECTED_MESSAGE, defaultErrorPath(SKV_STATE_REJECTED_MESSAGE), { closeTab: true })
-          }
+          // Lost to a concurrent delivery of the same redirect, or expired
+          // since the peek.
+          if (!consumed) return refuseOrReplayState()
           flow = consumed
           if (error) {
             // Skatteverket's code and description are for the log. What is
@@ -918,9 +1028,7 @@ export const skatteverketExtension: Extension = {
         }
         responseOrigin = flow.origin
 
-        const successPath = flow.returnTo
-          ? `${flow.returnTo}${flow.returnTo.includes('?') ? '&' : '?'}skv_connected=true`
-          : `/reports?tab=vat-declaration&skv_connected=true`
+        const successPath = successPathFor(flow.returnTo)
         const errorPath = (msg: string) =>
           flow.returnTo
             ? `${flow.returnTo}${flow.returnTo.includes('?') ? '&' : '?'}skv_error=${encodeURIComponent(msg)}`

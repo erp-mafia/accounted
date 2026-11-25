@@ -329,15 +329,16 @@ export default function OrdersPage() {
               {t('bulk_book_selected')}
             </Button>
           </BulkSelectionBar>
-          {/* Negative margin + matching padding: lets the hover-revealed
-              selection checkbox hang into the page margins without being
-              clipped by the overflow container (transactions-page pattern). */}
+          {/* Negative margin: the list bleeds 8px past the gutter, and the
+              scroller reaches exactly the panel padding. The scroller clips
+              whatever hangs outside the table, so the selection checkbox
+              has a column of its own (transactions-page pattern). */}
           <div className="-mx-4 overflow-x-auto px-2 md:-mx-6 md:px-4">
           <table className="w-full border-collapse text-[13px]">
             <thead>
               <tr>
-                <th className={cn(TH_CLASS, 'w-0 !p-0')} aria-hidden="true"></th>
-                <th className={TH_CLASS}>{t('col_date')}</th>
+                <th className={cn(TH_CLASS, 'w-7 !pl-0 !pr-2')} aria-hidden="true"></th>
+                <th className={cn(TH_CLASS, '!pl-0')}>{t('col_date')}</th>
                 <th className={TH_CLASS}>{t('col_order')}</th>
                 {multiStore && <th className={TH_CLASS}>{t('col_store')}</th>}
                 <th className={TH_CLASS}>{t('col_customer')}</th>
@@ -522,10 +523,10 @@ function OrderRow({
         isSelected && 'bg-secondary/40',
       )}
     >
-      {/* Hover-revealed selection checkbox (transactions-page pattern):
-          zero-width cell, the checkbox hangs in the left page margin so the
-          date column stays where it was. Selected rows keep it visible. */}
-      <td className={cn(TD_CLASS, 'relative w-0 !p-0 select-none')}>
+      {/* Hover-revealed selection checkbox in a real first column
+          (transactions-page pattern): hung in the page margin, the list's
+          scroller clipped half of it. Selected rows keep it visible. */}
+      <td className={cn(TD_CLASS, 'w-7 !pl-0 !pr-2 select-none')}>
         {selectable && (
           <RowSelectCheckbox
             checked={isSelected}
@@ -534,11 +535,11 @@ function OrderRow({
             }}
             onCheckedChange={() => onToggleSelect(order.id, shiftHeld.current)}
             aria-label={t('select_order_aria', { number: order.order_number })}
-            className="absolute -left-4 top-1/2 -translate-y-1/2 md:-left-6"
+            className="block"
           />
         )}
       </td>
-      <td className={cn(TD_CLASS, 'whitespace-nowrap date-figures text-muted-foreground')}>
+      <td className={cn(TD_CLASS, '!pl-0 whitespace-nowrap date-figures text-muted-foreground')}>
         {formatDate(order.order_date)}
       </td>
       <td className={cn(TD_CLASS, 'whitespace-nowrap')}>

@@ -378,14 +378,14 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send-peppol', () => {
       expect(transport.submit).toHaveBeenCalled()
     })
 
-    it('409 USAGE_SUBSCRIPTION_REQUIRED for a trial at the included amount, accepted or not, before the invoice is read', async () => {
+    it('409 USAGE_SUBSCRIPTION_STARTING for a subscription waiting for its first charge at the included amount, accepted or not, before the invoice is read', async () => {
       vi.stubEnv('USAGE_BILLING_KINDS', 'peppol_send')
       const trial = { data: { status: 'trialing', stripe_customer_id: 'cus_1', stripe_subscription_id: 'sub_1' }, error: null }
       const client = sendClient({ peppol_deliveries: atIncluded(), usage_consents: accepted, company_subscriptions: trial })
       mockServiceClient.mockReturnValue(client)
       const res = await send()
       expect(res.status).toBe(409)
-      expect((await res.json()).error.code).toBe('USAGE_SUBSCRIPTION_REQUIRED')
+      expect((await res.json()).error.code).toBe('USAGE_SUBSCRIPTION_STARTING')
       expect(client.calls.some((c) => c.table === 'invoices')).toBe(false)
       expect(transport.submit).not.toHaveBeenCalled()
     })

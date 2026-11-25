@@ -84,15 +84,28 @@ describe('usageGateRefusal', () => {
 describe('usageGateRefusal without a subscription of its own', () => {
   it('stops a trial at what is included, accepted or not, and says a subscription is needed', async () => {
     signings(2, 1)
-    const trial = { ...ACTIVE, status: 'trialing' }
     const accepted = [{ company_id: COMPANY, kind: 'signing', unit_price_ore: 1000, included: 3, accepted_by: 'u1', accepted_at: '2026-11-02T08:00:00Z' }]
-    const refusal = await usageGateRefusal(db(accepted, trial), COMPANY, 'signing', { env: { USAGE_BILLING_KINDS: 'signing' }, period: '2026-11' })
+    const refusal = await usageGateRefusal(db(accepted, null), COMPANY, 'signing', { env: { USAGE_BILLING_KINDS: 'signing' }, period: '2026-11' })
     expect(refusal).toEqual({
       ok: false,
       code: 'USAGE_SUBSCRIPTION_REQUIRED',
       details: { kind: 'signing', period: '2026-11', used: 3, included: 3, requested: 1, unit_price_ore: 1000 },
       messageSv:
         'De 3 signeringar som ingår är använda. Fler kostar 10,00 kr st och kräver ett abonnemang. Starta det under Inställningar, Abonnemang.',
+    })
+  })
+
+  it('stops a subscription that waits for its first charge at what is included, and does not ask for one to be started', async () => {
+    signings(2, 1)
+    // Started during the product trial: Stripe holds it trialing until the deferred first charge.
+    const starting = { ...ACTIVE, status: 'trialing' }
+    const accepted = [{ company_id: COMPANY, kind: 'signing', unit_price_ore: 1000, included: 3, accepted_by: 'u1', accepted_at: '2026-11-02T08:00:00Z' }]
+    const refusal = await usageGateRefusal(db(accepted, starting), COMPANY, 'signing', { env: { USAGE_BILLING_KINDS: 'signing' }, period: '2026-11' })
+    expect(refusal).toEqual({
+      ok: false,
+      code: 'USAGE_SUBSCRIPTION_STARTING',
+      details: { kind: 'signing', period: '2026-11', used: 3, included: 3, requested: 1, unit_price_ore: 1000 },
+      messageSv: 'De 3 signeringar som ingår är använda. Fler kostar 10,00 kr st och går att begära efter abonnemangets första dragning.',
     })
   })
 

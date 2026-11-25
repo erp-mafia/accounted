@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { deriveStage, type InvoiceLifecycle, type OpenPaymentInstruction } from './stages'
 import { isSupplierInvoiceAttested } from './reported-status'
+import { loadAttestPolicyOn } from './attest-policy-read'
 import { isOpenPaymentOrder, OPEN_PAYMENT_ORDER_CANDIDATE_STATUSES } from '@/lib/payments/orders/status'
 
 /**
@@ -182,18 +183,19 @@ export async function computeSupplierInvoiceLifecycle(
     }
   }
 
-  // The ladder is the company's (stagesFor): kontantmetoden has no attest
-  // step, so the method is read when an invoice carries an attest, the one
-  // stage it changes.
+  // The ladder is the company's (stagesFor): only faktureringsmetoden with
+  // the attest policy on has an attest step, so the method and the policy are
+  // read when an invoice carries an attest, the one stage they change.
   let accountingMethod: string | null = null
+  let attestPolicyOn = false
   if (invoices.some(isSupplierInvoiceAttested)) {
-    const { data: settings, error: settingsError } = await supabase
-      .from('company_settings')
-      .select('accounting_method')
-      .eq('company_id', companyId)
-      .maybeSingle()
+    const [{ data: settings, error: settingsError }, policyOn] = await Promise.all([
+      supabase.from('company_settings').select('accounting_method').eq('company_id', companyId).maybeSingle(),
+      loadAttestPolicyOn(supabase, companyId),
+    ])
     if (settingsError) throw settingsError
     accountingMethod = (settings as { accounting_method?: string | null } | null)?.accounting_method ?? null
+    attestPolicyOn = policyOn
   }
 
   const result: Record<string, InvoiceLifecycle> = {}
@@ -223,6 +225,7 @@ export async function computeSupplierInvoiceLifecycle(
         in_open_batch: batch !== null || order !== null,
         reconciled: reconciledThrough !== null,
         accounting_method: accountingMethod,
+        attest_policy_on: attestPolicyOn,
       }),
       approved_at: inv.approved_at,
       batch,

@@ -552,7 +552,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
     ['gnubok_record_customer_loss'],
     'served while CUSTOMER_LOSS_ENABLED is set',
   ),
-  'POST /api/invoices/:id/digital-mailbox/send': gap('P2', "send an invoice to the customer's Kivra or Billo mailbox"),
+  'POST /api/invoices/:id/digital-mailbox/send': covered(['gnubok_send_invoice'], 'channel kivra or billo; no v1 route'),
   // Digital mailboxes (Kivra, Billo): connecting the company's own mailbox
   // and the company as a sender. Billo's mailbox needs the admin's BankID
   // personnummer, read from their login, which an API key has no login for.
@@ -1079,6 +1079,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   // woocommerce
   'POST /api/extensions/ext/woocommerce/connect': uiOnly(OAUTH_CONNECT),
   'POST /api/extensions/ext/woocommerce/manual-connect': uiOnly('enters a third-party store credential'),
+  'POST /api/extensions/ext/woocommerce/verify-store': uiOnly('finishes the store authorization in the browser: the person types what only the store admin shows'),
   'DELETE /api/extensions/ext/woocommerce/disconnect': gap('P3'),
   'POST /api/extensions/ext/woocommerce/sync': gap('P3', EXT_SYNC),
   'POST /api/extensions/ext/woocommerce/backfill': covered(['gnubok_backfill_feed']),
@@ -1171,5 +1172,8 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * 162 -> 163 (2026-11-20): saving an enskild firma's NE-bilaga sida 2 inputs
  * (PUT .../ef-declaration/inputs), new and dashboard-only in this step; the
  * MCP preview takes the same figures per call.
+ * 163 -> 162 (2026-11-24): sending an invoice to the customer's Kivra or
+ * Billo mailbox, through the staged gnubok_send_invoice with channel kivra
+ * or billo.
  */
-export const GAP_CEILING = 163
+export const GAP_CEILING = 162

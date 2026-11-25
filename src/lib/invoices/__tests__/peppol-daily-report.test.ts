@@ -4,6 +4,11 @@ import { createTableMockSupabase } from '@/tests/helpers'
 
 const emailMock = vi.hoisted(() => ({ isConfigured: vi.fn(), sendEmail: vi.fn() }))
 vi.mock('@/lib/email/service', () => ({ getEmailService: () => emailMock }))
+// Who pays has one definition (peppol-plan-rule.ts): company-5 pays, the rest do not.
+const paidMock = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/entitlements/has-capability', () => ({
+  getCompanyIdsWithCapability: (...args: unknown[]) => paidMock(...args),
+}))
 
 import {
   QVALIA_DASHBOARD_URL,
@@ -56,16 +61,20 @@ function mockSupabase() {
     },
     peppol_access: {
       data: [
-        { company_id: 'company-1', status: 'enabled', max_sends: 10, requested_at: null },
-        { company_id: 'company-3', status: 'enabled', max_sends: 1, requested_at: null },
-        { company_id: 'company-4', status: 'enabled', max_sends: 10, requested_at: null },
-        { company_id: 'company-5', status: 'requested', max_sends: null, requested_at: '2026-10-18T20:00:00.000Z' },
-        { company_id: 'company-6', status: 'requested', max_sends: null, requested_at: '2026-10-18T21:00:00.000Z' },
-        { company_id: 'company-7', status: 'requested', max_sends: null, requested_at: '2026-10-01T08:00:00.000Z' },
+        { company_id: 'company-1', status: 'enabled', max_sends: 10, requested_at: null, enabled_at: '2026-10-01T08:00:00.000Z', enabled_by: 'anna', disabled_at: null },
+        { company_id: 'company-3', status: 'enabled', max_sends: 1, requested_at: null, enabled_at: '2026-10-01T08:00:00.000Z', enabled_by: 'anna', disabled_at: null },
+        { company_id: 'company-4', status: 'enabled', max_sends: 10, requested_at: null, enabled_at: '2026-10-01T08:00:00.000Z', enabled_by: 'anna', disabled_at: null },
+        // Switched on by the plan rule last night; an older automatic one is not news.
+        { company_id: 'company-8', status: 'enabled', max_sends: 10, requested_at: '2026-10-18T18:00:00.000Z', enabled_at: '2026-10-18T18:00:01.000Z', enabled_by: 'automatic: paid plan', disabled_at: null },
+        { company_id: 'company-9', status: 'enabled', max_sends: 10, requested_at: '2026-10-02T18:00:00.000Z', enabled_at: '2026-10-02T18:00:01.000Z', enabled_by: 'automatic: paid plan', disabled_at: null },
+        { company_id: 'company-5', status: 'requested', max_sends: null, requested_at: '2026-10-18T20:00:00.000Z', enabled_at: null, enabled_by: null, disabled_at: null },
+        { company_id: 'company-6', status: 'requested', max_sends: null, requested_at: '2026-10-18T21:00:00.000Z', enabled_at: null, enabled_by: null, disabled_at: null },
+        { company_id: 'company-7', status: 'requested', max_sends: null, requested_at: '2026-10-01T08:00:00.000Z', enabled_at: null, enabled_by: null, disabled_at: null },
+        // Paused last night: the plan ended.
+        { company_id: 'company-10', status: 'requested', max_sends: 10, requested_at: '2026-09-01T08:00:00.000Z', enabled_at: '2026-09-01T08:00:01.000Z', enabled_by: 'anna', disabled_at: '2026-10-19T02:00:00.000Z' },
       ],
     },
     peppol_inbound_documents: { data: null, count: 2 },
-    company_subscriptions: { data: [{ company_id: 'company-5', status: 'trialing' }, { company_id: 'company-6', status: 'canceled' }] },
     company_settings: {
       data: [
         { company_id: 'company-1', company_name: 'Säljare AB' },
@@ -73,10 +82,17 @@ function mockSupabase() {
         { company_id: 'company-3', company_name: 'Gräns AB' },
         { company_id: 'company-5', company_name: 'Ny Betalande AB' },
         { company_id: 'company-6', company_name: 'Ny Gratis AB' },
+        { company_id: 'company-8', company_name: 'Påslagen AB' },
+        { company_id: 'company-10', company_name: 'Pausad AB' },
       ],
     },
   })
 }
+
+beforeEach(() => {
+  paidMock.mockReset()
+  paidMock.mockResolvedValue(new Set(['company-5']))
+})
 
 describe('getPeppolDailyReportRecipients', () => {
   afterEach(() => { delete process.env.PEPPOL_DAILY_REPORT_RECIPIENTS })
@@ -90,7 +106,7 @@ describe('getPeppolDailyReportRecipients', () => {
 })
 
 describe('buildPeppolDailyReport', () => {
-  it('collects the day, the month per company and the new requests with whether they pay', async () => {
+  it('collects the day, the month per company, what the plan rule did and the new requests with whether they pay', async () => {
     const mock = mockSupabase()
     const report = await buildPeppolDailyReport(mock.supabase as unknown as SupabaseClient, NOW)
 
@@ -102,12 +118,16 @@ describe('buildPeppolDailyReport', () => {
       { companyId: 'company-1', sent: 2, max: 10 },
       { companyId: 'company-3', sent: 1, max: 1 },
     ])
+    expect(report.switchedOn).toEqual(['company-8'])
+    expect(report.paused).toEqual(['company-10'])
     // company-7 asked weeks ago: counted as open, not listed as new.
     expect(report.newRequests).toEqual([
       { companyId: 'company-5', requestedAt: '2026-10-18T20:00:00.000Z', paying: true },
       { companyId: 'company-6', requestedAt: '2026-10-18T21:00:00.000Z', paying: false },
     ])
-    expect(report.openRequests).toBe(3)
+    // Paying is the plan rule's answer: a paid grant, the seeded trial left out.
+    expect(paidMock).toHaveBeenCalledWith(expect.anything(), ['company-5', 'company-6'], 'email_send', { excludeTrial: true })
+    expect(report.openRequests).toBe(4)
     expect(report.inbound).toBe(2)
     expect(report.names.get('company-1')).toBe('Säljare AB')
 
@@ -136,8 +156,12 @@ describe('renderPeppolDailyReport', () => {
     expect(text).toContain('status failed: Validation error: BR-CO-15')
     expect(text).toContain('Säljare AB: 2 av 10')
     expect(text).toContain('Gräns AB: 1 av 1 (gränsen nådd)')
-    expect(text).toContain('Ny Betalande AB: betalar eller har kort registrerat')
-    expect(text).toContain('Ny Gratis AB: betalar inte')
+    expect(text).toContain('Påslagna automatiskt senaste dygnet (1)')
+    expect(text).toContain('Påslagen AB (company-8)')
+    expect(text).toContain('Pausade senaste dygnet, abonnemanget slutade (1)')
+    expect(text).toContain('Pausad AB (company-10)')
+    expect(text).toContain('Ny Betalande AB: betalar, slås på inom tio minuter')
+    expect(text).toContain('Ny Gratis AB: betalar inte, väntar på ett betalt abonnemang')
     expect(text).toContain('Mottagna dokument: 2.')
     expect(text).toContain(QVALIA_DASHBOARD_URL)
     expect(html).toContain(`href="${QVALIA_DASHBOARD_URL}"`)
@@ -150,6 +174,8 @@ describe('renderPeppolDailyReport', () => {
       sends: [],
       failures: [],
       month: [],
+      switchedOn: [],
+      paused: [],
       newRequests: [],
       openRequests: 0,
       inbound: 0,
@@ -158,7 +184,7 @@ describe('renderPeppolDailyReport', () => {
     expect(subject).toMatch(/0 skickade, 0 fel$/)
     expect(text).toContain('Inga Peppol-fakturor skickades.')
     expect(text).toContain('Inga fel.')
-    expect(text).toContain('Inga nya förfrågningar.')
+    expect(text).toContain('Inga nya förfrågningar som väntar.')
   })
 
   it('escapes company and buyer names in the html', () => {
@@ -168,6 +194,8 @@ describe('renderPeppolDailyReport', () => {
       sends: [{ ...sentDelivery, invoice: { ...sentDelivery.invoice, customer: { name: '<script>x</script>' } } }],
       failures: [],
       month: [],
+      switchedOn: [],
+      paused: [],
       newRequests: [],
       openRequests: 0,
       inbound: 0,

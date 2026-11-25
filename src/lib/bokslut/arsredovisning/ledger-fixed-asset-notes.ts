@@ -22,7 +22,7 @@ import type { WriteDownMovement } from '@/lib/bokslut/assets/value-adjustments'
 import { roundOre } from '@/lib/money'
 import type { TrialBalanceRow } from '@/types'
 import type { NoteEntry } from './types'
-import { formatPdfKronor } from './pdf-format'
+import { formatNoteKronor } from './pdf-format'
 
 type Row = Pick<
   TrialBalanceRow,
@@ -80,7 +80,7 @@ function sumMovement(rows: Row[]): Movement {
   )
 }
 
-const fmt = (n: number) => `${formatPdfKronor(n)} kr`
+const fmt = (n: number) => `${formatNoteKronor(n)} kr`
 
 /** The note on finansiella anläggningstillgångar, or null when the year has none. */
 export function buildFinancialFixedAssetsNote(rows: readonly Row[], noteNumber: number): NoteEntry | null {

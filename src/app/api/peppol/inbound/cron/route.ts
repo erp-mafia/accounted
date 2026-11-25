@@ -7,6 +7,7 @@ import {
   syncInboundPeppolDocuments,
 } from '@/lib/invoices/peppol-inbound'
 import { deliverPeppolDocumentToInbox } from '@/lib/invoices/peppol-inbox-delivery'
+import { applyPeppolPlanRule } from '@/lib/invoices/peppol-plan-rule'
 import {
   registerGrantedPeppolReceivers,
   withdrawRevokedPeppolRegistrations,
@@ -88,7 +89,12 @@ async function reportSkipped(log: Logger, reason: string): Promise<void> {
  * Both passes stop at a deadline inside maxDuration and count what they left
  * (`deferred`); the next run picks it up.
  *
- * First, the identifier of every company whose access no longer allows
+ * First, Peppol access follows each company's plan (peppol-plan-rule.ts): a
+ * company that asked and now pays is switched on, one whose plan ended is
+ * paused. That runs in every environment, an access point or not, and its
+ * own failure stops nothing else.
+ *
+ * Then the identifier of every company whose access no longer allows
  * receiving is withdrawn from the SMP (revoking access only changes our row),
  * and the identifier of every company newly allowed to receive is published,
  * a few per run (granting access only changes our row too). Each in its own
@@ -99,16 +105,33 @@ async function reportSkipped(log: Logger, reason: string): Promise<void> {
  * e-invoices are not being fetched), an info line when none has.
  */
 export const GET = withCronContext('cron.peppol_inbound', async (_request, ctx) => {
+  let plan: Awaited<ReturnType<typeof applyPeppolPlanRule>> | { failed: true }
+  try {
+    plan = await applyPeppolPlanRule({ service: createServiceClientNoCookies() })
+    if (plan.enabled.length > 0 || plan.paused.length > 0) {
+      ctx.log.info('peppol access follows the plan', { enabled: plan.enabled, paused: plan.paused })
+    }
+    if (plan.failed.length > 0) {
+      ctx.log.error('peppol plan rule could not write some companies; the next run tries again', {
+        alert: true,
+        failed: plan.failed,
+      })
+    }
+  } catch (err) {
+    ctx.log.error('peppol plan rule failed', err as Error, { alert: true })
+    plan = { failed: true }
+  }
+
   const availability = await getPeppolTransportAvailability()
   const transport = availability.available ? await getPeppolTransport(availability.provider) : null
   if (!transport) {
     const reason = availability.available ? 'provider_adapter_unavailable' : availability.reason
     await reportSkipped(ctx.log, reason)
-    return NextResponse.json({ data: { skipped: true, reason } })
+    return NextResponse.json({ data: { skipped: true, reason, plan } })
   }
   if (!transport.listInboundDocuments) {
     await reportSkipped(ctx.log, 'receiving_unsupported')
-    return NextResponse.json({ data: { skipped: true, reason: 'receiving_unsupported' } })
+    return NextResponse.json({ data: { skipped: true, reason: 'receiving_unsupported', plan } })
   }
 
   const service = createServiceClientNoCookies()
@@ -197,7 +220,7 @@ export const GET = withCronContext('cron.peppol_inbound', async (_request, ctx) 
       terminalReasons: terminalDocuments.map((d) => `${d.providerDocumentId}: ${d.reason}`),
     })
   }
-  return NextResponse.json({ data: { ...summary, reprocess, withdrawal, registration } })
+  return NextResponse.json({ data: { ...summary, reprocess, plan, withdrawal, registration } })
 })
 
 export const POST = GET
