@@ -410,6 +410,55 @@ describe('get_ar_ledger_invoices: the kundreskontra reads the same as its plain 
     expect(sql).toEqual(port.filter((r) => r.id !== id(13)))
   })
 
+  it('reads what the posted verifikat put on 1510, so an öre booked at issue is owed', async () => {
+    const s = await seedCompany()
+    const id = idFactory()
+    const cust = await insertCustomer(s, id(1), 'Öre AB')
+    const line = (accountNumber: string, debitAmount: number, creditAmount: number) => ({ accountNumber, debitAmount, creditAmount })
+    // 999,75 issued as Att betala 1 000: Dr 1510 1 000, Cr 3740 0,25.
+    const rounded = await insertPostedJournalEntry({
+      userId: s.userId, companyId: s.companyId, fiscalPeriodId: s.fiscalPeriodId, entryDate: '2026-03-01',
+      sourceType: 'invoice_created', sourceId: id(10), voucherNumber: 1,
+      lines: [line('1510', 1000, 0), line('3001', 0, 799.8), line('2611', 0, 199.95), line('3740', 0, 0.25)],
+    })
+    // Issued before the change: 1510 at the exact total.
+    const exact = await insertPostedJournalEntry({
+      userId: s.userId, companyId: s.companyId, fiscalPeriodId: s.fiscalPeriodId, entryDate: '2026-03-02',
+      sourceType: 'invoice_created', sourceId: id(11), voucherNumber: 2,
+      lines: [line('1510', 999.75, 0), line('3001', 0, 799.8), line('2611', 0, 199.95)],
+    })
+    await insertInvoice(s, { id: id(10), customerId: cust, number: 'R-1', status: 'sent', total: 999.75, journalEntryId: rounded })
+    await insertInvoice(s, { id: id(11), customerId: cust, number: 'R-2', status: 'sent', total: 999.75, journalEntryId: exact })
+    // A foreign invoice reads no 1510 figure, whatever its verifikat says.
+    const foreign = await insertPostedJournalEntry({
+      userId: s.userId, companyId: s.companyId, fiscalPeriodId: s.fiscalPeriodId, entryDate: '2026-03-03',
+      sourceType: 'invoice_created', sourceId: id(12), voucherNumber: 3,
+      lines: [line('1510', 1100.25, 0), line('3001', 0, 1100.25)],
+    })
+    await insertInvoice(s, {
+      id: id(12), customerId: cust, number: 'R-3', status: 'sent', total: 100, currency: 'EUR', exchangeRate: 11, journalEntryId: foreign,
+    })
+    // No verifikat at all.
+    await insertInvoice(s, { id: id(13), customerId: cust, number: 'R-4', status: 'sent', total: 10.5 })
+
+    const rows = (await sqlClient(s.userId).rpc('get_ar_ledger_invoices', { p_company_id: s.companyId })).data as Array<{
+      id: string
+      registered_receivable_sek: number | null
+    }>
+    const registered = Object.fromEntries(rows.map((r) => [r.id, r.registered_receivable_sek]))
+    expect(registered).toEqual({ [id(10)]: 1000, [id(11)]: 999.75, [id(12)]: null, [id(13)]: null })
+
+    // The report over the SQL reads as over the port, and owes 1 000 on the rounded one.
+    const tables = await loadTables(s.companyId)
+    const viaSql = await generateARLedger(sqlClient(s.userId), s.companyId, undefined, { strict: true })
+    const viaPort = await generateARLedger(portClient(tables), s.companyId, undefined, { strict: true })
+    expect(viaSql).toEqual(viaPort)
+    const outstanding = Object.fromEntries(viaSql.entries[0].invoices.map((i) => [i.invoice_id, i.outstanding]))
+    expect(outstanding[id(10)]).toBe(1000)
+    expect(outstanding[id(11)]).toBe(999.75)
+    expect(outstanding[id(13)]).toBe(10.5)
+  })
+
   it('answers nothing for another company under RLS', async () => {
     const { s } = await seedReceivables()
     const stranger = await insertAuthUser()

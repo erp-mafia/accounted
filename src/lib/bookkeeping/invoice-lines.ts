@@ -28,6 +28,8 @@ import { computeLineDeductions, DEDUCTION_TYPE_LABELS } from '@/lib/bookkeeping/
 import { creditNatural } from './line-side'
 import { InvoiceFxRateMissingError, getOutputVatAccount, getRevenueAccount } from './invoice-accounts'
 import { fxDifferenceLine, oreRoundingLine, oreSettlementResidual } from './ore-rounding'
+import { fxDeviationTooLarge } from './fx-settlement'
+import { getDisplayTotal } from './invoice-rounding'
 import { overpaymentAllowed, overpaymentExcess, overpaymentLine } from './overpayment'
 import { paymentFeeAllowed, paymentFeeLine, paymentFeeShortfall } from './payment-fee'
 import { equalOre, roundOre, sumOre } from '@/lib/money'
@@ -608,10 +610,11 @@ export type InvoiceRegistrationLinesSource = InvoiceCashLinesSource
  * edits carry what gets booked. Supports per-item VAT rates and revenue
  * accounts; periodiserade lines credit the 29xx interim account.
  *
- *   Debit  1510 Kundfordringar     [total incl VAT, minus ROT/RUT]
+ *   Debit  1510 Kundfordringar     [Att betala: total incl VAT, öresavrundad, minus ROT/RUT]
  *   Debit  1513 Skatteverket       [ROT/RUT per item]
  *   Credit 30xx Försäljning        [subtotal per rate and account]
  *   Credit 26xx Utgående moms      [vat per rate]
+ *   Credit/Debit 3740 Öresavrundning [Att betala less the exact total, no moms]
  *
  * numberOverride replaces the invoice number in the line texts (self-billing
  * received books under the counterparty's external number).
@@ -620,12 +623,18 @@ export type InvoiceRegistrationLinesSource = InvoiceCashLinesSource
  * 29xx interim account. Only a caller that also creates the accrual schedule
  * may leave it on. The kontantmetoden year-end carry passes false: no schedule
  * exists under kontantmetoden, so a 29xx balance would never dissolve.
+ *
+ * options.companyOreRounding: the company's öresavrundning setting, which the
+ * invoice's own ore_rounding overrides (getDisplayTotal). Given, the
+ * receivable is what the invoice asks the customer to pay (issueOreRounding).
+ * Left out, 1510 carries the exact total, as the kontantmetoden year-end
+ * carry books it.
  */
 export function buildInvoiceRegistrationLines(
   invoice: InvoiceRegistrationLinesSource,
   entityType: EntityType,
   numberOverride?: string | null,
-  options: { deferAccruals?: boolean } = {},
+  options: { deferAccruals?: boolean; companyOreRounding?: boolean } = {},
 ): CreateJournalEntryLineInput[] {
   const lines: CreateJournalEntryLineInput[] = []
   const isForeign = invoice.currency !== 'SEK'
@@ -665,7 +674,9 @@ export function buildInvoiceRegistrationLines(
   const debitAmount = isForeign
     ? Math.round(totalCredits * 100) / 100
     : headerToSekOrThrow(invoice.total, invoice.total_sek, invoice.currency, invoice.exchange_rate)
-  const arAmount = Math.round((debitAmount - rotRut.totalSek) * 100) / 100
+  const exactAmount = Math.round((debitAmount - rotRut.totalSek) * 100) / 100
+  const rounding = issueOreRounding(invoice, exactAmount, options.companyOreRounding)
+  const arAmount = roundOre(exactAmount + rounding)
 
   lines.push({
     account_number: '1510',
@@ -678,8 +689,44 @@ export function buildInvoiceRegistrationLines(
 
   lines.push(...rotRut.lines)
   lines.push(...creditLines)
+  // 1510 carries more than the exact total (rounded up): 3740 is credited;
+  // less (rounded down): debited. The customer-side settlement rule names the
+  // side by the gap the other way round.
+  if (rounding !== 0) lines.push(oreRoundingLine(-rounding, 'customer'))
 
   return lines
+}
+
+/**
+ * The öresavrundning an issue verifikat books on 1510 and 3740: what the
+ * invoice asks the customer to pay less its exact total (getDisplayTotal's
+ * roundingDelta: SEK, rounding on, öre in the total), 0 when none applies.
+ * The receivable is the claim the invoice states (BFL 5 kap 2 §, BFNAR 2013:2
+ * p. 3.4), so the öre belongs to the verifikat that books it, not to the
+ * payment. Every settlement door clears what 1510 carries and books only the
+ * öre left (bookedOreRounding), and the kundreskontra counts the same.
+ *
+ * Not booked when the rounded receivable would not be positive, or when the
+ * öre is more than FX_SAME_DOCUMENT_LIMIT of it (an invoice of a few kronor):
+ * the settlement doors read a gap that large as a rättelse of the debt, not
+ * rounding, so such an invoice keeps the exact total and its öre lands on
+ * 3740 when it is paid.
+ *
+ * companyOreRounding undefined: no rounding (the caller books the exact total).
+ */
+export function issueOreRounding(
+  invoice: Pick<InvoiceRegistrationLinesSource, 'total' | 'currency' | 'ore_rounding'>,
+  exactReceivableSek: number,
+  companyOreRounding: boolean | undefined,
+): number {
+  if (companyOreRounding === undefined) return 0
+  const { roundingDelta } = getDisplayTotal(invoice, { ore_rounding: companyOreRounding })
+  const rounding = roundOre(roundingDelta)
+  if (rounding === 0) return 0
+  const rounded = roundOre(exactReceivableSek + rounding)
+  if (Math.sign(rounded) !== Math.sign(exactReceivableSek) || rounded === 0) return 0
+  if (fxDeviationTooLarge(rounded, exactReceivableSek)) return 0
+  return rounding
 }
 
 /**
@@ -735,12 +782,19 @@ export function creditNoteDeductionSplit(
  * 1513 credit of it: what Skatteverket paid and is owed back. A share still
  * pending or refused was never booked and is not reversed. Undefined, null
  * or the whole share: the full reversal.
+ *
+ * options.companyOreRounding: as on buildInvoiceRegistrationLines, for a
+ * credit note of an original whose issue verifikat booked its öresavrundning
+ * (registrationOreRounding): the credit then takes off 1510 what it credits
+ * the customer, and 3740 the other way round, so the original and its full
+ * credit net to zero on both. Left out (an original booked at the exact
+ * total), the credit reverses the exact total as the original booked it.
  */
 export function buildCreditNoteLines(
   creditNote: InvoiceRegistrationLinesSource,
   entityType: EntityType,
   originalVoucherRef?: string,
-  options: { deferAccruals?: boolean; deductionBookedSek?: number | null } = {},
+  options: { deferAccruals?: boolean; deductionBookedSek?: number | null; companyOreRounding?: boolean } = {},
 ): CreateJournalEntryLineInput[] {
   const lines: CreateJournalEntryLineInput[] = []
   const tag = invoiceTag(creditNote)
@@ -831,7 +885,11 @@ export function buildCreditNoteLines(
   // the revenue/VAT lines (a credited rabatt row subtracts), on 1510's
   // natural side for what the credit takes off the receivable.
   const netDebits = reversalLines.reduce((sum, l) => sum + l.debit_amount - l.credit_amount, 0)
-  const customerReceivable = roundOre(netDebits - rotRut.totalSek)
+  const exactReceivable = roundOre(netDebits - rotRut.totalSek)
+  // The credit's own öresavrundning on its signed (negative) receivable: -0.25
+  // on -999.75, so 1510 is credited 1 000 and 3740 debited 0.25.
+  const rounding = split ? 0 : issueOreRounding(creditNote, -exactReceivable, options.companyOreRounding)
+  const customerReceivable = roundOre(exactReceivable - rounding)
   lines.push({
     account_number: '1510',
     ...creditNatural(customerReceivable),
@@ -839,6 +897,7 @@ export function buildCreditNoteLines(
     dimensions: defaultDimensions,
   })
   lines.push(...rotRut.lines)
+  if (rounding !== 0) lines.push(oreRoundingLine(-rounding, 'customer'))
 
   return lines
 }
@@ -868,6 +927,8 @@ export interface InvoiceCashLinesSource {
    * derives the 1513 legs from the items.
    */
   deduction_total?: number | null
+  /** Per-invoice öresavrundning, over the company's setting (getDisplayTotal). */
+  ore_rounding?: boolean | null
 }
 
 /**

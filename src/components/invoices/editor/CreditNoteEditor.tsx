@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
+import { readRegistrationOreRounding } from '@/lib/invoices/registration-ore-rounding'
 import { useToast } from '@/components/ui/use-toast'
 import { Badge } from '@/components/ui/badge'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -100,6 +101,10 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
   const [isSubmitting, setIsSubmitting] = useState(false)
   // Bilagor picked in the confirm (#79): linked once the send has created the credit note.
   const [stagedAttachments, setStagedAttachments] = useState<InvoiceAttachmentFile[]>([])
+  // The original's booked öresavrundning: the credit books its own only then
+  // (issueCreditNote reads the same). Preview only; a failed read shows the
+  // exact reversal.
+  const [originalOreRounding, setOriginalOreRounding] = useState(0)
 
   useEffect(() => {
     let cancelled = false
@@ -129,6 +134,11 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
         return
       }
       if (data.items) data.items.sort((a: InvoiceItem, b: InvoiceItem) => a.sort_order - b.sort_order)
+      const booked = company?.id
+        ? await readRegistrationOreRounding(supabase, company.id, data).catch(() => 0)
+        : 0
+      if (cancelled) return
+      setOriginalOreRounding(booked)
       setInvoice(data as InvoiceWithRelations)
       setReason(t('reason_default', { number: creditNoteOriginalReference(data) ?? '' }))
     }
@@ -138,7 +148,7 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
     }
     // supabase is memoised; t and toast are stable for the page's lifetime.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [invoiceId, reloadKey])
+  }, [invoiceId, reloadKey, company?.id])
 
   const originalNumber = invoice ? creditNoteOriginalReference(invoice) : null
   const creditNumber = originalNumber ? creditNoteNumber(originalNumber) : null
@@ -452,7 +462,10 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
       // would show a reversal that is not the one booked.
       const entityType = companySettings?.entity_type ?? company?.entity_type
       const lines = isEntityType(entityType)
-        ? proposeCreditNoteSendLines({ ...invoice, customer: invoice.customer ?? undefined }, { entityType, today })
+        ? proposeCreditNoteSendLines(
+            { ...invoice, customer: invoice.customer ?? undefined },
+            { entityType, today, originalOreRounding },
+          )
         : []
       confirmVoucher =
         lines.length > 0

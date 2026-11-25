@@ -47,6 +47,11 @@ export interface ArLedgerInvoice {
   deduction_reclaimed_total: number | null
   paid_at: string | null
   journal_entry_id: string | null
+  /**
+   * A SEK row: what its posted verifikat carries on 151x, 1513 aside, null
+   * otherwise (issue-rounding-carried.ts reads the öresavrundning off it).
+   */
+  registered_receivable_sek?: number | null
   /** As of a date: the invoice has payment rows at all, of any date (InvoicePaymentFacts). */
   has_payment_rows: boolean
   /** As of a date: the amounts of its payment rows dated on or before it, in id order. */

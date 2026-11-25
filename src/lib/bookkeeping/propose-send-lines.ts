@@ -34,6 +34,13 @@ export interface ProposeSendLinesInput {
    * share and that part, as issueCreditNote books it.
    */
   deductionBookedSek?: number | null
+  /**
+   * buildInvoiceRegistrationLines' and buildCreditNoteLines' companyOreRounding,
+   * as the server books: for an invoice the company's öresavrundning setting;
+   * for a credit note true only when its original's issue verifikat booked
+   * the öre (readRegistrationOreRounding).
+   */
+  companyOreRounding?: boolean
 }
 
 function toFormAmount(n: number): string {
@@ -45,10 +52,11 @@ function toFormAmount(n: number): string {
  * Propose journal entry lines for an invoice send (accrual method), or for a
  * credit note the reversal of them.
  *
- * Debit  1510 Kundfordringar [total incl VAT, minus ROT/RUT]
+ * Debit  1510 Kundfordringar [Att betala: total incl VAT, öresavrundad, minus ROT/RUT]
  * Debit  1513 Skatteverket   [ROT/RUT per item]
  * Credit 30xx Försäljning    [subtotal per rate and account]
  * Credit 26xx Utgående moms  [VAT per rate]
+ * Credit/Debit 3740          [öresavrundning]
  */
 export function proposeSendLines(input: ProposeSendLinesInput): FormLine[] {
   const { invoice, entityType } = input
@@ -64,8 +72,11 @@ export function proposeSendLines(input: ProposeSendLinesInput): FormLine[] {
   let lines: CreateJournalEntryLineInput[]
   try {
     lines = invoice.credited_invoice_id
-      ? buildCreditNoteLines(invoice, entityType, undefined, { deductionBookedSek: input.deductionBookedSek })
-      : buildInvoiceRegistrationLines(invoice, entityType)
+      ? buildCreditNoteLines(invoice, entityType, undefined, {
+          deductionBookedSek: input.deductionBookedSek,
+          companyOreRounding: input.companyOreRounding,
+        })
+      : buildInvoiceRegistrationLines(invoice, entityType, undefined, { companyOreRounding: input.companyOreRounding })
   } catch (err) {
     // A foreign invoice with no SEK source: the builders refuse rather than
     // relabel the foreign number as kronor, and the send itself is refused

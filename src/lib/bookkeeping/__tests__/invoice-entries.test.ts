@@ -147,6 +147,8 @@ describe('createInvoiceJournalEntry: negative item rows keep one non-negative si
       vat_amount: 250,
       total: 1249.5,
       vat_treatment: 'standard_25',
+      // About the row's side; the öresavrundning of the total is off here.
+      ore_rounding: false,
       items: [
         makeItem({ line_total: 1000, vat_rate: 25, vat_amount: 250 }),
         makeItem({ id: 'item-2', description: 'Öresavrundning', unit_price: -0.5, line_total: -0.5, vat_rate: 0, vat_amount: 0, revenue_account: '3740' }),
@@ -475,6 +477,8 @@ describe('createInvoiceJournalEntry: per-article revenue account override', () =
       total: 25.01,
       vat_treatment: 'standard_25',
       vat_rate: null as unknown as number,
+      // About the per-rate split; the öresavrundning of the total is off here.
+      ore_rounding: false,
       items: [
         makeItem({ description: 'A', unit_price: 10.005, line_total: 10.005, vat_rate: 25, vat_amount: 2.5 }),
         makeItem({ id: 'item-2', description: 'B', unit_price: 10.005, line_total: 10.005, vat_rate: 25, vat_amount: 2.5, revenue_account: '3041' }),
@@ -1496,14 +1500,17 @@ describe('createInvoiceJournalEntry: ROT/RUT-avdrag', () => {
     expect(totalDebit).toBe(totalCredit)
   })
 
-  it('books the deduction the invoice stores: a whole-krona RUT claim leaves 419,50 on 1510', async () => {
+  it('books the deduction the invoice stores: a whole-krona RUT claim, and Att betala 420 on 1510', async () => {
     // 670 + 25 % moms = 837,50; RUT 50 % = 418,75, saved as the 418 kr
-    // Skatteverket pays. The customer owes 419,50 and pays "Att betala" 420.
+    // Skatteverket pays. Öresavrundning rounds the total to 838, so the
+    // customer is asked for "Att betala" 420: 1510 carries that and 3740 the
+    // 0,50 (issueOreRounding).
     const invoice = makeInvoice({
       subtotal: 670,
       vat_amount: 167.5,
       total: 837.5,
       vat_treatment: 'standard_25',
+      ore_rounding: true,
       deduction_total: 418,
       items: [
         makeItem({
@@ -1520,7 +1527,10 @@ describe('createInvoiceJournalEntry: ROT/RUT-avdrag', () => {
 
     const input = mockedCreateEntry.mock.calls[0][3]
     expect(input.lines.find((l) => l.account_number === '1513')?.debit_amount).toBe(418)
-    expect(input.lines.find((l) => l.account_number === '1510')?.debit_amount).toBe(419.5)
+    expect(input.lines.find((l) => l.account_number === '1510')?.debit_amount).toBe(420)
+    expect(input.lines.filter((l) => l.account_number === '3740')).toEqual([
+      expect.objectContaining({ debit_amount: 0, credit_amount: 0.5 }),
+    ])
     const totalDebit = roundOre(input.lines.reduce((sum, l) => sum + l.debit_amount, 0))
     const totalCredit = roundOre(input.lines.reduce((sum, l) => sum + l.credit_amount, 0))
     expect(totalDebit).toBe(totalCredit)
@@ -1532,6 +1542,8 @@ describe('createInvoiceJournalEntry: ROT/RUT-avdrag', () => {
       vat_amount: 167.5,
       total: 837.5,
       vat_treatment: 'standard_25',
+      // About the deduction's öre; the öresavrundning of the total is off here.
+      ore_rounding: false,
       deduction_total: 418.75,
       items: [
         makeItem({
@@ -1788,6 +1800,8 @@ describe('dimensions propagation (PR7): createInvoiceJournalEntry', () => {
       total: 25.01,
       vat_treatment: 'standard_25',
       vat_rate: null as unknown as number,
+      // About the per-rate split; the öresavrundning of the total is off here.
+      ore_rounding: false,
       items: [
         makeItem({ description: 'A', unit_price: 10.005, line_total: 10.005, vat_rate: 25, vat_amount: 2.5 }),
         makeItem({ id: 'item-2', description: 'B', unit_price: 10.005, line_total: 10.005, vat_rate: 25, vat_amount: 2.5, dimensions: { '6': 'P001' } }),

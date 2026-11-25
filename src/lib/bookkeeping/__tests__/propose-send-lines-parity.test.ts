@@ -190,6 +190,20 @@ describe('proposeSendLines proposes what the server books', () => {
     expect(proposed.find((l) => l.account_number === '1510')?.debit_amount).toBe('875')
   })
 
+  it('öresavrundning: the preview books 1510 at Att betala and the öre on 3740, as the server does', async () => {
+    const inv = invoice({
+      total: 999.75,
+      subtotal: 799.8,
+      vat_amount: 199.95,
+      ore_rounding: true,
+      items: [item({ unit_price: 799.8, line_total: 799.8, vat_amount: 199.95 })],
+    })
+    const proposed = proposeSendLines({ invoice: inv, entityType: 'aktiebolag', companyOreRounding: true })
+    expect(signature(proposed)).toEqual(signature(await booked(inv)))
+    expect(proposed.find((l) => l.account_number === '1510')?.debit_amount).toBe('1000')
+    expect(proposed.find((l) => l.account_number === '3740')?.credit_amount).toBe('0.25')
+  })
+
   it('a periodiserad row previews the 29xx interim account it books', async () => {
     const inv = invoice({
       items: [item({ accrual_period_start: '2026-10-01', accrual_period_end: '2027-09-30' })],

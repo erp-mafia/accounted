@@ -1,3 +1,4 @@
+import { readRegistrationOreRounding } from '@/lib/invoices/registration-ore-rounding'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { releaseDoubtfulReserveAfterChange } from '@/lib/customer-loss/doubtful'
@@ -23,6 +24,8 @@ export interface CreditNoteOriginalInvoice {
   paid_at?: string | null
   paid_amount?: number | null
   total?: number | null
+  currency?: string | null
+  deduction_total?: number | null
 }
 
 /**
@@ -380,6 +383,17 @@ export async function issueCreditNote(input: IssueCreditNoteInput): Promise<Issu
           }
           deductionBookedSek = state.bookedSek
         }
+        // An original whose issue verifikat booked its öresavrundning: the
+        // credit takes off 1510 what it credits the customer, so the two net
+        // to zero on 1510 and 3740. One booked at the exact total is reversed
+        // at the exact total. Under kontantmetoden no issue verifikat books
+        // 1510, so there is nothing to read.
+        const originalOreRounding = accountingMethod === 'cash'
+          ? 0
+          : await readRegistrationOreRounding(supabase, companyId, {
+              ...originalInvoice,
+              journal_entry_id: originalJournalEntryId,
+            })
         const journalEntry = await createCreditNoteJournalEntry(
           supabase,
           companyId,
@@ -391,7 +405,7 @@ export async function issueCreditNote(input: IssueCreditNoteInput): Promise<Issu
           // The posting port's event, while POSTING_EVENTS is on: the person
           // (or the approved operation) credited the invoice.
           () => ({ linkBasis: linkBasisColumns('user_created') }),
-          { deductionBookedSek },
+          { deductionBookedSek, ...(originalOreRounding !== 0 ? { companyOreRounding: true } : {}) },
         )
         journalEntryId = journalEntry?.id ?? null
       }

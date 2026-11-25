@@ -91,6 +91,24 @@ function postedOrReversed(e: Row): boolean {
 }
 
 /** get_ar_ledger_invoices, without the early drop and in table order. */
+/** registered_receivable_sek: a SEK row's posted verifikat on 151x, 1513 aside, else null. */
+function registeredReceivable(tables: ReskontraTables, companyId: unknown, i: Row): number | null {
+  if ((i.currency ?? 'SEK') !== 'SEK' || i.journal_entry_id == null) return null
+  const entry = rowsOf(tables, 'journal_entries').find(
+    (e) => e.id === i.journal_entry_id && ofCompany(e, companyId) && e.status === 'posted',
+  )
+  if (!entry) return null
+  const lines = rowsOf(tables, 'journal_entry_lines').filter(
+    (l) =>
+      l.journal_entry_id === entry.id &&
+      String(l.account_number).startsWith('151') &&
+      l.account_number !== '1513',
+  )
+  if (lines.length === 0) return null
+  const sum = lines.reduce((acc, l) => acc + Number(l.debit_amount ?? 0) - Number(l.credit_amount ?? 0), 0)
+  return Math.round(sum * 100) / 100
+}
+
 export function portArLedgerInvoices(tables: ReskontraTables, args: Row): Row[] {
   const companyId = args.p_company_id
   const asOf = (args.p_as_of_date as string | null | undefined) ?? null
@@ -155,6 +173,7 @@ export function portArLedgerInvoices(tables: ReskontraTables, args: Row): Row[] 
         deduction_reclaimed_total: i.deduction_reclaimed_total ?? 0,
         paid_at: i.paid_at ?? null,
         journal_entry_id: i.journal_entry_id ?? null,
+        registered_receivable_sek: registeredReceivable(tables, companyId, i),
         ...paymentFacts(payments, 'invoice_id', i.id, companyId, asOf),
         credit_links: isCreditNote
           ? payments

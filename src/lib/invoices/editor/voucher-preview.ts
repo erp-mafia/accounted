@@ -62,6 +62,12 @@ export interface DraftVoucherInput {
   items: DraftVoucherItem[]
   defaultDimensions?: Record<string, string> | null
   entityType: EntityType
+  /**
+   * The form's öresavrundning choice: the issue verifikat books 1510 at the
+   * rounded Att betala and the öre on 3740 (issueOreRounding). Left out, the
+   * proposal books the exact total.
+   */
+  oreRounding?: boolean
 }
 
 /**
@@ -72,7 +78,7 @@ export interface DraftVoucherInput {
 export function proposeDraftSendLines(input: DraftVoucherInput): FormLine[] {
   const invoice = draftInvoice(input)
   if (!invoice) return []
-  return proposeSendLines({ invoice, entityType: input.entityType })
+  return proposeSendLines({ invoice, entityType: input.entityType, companyOreRounding: input.oreRounding })
 }
 
 /**
@@ -177,6 +183,7 @@ function draftInvoice(input: DraftVoucherInput) {
     vat_treatment: input.vatTreatment,
     items,
     default_dimensions: input.defaultDimensions ?? null,
+    ore_rounding: input.oreRounding ?? null,
   }
 }
 
@@ -191,7 +198,12 @@ function draftInvoice(input: DraftVoucherInput) {
  */
 export function proposeCreditNoteSendLines(
   original: Invoice & { items: InvoiceItem[] },
-  options: { entityType: EntityType; today: string },
+  options: {
+    entityType: EntityType
+    today: string
+    /** The original's booked öresavrundning (readRegistrationOreRounding); 0 or left out: none. */
+    originalOreRounding?: number
+  },
 ): FormLine[] {
   const reference = creditNoteOriginalReference(original)
   if (!reference) return []
@@ -217,8 +229,10 @@ export function proposeCreditNoteSendLines(
         credited_invoice_id: fields.credited_invoice_id,
         items,
         default_dimensions: fields.default_dimensions,
+        ore_rounding: fields.ore_rounding,
       },
       entityType: options.entityType,
+      ...(options.originalOreRounding ? { companyOreRounding: true } : {}),
     })
   } catch {
     // A missing FX rate on a foreign original: the confirm says how it books instead.

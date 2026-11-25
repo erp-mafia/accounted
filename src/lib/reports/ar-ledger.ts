@@ -14,6 +14,7 @@ import {
   outstandingLessPayouts,
   skatteverketSettledByInvoice,
 } from '@/lib/bookkeeping/skatteverket-share'
+import { issueRoundingOf, withIssueRounding } from './issue-rounding-carried'
 import { creditNoteCreditUsed, outstandingWithCreditUsed } from './credit-note-settlement'
 import { fetchArLedgerInvoices, type ArLedgerInvoice } from './ar-ledger-invoices'
 import { fetchCreditedInvoiceIds, netCreditedPairs } from './credited-pairs'
@@ -161,10 +162,15 @@ export async function generateARLedger(
   for (const inv of invoices) {
     const total = Number(inv.total) || 0
     const liveOutstanding = roundOre(total - (Number(inv.paid_amount) || 0))
+    // The öresavrundning the issue verifikat put on 1510 is owed with the
+    // rest while the customer's part is open (issue-rounding-carried.ts).
     ownOutstanding.set(inv.id, outstandingWithCreditUsed(
       payments
-        ? outstandingLessPayouts(outstandingAsOf(inv, total, liveOutstanding, payments, asOfDate!), settled.get(inv.id))
-        : liveReceivableOutstanding(inv, liveOutstanding, settled.get(inv.id)),
+        ? outstandingLessPayouts(
+            withIssueRounding(inv, outstandingAsOf(inv, total, liveOutstanding, payments, asOfDate!)),
+            settled.get(inv.id),
+          )
+        : liveReceivableOutstanding(inv, withIssueRounding(inv, liveOutstanding), settled.get(inv.id)),
       creditUsed.get(inv.id)
     ))
   }
@@ -202,7 +208,9 @@ export async function generateARLedger(
 
     const entry = byCustomer.get(customerId)!
     const daysOverdue = daysPastDue(inv.due_date, asOf)
-    const total = Number(inv.total) || 0
+    // The amount the invoice asks for when its issue verifikat booked the
+    // öresavrundning (the rounded Att betala), so Betalt stays what was paid.
+    const total = roundOre((Number(inv.total) || 0) + issueRoundingOf(inv))
     const outstanding = paired.outstanding.get(inv.id) ?? 0
     const paidAmount = roundOre(total - outstanding)
 

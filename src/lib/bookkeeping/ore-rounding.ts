@@ -56,6 +56,22 @@ export function bookedOreRounding(remainingSek: number, carriedSek: number | nul
 }
 
 /**
+ * The öresavrundning a SEK customer document's issue verifikat put on 1510:
+ * what the verifikat carries on 151x (1513 aside) less the document's own
+ * receivable (its total less the ROT/RUT share), when that gap is inside the
+ * öre band. bookedOreRounding read from the issue side: the same gap, signed
+ * the way the verifikat booked it.
+ *
+ *   > 0: rounded up (1510 carries more, 3740 credited)
+ *   < 0: rounded down (1510 carries less, 3740 debited)
+ *   0:   the exact total, the ledger cannot say (null), or a krona or more
+ */
+export function registrationOreRounding(receivableSek: number, registeredSek: number | null | undefined): number {
+  const booked = bookedOreRounding(receivableSek, registeredSek)
+  return booked === 0 ? 0 : -booked
+}
+
+/**
  * Which ledger the settlement clears. It decides the 3740 side:
  *
  *   customer (1510 or revenue credited, bank debited):

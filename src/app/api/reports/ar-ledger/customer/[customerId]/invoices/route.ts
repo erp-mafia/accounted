@@ -12,6 +12,7 @@ import {
 import type { ReportSourceLine } from '@/lib/reports/source-lines'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { roundOre } from '@/lib/money'
+import { issueRoundingOf, withIssueRounding } from '@/lib/reports/issue-rounding-carried'
 
 /**
  * GET /api/reports/ar-ledger/customer/[customerId]/invoices
@@ -75,7 +76,8 @@ export const GET = withRouteContext<{ params: Promise<{ customerId: string }> }>
       outstandingWithCreditUsed(
         liveReceivableOutstanding(
           inv,
-          roundOre((Number(inv.total) || 0) - (Number(inv.paid_amount) || 0)),
+          // With the öresavrundning the issue verifikat booked, as in generateARLedger.
+          withIssueRounding(inv, roundOre((Number(inv.total) || 0) - (Number(inv.paid_amount) || 0))),
           settled.get(inv.id)
         ),
         creditUsed.get(inv.id)
@@ -136,7 +138,7 @@ export const GET = withRouteContext<{ params: Promise<{ customerId: string }> }>
     due_date: string
   })[] = invoices.map((inv) => {
     const entry = entryMap.get(inv.id)
-    const total = Number(inv.total) || 0
+    const total = roundOre((Number(inv.total) || 0) + issueRoundingOf(inv))
     const outstanding = outstandingOf.get(inv.id) as number
     const isFx = inv.currency && inv.currency !== 'SEK'
     const hasRate = inv.exchange_rate != null && Number(inv.exchange_rate) > 0

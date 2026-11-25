@@ -1,5 +1,5 @@
 import { bankBookingContext } from '@/lib/bookkeeping/bank-booking-context'
-import { isKronorCurrency } from '@/lib/bookkeeping/currency-utils'
+import { isKronorCurrency, isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
 import { findFiscalPeriod } from './engine'
 import { coerceDimensionsBag } from './dimension-resolver'
 import { clearedSek, statedSettlement } from './ledger-carried-sek'
@@ -16,6 +16,8 @@ import {
   type InvoicePostingContext,
 } from './invoice-business-events'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { dbError } from '@/lib/errors/db-error'
+import { getDisplayTotal } from './invoice-rounding'
 import type {
   CreateJournalEntryInput,
   Transaction,
@@ -158,7 +160,9 @@ export async function buildInvoiceJournalEntryInput(
   // point). User-edited lines above book as reviewed and get no schedule.
   await assertAccruedIncomeLinesBookable(supabase, companyId, invoice.invoice_date, invoice.items ?? [])
 
-  const lines = buildInvoiceRegistrationLines(invoice, entityType, options?.numberOverride)
+  const lines = buildInvoiceRegistrationLines(invoice, entityType, options?.numberOverride, {
+    companyOreRounding: await registrationOreRoundingSetting(supabase, companyId, invoice),
+  })
 
   const input: CreateJournalEntryInput = {
     fiscal_period_id: fiscalPeriodId,
@@ -175,6 +179,33 @@ export async function buildInvoiceJournalEntryInput(
   }
 
   return input
+}
+
+/**
+ * The öresavrundning setting the issue verifikat books by (issueOreRounding):
+ * the invoice's own choice, else the company's (default on, as
+ * getDisplayTotal reads it). A foreign invoice has none to book, and a
+ * received självfaktura states the buyer's amount, not a rounded one of ours:
+ * both book the exact total (undefined).
+ */
+async function registrationOreRoundingSetting(
+  supabase: SupabaseClient,
+  companyId: string,
+  invoice: Invoice,
+): Promise<boolean | undefined> {
+  if (!isLedgerCurrency(invoice.currency) || invoice.is_self_billed) {
+    return undefined
+  }
+  if (typeof invoice.ore_rounding === 'boolean') return invoice.ore_rounding
+  // A total in whole kronor has nothing to round: the setting is not read.
+  if (!getDisplayTotal(invoice, { ore_rounding: true }).applies) return false
+  const { data, error } = await supabase
+    .from('company_settings')
+    .select('ore_rounding')
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (error) throw dbError(error, 'company öresavrundning')
+  return (data as { ore_rounding?: boolean | null } | null)?.ore_rounding ?? true
 }
 
 /**
@@ -389,8 +420,8 @@ export async function createCreditNoteJournalEntry(
   originalVoucherRef?: string,
   /** What the door saw, read by the posting port only while POSTING_EVENTS is on. */
   posting?: () => InvoicePostingContext,
-  /** See buildCreditNoteLines' options.deductionBookedSek. */
-  options: { deductionBookedSek?: number | null } = {},
+  /** See buildCreditNoteLines' options.deductionBookedSek and companyOreRounding. */
+  options: { deductionBookedSek?: number | null; companyOreRounding?: boolean } = {},
 ): Promise<JournalEntry | null> {
   const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, creditNote.invoice_date)
   if (!fiscalPeriodId) {

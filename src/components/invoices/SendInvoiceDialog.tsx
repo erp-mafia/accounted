@@ -29,6 +29,7 @@ import { ToastAction } from '@/components/ui/toast'
 import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
 import { KonteringLinesEditor } from '@/components/bookkeeping/KonteringLinesEditor'
 import { proposeSendLines } from '@/lib/bookkeeping/propose-send-lines'
+import { readRegistrationOreRounding } from '@/lib/invoices/registration-ore-rounding'
 import { getAmountToPay } from '@/lib/bookkeeping/invoice-rounding'
 import { voucherLineViews } from '@/lib/bookkeeping/voucher-line-view'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
@@ -175,6 +176,9 @@ export default function SendInvoiceDialog({
   // A kontantmetod ROT/RUT original whose Skatteverket share is not booked
   // yet: its credit reverses the customer's share alone.
   const [deductionBookedSek, setDeductionBookedSek] = useState<number | null>(null)
+  // A credit note of an original whose issue verifikat booked its
+  // öresavrundning books its own (issueCreditNote reads the same).
+  const [originalOreRounding, setOriginalOreRounding] = useState(0)
   const [catalog, setCatalog] = useState<CatalogAccount[]>([])
   const [editLines, setEditLines] = useState<FormLine[]>([])
   const [hasEdited, setHasEdited] = useState(false)
@@ -295,8 +299,13 @@ export default function SendInvoiceDialog({
           // Preview only: issueCreditNote decides again when it books.
           bookedShare = state.ok ? state.bookedSek : null
         }
+        // Preview only, as above: a failed read shows the exact reversal.
+        const originalRounding = bookOnIssue && originalResult.data
+          ? await readRegistrationOreRounding(supabase, company.id, originalResult.data).catch(() => 0)
+          : 0
         if (cancelled) return
         setDeductionBookedSek(bookedShare)
+        setOriginalOreRounding(originalRounding)
 
         // Line editing needs the BAS catalogue; only the accrual
         // book-at-issue path renders the editor, so skip the load elsewhere.
@@ -332,8 +341,11 @@ export default function SendInvoiceDialog({
 
     // The whole row: the server books from all of it (item accounts and
     // dimensions, delivery_country), so the preview must read the same.
-    return proposeSendLines({ invoice, entityType, deductionBookedSek })
-  }, [isInitialized, shouldBookOnIssue, entityType, invoice, deductionBookedSek])
+    const companyOreRounding = invoice.credited_invoice_id
+      ? (originalOreRounding !== 0 ? true : undefined)
+      : (invoice.is_self_billed ? undefined : (companySettings?.ore_rounding ?? true))
+    return proposeSendLines({ invoice, entityType, deductionBookedSek, companyOreRounding })
+  }, [isInitialized, shouldBookOnIssue, entityType, invoice, deductionBookedSek, originalOreRounding, companySettings?.ore_rounding])
 
   const additionalCc = useMemo(
     () => parseInvoiceRecipientText(additionalCcText),

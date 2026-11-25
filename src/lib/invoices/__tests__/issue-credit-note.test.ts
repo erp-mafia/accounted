@@ -31,6 +31,11 @@ vi.mock('@/lib/invoices/rot-rut-payout-recognition', () => ({
   getDeductionShareBookedByPayout: (...args: unknown[]) => mockGetDeductionShareBooked(...args),
 }))
 
+const mockReadRegistrationOreRounding = vi.fn().mockResolvedValue(0)
+vi.mock('@/lib/invoices/registration-ore-rounding', () => ({
+  readRegistrationOreRounding: (...args: unknown[]) => mockReadRegistrationOreRounding(...args),
+}))
+
 import {
   creditIssueFailureCode,
   creditNoteNeedsJournalEntry,
@@ -71,6 +76,38 @@ describe('issueCreditNote', () => {
       cancelledSchedules: 1,
       reversedEntries: 0,
       failedReversals: 0,
+    })
+  })
+
+  it('books its own öresavrundning only when the original\'s issue verifikat booked one', async () => {
+    enqueue({ data: null, error: null })
+    enqueue({ data: { voucher_series: 'A', voucher_number: 42 }, error: null })
+    mockCreateCreditNoteJournalEntry.mockResolvedValue({ id: 'journal-1' })
+    enqueue({ data: [{ id: 'credit-1' }], error: null })
+    enqueue({ data: [{ id: 'invoice-1' }], error: null })
+    mockReadRegistrationOreRounding.mockResolvedValueOnce(0.25)
+
+    const result = await issueCreditNote({
+      supabase: supabase as never,
+      companyId: 'company-1',
+      userId: 'user-1',
+      creditNote: makeCreditNote({ subtotal: -799.8, vat_amount: -199.95, total: -999.75 }),
+      originalInvoice: { id: 'invoice-1', invoice_number: 'F-100', status: 'sent', journal_entry_id: 'original-journal-1' },
+      entityType: 'enskild_firma',
+      accountingMethod: 'accrual',
+      deferInvoiceBooking: false,
+      log,
+    })
+
+    expect(result.complete).toBe(true)
+    expect(mockReadRegistrationOreRounding).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      expect.objectContaining({ id: 'invoice-1', journal_entry_id: 'original-journal-1' }),
+    )
+    expect(mockCreateCreditNoteJournalEntry.mock.calls[0][8]).toEqual({
+      deductionBookedSek: null,
+      companyOreRounding: true,
     })
   })
 
