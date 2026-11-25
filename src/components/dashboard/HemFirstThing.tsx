@@ -28,8 +28,8 @@ interface HemFirstThingProps {
   clients: AiClient[]
   /** Where "connect the bank" leads (the checklist's bank step). */
   bankHref: string
-  /** Where "upload a document" leads (the checklist's receipts step). */
-  receiptsHref: string
+  /** Where a bank statement file is imported; null when connecting the bank already leads there. */
+  bankFileHref: string | null
   /** The company's inbox page (WorklistCounts.inboxHref). */
   inboxHref: string | null
   companyId: string
@@ -41,7 +41,7 @@ interface HemFirstThingProps {
  * lists Hem already reads and decides nothing about the books. The one
  * primary button of the page is in here; the top bar carries none.
  */
-export function HemFirstThing({ kind, lead, after, clients, bankHref, receiptsHref, inboxHref, companyId }: HemFirstThingProps) {
+export function HemFirstThing({ kind, lead, after, clients, bankHref, bankFileHref, inboxHref, companyId }: HemFirstThingProps) {
   const t = useTranslations('dashboard')
   const router = useRouter()
   const bookingScreen = useBookingScreenEnabled()
@@ -81,7 +81,7 @@ export function HemFirstThing({ kind, lead, after, clients, bankHref, receiptsHr
     title = t('first_thing_connect_title')
     why = t('first_thing_connect_why')
     primary = link(bankHref, t('first_thing_connect_action'), 'default')
-    second = link(receiptsHref, t('first_thing_connect_upload'), 'link')
+    second = bankFileHref ? link(bankFileHref, t('first_thing_connect_file'), 'link') : null
   } else if (kind === 'book_bank_rows') {
     if (client) {
       title = t('first_thing_book_ai_title', { client: client.name })

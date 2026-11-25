@@ -57,7 +57,7 @@ export async function HemFirstThingSection({
   const createdAt = (Array.isArray(embedded) ? embedded[0] : embedded)?.created_at ?? null
   const uiState = preferences?.ui_state as UserUiState | null
   const closed = Boolean(uiState?.first_thing_closed?.[companyId])
-  if (closed || !isNewCompany(createdAt, today)) return hem
+  if (!isNewCompany(createdAt, today)) return hem
 
   if (isCompanyQuestionsEnabled(companyId)) {
     let questions: ReturnType<typeof walkQuestions> = []
@@ -72,6 +72,9 @@ export async function HemFirstThingSection({
       return <DashboardContent notices={notices} panes={<HemQuestionFirst questions={questions} companyId={companyId} />} />
     }
   }
+
+  // The closed block hides the first thing, never a question filed after the person last went through them.
+  if (closed) return hem
 
   const [worklist, bankConnections, transactions, sieImports, hasAi] = await Promise.all([
     getWorklistCounts(supabase, companyId),
@@ -110,7 +113,7 @@ export async function HemFirstThingSection({
           after={firstThing.after}
           clients={clients}
           bankHref={ENABLED_EXTENSION_IDS.has('enable-banking') ? '/import?mode=psd2' : '/import?mode=bank'}
-          receiptsHref={hasAi ? '/e/general/invoice-inbox' : '/settings/billing'}
+          bankFileHref={ENABLED_EXTENSION_IDS.has('enable-banking') ? '/import?mode=bank' : null}
           inboxHref={worklist.inboxHref ?? null}
           companyId={companyId}
         />

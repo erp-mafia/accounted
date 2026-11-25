@@ -133,9 +133,15 @@ describe('classifyToolResult', () => {
     })
   })
 
-  it('recognises a task handle', () => {
+  it('recognises a task handle nested under task (2025-11-25 core shape)', () => {
     const task = { taskId: 't1', status: 'working', pollIntervalMs: 2000 }
     expect(classifyToolResult({ resultType: 'task', task })).toEqual({ kind: 'task', task })
+  })
+
+  it('recognises a flat task handle (tasks extension), with or without the nested copy', () => {
+    const task = { taskId: 't1', status: 'working', createdAt: '2026-11-25T10:00:00Z', lastUpdatedAt: '2026-11-25T10:00:00Z', ttlMs: 3600000, pollIntervalMs: 2000 }
+    expect(classifyToolResult({ resultType: 'task', ...task, _meta: { x: 1 } })).toEqual({ kind: 'task', task })
+    expect(classifyToolResult({ resultType: 'task', ...task, task })).toEqual({ kind: 'task', task })
   })
 })
 
