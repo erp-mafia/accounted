@@ -881,18 +881,6 @@ export default function NewSupplierInvoiceForm({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [watchedInvoiceDate])
 
-  // Pre-submit duplicate advisory: the number (the create route's structured
-  // 409 stays the enforcement point) and the payment reference, which no
-  // door refuses.
-  const { found: duplicates, check: checkDuplicates } = useSupplierInvoiceDuplicates({
-    supplier_id: watchedSupplierId,
-    supplier_invoice_number: watchedInvoiceNumber,
-    payment_reference: watchedPaymentReference,
-    payer: watchedPayer,
-  })
-  // On one other invoice of the supplier only: acknowledged in the review dialog.
-  const reuseToAcknowledge = duplicates?.reference?.needs_acknowledgement ? duplicates.reference : null
-
   // Auto-fetch Riksbanken exchange rate when currency switches to non-SEK and
   // the user hasn't typed a custom rate yet. Re-fetches when the invoice
   // date changes too. Never overwrites a user-entered rate. Reuses the
@@ -1376,6 +1364,22 @@ export default function NewSupplierInvoiceForm({
   const subtotal = roundOre(bookedSubtotal - totalNonDeductibleVat)
   const totalVat = roundOre(deductibleVat + totalNonDeductibleVat)
 
+  // Pre-submit duplicate advisory: the number (the create route's structured
+  // 409 stays the enforcement point) and the payment reference, which no
+  // door refuses. The date and the payable shown tell the same document
+  // registered again among the supplier's invoices with the reference.
+  const { found: duplicates, check: checkDuplicates } = useSupplierInvoiceDuplicates({
+    supplier_id: watchedSupplierId,
+    supplier_invoice_number: watchedInvoiceNumber,
+    payment_reference: watchedPaymentReference,
+    payer: watchedPayer,
+    invoice_date: watchedInvoiceDate,
+    currency: watchedCurrency || 'SEK',
+    total: figures.toPay,
+  })
+  // On one other invoice of the supplier, or the same document again: acknowledged in the review dialog.
+  const reuseToAcknowledge = duplicates?.reference?.needs_acknowledgement ? duplicates.reference : null
+
   // Total-first fill: a single row whose amount is still empty, or still the
   // one this fill put there, takes its net from Fakturabelopp and Moms (and
   // follows a later change of either, or of the row's moms sats). With
@@ -1839,7 +1843,9 @@ export default function NewSupplierInvoiceForm({
     onMissingField: focusMissingField,
     settleTransactionId: inboxItemId ? (settleWith?.transactionId ?? null) : null,
     euSupplier,
-    acknowledgesInReview: async (data) => (await checkDuplicates(data))?.reference?.needs_acknowledgement === true,
+    // The payable is not a form field: the one shown goes along, as with the debounced lookup.
+    acknowledgesInReview: async (data) =>
+      (await checkDuplicates({ ...data, total: figures.toPay }))?.reference?.needs_acknowledgement === true,
   })
 
   // Gone, or never there: nothing is left for the unmount cleanup to remove.
@@ -3205,7 +3211,7 @@ export default function NewSupplierInvoiceForm({
             </DialogTitle>
             {/* data-ph-mask: the conflict message carries the invoice number */}
             <DialogDescription data-ph-mask="">
-              {duplicates?.number?.voucher
+              {duplicates?.number
                 ? duplicateNumberSentence(t, (watchedInvoiceNumber || '').trim(), duplicates.number)
                 : conflict?.message}
             </DialogDescription>

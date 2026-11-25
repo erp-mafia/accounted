@@ -233,10 +233,20 @@ describe('POST /items/:id/convert', () => {
           'duplicate key value violates unique constraint "idx_supplier_invoices_company_supplier_number"',
       },
     })
-    // Lookup of the existing (non-credited) invoice for the conflict payload.
+    // Lookup of the existing (non-credited) invoice for the conflict payload,
+    // then the verifikat it is booked on.
     enqueue({
-      data: { id: 'existing-1', supplier_invoice_number: 'F-2024-001', status: 'approved' },
+      data: {
+        id: 'existing-1',
+        supplier_invoice_number: 'F-2024-001',
+        status: 'paid',
+        paid_at: '2026-10-28T09:12:00Z',
+        remaining_amount: 0,
+        registration_journal_entry_id: 'je-71',
+        payment_journal_entry_id: null,
+      },
     })
+    enqueue({ data: { id: 'je-71', voucher_series: 'A', voucher_number: 71 } })
 
     const ctx = buildCtx(supabase)
     const request = createMockRequest('/items/item-1/convert', {
@@ -251,7 +261,15 @@ describe('POST /items/:id/convert', () => {
 
     expect(status).toBe(409)
     expect(body.error.code).toBe('SI_CREATE_DUPLICATE_INVOICE_NUMBER')
-    expect(body.error.details?.existing?.id).toBe('existing-1')
+    expect(body.error.details?.existing).toEqual({
+      id: 'existing-1',
+      supplier_invoice_number: 'F-2024-001',
+      status: 'paid',
+      credit_note_id: null,
+      paid_at: '2026-10-28T09:12:00Z',
+      remaining_amount: 0,
+      voucher: { journal_entry_id: 'je-71', label: 'A71' },
+    })
     // Data minimisation: the raw request body must NOT be echoed back into the
     // error envelope: only the server-authoritative `existing` row.
     expect(body.error.details).not.toHaveProperty('supplierId')

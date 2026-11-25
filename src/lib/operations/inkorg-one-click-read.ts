@@ -211,9 +211,11 @@ export async function readOneClickInput(
   }
 
   // A registration stores the reading's payment reference. On one other live invoice of the
-  // supplier it may be the same invoice under another number, which a person acknowledges in
-  // the editor (lib/supplier-invoices/duplicate-lookup.ts). Only a supplier invoice on a card
-  // that exists can have one. A lookup that fails opens the editor too: it is asked again there.
+  // supplier it may be the same invoice under another number, and on an invoice with the
+  // reading's date and total it is the same document again, however many share it: a person
+  // acknowledges either in the editor (lib/supplier-invoices/duplicate-lookup.ts). Only a
+  // supplier invoice on a card that exists can have one. A lookup that fails opens the editor
+  // too: it is asked again there.
   const supplierId = supplier?.id
   const paymentReference = reading?.invoice?.paymentReference
   const referenceToAcknowledge =
@@ -222,8 +224,16 @@ export async function readOneClickInput(
           log,
           'the payment reference',
           async () =>
-            (await lookupSupplierInvoiceDuplicates(supabase, companyId, { supplierId, number: reading?.invoice?.invoiceNumber, reference: paymentReference }))
-              .reference?.needs_acknowledgement === true,
+            (
+              await lookupSupplierInvoiceDuplicates(supabase, companyId, {
+                supplierId,
+                number: reading?.invoice?.invoiceNumber,
+                reference: paymentReference,
+                invoiceDate: isoDate(reading?.invoice?.invoiceDate),
+                total: reading?.totals?.total ?? null,
+                currency: reading?.invoice?.currency,
+              })
+            ).reference?.needs_acknowledgement === true,
           true,
         )
       : false

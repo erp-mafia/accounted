@@ -13,7 +13,7 @@ import {
   type SupplierInvoiceFormData,
 } from '@/lib/supplier-invoices/form-payload'
 import { isPersonPayer } from '@/lib/expenses/payer'
-import { registrationPassesReview } from '@/lib/supplier-invoices/duplicate-lookup'
+import { registrationPassesReview } from '@/lib/supplier-invoices/duplicate-lookup-query'
 import { pendingRegistrationReducer } from '@/lib/supplier-invoices/pending-registration'
 import type { InvoiceExtractionResult } from '@/types'
 
@@ -86,8 +86,9 @@ interface UseSupplierInvoiceSubmitParams {
   /**
    * Whether this registration has something to acknowledge in the review
    * dialog first: a payment reference another invoice of the supplier already
-   * carries (lib/supplier-invoices/duplicate-lookup.ts). Asked when the
-   * person submits, so a lookup still on its way is waited for.
+   * carries, or the same document registered again
+   * (lib/supplier-invoices/duplicate-lookup.ts). Asked when the person
+   * submits, so a lookup still on its way is waited for.
    */
   acknowledgesInReview?: (data: SupplierInvoiceFormData) => Promise<boolean>
   /**

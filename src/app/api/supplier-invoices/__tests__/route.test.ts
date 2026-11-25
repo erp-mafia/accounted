@@ -766,6 +766,9 @@ describe('POST /api/supplier-invoices', () => {
       supplier_invoice_number: 'LF-DUP',
       status: 'credited',
       credit_note_id: 'credit-1',
+      paid_at: null,
+      remaining_amount: null,
+      voucher: null,
     })
     // Details are snake_case on both doors since the service unification.
     expect(body.error.details.supplier_id).toBe(VALID_UUID)
@@ -798,6 +801,52 @@ describe('POST /api/supplier-invoices', () => {
     expect(body.error.code).toBe('SI_CREATE_DUPLICATE_INVOICE_NUMBER')
     expect(body.error.details.existing.status).toBe('approved')
     expect(body.error.details.existing.credit_note_id).toBeNull()
+  })
+
+  it('returns 409 saying whether the original is paid, and the verifikat it is booked on', async () => {
+    stubRegistration({ arrival: 12 })
+    setTable('supplier_invoices', [
+      { data: null, error: DUPLICATE_ERROR },
+      {
+        data: {
+          id: 'existing-3',
+          supplier_invoice_number: 'LF-PAID',
+          status: 'paid',
+          paid_at: '2026-10-28T09:12:00Z',
+          remaining_amount: 0,
+          registration_journal_entry_id: 'je-71',
+          payment_journal_entry_id: 'je-80',
+        },
+      },
+    ])
+    setTable('journal_entries', { data: { id: 'je-71', voucher_series: 'A', voucher_number: 71 } })
+
+    const request = createMockRequest('/api/supplier-invoices', {
+      method: 'POST',
+      body: {
+        supplier_id: VALID_UUID,
+        supplier_invoice_number: 'LF-PAID',
+        invoice_date: '2024-06-01',
+        due_date: '2024-07-01',
+        items: [{ description: 'Test', quantity: 1, unit_price: 1000, account_number: '4010' }],
+      },
+    })
+    const response = await POST(request)
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details: { existing: unknown } } }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.details.existing).toEqual({
+      id: 'existing-3',
+      supplier_invoice_number: 'LF-PAID',
+      status: 'paid',
+      credit_note_id: null,
+      paid_at: '2026-10-28T09:12:00Z',
+      remaining_amount: 0,
+      voucher: { journal_entry_id: 'je-71', label: 'A71' },
+    })
+    // The registration's verifikat, read under the company.
+    expect(findCalls('journal_entries', 'eq')).toContainEqual(['id', 'je-71'])
+    expect(findCalls('journal_entries', 'eq')).toContainEqual(['company_id', expect.any(String)])
   })
 
   it('returns generic 409 when existing row lookup races to nothing', async () => {

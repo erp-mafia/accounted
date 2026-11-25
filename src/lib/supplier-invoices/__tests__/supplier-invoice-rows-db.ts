@@ -12,8 +12,9 @@ function likePattern(pattern: string): RegExp {
 
 /**
  * Tables answered from rows, with the filters the duplicate lookup uses
- * applied as the database applies them: eq, in, not(in), like, order and
- * limit. A queue of canned answers would only pin which filters are called;
+ * applied as the database applies them: eq, in, not(in), like, order,
+ * limit and maybeSingle (and the payment instructions it reads, by the same
+ * filters). A queue of canned answers would only pin which filters are called;
  * this decides what comes back, so "credited is left out" and "another
  * company never leaks" are tested as outcomes.
  */
@@ -22,6 +23,7 @@ export function createSupplierInvoiceRowsDb(tables: Record<string, Row[]>) {
     let out = [...rows]
     const orders: Array<{ column: string; direction: 1 | -1 }> = []
     let limit: number | null = null
+    let single = false
     for (const { method, args } of chain) {
       const [column, a, b] = args as [string, unknown, unknown]
       if (method === 'eq') out = out.filter((row) => row[column] === a)
@@ -35,6 +37,7 @@ export function createSupplierInvoiceRowsDb(tables: Record<string, Row[]>) {
       } else if (method === 'order') {
         orders.push({ column, direction: (a as { ascending?: boolean } | undefined)?.ascending === false ? -1 : 1 })
       } else if (method === 'limit') limit = Number(column)
+      else if (method === 'maybeSingle') single = true
     }
     out.sort((x, y) => {
       for (const { column, direction } of orders) {
@@ -43,6 +46,7 @@ export function createSupplierInvoiceRowsDb(tables: Record<string, Row[]>) {
       }
       return 0
     })
+    if (single) return { data: out[0] ?? null, error: null }
     return { data: limit === null ? out : out.slice(0, limit), error: null }
   }
   const resolvers: Record<string, TableMockResolver> = {}
@@ -52,7 +56,7 @@ export function createSupplierInvoiceRowsDb(tables: Record<string, Row[]>) {
 
 let arrival = 0
 
-/** A supplier invoice row as the lookup reads it: live, unbooked, of supplier-1 in company-1. */
+/** A supplier invoice row as the lookup reads it: live, unbooked, unpaid, of supplier-1 in company-1. */
 export function invoiceRow(overrides: Row = {}): Row {
   arrival += 1
   return {
@@ -69,6 +73,12 @@ export function invoiceRow(overrides: Row = {}): Row {
     payment_reference: null,
     registration_journal_entry_id: null,
     payment_journal_entry_id: null,
+    paid_at: null,
+    paid_amount: 0,
+    remaining_amount: 1250,
+    due_date: '2026-10-31',
+    bank_entered_at: null,
+    is_credit_note: false,
     ...overrides,
   }
 }
