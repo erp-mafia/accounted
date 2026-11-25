@@ -51,18 +51,28 @@ export interface PairRowProps {
 
 const NUM = 'whitespace-nowrap text-right tabular-nums'
 const DATE = 'whitespace-nowrap tabular-nums text-muted-foreground'
+/**
+ * Below sm (a phone) the row is three cells: what happened, the amount and
+ * the action. The dates and the ledger's own columns hide; the ledger side
+ * stacks under the bank row's text in the first cell, and a ledger row's
+ * text and amount move into the first two cells.
+ */
+const DESKTOP_ONLY = 'hidden sm:table-cell'
 
 export function PairsHead({ externalLabel }: { externalLabel: string }) {
   const t = useTranslations('reconciliation')
   return (
     <tr>
-      <th className={cn(TH_CLASS, '!pl-0 w-[96px]')}>{t('col_date')}</th>
-      <th className={cn(TH_CLASS, 'w-[30%]')}>{externalLabel}</th>
-      <th className={cn(TH_CLASS, 'w-[120px] text-right')}>{t('col_amount')}</th>
-      <th className={cn(TH_CLASS, 'w-[96px] pl-6')}>{t('col_date')}</th>
-      <th className={TH_CLASS}>{t('v2_side_ledger')}</th>
-      <th className={cn(TH_CLASS, 'w-[120px] text-right')}>{t('col_amount')}</th>
-      <th className={cn(TH_CLASS, '!pr-0 w-[150px]')} aria-hidden="true"></th>
+      <th className={cn(TH_CLASS, DESKTOP_ONLY, '!pl-0 w-[96px]')}>{t('col_date')}</th>
+      <th className={cn(TH_CLASS, 'w-full max-sm:pl-0 sm:w-[30%]')}>
+        <span className="sm:hidden">{t('col_event')}</span>
+        <span className="hidden sm:inline">{externalLabel}</span>
+      </th>
+      <th className={cn(TH_CLASS, 'text-right sm:w-[120px]')}>{t('col_amount')}</th>
+      <th className={cn(TH_CLASS, DESKTOP_ONLY, 'w-[96px] pl-6')}>{t('col_date')}</th>
+      <th className={cn(TH_CLASS, DESKTOP_ONLY)}>{t('v2_side_ledger')}</th>
+      <th className={cn(TH_CLASS, DESKTOP_ONLY, 'w-[120px] text-right')}>{t('col_amount')}</th>
+      <th className={cn(TH_CLASS, '!pr-0 sm:w-[150px]')} aria-hidden="true"></th>
     </tr>
   )
 }
@@ -269,23 +279,29 @@ export function PairRow({
     })
   }
 
+  const ledgerMoney =
+    ledgerAmount == null ? '' : external ? money(ledgerAmount) : formatCurrency(ledgerAmount, item.currency)
+
   return (
     <tr className="group transition-colors duration-150 hover:bg-secondary/35">
-      <td className={cn(TD_CLASS, '!pl-0 date-figures', DATE)}>{external ? formatDate(item.date) : ''}</td>
-      <td className={cn(TD_CLASS, 'max-w-0')}>
+      <td className={cn(TD_CLASS, DESKTOP_ONLY, '!pl-0 date-figures', DATE)}>{external ? formatDate(item.date) : ''}</td>
+      <td className={cn(TD_CLASS, 'max-w-0 max-sm:pl-0')}>
         {external && (
           <span className="block truncate" data-ph-mask title={item.description}>
             {item.description}
           </span>
         )}
+        {/* A phone: the ledger side, under the bank row's text (the pair it
+            would be linked to), or alone on a ledger row. */}
+        {ledgerText && <span className={cn('block overflow-hidden sm:hidden', external && 'mt-0.5')}>{ledgerText}</span>}
       </td>
       <td className={cn(TD_CLASS, NUM)} data-ph-mask>
-        {external ? money(item.amount) : ''}
+        {external ? money(item.amount) : <span className="sm:hidden">{ledgerMoney}</span>}
       </td>
-      <td className={cn(TD_CLASS, DATE, 'pl-6 date-figures')}>{ledgerDate ? formatDate(ledgerDate) : ''}</td>
-      <td className={cn(TD_CLASS, 'max-w-0')}>{ledgerText}</td>
-      <td className={cn(TD_CLASS, NUM)} data-ph-mask>
-        {ledgerAmount == null ? '' : external ? money(ledgerAmount) : formatCurrency(ledgerAmount, item.currency)}
+      <td className={cn(TD_CLASS, DESKTOP_ONLY, DATE, 'pl-6 date-figures')}>{ledgerDate ? formatDate(ledgerDate) : ''}</td>
+      <td className={cn(TD_CLASS, DESKTOP_ONLY, 'max-w-0')}>{ledgerText}</td>
+      <td className={cn(TD_CLASS, DESKTOP_ONLY, NUM)} data-ph-mask>
+        {ledgerMoney}
       </td>
       <td className={cn(TD_CLASS, '!pr-0 text-right')}>
         <span className="inline-flex items-center justify-end gap-2">

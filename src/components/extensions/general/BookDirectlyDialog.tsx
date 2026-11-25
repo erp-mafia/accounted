@@ -743,8 +743,10 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
 
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,560px)]">
           {/* Document column: sticky on desktop so the underlag stays visible
-              while the form scrolls; stacks above the form on smaller screens. */}
-          <div className="h-[45vh] lg:sticky lg:top-0 lg:h-[72vh] lg:self-start">
+              while the form scrolls; stacks above the form on smaller screens,
+              at 35vh: a multi-page PDF scrolls inside it, and a taller box
+              took most swipes on a phone before the form. */}
+          <div className="h-[35vh] lg:sticky lg:top-0 lg:h-[72vh] lg:self-start">
             <DocumentViewerPane
               documentId={item.document_id}
               mime={docMime}
@@ -981,16 +983,17 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                   {formatCounterpartyName(accountSuggestion.counterparty)}
                 </p>
               )}
-              {/* overflow-x-auto: the fixed columns need about 400px, so on a phone
-                  the Kredit field and the remove button scroll instead of clipping
-                  (as BulkBookDialog's manual lines). */}
+              {/* Below sm (a phone) the columns narrow and the account's name
+                  hides beside its number, so a line is about 310px and fits
+                  the dialog. overflow-x-auto stays for the one case that is
+                  still wider: the dimensions toggle on every line. */}
               <div className="overflow-x-auto">
                 <table className="w-full border-collapse text-[13px]">
                   <thead>
                     <tr>
                       <th className={cn(VTH_CLASS, 'pr-3')}>Konto</th>
-                      <th className={cn(VTH_CLASS, 'w-[112px] pr-2 text-right')}>Debet</th>
-                      <th className={cn(VTH_CLASS, 'w-[112px] pr-2 text-right')}>Kredit</th>
+                      <th className={cn(VTH_CLASS, 'w-[88px] pr-2 text-right sm:w-[112px]')}>Debet</th>
+                      <th className={cn(VTH_CLASS, 'w-[88px] pr-2 text-right sm:w-[112px]')}>Kredit</th>
                       <th className={cn(VTH_CLASS, 'w-8 pr-0')}>
                         <span className="sr-only">{tJournal('remove_line')}</span>
                       </th>
@@ -1003,7 +1006,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                           {/* The account, its name, and the line's tag toggle:
                               a bag describes the account's line. */}
                           <div className="flex items-center gap-2">
-                            <div className="w-[120px] shrink-0">
+                            <div className="w-[80px] shrink-0 sm:w-[120px]">
                               <AccountCombobox
                                 value={line.account_number}
                                 accounts={accounts}
@@ -1012,7 +1015,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                                 className="h-7"
                               />
                             </div>
-                            <span className="min-w-0 flex-1 truncate text-muted-foreground">
+                            <span className="hidden min-w-0 flex-1 truncate text-muted-foreground sm:block">
                               {accountLabel(line.account_number)}
                             </span>
                             {dimensionsEnabled && (
