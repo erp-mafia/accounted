@@ -12,6 +12,7 @@ import type { OperationOutcome } from '@/lib/operations/types'
 import { roundOre } from '@/lib/money'
 import { executionDateFor, previousBankDayIso } from '@/lib/payments/bank-days'
 import { SIGNED_PAYMENT_ORDER_STATUSES, type PaymentOrderStatus } from './status'
+import { isSkattekontoPaymentUnderway, type SkattekontoPaymentSigning } from './skattekonto-underway'
 import type { PaymentOrderRow } from './types'
 
 /**
@@ -76,18 +77,24 @@ export function isSkattekontoDayInPayment(order: Pick<OpenSkattekontoOrder, 'sta
 /** A bank payment to the skattekonto made towards a due date (readSkattekontoPaymentsTowards). */
 export interface SkattekontoPaymentTowards extends OpenSkattekontoOrder {
   requested_execution_date: string
+  /** The order's signing, as Hem's cover rule reads it (SkattekontoPaymentOrderCover). */
+  signing: SkattekontoPaymentSigning | SkattekontoPaymentSigning[] | null
 }
 
 /**
- * Whether a bank payment to the skattekonto will pay: signed, or being
- * signed, so the bank pays it on its date unless it is cancelled there
- * (SIGNED_PAYMENT_ORDER_STATUSES), or executed. One that reached the bank
- * unsigned (submitted, e.g. after a BankID nobody finished) never executes
- * (status.ts), and one claimed for signing is not signed yet: both are in
- * payment for the day (isSkattekontoDayInPayment), and neither pays.
+ * Whether a bank payment to the skattekonto will pay: executed, or signed, so
+ * the bank pays it on its date unless it is cancelled there
+ * (SIGNED_PAYMENT_ORDER_STATUSES). One waiting for its BankID counts only
+ * while that signing can still finish, or once it finished, as Hem reads it
+ * (isSkattekontoPaymentUnderway): a BankID nobody finished, which the status
+ * sync cannot read, never pays. One that reached the bank unsigned
+ * (submitted) never executes (status.ts), and one claimed for signing is not
+ * signed yet: both are in payment for the day (isSkattekontoDayInPayment),
+ * and neither pays.
  */
-export function isSkattekontoPaymentSigned(order: Pick<OpenSkattekontoOrder, 'status'>): boolean {
-  return order.status === 'executed' || SIGNED_PAYMENT_ORDER_STATUSES.has(order.status as PaymentOrderStatus)
+export function isSkattekontoPaymentSigned(order: Pick<SkattekontoPaymentTowards, 'status' | 'signing'>, nowMs: number): boolean {
+  if (order.status === 'executed') return true
+  return SIGNED_PAYMENT_ORDER_STATUSES.has(order.status as PaymentOrderStatus) && isSkattekontoPaymentUnderway(order, nowMs)
 }
 
 /**
@@ -110,7 +117,9 @@ export async function readSkattekontoPaymentsTowards(
 ): Promise<SkattekontoPaymentTowards[]> {
   const { data, error } = await client
     .from('payment_orders')
-    .select('id, status, amount, batch_id, requested_execution_date')
+    .select(
+      'id, status, amount, batch_id, requested_execution_date, signing:payment_order_batches!fk_payment_orders_batch(status, signing_started_at)',
+    )
     .eq('company_id', companyId)
     .eq('purpose', 'skattekonto')
     .gte('requested_execution_date', previousBankDayIso(dueDate))
@@ -132,11 +141,12 @@ export async function readSkattekontoPaymentsTowards(
  * the AGI), so a larger amount is never read as paying this one.
  */
 export function skattekontoPaymentPaysDeclaration(
-  payment: Pick<SkattekontoPaymentTowards, 'status' | 'amount'>,
+  payment: Pick<SkattekontoPaymentTowards, 'status' | 'amount' | 'signing'>,
   declared: number,
+  nowMs: number,
 ): boolean {
   const owed = roundOre(declared)
-  return isSkattekontoPaymentSigned(payment) && owed > 0 && roundOre(Number(payment.amount)) === owed
+  return isSkattekontoPaymentSigned(payment, nowMs) && owed > 0 && roundOre(Number(payment.amount)) === owed
 }
 
 export const SKATTEKONTO_DAY_TAKEN = 'SKATTEKONTO_PAYMENT_DAY_TAKEN'

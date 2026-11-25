@@ -345,12 +345,21 @@ describe('GET /api/skatteverket/tax-payments/[period]', () => {
       })
     })
 
-    it.each(['awaiting_signature', 'awaiting_second_signer', 'accepted', 'executed'])(
-      'leaves the button out for a %s payment of the declaration: signed, or executed',
-      async (orderStatus) => {
+    // Now is 21:10 on 24 November (the describe's clock).
+    it.each([
+      ['awaiting_signature', 'its BankID open for five minutes', { status: 'awaiting_signature', signing_started_at: '2026-11-24T21:05:00+01:00' }],
+      ['awaiting_signature', 'its BankID finished, the bank confirming', { status: 'signed', signing_started_at: '2026-11-24T19:00:00+01:00' }],
+      ['awaiting_second_signer', 'signed once', null],
+      ['accepted', 'signed', null],
+      ['executed', 'paid', null],
+    ])(
+      'leaves the button out for a %s payment of the declaration (%s)',
+      async (orderStatus, _what, signing) => {
         enqueue({ data: FILED })
         enqueue({ data: SETTINGS })
-        enqueue({ data: [{ id: 'order-1', status: orderStatus, amount: '24568.00', batch_id: 'batch-1', requested_execution_date: '2026-12-11' }] })
+        enqueue({
+          data: [{ id: 'order-1', status: orderStatus, amount: '24568.00', batch_id: 'batch-1', requested_execution_date: '2026-12-11', signing }],
+        })
 
         const { body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await get('2026-11'))
 
@@ -362,6 +371,34 @@ describe('GET /api/skatteverket/tax-payments/[period]', () => {
         })
       },
     )
+
+    it('keeps the button for a BankID nobody finished once it can no longer finish, though the bank was never read', async () => {
+      // Abandoned at 19:30; the status sync could not read the bank, so the
+      // order still says awaiting_signature 100 minutes on. It never executes.
+      enqueue({ data: FILED })
+      enqueue({ data: SETTINGS })
+      enqueue({
+        data: [
+          {
+            id: 'order-1',
+            status: 'awaiting_signature',
+            amount: '24568.00',
+            batch_id: 'batch-1',
+            requested_execution_date: '2026-12-11',
+            signing: { status: 'awaiting_signature', signing_started_at: '2026-11-24T19:30:00+01:00' },
+          },
+        ],
+      })
+
+      const { body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await get('2026-11'))
+
+      expect(body.data.bank_payment).toEqual({
+        status: 'awaiting_signature',
+        amount: 24568,
+        requested_execution_date: '2026-12-11',
+        pays_declaration: false,
+      })
+    })
 
     it('reads no due day for an unsigned payment larger than the declaration: it pays nothing', async () => {
       // The whole day's sum, but never signed.

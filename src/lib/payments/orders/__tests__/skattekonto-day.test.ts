@@ -8,7 +8,14 @@ import {
   skattekontoPaymentDayFor,
   skattekontoPaymentPaysDeclaration,
 } from '../skattekonto-day'
-import { PAYMENT_ORDER_STATUSES } from '../status'
+import { PAYMENT_ORDER_STATUSES, UNANSWERED_SIGNING_MINUTES } from '../status'
+
+const NOW = Date.parse('2026-11-24T20:10:00Z')
+const minutesBefore = (minutes: number) => new Date(NOW - minutes * 60_000).toISOString()
+/** A signing nobody finished, started `minutes` before NOW. */
+const openSigning = (minutes: number) => ({ status: 'awaiting_signature', signing_started_at: minutesBefore(minutes) })
+/** A signing whose BankID finished `minutes` before NOW (the bank may still be confirming it). */
+const finishedSigning = (minutes: number) => ({ status: 'signed', signing_started_at: minutesBefore(minutes) })
 
 describe('skattekontoPaymentDayFor', () => {
   it('is the banking day before the due date', () => {
@@ -43,6 +50,7 @@ describe('readSkattekontoPaymentsTowards', () => {
     amount: '100.00',
     batch_id: batch,
     requested_execution_date: day,
+    signing: null,
   })
 
   it('reads from the banking day before the due date through the due date, earliest first', async () => {
@@ -52,6 +60,10 @@ describe('readSkattekontoPaymentsTowards', () => {
     const found = await readSkattekontoPaymentsTowards(supabase as unknown as SupabaseClient, 'company-1', '2026-12-14')
 
     expect(found.map((o) => o.id)).toEqual(['order-executed-2026-12-11', 'order-accepted-2026-12-14'])
+    // The signing is read with the order, as Hem's cover rule reads it.
+    expect(findCalls('payment_orders', 'select')).toEqual([
+      [expect.stringContaining('signing:payment_order_batches!fk_payment_orders_batch(status, signing_started_at)')],
+    ])
     expect(findCalls('payment_orders', 'eq')).toEqual([
       ['company_id', 'company-1'],
       ['purpose', 'skattekonto'],
@@ -78,49 +90,78 @@ describe('readSkattekontoPaymentsTowards', () => {
     const found = await readSkattekontoPaymentsTowards(supabase as unknown as SupabaseClient, 'company-1', '2026-12-14')
 
     expect(found.map((o) => o.status)).toEqual(['submitted'])
-    expect(isSkattekontoPaymentSigned(found[0])).toBe(false)
+    expect(isSkattekontoPaymentSigned(found[0], NOW)).toBe(false)
   })
 })
 
 describe('isSkattekontoPaymentSigned', () => {
-  const SIGNED_OR_EXECUTED = ['awaiting_signature', 'awaiting_second_signer', 'accepted', 'executed']
-
-  it('is true for an order signed, or being signed, at the bank and for an executed one', () => {
-    for (const status of SIGNED_OR_EXECUTED) expect(isSkattekontoPaymentSigned({ status })).toBe(true)
+  it('is true for an executed order and for one signed at the bank', () => {
+    for (const status of ['awaiting_second_signer', 'accepted', 'executed']) {
+      expect(isSkattekontoPaymentSigned({ status, signing: null }, NOW)).toBe(true)
+    }
   })
 
-  it('is false for every other status: unsigned at the bank (submitted) never executes', () => {
-    const others = PAYMENT_ORDER_STATUSES.filter((status) => !SIGNED_OR_EXECUTED.includes(status))
+  it('counts a payment waiting for its BankID while that signing can still finish, or once it finished', () => {
+    expect(isSkattekontoPaymentSigned({ status: 'awaiting_signature', signing: openSigning(5) }, NOW)).toBe(true)
+    // The BankID finalised and the bank is still confirming it, at any age.
+    expect(isSkattekontoPaymentSigned({ status: 'awaiting_signature', signing: finishedSigning(8 * 24 * 60) }, NOW)).toBe(true)
+  })
+
+  it('does not count a BankID nobody finished once it can no longer finish, nor one with no signing known', () => {
+    // Abandoned, and the status sync could not read the bank to move it on.
+    expect(
+      isSkattekontoPaymentSigned({ status: 'awaiting_signature', signing: openSigning(UNANSWERED_SIGNING_MINUTES) }, NOW),
+    ).toBe(false)
+    expect(isSkattekontoPaymentSigned({ status: 'awaiting_signature', signing: [openSigning(2 * 24 * 60)] }, NOW)).toBe(false)
+    expect(isSkattekontoPaymentSigned({ status: 'awaiting_signature', signing: null }, NOW)).toBe(false)
+  })
+
+  it('is false for every other status, whatever its signing: unsigned at the bank (submitted) never executes', () => {
+    const signedOrExecuted: readonly string[] = ['awaiting_signature', 'awaiting_second_signer', 'accepted', 'executed']
+    const others = PAYMENT_ORDER_STATUSES.filter((status) => !signedOrExecuted.includes(status))
     expect(others).toEqual(['draft', 'approved', 'submitted', 'rejected', 'cancelled', 'failed'])
-    for (const status of others) expect(isSkattekontoPaymentSigned({ status })).toBe(false)
+    for (const status of others) {
+      expect(isSkattekontoPaymentSigned({ status, signing: null }, NOW)).toBe(false)
+      expect(isSkattekontoPaymentSigned({ status, signing: openSigning(1) }, NOW)).toBe(false)
+    }
   })
 })
 
 describe('skattekontoPaymentPaysDeclaration', () => {
-  const signed = (amount: number | string) => ({ status: 'accepted', amount })
+  const signed = (amount: number | string) => ({ status: 'accepted', amount, signing: null })
 
   it('is true for a signed payment of exactly the declared amount, to the öre', () => {
-    expect(skattekontoPaymentPaysDeclaration(signed(24568), 12000 + 12568)).toBe(true)
-    expect(skattekontoPaymentPaysDeclaration(signed('1234.56'), 1234.56)).toBe(true)
+    expect(skattekontoPaymentPaysDeclaration(signed(24568), 12000 + 12568, NOW)).toBe(true)
+    expect(skattekontoPaymentPaysDeclaration(signed('1234.56'), 1234.56, NOW)).toBe(true)
   })
 
   it('is true for every signed or executed status', () => {
-    for (const status of ['awaiting_signature', 'awaiting_second_signer', 'accepted', 'executed']) {
-      expect(skattekontoPaymentPaysDeclaration({ status, amount: '24568.00' }, 24568)).toBe(true)
+    for (const status of ['awaiting_second_signer', 'accepted', 'executed']) {
+      expect(skattekontoPaymentPaysDeclaration({ status, amount: '24568.00', signing: null }, 24568, NOW)).toBe(true)
     }
+    expect(skattekontoPaymentPaysDeclaration({ status: 'awaiting_signature', amount: '24568.00', signing: openSigning(5) }, 24568, NOW)).toBe(
+      true,
+    )
   })
 
-  it('is false for the exact amount at the bank unsigned, or claimed for signing and not signed yet', () => {
-    expect(skattekontoPaymentPaysDeclaration({ status: 'submitted', amount: '24568.00' }, 24568)).toBe(false)
-    expect(skattekontoPaymentPaysDeclaration({ status: 'approved', amount: '24568.00' }, 24568)).toBe(false)
+  it('is false for the exact amount unsigned: at the bank, claimed for signing, or a BankID left unfinished', () => {
+    expect(skattekontoPaymentPaysDeclaration({ status: 'submitted', amount: '24568.00', signing: null }, 24568, NOW)).toBe(false)
+    expect(skattekontoPaymentPaysDeclaration({ status: 'approved', amount: '24568.00', signing: null }, 24568, NOW)).toBe(false)
+    expect(
+      skattekontoPaymentPaysDeclaration(
+        { status: 'awaiting_signature', amount: '24568.00', signing: openSigning(UNANSWERED_SIGNING_MINUTES + 30) },
+        24568,
+        NOW,
+      ),
+    ).toBe(false)
   })
 
   it('is false for a larger payment: it may be another declaration due the same day', () => {
-    expect(skattekontoPaymentPaysDeclaration(signed(60000), 24568)).toBe(false)
+    expect(skattekontoPaymentPaysDeclaration(signed(60000), 24568, NOW)).toBe(false)
   })
 
   it('is false for a smaller payment and for a declaration asking for nothing', () => {
-    expect(skattekontoPaymentPaysDeclaration(signed(24567.99), 24568)).toBe(false)
-    expect(skattekontoPaymentPaysDeclaration(signed(0), 0)).toBe(false)
+    expect(skattekontoPaymentPaysDeclaration(signed(24567.99), 24568, NOW)).toBe(false)
+    expect(skattekontoPaymentPaysDeclaration(signed(0), 0, NOW)).toBe(false)
   })
 })

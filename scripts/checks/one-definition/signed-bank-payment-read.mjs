@@ -9,7 +9,8 @@ export default {
     'lib/payments/orders/status.ts',
     // isSkattekontoPaymentSigned: the same reading for a payment to the
     // skattekonto, which has no invoice to read it by. Only a signed or
-    // executed one pays a declaration; one at the bank unsigned never executes.
+    // executed one pays a declaration (a BankID nobody finished only while it
+    // can, skattekonto-underway.ts); one at the bank unsigned never executes.
     'lib/payments/orders/skattekonto-day.ts',
   ],
 }
