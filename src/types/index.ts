@@ -1424,6 +1424,12 @@ export interface SalesOrder {
   total: number
   your_reference: string | null
   our_reference: string | null
+  /**
+   * Märkning for the order's invoices: copied from the offert or proforma it
+   * was converted from, or set on the order. Null leaves each invoice to the
+   * customer card's (lib/customers/invoice-marking.ts).
+   */
+  invoice_marking: string | null
   notes: string | null
   default_dimensions: Record<string, string>
   confirmed_at: string | null

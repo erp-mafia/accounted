@@ -75,6 +75,7 @@ function makeOrder(overrides: Partial<SalesOrder> = {}): SalesOrder {
     total: 1250,
     your_reference: null,
     our_reference: null,
+    invoice_marking: null,
     notes: null,
     default_dimensions: {},
     confirmed_at: '2026-09-01T00:00:00Z',
@@ -208,6 +209,20 @@ describe('gnubok_get_sales_order', () => {
     expect((result.invoices as Record<string, unknown>[])[0]).toMatchObject({ invoice_id: 'inv-1', status: 'draft' })
   })
 
+  it("returns the order's Märkning, null when it states none", async () => {
+    for (const marking of ['PO-4711', null]) {
+      vi.mocked(loadSalesOrder).mockResolvedValue({ ok: true, order: makeOrder({ invoice_marking: marking }) })
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: [] })
+
+      const result = (await byName('gnubok_get_sales_order').execute(
+        { sales_order_id: ORDER_ID }, 'company-1', 'user-1', supabase as never,
+      )) as Record<string, unknown>
+
+      expect(result.invoice_marking).toBe(marking)
+    }
+  })
+
   it('maps SALES_ORDER_NOT_FOUND onto a not-found error with a remediation hint', async () => {
     vi.mocked(loadSalesOrder).mockResolvedValue({ ok: false, code: 'SALES_ORDER_NOT_FOUND' })
     await expect(
@@ -268,6 +283,26 @@ describe('gnubok_create_sales_order', () => {
         'company-1', 'user-1', supabase as never,
       ),
     ).rejects.toThrow(/INVOICE_CREATE_VAT_RULE_VIOLATION/)
+  })
+
+  it('stages the Märkning for the order, where the commit re-validates it', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: makeCustomer({ id: CUSTOMER_ID, customer_type: 'swedish_business', vat_number_validated: false }) })
+    enqueue({ data: { id: 'op-1' } }) // pending_operations insert
+
+    const result = (await byName('gnubok_create_sales_order').execute(
+      {
+        customer_id: CUSTOMER_ID,
+        invoice_marking: 'PO-4711',
+        items: [{ description: 'Konsulttimmar', quantity: 10, unit: 'tim', unit_price: 100 }],
+      },
+      'company-1', 'user-1', supabase as never,
+    )) as { staged: boolean }
+
+    expect(result.staged).toBe(true)
+    const insert = findCall('pending_operations', 'insert')?.[0] as { operation_type: string; params: Record<string, unknown> }
+    expect(insert.operation_type).toBe('create_sales_order')
+    expect(insert.params.invoice_marking).toBe('PO-4711')
   })
 })
 
