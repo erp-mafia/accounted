@@ -73,12 +73,15 @@ export function MailboxList({
   doors,
   receiveOnly = false,
   connectVariant,
+  connectLabel,
 }: {
   doors?: readonly MailboxDoor[]
   /** Leaves out the sending line of Kivra and Billo: the list is only about what comes in. */
   receiveOnly?: boolean
   /** The look of the buttons that connect Kivra and Billo. */
   connectVariant?: 'default' | 'outline'
+  /** The words on the buttons that connect Kivra and Billo; each row's own when left out. */
+  connectLabel?: string
 } = {}) {
   const t = useTranslations('inkorg')
   const digital = useDigitalMailboxes()
@@ -109,9 +112,9 @@ export function MailboxList({
         ) : entry.door === 'mailbox' ? (
           <GmailRow key={entry.door} />
         ) : entry.door === 'kivra' ? (
-          <KivraRow key={entry.door} {...digital.rowProps('kivra')} receiveOnly={receiveOnly} connectVariant={connectVariant} />
+          <KivraRow key={entry.door} {...digital.rowProps('kivra')} receiveOnly={receiveOnly} connectVariant={connectVariant} connectLabel={connectLabel} />
         ) : entry.door === 'billo' ? (
-          <BilloRow key={entry.door} {...digital.rowProps('billo')} receiveOnly={receiveOnly} connectVariant={connectVariant} />
+          <BilloRow key={entry.door} {...digital.rowProps('billo')} receiveOnly={receiveOnly} connectVariant={connectVariant} connectLabel={connectLabel} />
         ) : (
           <MailboxRow key={entry.door} door={entry.door}>
             <Button asChild variant="outline">
@@ -439,6 +442,8 @@ export interface DigitalRowProps {
   Row?: ComponentType<DigitalMailboxRowFrameProps>
   /** The look of the button that connects: the dialog's primary when left out, `outline` in a list of connections. */
   connectVariant?: 'default' | 'outline'
+  /** The words on the button that connects: the row's own when left out. */
+  connectLabel?: string
   /** Leaves out the sending line: only what comes in is shown. */
   receiveOnly?: boolean
 }
@@ -733,7 +738,7 @@ function DigitalRowMenu({ provider, onDisconnect }: { provider: DigitalMailboxPr
  * in a new tab); the row waits until Kivra confirms, by its webhook, the
  * cron's lookup or "Kontrollera", and then reads the mailbox.
  */
-export function KivraRow({ slot, onConnection, reload, Row = DialogDigitalRow, connectVariant, receiveOnly = false }: DigitalRowProps) {
+export function KivraRow({ slot, onConnection, reload, Row = DialogDigitalRow, connectVariant, connectLabel, receiveOnly = false }: DigitalRowProps) {
   const actions = useDigitalMailboxActions('kivra', { onConnection, reload })
   const { t, busy } = actions
   // Kivra's activation page from the last connect answer, reopened without another round trip.
@@ -789,7 +794,7 @@ export function KivraRow({ slot, onConnection, reload, Row = DialogDigitalRow, c
     return (
       <Row door="kivra" extra={sending}>
         <Button variant={connectVariant} loading={busy === 'connect'} onClick={() => void connect()}>
-          {t('connect_kivra')}
+          {connectLabel ?? t('connect_kivra')}
         </Button>
       </Row>
     )
@@ -821,7 +826,7 @@ export function KivraRow({ slot, onConnection, reload, Row = DialogDigitalRow, c
  * Billo: the company's business mailbox is created from here, with the
  * admin (BankID) as its representative, and read from then on.
  */
-export function BilloRow({ slot, onConnection, reload, Row = DialogDigitalRow, connectVariant, receiveOnly = false }: DigitalRowProps) {
+export function BilloRow({ slot, onConnection, reload, Row = DialogDigitalRow, connectVariant, connectLabel, receiveOnly = false }: DigitalRowProps) {
   const actions = useDigitalMailboxActions('billo', { onConnection, reload })
   const { t, busy } = actions
   const [creating, setCreating] = useState(false)
@@ -842,7 +847,7 @@ export function BilloRow({ slot, onConnection, reload, Row = DialogDigitalRow, c
     return (
       <Row door="billo" extra={sending}>
         <Button variant={connectVariant} onClick={() => setCreating(true)}>
-          {t('billo_create')}
+          {connectLabel ?? t('billo_create')}
         </Button>
         <BilloCreateDialog
           open={creating}
