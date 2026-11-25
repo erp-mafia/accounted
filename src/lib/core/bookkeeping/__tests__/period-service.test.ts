@@ -29,6 +29,14 @@ function makeClient() {
   }
 }
 
+// The service-role client the period decisions write audit_log with: the
+// table has no INSERT policy, so the session client above is refused there.
+const { serviceFrom, serviceInsert } = vi.hoisted(() => ({ serviceFrom: vi.fn(), serviceInsert: vi.fn() }))
+vi.mock('@/lib/auth/api-keys', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/auth/api-keys')>()),
+  createServiceClientNoCookies: () => ({ from: serviceFrom }),
+}))
+
 import {
   lockPeriod,
   unlockPeriod,
@@ -40,12 +48,15 @@ import {
   resolvePeriodStatusForDate,
 } from '../period-service'
 import { getStructuredError } from '@/lib/errors/get-structured-error'
+import { registerObservabilitySink, resetObservabilitySink } from '@/lib/observability/sink'
 
 beforeEach(() => {
   vi.clearAllMocks()
   eventBus.clear()
   resultIdx = 0
   results = []
+  serviceInsert.mockResolvedValue({ data: null, error: null })
+  serviceFrom.mockImplementation(() => ({ insert: serviceInsert }))
 })
 
 describe('lockPeriod', () => {
@@ -613,7 +624,6 @@ describe('markPeriodClosedExternally', () => {
       { count: 0, data: null, error: null },  // guard leg 1: untriaged count
       { count: 0, data: null, error: null },  // guard leg 2: business-unbooked count
       { data: updated, error: null },         // update
-      { data: null, error: null },            // audit_log insert
     ]
 
     const supabase = makeClient()
@@ -634,7 +644,6 @@ describe('markPeriodClosedExternally', () => {
       { count: 0, data: null, error: null },  // guard leg 1: untriaged count
       { count: 0, data: null, error: null },  // guard leg 2: business-unbooked count
       { data: updated, error: null },         // update
-      { data: null, error: null },            // audit_log insert
     ]
 
     const supabase = makeClient()
@@ -667,7 +676,6 @@ describe('markPeriodClosedExternally', () => {
       { count: 0, data: null, error: null },          // guard leg 1: untriaged count
       { count: 0, data: null, error: null },          // guard leg 2: business-unbooked count
       { data: updated, error: null },                 // update
-      { data: null, error: null },                    // audit_log insert
     ]
 
     const supabase = makeClient()
@@ -834,7 +842,6 @@ describe('reopenExternallyClosedPeriod', () => {
     results = [
       { data: period, error: null },    // fetch
       { data: reopened, error: null },  // update
-      { data: null, error: null },      // audit_log insert
     ]
 
     const handler = vi.fn()
@@ -847,8 +854,10 @@ describe('reopenExternallyClosedPeriod', () => {
     expect(result.closed_externally).toBe(false)
     expect(result.locked_at).toBeNull()
     expect(handler).toHaveBeenCalledOnce()
-    // Three table touches: fetch, update, audit_log.
-    expect(supabase.from).toHaveBeenCalledWith('audit_log')
+    // The session client reads and updates the period; the audit row goes
+    // through the service role (audit_log has no INSERT policy).
+    expect(supabase.from).toHaveBeenCalledTimes(2)
+    expect(serviceFrom).toHaveBeenCalledWith('audit_log')
   })
 
   it('rejects an open period', async () => {
@@ -904,7 +913,6 @@ describe('unlockPeriod', () => {
     results = [
       { data: period, error: null },
       { data: unlocked, error: null },
-      { data: null, error: null }, // audit_log insert
     ]
 
     const handler = vi.fn()
@@ -1306,9 +1314,182 @@ describe('SIE import hold refusals', () => {
     results = [
       { data: period, error: null },
       { data: { ...period, locked_at: null }, error: null },
-      { data: null, error: null }, // audit_log
     ]
     const result = await unlockPeriod(makeClient() as never, 'company-1', 'user-1', 'fp-1')
     expect(result.locked_at).toBeNull()
+  })
+})
+
+// ============================================================
+// The audit_log row of a period decision (unlock, klarmarkera, its undo)
+// ============================================================
+
+describe('period decisions: the audit_log row', () => {
+  type QueuedResult = (typeof results)[number]
+
+  // Each decision as the dashboard runs it: on the caller's session client,
+  // which RLS refuses on audit_log (no INSERT policy, 42501). `update`
+  // replaces the period update's answer.
+  const decisions = [
+    {
+      name: 'unlockPeriod',
+      description: /^Period unlocked: /,
+      oldState: { locked_at: '2025-01-10T00:00:00Z' },
+      newState: { locked_at: null },
+      run: (supabase: ReturnType<typeof makeClient>, update?: QueuedResult) => {
+        const period = makeFiscalPeriod({ id: 'fp-1', locked_at: '2025-01-10T00:00:00Z', is_closed: false })
+        results = [
+          { data: period, error: null }, // fetch
+          update ?? { data: { ...period, locked_at: null }, error: null }, // update
+        ]
+        return unlockPeriod(supabase as never, 'company-1', 'user-1', 'fp-1')
+      },
+    },
+    {
+      name: 'markPeriodClosedExternally',
+      description: /^Period marked as closed in previous system: /,
+      oldState: { is_closed: false, closed_at: null, locked_at: null },
+      newState: {
+        is_closed: true,
+        closed_at: '2026-11-25T10:00:00Z',
+        closed_externally: true,
+        locked_at: '2026-11-25T10:00:00Z',
+      },
+      run: (supabase: ReturnType<typeof makeClient>, update?: QueuedResult) => {
+        const period = makeFiscalPeriod({ id: 'fp-1', locked_at: null, is_closed: false, period_end: '2024-12-31' })
+        results = [
+          { data: period, error: null }, // fetch
+          { count: 3, data: null, error: null }, // imported-verifikat count (migrated year)
+          { count: 0, data: null, error: null }, // guard leg 1: untriaged count
+          { count: 0, data: null, error: null }, // guard leg 2: business-unbooked count
+          update ?? {
+            data: {
+              ...period,
+              is_closed: true,
+              closed_at: '2026-11-25T10:00:00Z',
+              closed_externally: true,
+              locked_at: '2026-11-25T10:00:00Z',
+            },
+            error: null,
+          }, // update
+        ]
+        return markPeriodClosedExternally(supabase as never, 'company-1', 'user-1', 'fp-1')
+      },
+    },
+    {
+      name: 'reopenExternallyClosedPeriod',
+      description: /^Period reopened, previous-system close undone: /,
+      oldState: {
+        is_closed: true,
+        closed_at: '2026-08-27T09:20:13Z',
+        closed_externally: true,
+        locked_at: '2026-08-27T09:20:13Z',
+      },
+      newState: { is_closed: false, closed_at: null, closed_externally: false, locked_at: null },
+      run: (supabase: ReturnType<typeof makeClient>, update?: QueuedResult) => {
+        const period = makeFiscalPeriod({
+          id: 'fp-1',
+          is_closed: true,
+          closed_at: '2026-08-27T09:20:13Z',
+          closed_externally: true,
+          locked_at: '2026-08-27T09:20:13Z',
+          closing_entry_id: null,
+        })
+        results = [
+          { data: period, error: null }, // fetch
+          update ?? {
+            data: { ...period, is_closed: false, closed_at: null, closed_externally: false, locked_at: null },
+            error: null,
+          }, // update
+        ]
+        return reopenExternallyClosedPeriod(supabase as never, 'company-1', 'user-1', 'fp-1')
+      },
+    },
+  ]
+
+  /** Collect what reaches the observability sink (error-level log records). */
+  function captureReports(): Array<{ error: unknown; context: Record<string, unknown> }> {
+    const reported: Array<{ error: unknown; context: Record<string, unknown> }> = []
+    registerObservabilitySink({
+      name: 'test',
+      captureException: (error, context) => {
+        reported.push({ error, context })
+      },
+      captureMessage: () => {},
+      flush: async () => true,
+    })
+    return reported
+  }
+
+  it.each(decisions)('$name writes its row with the service role, not the session client', async (d) => {
+    const supabase = makeClient()
+    await d.run(supabase)
+
+    expect(supabase.from).not.toHaveBeenCalledWith('audit_log')
+    expect(serviceFrom).toHaveBeenCalledWith('audit_log')
+    expect(serviceInsert).toHaveBeenCalledTimes(1)
+    const row = serviceInsert.mock.calls[0][0]
+    // The company, period and person are the ones the session client just
+    // read and updated under the caller's RLS.
+    expect(row).toMatchObject({
+      user_id: 'user-1',
+      company_id: 'company-1',
+      action: 'UPDATE',
+      table_name: 'fiscal_periods',
+      record_id: 'fp-1',
+      old_state: d.oldState,
+      new_state: d.newState,
+    })
+    expect(row.description).toMatch(d.description)
+  })
+
+  // The row is written only after the caller's own client has changed the
+  // period. An update that RLS or the concurrency guard turns into no row
+  // (PGRST116 from .single()) refuses the decision and writes nothing.
+  it.each(decisions)('$name writes no row when its update changes nothing', async (d) => {
+    const refused = {
+      data: null,
+      error: { code: 'PGRST116', message: 'JSON object requested, multiple (or no) rows returned' },
+    }
+
+    await expect(d.run(makeClient(), refused)).rejects.toThrow()
+    expect(serviceFrom).not.toHaveBeenCalled()
+  })
+
+  it.each(decisions)('$name keeps the change when the row is refused, and reports the refusal', async (d) => {
+    serviceInsert.mockResolvedValue({
+      data: null,
+      error: { code: '42501', message: 'new row violates row-level security policy for table "audit_log"' },
+    })
+    const reported = captureReports()
+    try {
+      const result = await d.run(makeClient())
+
+      expect(result.id).toBe('fp-1')
+      expect(reported).toHaveLength(1)
+      expect(reported[0].context).toMatchObject({
+        logLevel: 'error',
+        code: '42501',
+        companyId: 'company-1',
+        fiscalPeriodId: 'fp-1',
+      })
+      expect((reported[0].error as Error).message).toContain('row-level security')
+    } finally {
+      resetObservabilitySink()
+    }
+  })
+
+  it('reports a write that throws, and still answers the change', async () => {
+    serviceInsert.mockRejectedValue(new Error('fetch failed'))
+    const reported = captureReports()
+    try {
+      const result = await decisions[1].run(makeClient())
+
+      expect(result.closed_externally).toBe(true)
+      expect(reported).toHaveLength(1)
+      expect(reported[0].context).toMatchObject({ logLevel: 'error', companyId: 'company-1', fiscalPeriodId: 'fp-1' })
+    } finally {
+      resetObservabilitySink()
+    }
   })
 })
