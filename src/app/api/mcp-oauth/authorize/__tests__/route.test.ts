@@ -230,7 +230,9 @@ function runConsentScript(html: string) {
     getElementById: (id: string) => {
       if (id === 'consent-form') return form
       if (id === 'sod-note') return sodNote
-      if (id === 'select-read' || id === 'select-all' || id === 'select-none') return button(id)
+      if (id === 'select-read' || id === 'select-all' || id === 'select-none') {
+        return html.includes(`id="${id}"`) ? button(id) : null
+      }
       return null
     },
   }
@@ -980,12 +982,16 @@ describe('approve is never pre-ticked (issue #3408, product decision 2026-10-03,
       const html = await (await GET(new Request(buildAuthorizeUrl({ ...params, scope })))).text()
       expect(checkboxFor(html, 'pending_operations:approve')).not.toContain('checked')
       expect(checkedScopes(html)).toEqual([])
-      // Says nothing is pre-selected instead of claiming read is, and opens
-      // the fold so the one box to tick is in view.
+      // Says nothing is pre-selected instead of claiming read is. The one box
+      // to tick is outside the fold, and a fold with nothing left in it is
+      // not rendered at all.
       expect(html).toContain('Inget är förvalt: välj själv nedan vad')
-      expect(html).toContain('Inget förvalt &middot; välj nedan')
       expect(html).not.toContain('Endast läsbehörigheter är förvalda')
-      expect(html).toContain('<details class="scopes-details" open>')
+      expect(html).not.toContain('<details')
+      expect(html).toMatch(/<li class="warn-choice">\s*<input[^>]*value="pending_operations:approve"/)
+      // The inline script runs without the fold's shortcut buttons.
+      const page = runConsentScript(html)
+      page.set('pending_operations:approve', true)
     }
 
     // Allow with nothing ticked: no read default to fall back on, and the
@@ -1016,14 +1022,37 @@ describe('approve is never pre-ticked (issue #3408, product decision 2026-10-03,
     expect(html).toContain('<details class="scopes-details">')
   })
 
-  it('labels the approve row Agentförslag with a godkänn tag', async () => {
+  it('shows the approve box unfolded, in the line that explains it, with the other permissions folded', async () => {
     const html = await (await GET(new Request(buildAuthorizeUrl(params)))).text()
-    const approveRow = html.match(
-      /<div class="scope-row write">\s*<input[^>]*value="pending_operations:approve"[^>]*>[\s\S]*?<\/div>/,
-    )?.[0]
-    expect(approveRow).toBeDefined()
-    expect(approveRow).toContain('<span class="scope-name">Agentförslag</span>')
-    expect(approveRow).toContain('<span class="scope-tag">godkänn</span>')
+    const fold = html.match(/<details class="scopes-details"[^>]*>[\s\S]*?<\/details>/)?.[0]
+    expect(fold).toBeDefined()
+    expect(fold).toContain('value="transactions:write"')
+    expect(fold).toContain('value="pending_operations:read"')
+    expect(fold).not.toContain('value="pending_operations:approve"')
+
+    const approveLine = html.match(/<li class="warn-choice">[\s\S]*?<\/li>/)?.[0]
+    expect(approveLine).toBeDefined()
+    const box = checkboxFor(approveLine!, 'pending_operations:approve')
+    expect(box).toBeDefined()
+    expect(box).toContain('name="scopes"')
+    expect(box).not.toContain('checked')
+    const id = box!.match(/id="([^"]*)"/)![1]
+    expect(approveLine).toContain(
+      `<label for="${id}"><strong>Godkänn:</strong> Claude får godkänna sina egna förslag och då bokförs det utan din granskning.</label>`,
+    )
+    // One approve box on the page, so the form can never post it twice.
+    expect(html.match(/value="pending_operations:approve"/g)).toHaveLength(1)
+  })
+
+  it('lets the folded row be selected and copied', async () => {
+    const html = await (await GET(new Request(buildAuthorizeUrl(params)))).text()
+    const summaryCss = html.match(/\.scopes-details summary \{[^}]*\}/)?.[0]
+    expect(summaryCss).toBeDefined()
+    expect(summaryCss).not.toContain('user-select')
+  })
+
+  it('keeps Agentförslag as the name of the fold group, without staging jargon', async () => {
+    const html = await (await GET(new Request(buildAuthorizeUrl(params)))).text()
     expect(html).toContain('<div class="scope-group-title">Agentförslag</div>')
     expect(html).not.toMatch(/stagade operationer/i)
   })
