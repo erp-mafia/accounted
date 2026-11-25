@@ -103,6 +103,76 @@ export function readVerifikatQuerySearch(search: string, scope: VerifikatSearchS
 }
 
 /**
+ * What a needle is read as, for a log line: the readings, never the needle.
+ * The text match always applies.
+ */
+export function verifikatSearchReadings(needle: VerifikatSearch): string[] {
+  return [
+    'text',
+    ...(needle.voucher ? ['voucher'] : []),
+    ...(needle.account ? ['account'] : []),
+    ...(needle.amount !== null ? ['amount'] : []),
+    ...(needle.dates ? ['date'] : []),
+  ]
+}
+
+/**
+ * The ILIKE pattern of the text match. Escapes LIKE wildcards (\ % _) so they
+ * match literally, and caps the needle length (200 chars): both in
+ * escapeLikePattern. The cap bounds DB work against oversized input
+ * (compliance A.8.28 / ASVS V1.2.5); escaping keeps "50%" from over-matching.
+ */
+function textPattern(search: string): string {
+  return `%${escapeLikePattern(search.trim())}%`
+}
+
+/** applyVerifikatSearch's search as the parameters of list_verifikat_by_amount. */
+export interface VerifikatSearchParams {
+  p_search_pattern: string | null
+  p_search_voucher_series: string | null
+  p_search_voucher_number: number | null
+  p_search_account: string | null
+  p_search_amount: number | null
+  p_search_date_from: string | null
+  p_search_date_to: string | null
+}
+
+/**
+ * The same search as applyVerifikatSearch, for an RPC that filters verifikat
+ * in SQL (list_verifikat_by_amount): each reading of `needle` is its own
+ * parameter, NULL when the needle is not read that way, and the RPC puts
+ * every reading as an arm next to the text match, as applyVerifikatSearch
+ * does. `needle` is the reading from readVerifikatQuerySearch, so the RPC and
+ * the direct query read a needle alike. No search: every parameter NULL.
+ *
+ * The pattern is the one PostgREST hands Postgres for the direct query:
+ * PostgREST reads `*` in a like pattern as `%`, so "A*B" matches "A%B" there,
+ * and so here.
+ */
+export function verifikatSearchParams(search: string | null, needle: VerifikatSearch | null): VerifikatSearchParams {
+  if (!search || !needle) {
+    return {
+      p_search_pattern: null,
+      p_search_voucher_series: null,
+      p_search_voucher_number: null,
+      p_search_account: null,
+      p_search_amount: null,
+      p_search_date_from: null,
+      p_search_date_to: null,
+    }
+  }
+  return {
+    p_search_pattern: textPattern(search).replace(/\*/g, '%'),
+    p_search_voucher_series: needle.voucher?.series ?? null,
+    p_search_voucher_number: needle.voucher?.number ?? null,
+    p_search_account: needle.account,
+    p_search_amount: needle.amount,
+    p_search_date_from: needle.dates?.from ?? null,
+    p_search_date_to: needle.dates?.to ?? null,
+  }
+}
+
+/**
  * The PostgREST filters applyVerifikatSearch needs. It takes any builder that
  * has them and hands the same builder type back; the constraint names the
  * methods only (see excludeCreditNotes, lib/bookkeeping/credit-note-state.ts,
@@ -152,11 +222,8 @@ export function applyVerifikatSearch<Q extends { [K in keyof VerifikatSearchQuer
   needle: VerifikatSearch,
 ): Q {
   let q = query as unknown as VerifikatSearchQuery
-  // Escape LIKE wildcards (\ % _) so they match literally, and cap the needle
-  // length (200 chars): both in escapeLikePattern. The cap bounds DB work
-  // against oversized input (compliance A.8.28 / ASVS V1.2.5); escaping keeps
-  // "50%" from over-matching. Supabase parameterises the value.
-  const pattern = `%${escapeLikePattern(search.trim())}%`
+  // Supabase parameterises the value.
+  const pattern = textPattern(search)
   const arms: string[] = []
   // The first thing a user searches for is the voucher's own label ("A209").
   // A description-only match never finds it (only OTHER vouchers that
