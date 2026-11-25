@@ -15,6 +15,11 @@
 --
 -- Body copied from 20261101180000_normalize_iban.sql; only the cash_accounts
 -- claim predicate changes. CREATE OR REPLACE keeps the service-only grants.
+--
+-- Version 20261125120100: it merged as 20261125120000, a version another
+-- migration holds, so production never applied it.
+--
+-- pg-test: covered-by tests/pg/bank-session-attachment.pg.test.ts
 
 CREATE OR REPLACE FUNCTION public.attach_shared_bank_session(p_company_id uuid, p_user_id uuid, p_source_connection_id uuid)
  RETURNS jsonb
