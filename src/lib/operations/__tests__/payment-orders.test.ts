@@ -499,6 +499,7 @@ describe('payments.usage', () => {
       extra_offered: false,
       billed_above_included: false,
       subscription_required: false,
+      subscription_starting: false,
       unit_price_ore: 200,
       remaining_payments: 8,
       extra_payments: 0,

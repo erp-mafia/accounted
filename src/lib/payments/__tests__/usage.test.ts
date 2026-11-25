@@ -51,6 +51,22 @@ describe('getBankPaymentsUsage', () => {
     }
   })
 
+  it('does not ask a company whose subscription waits for its first charge to start one', async () => {
+    process.env.USAGE_BILLING_KINDS = 'bank_payment'
+    try {
+      // Started during the product trial: Stripe holds it trialing until the deferred first charge.
+      const db = createTableMockSupabase({
+        payment_orders: { data: Array.from({ length: 10 }, (_, i) => ({ id: `o${i}`, cash_account_id: 'a1' })) },
+        company_subscriptions: { data: { status: 'trialing', stripe_customer_id: 'cus_1', stripe_subscription_id: 'sub_1' } },
+        company_settings: { data: { is_sandbox: false } },
+      })
+      const usage = await getBankPaymentsUsage(db.supabase as unknown as SupabaseClient, COMPANY, '2026-10')
+      expect(usage).toMatchObject({ cap_payments: 10, extra_offered: false, billed_above_included: false, subscription_required: false, subscription_starting: true, remaining_payments: 0 })
+    } finally {
+      delete process.env.USAGE_BILLING_KINDS
+    }
+  })
+
   it('moves the stop to the safety ceiling and names the unit price once an admin accepted', async () => {
     process.env.USAGE_BILLING_KINDS = 'bank_payment'
     try {
@@ -90,6 +106,7 @@ describe('getBankPaymentsUsage', () => {
       extra_offered: false,
       billed_above_included: false,
       subscription_required: false,
+      subscription_starting: false,
       unit_price_ore: 200,
       remaining_payments: 7,
       extra_payments: 0,

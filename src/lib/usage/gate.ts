@@ -3,7 +3,8 @@
  * ahead. While a kind is billed (USAGE_BILLING_KINDS) and what it includes
  * is used up (the month's amount, or for signed documents the company's
  * first in all), the action is refused: with USAGE_SUBSCRIPTION_REQUIRED for
- * a company nobody pays for (paying.ts), else with USAGE_LIMIT_REACHED until
+ * a company nobody pays for (paying.ts), USAGE_SUBSCRIPTION_STARTING for one
+ * whose subscription waits for its first charge, else with USAGE_LIMIT_REACHED until
  * the company asks for more (requests.ts) and an operator opens the charge for
  * it (a usage_consents row, consent.ts); after that it goes ahead and costs
  * the unit price. A kind that is not billed is never stopped here: its own rules
@@ -21,7 +22,7 @@ import { liveAccountKeys, readLiveBankAccounts } from './bank-accounts'
 import { consentCovers, readOpenConsents } from './consent'
 import { countCompanyUsage } from './counters'
 import { billedUsageKinds, formatOre, USAGE_GAUGE_KINDS, USAGE_INVOICE_LABELS, USAGE_PRICES, USAGE_UNITS_SV, type UsageKind } from './kinds'
-import { readCompanyPays } from './paying'
+import { readCompanyPayerState } from './paying'
 
 type Refusal = Extract<OperationOutcome<never>, { ok: false }>
 
@@ -64,6 +65,11 @@ export function usageSubscriptionRequiredMessage(details: UsageLimitDetails): st
   return `${priceSentence(details)} och kräver ett abonnemang. Starta det under Inställningar, Abonnemang.`
 }
 
+/** The refusal for a company whose subscription, started during the trial, waits for its first charge (paying.ts). */
+export function usageSubscriptionStartingMessage(details: UsageLimitDetails): string {
+  return `${priceSentence(details)} och går att begära när abonnemanget har startat efter provperioden.`
+}
+
 /**
  * The refusal for `requested` more units of a kind, or null when they may go
  * ahead. `used` is counted here unless the caller passes it (live bank
@@ -93,7 +99,11 @@ export async function usageGateRefusal(
       : await countCompanyUsage(service, companyId, kind, period))
   if (used + requested <= included) return null
   const details: UsageLimitDetails = { kind, period, used, included, requested, unit_price_ore: price.unitPriceOre ?? 0 }
-  if (!(await readCompanyPays(service, companyId))) {
+  const payer = await readCompanyPayerState(service, companyId)
+  if (!payer.payer && payer.subscriptionStarting) {
+    return { ok: false, code: 'USAGE_SUBSCRIPTION_STARTING', details: { ...details }, messageSv: usageSubscriptionStartingMessage(details) }
+  }
+  if (!payer.payer) {
     return { ok: false, code: 'USAGE_SUBSCRIPTION_REQUIRED', details: { ...details }, messageSv: usageSubscriptionRequiredMessage(details) }
   }
   if (consentCovers((await readOpenConsents(service, companyId)).get(kind), kind)) return null

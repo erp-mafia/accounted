@@ -1117,7 +1117,7 @@ Example response `200`:
 **Bank payments sent and accounts used in a month, against the monthly cap.**
 `scope:suppliers:read · risk:low · idempotent`
 
-Counts the payments that reached the provider (an order with a provider payment id) and the accounts they left from, in one month in Stockholm time, against what the company may send per month. A payment counts in the month its signing sent it to the provider, not the month it was drafted. included_payments is what the month includes (10 unless raised for the company) and cap_payments the hard stop: the same number, or a higher safety ceiling once billed_above_included is true and payments above what is included cost unit_price_ore each, billed in arrears. extra_offered says that charge can be accepted; only a person with the admin role accepts it, under Settings, Billing, Usage. subscription_required says it would be, but the company has no subscription of its own (a trial or a free period) and stops at what is included until a person starts one under Settings, Billing. remaining_payments is what the month still takes, and a BankID signing that would pass the cap is refused with BANK_PAYMENTS_ALLOWANCE_EXCEEDED. Accounts are counted, not capped. Payment files are not counted. The month defaults to the current one.
+Counts the payments that reached the provider (an order with a provider payment id) and the accounts they left from, in one month in Stockholm time, against what the company may send per month. A payment counts in the month its signing sent it to the provider, not the month it was drafted. included_payments is what the month includes (10 unless raised for the company) and cap_payments the hard stop: the same number, or a higher safety ceiling once billed_above_included is true and payments above what is included cost unit_price_ore each, billed in arrears. extra_offered says that charge can be accepted; only a person with the admin role accepts it, under Settings, Billing, Usage. subscription_required says it would be, but the company has no subscription of its own (a trial or a free period) and stops at what is included until a person starts one under Settings, Billing. subscription_starting says the company has one, started during the trial, and stops at what is included until its first charge at the end of the trial; nothing is to be started. remaining_payments is what the month still takes, and a BankID signing that would pass the cap is refused with BANK_PAYMENTS_ALLOWANCE_EXCEEDED. Accounts are counted, not capped. Payment files are not counted. The month defaults to the current one.
 
 **Use when:** Before a batch of bank payments, to see how many the month still takes.
 **Do not use for:** Payment files (pain.001): they are not bank payments and are neither counted nor capped.
@@ -1144,6 +1144,7 @@ Response `200`:
     extra_offered: boolean,
     billed_above_included: boolean,
     subscription_required: boolean,
+    subscription_starting: boolean,
     unit_price_ore: number,
     remaining_payments: number,
     extra_payments: number,
@@ -1174,6 +1175,7 @@ Example response `200`:
     "extra_offered": false,
     "billed_above_included": false,
     "subscription_required": false,
+    "subscription_starting": false,
     "unit_price_ore": 200,
     "remaining_payments": 6,
     "extra_payments": 0,

@@ -4381,6 +4381,7 @@
     "usage_charge_off": "{included, plural, =0 {Costs {price} each. Ask for it and we open it.} other {Stops at #. More cost {price} each: ask for more and we open it.}}",
     "usage_charge_on": "{included, plural, =0 {Open since {date}: {price} each.} other {Open since {date}: {price} each above #.}}",
     "usage_charge_needs_subscription": "{included, plural, =0 {Costs {price} each and needs a subscription.} other {Stops at #. More cost {price} each and need a subscription.}}",
+    "usage_charge_subscription_starting": "{included, plural, =0 {Costs {price} each and can be requested once your subscription has started after the trial.} other {Stops at #. More cost {price} each and can be requested once your subscription has started after the trial.}}",
     "usage_charge_request": "Ask for more"
   },
   "settings_invoice_form": {
@@ -18066,6 +18067,7 @@
     "billed_extra": "{extra, plural, one {# payment goes} other {# payments go}} above what {month} includes and {extra, plural, one {costs} other {cost}} {price} each, billed in arrears.",
     "offered_none_left": "You have used {used} of the {included} bank payments included in {month}. More cost {price} each: ask for more and we open it.",
     "subscription_none_left": "You have used {used} of the {included} bank payments included in {month}. More cost {price} each and need a subscription.",
+    "subscription_starting_none_left": "You have used {used} of the {included} bank payments included in {month}. More cost {price} each and can be requested once your subscription has started after the trial.",
     "start_subscription": "Start a subscription"
   },
   "payments_page": {

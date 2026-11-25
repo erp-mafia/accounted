@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createTableMockSupabase } from '@/tests/helpers'
-import { readByraAgreements, readCompanyPayer, readCompanyPays, subscriptionPays } from '../paying'
+import { readByraAgreements, readCompanyPayer, readCompanyPayerState, readCompanyPays, subscriptionPays, subscriptionStarting } from '../paying'
 
 const COMPANY = 'c0000000-0000-4000-8000-000000000001'
 const ACTIVE = { isSandbox: false, status: 'active', customerId: 'cus_1', subscriptionId: 'sub_1' }
@@ -13,6 +13,38 @@ describe('subscriptionPays', () => {
     expect(subscriptionPays({ ...ACTIVE, subscriptionId: null })).toBe(false)
     expect(subscriptionPays({ ...ACTIVE, customerId: null })).toBe(false)
     expect(subscriptionPays({ ...ACTIVE, isSandbox: true })).toBe(false)
+  })
+})
+
+describe('subscriptionStarting', () => {
+  it('names only a trialing subscription of its own, outside a sandbox: one started during the trial, before its first charge', () => {
+    const starting = { ...ACTIVE, status: 'trialing' }
+    expect(subscriptionStarting(starting)).toBe(true)
+    for (const status of ['active', 'past_due', 'canceled', null]) expect(subscriptionStarting({ ...starting, status })).toBe(false)
+    expect(subscriptionStarting({ ...starting, subscriptionId: null })).toBe(false)
+    expect(subscriptionStarting({ ...starting, customerId: null })).toBe(false)
+    expect(subscriptionStarting({ ...starting, isSandbox: true })).toBe(false)
+  })
+})
+
+describe('readCompanyPayerState', () => {
+  it('has no payer for a subscription waiting for its first charge, and says it is starting', async () => {
+    const db = createTableMockSupabase({
+      company_subscriptions: { data: { status: 'trialing', stripe_customer_id: 'cus_1', stripe_subscription_id: 'sub_1' } },
+      company_settings: { data: { is_sandbox: false } },
+    })
+    expect(await readCompanyPayerState(db.supabase as unknown as SupabaseClient, COMPANY)).toEqual({ payer: null, subscriptionStarting: true })
+    expect(await readCompanyPayer(db.supabase as unknown as SupabaseClient, COMPANY)).toBeNull()
+  })
+
+  it('says nothing is starting for an active subscription or for none', async () => {
+    const active = createTableMockSupabase({
+      company_subscriptions: { data: { status: 'active', stripe_customer_id: 'cus_1', stripe_subscription_id: 'sub_1' } },
+      company_settings: { data: { is_sandbox: false } },
+    })
+    expect(await readCompanyPayerState(active.supabase as unknown as SupabaseClient, COMPANY)).toEqual({ payer: { kind: 'subscription' }, subscriptionStarting: false })
+    const none = createTableMockSupabase({ company_subscriptions: { data: null }, company_settings: { data: { is_sandbox: false } } })
+    expect(await readCompanyPayerState(none.supabase as unknown as SupabaseClient, COMPANY)).toEqual({ payer: null, subscriptionStarting: false })
   })
 })
 
