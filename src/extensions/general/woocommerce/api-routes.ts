@@ -77,6 +77,11 @@ const SUFFIX_MISMATCH_RESTART = {
   error_en: "The characters do not match the key. Start the connection again and remove the unused API key in the store's WooCommerce settings.",
 }
 
+const TRY_USED = {
+  error: 'Bekräftelsen för den här anslutningen har redan prövats. Starta om anslutningen och ta bort den oanvända API-nyckeln i butikens WooCommerce-inställningar.',
+  error_en: "The confirmation for this connection has already been tried. Start the connection again and remove the unused API key in the store's WooCommerce settings.",
+}
+
 const NOT_COMPLETED = {
   error: 'Kunde inte slutföra anslutningen. Försök igen.',
   error_en: 'Could not complete the connection. Please try again.',
@@ -589,19 +594,40 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
           { status: 409 },
         )
       }
+      // Tries are bounded. Where the shared rate limiter runs, it bounds them
+      // per user over the handshake window. Where none is configured (a
+      // self-host without one), each approval allows one try: the try claims
+      // the handshake's single-use state before the comparison, so tries made
+      // at once cannot multiply it, and a wrong answer parks the attempt.
+      const oneTry = !isRateLimiterConfigured()
+      if (oneTry) {
+        const { data: claimed, error: claimError } = await service
+          .from('woocommerce_connections')
+          .update({ oauth_state: null })
+          .eq('id', row.id)
+          .eq('status', 'pending')
+          .not('oauth_state', 'is', null)
+          .select('id')
+          .maybeSingle()
+        if (claimError) {
+          log.error('[woocommerce] Failed to claim a store control try', {
+            connection_id: row.id,
+            code: claimError.code,
+            message: claimError.message,
+          })
+          return NextResponse.json(NOT_COMPLETED, { status: 500 })
+        }
+        if (!claimed) return NextResponse.json({ ...TRY_USED, code: 'try_used' }, { status: 409 })
+      }
       if (!keySuffixMatches(decryptCredential(row.consumer_key_encrypted), suffix)) {
-        // The rate limiter above bounds the tries. Where none is configured
-        // (a self-host without one) nothing would, so there a wrong answer
-        // ends the attempt and guessing never pays.
-        const retryable = isRateLimiterConfigured()
         log.warn('[woocommerce] Store control proof did not match', {
           connection_id: row.id,
           companyId: ctx.companyId,
-          retryable,
+          oneTry,
         })
-        if (!retryable) await park(SUFFIX_MISMATCH_RESTART.error)
+        if (oneTry) await park(SUFFIX_MISMATCH_RESTART.error)
         return NextResponse.json(
-          { ...(retryable ? SUFFIX_MISMATCH : SUFFIX_MISMATCH_RESTART), code: 'suffix_mismatch' },
+          { ...(oneTry ? SUFFIX_MISMATCH_RESTART : SUFFIX_MISMATCH), code: 'suffix_mismatch' },
           { status: 400 },
         )
       }

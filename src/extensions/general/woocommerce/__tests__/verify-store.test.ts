@@ -223,24 +223,77 @@ describe('POST /api/extensions/ext/woocommerce/verify-store', () => {
     expect(ctx.emit).not.toHaveBeenCalled()
   })
 
-  it('ends the attempt on a wrong suffix where no rate limiter bounds the tries', async () => {
-    vi.mocked(isRateLimiterConfigured).mockReturnValue(false)
-    const ctx = makeContext()
-    const service = serviceReturning({ data: pendingRow() }, { data: null }) // park
+  describe('where no rate limiter bounds the tries: one try per approval', () => {
+    beforeEach(() => {
+      vi.mocked(isRateLimiterConfigured).mockReturnValue(false)
+    })
 
-    const res = await verifyStore().handler(
-      makeRequest({ connection_id: CONN, key_suffix: 'fffffff' }),
-      ctx,
-    )
+    it('claims the single-use state before comparing, and a wrong suffix ends the attempt', async () => {
+      const ctx = makeContext()
+      const service = serviceReturning(
+        { data: pendingRow() },
+        { data: { id: CONN } }, // claim the try
+        { data: null }, // park
+      )
 
-    expect(res.status).toBe(400)
-    const body = await res.json()
-    expect(body.code).toBe('suffix_mismatch')
-    expect(body.error).toMatch(/Starta om anslutningen/)
-    const updates = service.findCalls('woocommerce_connections', 'update')
-    expect(updates).toHaveLength(1)
-    expect(updates[0][0]).toMatchObject({ status: 'error', consumer_key_encrypted: null, oauth_state: null })
-    expect(ctx.emit).not.toHaveBeenCalled()
+      const res = await verifyStore().handler(
+        makeRequest({ connection_id: CONN, key_suffix: 'fffffff' }),
+        ctx,
+      )
+
+      expect(res.status).toBe(400)
+      const body = await res.json()
+      expect(body.code).toBe('suffix_mismatch')
+      expect(body.error).toMatch(/Starta om anslutningen/)
+      const updates = service.findCalls('woocommerce_connections', 'update')
+      expect(updates).toHaveLength(2)
+      // The claim consumes the state only where it is still there.
+      expect(updates[0][0]).toEqual({ oauth_state: null })
+      const notCalls = service.calls.filter((c) => c.method === 'not').map((c) => c.args)
+      expect(notCalls).toContainEqual(['oauth_state', 'is', null])
+      expect(updates[1][0]).toMatchObject({ status: 'error', consumer_key_encrypted: null })
+      expect(ctx.emit).not.toHaveBeenCalled()
+    })
+
+    it('refuses a try that finds the state already claimed, without comparing: tries made at once cannot multiply', async () => {
+      const ctx = makeContext()
+      const service = serviceReturning(
+        { data: pendingRow() },
+        { data: null }, // the claim matches nothing: another try took it
+      )
+
+      const res = await verifyStore().handler(
+        // The right suffix: it must not matter once the try is used.
+        makeRequest({ connection_id: CONN, key_suffix: '1a2b3c4' }),
+        ctx,
+      )
+
+      expect(res.status).toBe(409)
+      expect((await res.json()).code).toBe('try_used')
+      expect(service.findCalls('woocommerce_connections', 'update')).toHaveLength(1)
+      expect(ctx.emit).not.toHaveBeenCalled()
+    })
+
+    it('takes the store live when the one try matches', async () => {
+      const ctx = makeContext()
+      const service = serviceReturning(
+        { data: pendingRow() },
+        { data: { id: CONN } }, // claim the try
+        { data: null }, // record the proof
+        { data: ACTIVATED }, // activateIfComplete
+      )
+
+      const res = await verifyStore().handler(
+        makeRequest({ connection_id: CONN, key_suffix: '1a2b3c4' }),
+        ctx,
+      )
+
+      expect(res.status).toBe(200)
+      const updates = service.findCalls('woocommerce_connections', 'update')
+      expect(updates).toHaveLength(3)
+      expect(updates[2][0]).toMatchObject({ status: 'active' })
+      expect(ctx.emit).toHaveBeenCalledTimes(1)
+    })
   })
 
   it('takes the store live when the suffix matches as the admin shows it, under the initiator session', async () => {
