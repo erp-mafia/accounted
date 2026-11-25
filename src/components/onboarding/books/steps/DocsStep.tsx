@@ -20,11 +20,10 @@ export function DocsStep({ ctx }: { ctx: BooksCtx }) {
       </h1>
       <p className="agent-lead">{t('docs_sub')}</p>
       <div className="docs-list">
-        <MailboxList doors={DOCS_DOORS} />
+        <MailboxList doors={DOCS_DOORS} receiveOnly connectVariant="outline" />
       </div>
-      <p className="docs-more">{t('docs_more')}</p>
       <div className="jny-qactions">
-        <Button onClick={() => ctx.dispatch({ type: 'AFTER_DOCS', flags: ctx.flags })}>{t('continue')}</Button>
+        <Button size="lg" onClick={() => ctx.dispatch({ type: 'AFTER_DOCS', flags: ctx.flags })}>{t('continue')}</Button>
       </div>
     </div>
   )

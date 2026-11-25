@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { booksSkip, IMPORT_HISTORY_HREF } from '../skip'
+import { booksSkip, IMPORT_HISTORY_HREF, skipShown } from '../skip'
 import type { BooksState } from '../reducer'
 
 const base: Pick<BooksState, 'step' | 'working' | 'imported' | 'path'> = {
@@ -53,5 +53,18 @@ describe('booksSkip', () => {
     expect(booksSkip({ ...base, step: 'bank', imported: true, path: 'migration' }, false).notice).toBe('later')
     expect(booksSkip({ ...base, step: 'bank' }, true).notice).toBe('later')
     expect(booksSkip({ ...base, step: 'skv', path: 'fresh' }, false)).toEqual({ notice: 'later', href: '/', hardNavigation: false })
+  })
+})
+
+describe('skipShown', () => {
+  const steps = ['source', 'sie', 'provider', 'resume', 'insight', 'bank', 'ai', 'docs', 'skv', 'done'] as const
+
+  it('shows on every step but Klart without the sources arrangement', () => {
+    for (const step of steps) expect(skipShown(step, false)).toBe(step !== 'done')
+  })
+
+  it('shows only on the steps without a way on of their own with the sources arrangement', () => {
+    const shown = steps.filter((step) => skipShown(step, true))
+    expect(shown).toEqual(['sie', 'provider', 'resume'])
   })
 })

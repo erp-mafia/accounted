@@ -231,8 +231,8 @@ export function SkvStep({ ctx }: { ctx: BooksCtx }) {
             {ombudWaiting
               ? tOmbud('waiting_hint', { appName })
               : ombudMode
-                ? t('skv_ombud_sub', { appName })
-                : t('skv_sub')}
+                ? t(flags.sourcesFlow ? 'skv_ombud_sub_short' : 'skv_ombud_sub', { appName })
+                : t(flags.sourcesFlow ? 'skv_sub_short' : 'skv_sub')}
           </p>
           {attn ? <p className="jny-attn">{attn}</p> : null}
           {flags.hasSkatteverket ? (
@@ -274,7 +274,7 @@ export function SkvStep({ ctx }: { ctx: BooksCtx }) {
           </Button>
         ) : open ? (
           <Button variant="ghost" className={`text-muted-foreground${bodyCls}`} onClick={() => dispatch({ type: 'SKV_SKIP' })}>
-            {t('skv_skip')}
+            {t(flags.sourcesFlow ? 'skv_skip_short' : 'skv_skip')}
           </Button>
         ) : null}
       </div>
