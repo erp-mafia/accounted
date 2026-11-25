@@ -24,7 +24,7 @@
  */
 import { roundOre, sumOre } from '@/lib/money'
 import type { ConceptAmount, ConceptAmounts } from '@/lib/bokslut/ixbrl/types'
-import type { K2LegalForm, K2MappingResult, TrialBalanceRowLike } from '@/lib/bokslut/ixbrl/k2-mapper'
+import { k2BrPostForAccount, type K2LegalForm, type K2MappingResult, type TrialBalanceRowLike } from '@/lib/bokslut/ixbrl/k2-mapper'
 import { SIGN_RECLASSIFICATION_RULES, selectReclassifiedAccounts } from '@/lib/reports/sign-reclassification'
 import { k2EquityPosts, type EquityPostDefinition } from './equity-specification'
 
@@ -93,6 +93,14 @@ export const CURRENT_TAX_RECEIVABLE_CONCEPT = 'AktuellSkattefodran'
 
 function inRanges(account: string, ranges: readonly Range[]): boolean {
   return ranges.some((range) => account >= range.start && account <= range.end)
+}
+
+/**
+ * The K3 balance sheet post of a BAS account: the post K3 carves out for it
+ * (K3_SPLITS), else the K2 post that holds it. Null when no post covers it.
+ */
+export function k3BrPostForAccount(account: string, legalForm: K2LegalForm): string | null {
+  return K3_SPLITS.find((split) => inRanges(account, split.ranges))?.concept ?? k2BrPostForAccount(account, legalForm)
 }
 
 function net(row: TrialBalanceRowLike): number {

@@ -320,10 +320,19 @@ export async function buildSimCompany(plan: SimPlan, key: AnswerKey, options: Bu
         await doors.write('gnubok_create_asset', {
           name: event.name,
           category: 'equipment',
-          acquisition_date: event.date,
+          acquisition_date: event.acquisitionDate ?? event.date,
           acquisition_cost: event.cost,
           useful_life_months: event.usefulLifeMonths,
+          ...(event.openingAmount
+            ? { opening_accumulated_depreciation: event.openingAmount, opening_depreciation_date: event.openingDate }
+            : {}),
         })
+        return
+      case 'depreciation_by_hand':
+        await voucher(event.date, `Avskrivning ${event.assetName}`, [
+          { account_number: '7832', debit_amount: event.amount },
+          { account_number: '1229', credit_amount: event.amount },
+        ])
         return
       case 'card_cost': {
         const gross = event.net + (event.net * event.vatRate) / 100
