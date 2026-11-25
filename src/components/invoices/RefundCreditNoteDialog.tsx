@@ -44,9 +44,9 @@ interface RefundCreditNoteDialogProps {
 
 /**
  * "Registrera återbetalning" on a kreditfaktura (follow-up of crm#1435): the
- * day the money left and the account it left from. Books Dr 1510 / Cr that
- * account for the whole amount owed through the mark-paid door, which
- * records the refund on the credit note.
+ * day the money left and the account it left from. The mark-paid door books
+ * Dr 1510 / Cr that account for the whole amount owed and records the refund
+ * on the credit note.
  */
 export default function RefundCreditNoteDialog({
   open,
@@ -87,12 +87,12 @@ export default function RefundCreditNoteDialog({
       const response = await fetch(`/api/invoices/${creditNote.id}/mark-paid`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        // The account, not rows: the door books the whole refund itself, so a
+        // credit note whose verifikat booked an öresavrundning has all of what
+        // 1510 carries for it taken off (planCreditNoteRefund's ledgerOwed).
         body: JSON.stringify({
           payment_date: refundDate,
-          lines: [
-            { account_number: RECEIVABLE_ACCOUNT, debit_amount: owed, credit_amount: 0 },
-            { account_number: account.ledger_account, debit_amount: 0, credit_amount: owed },
-          ],
+          payment_account: account.ledger_account,
           ...(force ? { force: true } : {}),
         }),
       })

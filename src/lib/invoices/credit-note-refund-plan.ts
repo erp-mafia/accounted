@@ -59,8 +59,13 @@ export type CreditNoteRefundUnsupportedReason =
   | 'no_original'
 
 export type CreditNoteRefundPlan =
-  /** owed: kronor still to pay back; refunded: what earlier refunds recorded. */
-  | { ok: true; owed: number; refunded: number }
+  /**
+   * owed: kronor still to pay back; refunded: what earlier refunds recorded;
+   * ledgerOwed: what paying owed back takes off 1510, which is owed and the
+   * öresavrundning the credit note's own verifikat booked when the refund
+   * pays the whole open credit back (planCreditNoteRefund's issueOre).
+   */
+  | { ok: true; owed: number; refunded: number; ledgerOwed: number }
   | {
       ok: false
       code: 'CREDIT_NOTE_REFUND_UNSUPPORTED'
@@ -101,11 +106,19 @@ export function creditNoteRefundedAmount(
  *   original 10 000 paid in full, credited:    owed 10 000
  *   original 10 000 paid 7 000, credited:      owed  7 000
  *   original unpaid, credited:                 owed      0
+ *
+ * issueOre is the öresavrundning the credit note's own verifikat booked
+ * (bookedOreRounding of its total against what that verifikat put on 1510,
+ * 0 when it booked none): a credit of 999,75 issued as Cr 1510 1 000 / Dr
+ * 3740 0,25 is 0,25. A refund of the whole open credit takes all of what 1510
+ * carries for it (ledgerOwed 1 000, the credit note's "Att betala"); a part
+ * refund takes its own kronor and leaves the öre for the last one.
  */
 export function planCreditNoteRefund(
   creditNote: RefundPlanCreditNote,
   original: RefundPlanOriginal | null | undefined,
   creditUsed = 0,
+  issueOre = 0,
 ): CreditNoteRefundPlan {
   const unsupported = (reason: CreditNoteRefundUnsupportedReason): CreditNoteRefundPlan => ({
     ok: false,
@@ -128,5 +141,7 @@ export function planCreditNoteRefund(
   if (!(owed > 0.005)) {
     return { ok: false, code: 'CREDIT_NOTE_REFUND_NOTHING_OWED', details: { refunded, credit_used: creditUsed } }
   }
-  return { ok: true, owed, refunded }
+  const wholeCredit = roundOre(owed + creditOpen) === 0
+  const ledgerOwed = wholeCredit && issueOre !== 0 ? roundOre(owed + issueOre) : owed
+  return { ok: true, owed, refunded, ledgerOwed }
 }

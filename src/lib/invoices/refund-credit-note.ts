@@ -7,6 +7,7 @@ import { findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
 import { invoicePaymentBusinessEvent } from '@/lib/bookkeeping/invoice-business-events'
+import { bookedOreRounding } from '@/lib/bookkeeping/ore-rounding'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
@@ -85,9 +86,10 @@ export interface RefundCreditNoteParams {
   /** Where the money left from (Cr). Ignored when customLines carry their own. */
   settlementAccountNumber: string
   /**
-   * The person's own rows (dashboard and v1): debit 1510 for at most what is
+   * The person's own rows (v1, or a caller's): debit 1510 for at most what is
    * owed, credit the bank. Absent: the whole amount owed, Dr 1510 / Cr
-   * settlementAccountNumber.
+   * settlementAccountNumber, and all of what 1510 carries for the credit when
+   * its verifikat booked an öresavrundning.
    */
   customLines?: RefundCustomLine[]
   /** Skip the already-booked guard after the person confirmed it is another refund. */
@@ -162,6 +164,41 @@ async function readCreditUsed(
   const rows = (data ?? []) as Array<{ amount: number | string | null; currency: string | null }>
   if (rows.some((row) => !isLedgerCurrency(row.currency))) return { ok: false, unreadable: true }
   return { ok: true, used: sumOre(rows.map((row) => Math.abs(Number(row.amount) || 0))) }
+}
+
+/**
+ * The öresavrundning the credit note's own verifikat booked: its total
+ * against what the verifikat credited 1510 (bookedOreRounding), 0 when it
+ * booked none. Only a kronor credit with öre can carry one, so a whole-krona
+ * credit costs no read; a verifikat no longer posted counts as none.
+ */
+async function readCreditNoteIssueOre(
+  supabase: SupabaseClient,
+  companyId: string,
+  creditNote: RefundCreditNoteRow,
+): Promise<{ ok: true; ore: number } | { ok: false; error: unknown }> {
+  const total = roundOre(Number(creditNote.total) || 0)
+  if (!creditNote.journal_entry_id || !isLedgerCurrency(creditNote.currency) || Number.isInteger(total)) {
+    return { ok: true, ore: 0 }
+  }
+  const { data, error } = await supabase
+    .from('journal_entries')
+    .select('id, status, lines:journal_entry_lines(account_number, debit_amount, credit_amount)')
+    .eq('company_id', companyId)
+    .eq('id', creditNote.journal_entry_id)
+    .maybeSingle()
+  if (error) return { ok: false, error }
+  const entry = data as {
+    status: string
+    lines: Array<{ account_number: string; debit_amount: number | string | null; credit_amount: number | string | null }> | null
+  } | null
+  if (!entry || entry.status !== 'posted') return { ok: true, ore: 0 }
+  let receivable = 0
+  for (const line of entry.lines ?? []) {
+    if (line.account_number !== RECEIVABLE_ACCOUNT) continue
+    receivable += (Number(line.debit_amount) || 0) - (Number(line.credit_amount) || 0)
+  }
+  return { ok: true, ore: bookedOreRounding(total, roundOre(receivable)) }
 }
 
 /**
@@ -344,12 +381,19 @@ export async function refundCreditNote(
     return { ok: false, code: 'CREDIT_NOTE_REFUND_UNSUPPORTED', details: { reason: 'foreign_currency' } }
   }
 
-  const plan = planCreditNoteRefund(creditNote, original, creditUsed.used)
+  const issueOre = await readCreditNoteIssueOre(supabase, companyId, creditNote)
+  if (!issueOre.ok) return { ok: false, code: 'DB_ERROR', error: issueOre.error }
+
+  const plan = planCreditNoteRefund(creditNote, original, creditUsed.used, issueOre.ore)
   if (!plan.ok) return plan
 
-  const built = buildCreditNoteRefundLines(creditNote, plan.owed, settlementAccountNumber, customLines)
+  // The voucher takes off 1510 what it carries (ledgerOwed); the credit note
+  // records the debt settled, so the kundreskontra nets it to zero exactly
+  // when 1510 does.
+  const built = buildCreditNoteRefundLines(creditNote, plan.ledgerOwed, settlementAccountNumber, customLines)
   if (!built.ok) return built
   const { amount, description, lines } = built
+  const settled = issueOre.ore !== 0 && amount >= plan.ledgerOwed - ORE_TOLERANCE ? plan.owed : amount
 
   if (!force) {
     const since = guardWindowStart(creditNote.invoice_date, refundDate)
@@ -360,8 +404,8 @@ export async function refundCreditNote(
   }
 
   const priorPaid = roundOre(Number(creditNote.paid_amount ?? 0))
-  const paidAmount = roundOre(priorPaid - amount)
-  const owedAfter = roundOre(plan.owed - amount)
+  const paidAmount = roundOre(priorPaid - settled)
+  const owedAfter = roundOre(plan.owed - settled)
   const refundedAt = owedAfter <= ORE_TOLERANCE ? paidAtFromDate(refundDate) : null
 
   // Refused before anything is written, the dry run included: the engine's
@@ -402,7 +446,7 @@ export async function refundCreditNote(
           creditNote,
           input,
           { paymentAccount: customLines ? null : settlementAccountNumber, generated: !customLines, bankLine: false },
-          { linkBasis: linkBasisColumnsFor(REFUND_LINK_BASIS), settledAmount: amount },
+          { linkBasis: linkBasisColumnsFor(REFUND_LINK_BASIS), settledAmount: settled },
         ),
       input,
     })

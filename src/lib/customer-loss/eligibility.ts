@@ -6,6 +6,7 @@ import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
 import { isInvoiceOverdue } from '@/lib/invoices/overdue'
 import { roundOre } from '@/lib/money'
 import { isOwedInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
+import { openReceivable } from './amounts'
 import type { CustomerLossErrorCode } from './errors'
 import type { CustomerLossInvoice, CustomerLossState, LatestCase } from './state'
 
@@ -55,8 +56,20 @@ export function openClaimRefusal(state: CustomerLossState): CustomerLossErrorCod
     // booked yet (deferred booking) is booked first.
     return state.accountingMethod === 'cash' ? null : 'CUSTOMER_LOSS_INVOICE_NOT_BOOKED'
   }
-  if (roundOre(state.basis - invoice.paid_amount) !== roundOre(invoice.remaining_amount)) {
+  // The öre an issue verifikat booked on 1510 (öresavrundning) is no mismatch.
+  if (openReceivable(state.basis, invoice.paid_amount, invoice.remaining_amount) === null) {
     return 'CUSTOMER_LOSS_LEDGER_MISMATCH'
   }
   return null
+}
+
+/**
+ * The open claim as 151x carries it, for an invoice that reached the ledger:
+ * the remaining amount, and the öresavrundning when its issue verifikat
+ * booked one (openReceivable). Where the two disagree, the remaining amount:
+ * openClaimRefusal stops a booking before it gets here.
+ */
+export function openClaimOnLedger(state: CustomerLossState): number {
+  const { invoice } = state
+  return openReceivable(state.basis, invoice.paid_amount, invoice.remaining_amount) ?? invoice.remaining_amount
 }

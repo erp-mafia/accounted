@@ -219,6 +219,65 @@ describe('befarad kundförlust', () => {
   })
 })
 
+/**
+ * 999,75 kr (799,80 + 199,95 moms) whose issue verifikat booked the
+ * öresavrundning: D 1510 1 000, K 3740 0,25. 151x carries 1 000, the invoice
+ * says 999,75 is left: no mismatch, and every decision values the 1 000.
+ */
+const roundedIssue = (over: { paid_amount?: number; remaining_amount?: number; status?: string } = {}, rows: WriteOffRow[] = []) =>
+  makeState({
+    rows,
+    basis: 1000,
+    openVat: new Map([['2611', 199.95]]),
+    invoice: { total: 999.75, paid_amount: 0, remaining_amount: 999.75, ...over },
+  })
+
+describe('an invoice whose issue verifikat booked the öresavrundning', () => {
+  const params = { invoiceId: INVOICE, entryDate: '2026-06-01', reason: 'Konkurs', evidenceDocumentId: 'doc-1', decidedBy: USER }
+
+  it('writes off all 1510 carries for it: no öre is left on the receivable', async () => {
+    vi.mocked(loadCustomerLossState).mockResolvedValue({ ok: true, state: roundedIssue() })
+    const { supabase, rpc } = mockSupabase()
+    const outcome = await recordConfirmedLoss(supabase, COMPANY, USER, params)
+    expect(outcome).toMatchObject({ ok: true })
+    expect(lineTuples()).toEqual([
+      ['6351', 800.05, 0],
+      ['2611', 199.95, 0],
+      ['1510', 0, 1000],
+    ])
+    expect(rpc).toHaveBeenCalledWith(
+      'record_invoice_write_off',
+      expect.objectContaining({ p_kind: 'confirmed', p_amount: 1000, p_net_amount: 800.05, p_vat_amount: 199.95 }),
+    )
+  })
+
+  it('reserves the same 1 000 net of VAT, and releases by it after a payment of 500', async () => {
+    vi.mocked(loadCustomerLossState).mockResolvedValue({ ok: true, state: roundedIssue() })
+    const first = mockSupabase()
+    expect(await recordDoubtfulLoss(first.supabase, COMPANY, USER, { invoiceId: INVOICE, entryDate: '2026-06-01', reason: 'x', decidedBy: USER })).toMatchObject({ ok: true })
+    expect(lineTuples()).toEqual([
+      ['6352', 800.05, 0],
+      ['1519', 0, 800.05],
+    ])
+
+    vi.clearAllMocks()
+    vi.mocked(findFiscalPeriod).mockResolvedValue('fp-1')
+    vi.mocked(createJournalEntry).mockResolvedValue({ id: 'je-loss' } as never)
+    const reserved = [{ id: 'f', kind: 'doubtful', net_amount: 800.05 } as unknown as WriteOffRow]
+    vi.mocked(loadCustomerLossState).mockResolvedValue({
+      ok: true,
+      state: roundedIssue({ status: 'partially_paid', paid_amount: 500, remaining_amount: 499.75 }, reserved),
+    })
+    const second = mockSupabase()
+    await releaseDoubtfulReserve(second.supabase, COMPANY, USER, { invoiceId: INVOICE, entryDate: '2026-06-05', decidedBy: USER, reason: 'Betalning' })
+    // 500 still on 1510: its reserve is 500 less half the VAT (99,98), 400,02.
+    expect(lineTuples()).toEqual([
+      ['1519', 400.03, 0],
+      ['6352', 0, 400.03],
+    ])
+  })
+})
+
 describe('release of a befarad reserve', () => {
   const reserved = [{ id: 'f', kind: 'doubtful', net_amount: 1000 } as unknown as WriteOffRow]
 

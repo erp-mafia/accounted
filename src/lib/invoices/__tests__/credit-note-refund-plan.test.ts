@@ -28,6 +28,7 @@ describe('planCreditNoteRefund', () => {
       ok: true,
       owed: 10000,
       refunded: 0,
+      ledgerOwed: 10000,
     })
   })
 
@@ -48,6 +49,7 @@ describe('planCreditNoteRefund', () => {
       ok: true,
       owed: 6000,
       refunded: 4000,
+      ledgerOwed: 6000,
     })
     expect(planCreditNoteRefund(creditNote({ paid_amount: -10000 }), { total: 10000, paid_amount: 10000 })).toMatchObject({
       ok: false,
@@ -61,6 +63,44 @@ describe('planCreditNoteRefund', () => {
       ok: false,
       code: 'CREDIT_NOTE_REFUND_NOTHING_OWED',
       details: { credit_used: 10000 },
+    })
+  })
+
+  describe('a credit note whose verifikat booked an öresavrundning (Cr 1510 1 000 / Dr 3740 0,25 for 999,75)', () => {
+    const rounded = creditNote({ total: -999.75 })
+
+    it('takes all of what 1510 carries when the whole credit is paid back', () => {
+      expect(planCreditNoteRefund(rounded, { total: 999.75, paid_amount: 999.75 }, 0, 0.25)).toEqual({
+        ok: true,
+        owed: 999.75,
+        refunded: 0,
+        ledgerOwed: 1000,
+      })
+    })
+
+    it('rounded down as well: 1 000,40 issued as Cr 1510 1 000 / Cr 3740 0,40', () => {
+      expect(
+        planCreditNoteRefund(creditNote({ total: -1000.4 }), { total: 1000.4, paid_amount: 1000.4 }, 0, -0.4),
+      ).toMatchObject({ ok: true, owed: 1000.4, ledgerOwed: 1000 })
+    })
+
+    it('a part refund takes its own kronor and leaves the öre for the last one', () => {
+      expect(planCreditNoteRefund(rounded, { total: 999.75, paid_amount: 700 }, 0, 0.25)).toMatchObject({
+        ok: true,
+        owed: 700,
+        ledgerOwed: 700,
+      })
+      expect(
+        planCreditNoteRefund(creditNote({ total: -999.75, paid_amount: -700 }), { total: 999.75, paid_amount: 999.75 }, 0, 0.25),
+      ).toMatchObject({ ok: true, owed: 299.75, ledgerOwed: 300 })
+    })
+
+    it('without a booked öre nothing changes', () => {
+      expect(planCreditNoteRefund(rounded, { total: 999.75, paid_amount: 999.75 })).toMatchObject({
+        ok: true,
+        owed: 999.75,
+        ledgerOwed: 999.75,
+      })
     })
   })
 

@@ -3,6 +3,7 @@ import {
   confirmedLines,
   doubtfulLines,
   liveRows,
+  openReceivable,
   openVatByAccount,
   outputVatRate,
   reachedLedgerAsReceivable,
@@ -89,6 +90,26 @@ describe('open VAT per account, net of credit notes', () => {
     expect(reachedLedgerAsReceivable([l('1930', 1250, 0), l('3001', 0, 1000), l('2611', 0, 250)])).toBe(false)
     // A year-end carry puts the full claim on 1510 and counts as booked.
     expect(reachedLedgerAsReceivable([l('1510', 1250, 0), l('3001', 0, 1000), l('2611', 0, 250)])).toBe(true)
+  })
+})
+
+describe('what 151x carries for the open claim', () => {
+  it('is the remaining amount when the ledger agrees with the invoice', () => {
+    expect(openReceivable(1250, 0, 1250)).toBe(1250)
+    expect(openReceivable(1250, 625, 625)).toBe(625)
+  })
+
+  it('takes in the öresavrundning the issue verifikat booked on 1510', () => {
+    // 999,75 issued as D 1510 1 000 / K 3740 0,25.
+    expect(openReceivable(1000, 0, 999.75)).toBe(1000)
+    expect(openReceivable(1000, 500, 499.75)).toBe(500)
+    // 1 000,40 issued as D 1510 1 000 / D 3740 0,40.
+    expect(openReceivable(1000, 0, 1000.4)).toBe(1000)
+  })
+
+  it('is no answer when the gap is a krona or more: that is no rounding', () => {
+    expect(openReceivable(1250, 0, 1000)).toBeNull()
+    expect(openReceivable(1001, 0, 1000)).toBeNull()
   })
 })
 

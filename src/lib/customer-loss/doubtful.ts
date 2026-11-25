@@ -27,7 +27,7 @@ import {
   vatSharesOfPart,
   type VatShare,
 } from './amounts'
-import { openClaimRefusal } from './eligibility'
+import { openClaimOnLedger, openClaimRefusal } from './eligibility'
 import type { CustomerLossErrorCode, CustomerLossOutcome } from './errors'
 import { bookDecision } from './record'
 import { loadCustomerLossState, type CustomerLossState } from './state'
@@ -58,7 +58,9 @@ export function planDoubtful(state: CustomerLossState): { ok: true; plan: Doubtf
   if (refusal) return { ok: false, code: refusal }
   if (!state.booked) return { ok: false, code: 'CUSTOMER_LOSS_DOUBTFUL_NOT_BOOKED' }
 
-  const remaining = state.invoice.remaining_amount
+  // The reserve values the receivable as 151x carries it, the figure a
+  // konstaterad decision later clears (openClaimOnLedger).
+  const remaining = openClaimOnLedger(state)
   const target = reserveTarget(state.openVat, state.basis, remaining)
   const toBook = roundOre(target - state.reserve)
   if (toBook <= 0) {
@@ -145,7 +147,9 @@ export async function releaseDoubtfulReserve(
     state.booked &&
     isOwedInvoiceStatus(state.invoice.status) &&
     state.invoice.remaining_amount > 0
-  const target = stillOpen ? reserveTarget(state.openVat, state.basis, state.invoice.remaining_amount) : 0
+  // The same open claim planDoubtful reserved for, so the öre an issue
+  // verifikat booked is never released as excess.
+  const target = stillOpen ? reserveTarget(state.openVat, state.basis, openClaimOnLedger(state)) : 0
   const release = roundOre(state.reserve - target)
   if (release <= 0) return null
 

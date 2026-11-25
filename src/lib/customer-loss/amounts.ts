@@ -4,7 +4,9 @@
  * Every amount is SEK and comes from the ledger: the invoice's own posted
  * voucher (the one invoices.journal_entry_id names) and the vouchers of its
  * credit notes. The open part of the claim is invoices.remaining_amount,
- * checked against those vouchers before anything is booked.
+ * checked against those vouchers before anything is booked; where the issue
+ * verifikat booked the öresavrundning (1510 at the rounded "Att betala"), the
+ * claim on 151x is that much more (openReceivable).
  *
  * - The VAT share of the open part is taken per output VAT account, pro rata
  *   to the open part of the receivable: a partial payment paid the same
@@ -18,6 +20,7 @@
  *   reserve covers the receivable excluding VAT; VAT moves only once the loss
  *   is konstaterad).
  */
+import { bookedOreRounding } from '@/lib/bookkeeping/ore-rounding'
 import { ACCOUNT_RUTA } from '@/lib/reports/vat-declaration'
 import { roundOre, sumOre } from '@/lib/money'
 import type { CreateJournalEntryLineInput } from '@/types'
@@ -86,6 +89,23 @@ export function receivableBasis(invoiceLines: LedgerLine[], creditNoteLines: Led
     total += n(line.debit_amount) - n(line.credit_amount)
   }
   return roundOre(total)
+}
+
+/**
+ * What 151x still carries for the open claim, or null when the ledger and the
+ * invoice disagree. The receivable less what was paid is the remaining
+ * amount, or the remaining amount and the öresavrundning the issue verifikat
+ * booked: 1510 at the rounded "Att betala" and the öre on 3740
+ * (bookedOreRounding). A gap of a krona or more is no rounding.
+ *
+ *   999,75 kr issued as 1 000 on 1510, unpaid:  1 000
+ *   the same after a payment of 500:              500
+ *   1 250 kr with 1 000 left on the invoice:     null
+ */
+export function openReceivable(basis: number, paid: number, remaining: number): number | null {
+  const carried = roundOre(basis - paid)
+  if (carried === roundOre(remaining)) return carried
+  return bookedOreRounding(remaining, carried) !== 0 ? carried : null
 }
 
 /** Whether the invoice's own voucher put a receivable on 151x (the booked-branch rule, build spec 4.2 F). */

@@ -24,7 +24,7 @@ import { linkBasisColumns } from '@/lib/links/stamp'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
 import { confirmedLines, totalVat, vatSharesOfPart, type VatShare } from './amounts'
-import { openClaimRefusal } from './eligibility'
+import { openClaimOnLedger, openClaimRefusal } from './eligibility'
 import type { CustomerLossOutcome } from './errors'
 import { bookDecision } from './record'
 import { loadCustomerLossState, type CustomerLossState } from './state'
@@ -45,10 +45,13 @@ export interface ConfirmedPlan {
 
 /** What a konstaterad decision books for an open claim that passed openClaimRefusal(). */
 export function planConfirmed(state: CustomerLossState): ConfirmedPlan {
-  const amount = state.invoice.remaining_amount
   if (!state.booked) {
+    const amount = state.invoice.remaining_amount
     return { amount, net: amount, vat: 0, shares: [], reserveReleased: 0, lines: null }
   }
+  // The claim leaves 151x as the ledger carries it, so an öresavrundning the
+  // issue verifikat booked is cleared with it rather than left on 1510.
+  const amount = openClaimOnLedger(state)
   const shares = vatSharesOfPart(state.openVat, state.basis, amount)
   const vat = totalVat(shares)
   return {

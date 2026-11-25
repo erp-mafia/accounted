@@ -147,6 +147,87 @@ describe('refundCreditNote', () => {
     expect(result).toMatchObject({ ok: true, amount: 4000, paidAmount: -4000 })
   })
 
+  describe('a credit of 999,75 whose verifikat booked an öresavrundning (Cr 1510 1 000, Dr 3740 0,25)', () => {
+    const ROUNDED: RefundCreditNoteRow = { ...CREDIT_NOTE, total: -999.75, vat_amount: -199.95 }
+    const voucher = (receivableCredit: number) => ({
+      data: {
+        id: 'je-credit',
+        status: 'posted',
+        lines: [
+          { account_number: '3001', debit_amount: 799.8, credit_amount: 0 },
+          { account_number: '2611', debit_amount: 199.95, credit_amount: 0 },
+          ...(receivableCredit === 1000 ? [{ account_number: '3740', debit_amount: 0.25, credit_amount: 0 }] : []),
+          { account_number: '1510', debit_amount: 0, credit_amount: receivableCredit },
+        ],
+      },
+    })
+
+    it('pays back all 1510 carries for it and records the 999,75 it settles', async () => {
+      enqueueReads({ total: 999.75, paid_amount: 999.75 })
+      enqueue(voucher(1000)) // the credit note's own verifikat
+      enqueue({ data: [] }) // already-booked guard: nothing
+      enqueue({ data: [{ id: 'cn-1' }] }) // compare-and-set
+
+      const result = await refundCreditNote(supabase as never, 'company-1', 'user-1', {
+        creditNote: ROUNDED,
+        refundDate: '2026-10-26',
+        settlementAccountNumber: '1930',
+      })
+
+      // 1 000 leaves the bank, 1510 nets to zero, and the credit note's own
+      // total less paid_amount is zero too, so the kundreskontra agrees.
+      expect(result).toMatchObject({ ok: true, amount: 1000, owedAfter: 0, paidAmount: -999.75, refundedAt: '2026-10-26T12:00:00Z' })
+      const { input } = mockPostJournalEntry.mock.calls[0][0] as { input: { lines: unknown[] } }
+      expect(input.lines).toEqual([
+        expect.objectContaining({ account_number: '1510', debit_amount: 1000, credit_amount: 0 }),
+        expect.objectContaining({ account_number: '1930', debit_amount: 0, credit_amount: 1000 }),
+      ])
+      expect(mockRecordRow).toHaveBeenCalledWith(supabase, expect.objectContaining({ newPaidAmount: -999.75 }))
+      expect(findCalls('invoices', 'update')[0][0]).toEqual({ paid_amount: -999.75, paid_at: '2026-10-26T12:00:00Z' })
+    })
+
+    it('a part refund takes its own kronor and leaves the öre on 1510 for the last one', async () => {
+      enqueueReads({ total: 999.75, paid_amount: 700 })
+      enqueue(voucher(1000))
+      enqueue({ data: [] })
+      enqueue({ data: [{ id: 'cn-1' }] })
+
+      const result = await refundCreditNote(supabase as never, 'company-1', 'user-1', {
+        creditNote: ROUNDED,
+        refundDate: '2026-10-26',
+        settlementAccountNumber: '1930',
+      })
+      expect(result).toMatchObject({ ok: true, amount: 700, paidAmount: -700 })
+    })
+
+    it('a credit note whose verifikat booked no öre is paid back as before', async () => {
+      enqueueReads({ total: 999.75, paid_amount: 999.75 })
+      enqueue(voucher(999.75))
+      enqueue({ data: [] })
+      enqueue({ data: [{ id: 'cn-1' }] })
+
+      const result = await refundCreditNote(supabase as never, 'company-1', 'user-1', {
+        creditNote: ROUNDED,
+        refundDate: '2026-10-26',
+        settlementAccountNumber: '1930',
+      })
+      expect(result).toMatchObject({ ok: true, amount: 999.75, owedAfter: 0, paidAmount: -999.75 })
+    })
+
+    it('refuses on a failed read of the verifikat rather than leave the öre on 1510', async () => {
+      enqueueReads({ total: 999.75, paid_amount: 999.75 })
+      enqueue({ data: null, error: { message: 'timeout' } })
+
+      const result = await refundCreditNote(supabase as never, 'company-1', 'user-1', {
+        creditNote: ROUNDED,
+        refundDate: '2026-10-26',
+        settlementAccountNumber: '1930',
+      })
+      expect(result).toMatchObject({ ok: false, code: 'DB_ERROR' })
+      expect(mockPostJournalEntry).not.toHaveBeenCalled()
+    })
+  })
+
   it('refuses when nothing is owed and writes nothing', async () => {
     enqueueReads({ total: 10500, paid_amount: 0 })
 
