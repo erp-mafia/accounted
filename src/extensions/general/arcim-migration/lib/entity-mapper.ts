@@ -916,7 +916,9 @@ function negate(n: number): number {
  * contradict their header. Flipped with the total, the VAT keeps the sign the
  * rows and the source's own voucher give it, and net plus VAT is still the
  * total. For a header whose figures share a sign this is the absolute value,
- * as before.
+ * as before. A zero total states no direction, so its figures keep their
+ * absolute values: a credit note whose net and VAT cancel out is held back as
+ * before, never imported as its own mirror image.
  *
  * ONE normaliser for both registers (#2838). The two DTOs share the fields
  * read here, and the question is the same on both sides: what would this
@@ -942,8 +944,10 @@ function withAbsoluteAmounts<T extends SalesInvoiceDto | SupplierInvoiceDto>(dto
   const statedNegative = rowNet !== 0 ? rowNet < 0 : dto.legalMonetaryTotal.payableAmount.value < 0
   const factor = statedNegative ? -1 : 1
   const oriented = (amount: AmountType): AmountType => ({ ...amount, value: amount.value === 0 ? 0 : amount.value * factor })
-  const headerFactor = dto.legalMonetaryTotal.payableAmount.value < 0 ? -1 : 1
-  const headerOriented = (amount: AmountType): AmountType => ({ ...amount, value: amount.value === 0 ? 0 : amount.value * headerFactor })
+  const headerTotal = roundOre(dto.legalMonetaryTotal.payableAmount.value)
+  const headerOriented = (amount: AmountType): AmountType => headerTotal === 0
+    ? abs(amount)
+    : { ...amount, value: amount.value === 0 ? 0 : amount.value * (headerTotal < 0 ? -1 : 1) }
   return {
     ...dto,
     lines: dto.lines.map((line) => {

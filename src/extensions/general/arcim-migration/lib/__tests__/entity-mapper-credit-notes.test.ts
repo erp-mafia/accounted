@@ -393,6 +393,20 @@ describe('mapSalesInvoice: a provider credit note end to end (#2789)', () => {
     expect(roundOre(Number(invoice.subtotal) + Number(invoice.vat_amount))).toBe(invoice.total)
   })
 
+  it('reads no direction into a zero total, so a credit note whose net and VAT cancel out stays held back', () => {
+    // Its rows' net is positive, so they read as magnitudes already; flipped
+    // with them, the header would import as the mirror image of the source.
+    // Kept as magnitudes, it disagrees with its rows and the worker refuses it.
+    const zero = { ...fortnoxCredit, Net: 250, TotalVAT: -250, Total: 0, Balance: 0,
+      InvoiceRows: [
+        { RowId: 1, Description: 'Retur vara', DeliveredQuantity: '-2.00', Price: 500, Total: -1000, VAT: 25 },
+        { RowId: 2, Description: 'Avgift', DeliveredQuantity: '1.00', Price: 1250, Total: 1250, VAT: 0 },
+      ] }
+    const { invoice, items } = importRow(mapFortnoxToSalesInvoice(zero))
+    const rowsVat = roundOre(items.reduce((sum, item) => sum + Number(item.vat_amount), 0))
+    expect(Math.abs(rowsVat - Number(invoice.vat_amount))).toBeGreaterThan(1)
+  })
+
   it('keeps the relative sign of the rows when the provider states the credit note in magnitudes', () => {
     // The same document as Bokio or the gateway would state it: credited rows
     // positive, the fee negative, the header a magnitude.
@@ -519,9 +533,10 @@ describe('mapSupplierInvoice: kreditfaktura', () => {
   })
 
   it('keeps the rows of a credit note whose VAT has the other sign than its total', () => {
-    // The same normaliser as the sales side: 1 000 credited at 6 %, 400
-    // charged at 25 %. The total is negative and the VAT positive; as
-    // magnitudes the credit note is 600 net and -40 VAT, which its rows say too.
+    // The same normaliser as the sales side, at the DTO: 1 000 credited at
+    // 6 %, 400 charged at 25 %, each row with its rate. The total is negative
+    // and the VAT positive; as magnitudes the credit note is 600 net and -40
+    // VAT, which its rows say too.
     const line = (id: string, total: number, rate: number) => ({ id, accountNumber: '4010', quantity: total < 0 ? -1 : 1,
       unitPrice: { value: Math.abs(total), currencyCode: 'SEK' }, lineExtensionAmount: { value: total, currencyCode: 'SEK' },
       taxPercent: rate, taxAmount: { value: roundOre(total * rate / 100), currencyCode: 'SEK' } })
