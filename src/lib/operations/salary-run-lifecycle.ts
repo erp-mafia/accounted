@@ -1,7 +1,8 @@
 /**
  * Salary-run lifecycle operations that used to be dashboard-only:
  *
- *   salary-runs.send-payslips         email each employee a secure payslip link
+ *   salary-runs.send-payslips         email each employee a secure payslip link,
+ *                                     or the PDF to their Kivra or Billo mailbox
  *   salary-runs.revert                review   -> draft
  *   salary-runs.unapprove             approved -> review
  *   salary-runs.attach-expense-claims put open utlägg on a draft payslip
@@ -29,10 +30,15 @@ const RUN_EXAMPLE_ID = 'run_a8f1…'
 // Send payslips
 // ---------------------------------------------------------------------------
 
+const PAYSLIP_CHANNELS = ['email', 'kivra', 'billo'] as const
+
 const PayslipDelivery = z.object({
   employee_id: z.string().uuid(),
   employee_name: z.string(),
   status: z.enum(['sent', 'failed', 'skipped']),
+  channel: z
+    .enum(PAYSLIP_CHANNELS)
+    .describe('kivra or billo when the payslip reached the employee\'s mailbox there; email for the secure link (sent, failed or skipped).'),
   error: z.string().nullable().describe('Why the send failed or was skipped; null when sent.'),
 })
 
@@ -52,9 +58,9 @@ export const salaryRunsSendPayslips = defineOperation({
   risk: 'medium',
   reversible: false,
   docs: {
-    summary: 'Email the employees on an approved salary run a secure link to their payslip.',
+    summary: 'Send the employees on an approved salary run their payslip: a secure email link, or the PDF to their Kivra or Billo mailbox.',
     description:
-      'Sends each employee on the run (or only those in employee_ids) an email with a secure link to their lönebesked (never a PDF attachment: salary data and personnummer must not sit in inboxes). Each send rotates the employee\'s link, so a link emailed earlier for the run stops working. Every attempt, sent, failed or skipped for a missing email address, is written to the delivery log (salary_payslip_deliveries, BFL 7 kap.). One employee failing does not stop the others. Requires the run to be approved, paid or booked. Dry-runnable: the dry run lists the recipients and who lacks an email address, and sends nothing.',
+      'Sends each employee on the run (or only those in employee_ids) an email with a secure link to their lönebesked (never a PDF attachment: salary data and personnummer must not sit in inboxes). Each send rotates the employee\'s link, so a link emailed earlier for the run stops working. With channel kivra or billo, the payslip PDF goes to each employee\'s mailbox there first, found by the employee\'s personnummer (Kivra: the employees Kivra matches as its users; Billo: everyone with a personnummer), and whoever it does not reach gets the email link; each delivery says which channel reached the employee. Every attempt, sent, failed or skipped for a missing email address, is written to the delivery log (salary_payslip_deliveries, BFL 7 kap.). One employee failing does not stop the others. Requires the run to be approved, paid or booked. Dry-runnable: the dry run lists the recipients and who lacks an email address, and sends nothing.',
     useWhen:
       'The run is approved (or paid/booked) and the employees should get their payslips, a group paid on its own day should get theirs (employee_ids), or a payslip should be re-sent after an employee\'s email address was corrected.',
     doNotUseFor:
@@ -65,11 +71,12 @@ export const salaryRunsSendPayslips = defineOperation({
       'An employee_ids entry not on the run refuses the whole send with 400 SALARY_PAYSLIPS_EMPLOYEE_NOT_ON_RUN (details.employee_ids); nothing is sent.',
       'Employees without an email address are skipped and counted in `skipped`, not an error: fix the address with PATCH /employees/{id} and send again.',
       'Refused with 403 from the sandbox company (SALARY_PAYSLIPS_SEND_SANDBOX) and without the email capability (SALARY_PAYSLIPS_SEND_CAPABILITY_BLOCKED).',
+      'channel kivra or billo is refused before anything is sent while the company has not switched on sending through that mailbox (409 DIGITAL_MAILBOX_SENDING_NOT_ACTIVE: a person does that under Settings, Connections), while Kivra lacks the employer address, email and phone in the company settings (400 DIGITAL_MAILBOX_EMPLOYER_CONTACT_MISSING), and, for Kivra, which is priced per payslip, past what the month includes until the company has asked for more and it is open (409 USAGE_LIMIT_REACHED, or USAGE_SUBSCRIPTION_REQUIRED without a subscription). The dry run applies the same refusals.',
       'Not idempotent towards the recipients: a replay with a new Idempotency-Key emails everyone again.',
       'The first send (or the first employee-copy PDF, whichever comes first) fixes which payslip sections the employee copy of this run prints, from salary_payslip_show_employer_cost / salary_payslip_show_breakdown at that moment. Changing those settings afterwards never changes a payslip of this run that employees already have; re-sending keeps the fixed sections.',
     ],
     example: {
-      request: { employee_ids: ['emp_1…'] },
+      request: { channel: 'kivra' },
       response: {
         data: {
           salary_run_id: RUN_EXAMPLE_ID,
@@ -78,8 +85,8 @@ export const salaryRunsSendPayslips = defineOperation({
           failed: 0,
           total: 3,
           deliveries: [
-            { employee_id: 'emp_1…', employee_name: 'Anna Andersson', status: 'sent', error: null },
-            { employee_id: 'emp_2…', employee_name: 'Björn Berg', status: 'skipped', error: 'Anställd saknar e-postadress' },
+            { employee_id: 'emp_1…', employee_name: 'Anna Andersson', status: 'sent', channel: 'kivra', error: null },
+            { employee_id: 'emp_2…', employee_name: 'Björn Berg', status: 'skipped', channel: 'email', error: 'Anställd saknar e-postadress' },
           ],
         },
         meta: META,
@@ -90,6 +97,7 @@ export const salaryRunsSendPayslips = defineOperation({
     salary_run_id: SALARY_RUN_ID,
     // Named in the MCP description, so no describe() (catalog tokens).
     employee_ids: z.array(z.string().uuid()).min(1).optional(),
+    channel: z.enum(PAYSLIP_CHANNELS).optional(),
   }),
   output: PayslipsSent,
   errorCodes: [
@@ -99,6 +107,11 @@ export const salaryRunsSendPayslips = defineOperation({
     'SALARY_PAYSLIPS_EMPLOYEE_NOT_ON_RUN',
     'SALARY_PAYSLIPS_SEND_SANDBOX',
     'SALARY_PAYSLIPS_SEND_CAPABILITY_BLOCKED',
+    'DIGITAL_MAILBOX_NOT_CONFIGURED',
+    'DIGITAL_MAILBOX_SENDING_NOT_ACTIVE',
+    'DIGITAL_MAILBOX_EMPLOYER_CONTACT_MISSING',
+    'USAGE_LIMIT_REACHED',
+    'USAGE_SUBSCRIPTION_REQUIRED',
   ],
   http: {
     method: 'POST',
@@ -109,12 +122,16 @@ export const salaryRunsSendPayslips = defineOperation({
     name: 'gnubok_send_payslips',
     title: 'Send Payslips',
     description:
-      'Stage emailing payslip links (everyone or employee_ids) on an approved, paid or booked run; replaces old links.',
-    keywords: ['skicka lönebesked', 'lönespecifikation', 'lönebesked e-post', 'maila lönebesked', 'payslip email'],
-    stage: { pendingType: 'send_payslips', title: () => 'Skicka lönebesked' },
+      'Stage sending payslips (everyone or employee_ids) on an approved, paid or booked run: email links (replaces old links), or channel kivra/billo for the PDF in each employee\'s mailbox, email link for the rest.',
+    keywords: ['skicka lönebesked', 'lönespecifikation', 'lönebesked e-post', 'maila lönebesked', 'payslip email', 'lönebesked kivra', 'kivra', 'billo'],
+    stage: {
+      pendingType: 'send_payslips',
+      title: (input) =>
+        input.channel === 'kivra' ? 'Skicka lönebesked till Kivra' : input.channel === 'billo' ? 'Skicka lönebesked till Billo' : 'Skicka lönebesked',
+    },
   },
-  run: async (ctx, { salary_run_id, employee_ids }, { dryRun }) => {
-    const outcome = await sendPayslips(ctx, salary_run_id, { dryRun, employeeIds: employee_ids })
+  run: async (ctx, { salary_run_id, employee_ids, channel }, { dryRun }) => {
+    const outcome = await sendPayslips(ctx, salary_run_id, { dryRun, employeeIds: employee_ids, channel })
     if (!outcome.ok || outcome.dryRun) return outcome
     const { sent, skipped, failed, total, deliveries } = outcome.data
     return { ok: true, data: { salary_run_id, sent, skipped, failed, total, deliveries } }

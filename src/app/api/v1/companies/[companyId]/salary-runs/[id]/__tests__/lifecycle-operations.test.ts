@@ -38,6 +38,22 @@ const mocks = vi.hoisted(() => ({
   isSandboxCompany: vi.fn(),
   hasCapability: vi.fn(),
   emit: vi.fn(),
+  payslipMailboxBlock: vi.fn(),
+  deliverPayslipsToMailbox: vi.fn(),
+  usageGateRefusal: vi.fn(),
+}))
+vi.mock('@/lib/salary/payslips/send-digital-mailbox', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/salary/payslips/send-digital-mailbox')>()),
+  payslipMailboxBlock: mocks.payslipMailboxBlock,
+  deliverPayslipsToMailbox: mocks.deliverPayslipsToMailbox,
+}))
+vi.mock('@/lib/usage/gate', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/usage/gate')>()),
+  usageGateRefusal: mocks.usageGateRefusal,
+}))
+vi.mock('@/lib/supabase/server', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/supabase/server')>()),
+  createServiceClient: () => ({ service: true }),
 }))
 vi.mock('@/lib/email/service', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/email/service')>()),
@@ -166,6 +182,9 @@ beforeEach(() => {
   mocks.rotateLinkForEmployee.mockResolvedValue({ token: 'T'.repeat(43) })
   mocks.sendEmail.mockResolvedValue({ success: true, messageId: 'msg-1' })
   mocks.emit.mockResolvedValue(undefined)
+  mocks.payslipMailboxBlock.mockResolvedValue(null)
+  mocks.deliverPayslipsToMailbox.mockResolvedValue([])
+  mocks.usageGateRefusal.mockResolvedValue(null)
   mockValidate.mockResolvedValue({
     userId: 'user-1',
     companyId: COMPANY_ID,
@@ -299,10 +318,11 @@ describe('POST /salary-runs/:id/send-payslips', () => {
       failed: 0,
       total: 2,
       deliveries: [
-        { employee_id: EMP_ID, employee_name: 'Anna Andersson', status: 'sent', error: null },
-        { employee_id: EMP2_ID, employee_name: 'Björn Berg', status: 'skipped', error: 'Anställd saknar e-postadress' },
+        { employee_id: EMP_ID, employee_name: 'Anna Andersson', status: 'sent', channel: 'email', error: null },
+        { employee_id: EMP2_ID, employee_name: 'Björn Berg', status: 'skipped', channel: 'email', error: 'Anställd saknar e-postadress' },
       ],
     })
+    expect(mocks.deliverPayslipsToMailbox).not.toHaveBeenCalled()
     expect(mocks.rotateLinkForEmployee).toHaveBeenCalledWith(c, {
       companyId: COMPANY_ID,
       salaryRunId: RUN_ID,
@@ -357,6 +377,76 @@ describe('POST /salary-runs/:id/send-payslips', () => {
     expect(body.error.code).toBe('SALARY_PAYSLIPS_EMPLOYEE_NOT_ON_RUN')
     expect(mocks.sendEmail).not.toHaveBeenCalled()
     expect(wrote(c)).toBe(false)
+  })
+
+  // The payslip PDF to each employee's Kivra mailbox where it reaches them,
+  // the email link for the rest: the same send the run page makes.
+  it('channel kivra: the mailbox first, the email link for whoever it does not reach, each delivery naming its channel', async () => {
+    mocks.deliverPayslipsToMailbox.mockResolvedValue([{ employee_id: EMP2_ID, status: 'sent', error: null }])
+    const c = client()
+    mockServiceClient.mockReturnValue(c)
+    const res = await postBody({ channel: 'kivra' })
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.deliveries).toEqual([
+      { employee_id: EMP2_ID, employee_name: 'Björn Berg', status: 'sent', channel: 'kivra', error: null },
+      { employee_id: EMP_ID, employee_name: 'Anna Andersson', status: 'sent', channel: 'email', error: null },
+    ])
+    expect(body.data).toMatchObject({ sent: 2, skipped: 0, failed: 0, total: 2 })
+    expect(mocks.payslipMailboxBlock).toHaveBeenCalledWith(c, COMPANY_ID, 'kivra')
+    expect(mocks.deliverPayslipsToMailbox).toHaveBeenCalledWith(
+      expect.objectContaining({ companyId: COMPANY_ID, userId: 'user-1' }),
+      expect.objectContaining({ provider: 'kivra', salaryRunId: RUN_ID }),
+    )
+    // Björn, reached in Kivra, gets no email link; Anna, not reached there, does.
+    expect(mocks.sendEmail).toHaveBeenCalledTimes(1)
+    expect(mocks.sendEmail.mock.calls[0][0].to).toBe('anna@example.test')
+  })
+
+  it('channel kivra: 409 DIGITAL_MAILBOX_SENDING_NOT_ACTIVE says where sending is switched on, and nothing is sent', async () => {
+    mocks.payslipMailboxBlock.mockResolvedValue('DIGITAL_MAILBOX_SENDING_NOT_ACTIVE')
+    const c = client()
+    mockServiceClient.mockReturnValue(c)
+    const res = await postBody({ channel: 'kivra' })
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error.code).toBe('DIGITAL_MAILBOX_SENDING_NOT_ACTIVE')
+    expect(body.error.details).toMatchObject({ channel: 'kivra' })
+    expect(body.error.recovery_hint).toMatch(/\/settings\/connections/)
+    expect(mocks.deliverPayslipsToMailbox).not.toHaveBeenCalled()
+    expect(mocks.sendEmail).not.toHaveBeenCalled()
+    expect(wrote(c)).toBe(false)
+  })
+
+  it('channel kivra: the usage gate stops the run, dry run too, counting every employee on it', async () => {
+    vi.stubEnv('USAGE_BILLING_KINDS', 'kivra_send')
+    try {
+      mocks.usageGateRefusal.mockResolvedValue({
+        ok: false,
+        code: 'USAGE_LIMIT_REACHED',
+        details: { kind: 'kivra_send', period: '2026-11', used: 0, included: 0, requested: 2, unit_price_ore: 300 },
+        messageSv: 'Utskick till Kivra kostar 3,00 kr st. Begär det under Inställningar, Abonnemang, Användning, så öppnar vi.',
+      })
+      const c = client()
+      mockServiceClient.mockReturnValue(c)
+      const res = await postBody({ channel: 'kivra' })
+      expect(res.status).toBe(409)
+      expect((await res.json()).error.code).toBe('USAGE_LIMIT_REACHED')
+      expect(mocks.usageGateRefusal).toHaveBeenCalledWith(expect.anything(), COMPANY_ID, 'kivra_send', { requested: 2 })
+      expect(mocks.deliverPayslipsToMailbox).not.toHaveBeenCalled()
+      expect(mocks.sendEmail).not.toHaveBeenCalled()
+      expect(wrote(c)).toBe(false)
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('400 VALIDATION_ERROR for an unknown channel', async () => {
+    mockServiceClient.mockReturnValue(client())
+    const res = await postBody({ channel: 'fax' })
+    expect(res.status).toBe(400)
+    expect((await res.json()).error.code).toBe('VALIDATION_ERROR')
+    expect(mocks.sendEmail).not.toHaveBeenCalled()
   })
 
   it('a provider failure is logged and reported without stopping the batch', async () => {

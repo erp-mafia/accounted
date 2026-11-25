@@ -403,6 +403,7 @@ import { registrationVoucherLabel } from '@/lib/invoices/register-booked-rules'
 import { effectiveQuoteStatus, quoteAwaitsSending } from '@/lib/invoices/quote-status'
 import { effectiveInvoiceStatus, filterInvoicesByReportedStatus, type OverdueInvoiceInput } from '@/lib/invoices/overdue'
 import { emailRefusal } from '@/lib/invoices/issue-and-book-invoice'
+import { checkInvoiceMailboxSend } from '@/lib/invoices/digital-mailbox-send'
 import { withAmountToPay, type AmountToPayRow } from '@/lib/invoices/amount-to-pay-fields'
 import { withPaymentReference, type PaymentReferenceRow } from '@/lib/invoices/payment-reference-fields'
 import {
@@ -4949,6 +4950,78 @@ async function fetchInvoiceWithCustomer(supabase: SupabaseClient, companyId: str
 
   if (invoiceError || !invoice) throw codedRefusal('NOT_FOUND', 'Invoice not found')
   return invoice
+}
+
+/**
+ * gnubok_send_invoice with channel kivra or billo: the invoice page's send
+ * to the customer's digital mailbox (lib/invoices/digital-mailbox-send.ts),
+ * staged. Every check that send runs, the usage gate and the provider's
+ * match of the customer's mailbox among them, refuses here first with the
+ * same code, so nothing waits for an approval that cannot go through. The
+ * approval runs the send itself, which checks it all again.
+ */
+async function stageInvoiceMailboxSend(request: {
+  supabase: SupabaseClient
+  companyId: string
+  userId: string
+  actor: ActorContext | undefined
+  invoiceId: string
+  provider: 'kivra' | 'billo'
+}): Promise<unknown> {
+  const { supabase, companyId, userId, actor, invoiceId, provider } = request
+  const invoice = await fetchInvoiceWithCustomer(supabase, companyId, invoiceId)
+  // The customer was deleted while the draft pointed at it (crm#263).
+  if (invoiceLacksCustomer(invoice)) throw registryError('INVOICE_CUSTOMER_MISSING')
+  const customer = invoice.customer as Customer
+
+  const check = await checkInvoiceMailboxSend(
+    { supabase, service: createServiceClientNoCookies(), companyId, log },
+    invoiceId,
+    provider,
+  )
+  if (!check.ok) {
+    throw new OperationError(check.code, {
+      ...(check.details ? { details: check.details } : {}),
+      ...(check.messageSv ? { messageSv: check.messageSv } : {}),
+    })
+  }
+
+  // A draft is issued on approval: refused now by the verdict its issue gives.
+  const parties = await stagedInvoiceParties(supabase, companyId, invoice)
+  if (parties === 'seller_missing') throw registryError('INVOICE_SEND_SELLER_ADDRESS_MISSING')
+  if (parties === 'buyer_missing') throw registryError('INVOICE_SEND_BUYER_ADDRESS_MISSING')
+  const partiesNote = simplifiedInvoiceNote(parties)
+  const issue = await buildIssuePreview(supabase, companyId, invoice)
+
+  const providerName = provider === 'kivra' ? 'Kivra' : 'Billo'
+  const sendLabel = invoice.invoice_number
+    ? invoice.invoice_number
+    : `${describeUnnumberedInvoice(invoice, customer.name || '')}${expectedNumberSuffix(invoice, issue)}`
+
+  return stage({
+    supabase,
+    companyId,
+    userId,
+    type: 'send_invoice',
+    title: `Skicka till ${providerName}: ${sendLabel}`,
+    params: { invoice_id: invoiceId, channel: provider },
+    preview: {
+      invoice_number: invoice.invoice_number,
+      customer_name: customer.name,
+      channel: provider,
+      recipient_kind: check.data.recipient_kind,
+      total: invoice.total,
+      currency: invoice.currency,
+      ...issue,
+    },
+    actor,
+    ...(partiesNote ? { complianceNote: partiesNote } : {}),
+    next: {
+      description: 'After the customer pays, mark the invoice paid via gnubok_mark_invoice_as_paid (or match it to the inbound bank transaction with gnubok_match_transaction_to_invoice).',
+      tool: 'gnubok_mark_invoice_as_paid',
+      args: { invoice_id: invoiceId },
+    },
+  })
 }
 
 /** Offset-pagination tail shared by the list tools: count/total/has_more/next_offset. */
@@ -12627,19 +12700,21 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_send_invoice',
-    keywords: ['skicka faktura', 'kundfaktura', 'e-faktura', 'mejla faktura', 'bifoga underlag', 'bilaga'],
-    title: 'Send Invoice by Email',
-    description: 'Send invoice via email with PDF attachment. Stages for approval. Requires customer email + email service configured.',
+    keywords: ['skicka faktura', 'kundfaktura', 'e-faktura', 'mejla faktura', 'bifoga underlag', 'bilaga', 'kivra', 'billo', 'digital brevlåda'],
+    title: 'Send Invoice',
+    // Wire bytes are frozen (payload-size.bench): channel is bare, named in the description.
+    description: "Stage emailing the invoice PDF (needs customer email) or sending it to the customer's Kivra/Billo mailbox (channel).",
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        invoice_id: { type: 'string', description: 'UUID of the invoice to send' },
+        invoice_id: { type: 'string' },
+        channel: { type: 'string', enum: ['email', 'kivra', 'billo'] },
         attachment_document_ids: {
           type: 'array',
           items: { type: 'string' },
           maxItems: MAX_INVOICE_ATTACHMENTS,
-          description: 'Document ids emailed after the PDF (25 MB total). Fixed once sent.',
+          description: 'Emailed after the PDF (25 MB total). Fixed once sent.',
         },
       },
       required: ['invoice_id'],
@@ -12649,6 +12724,19 @@ export const tools: McpTool[] = [
     async execute(args, companyId, userId, supabase, actor) {
       const invoiceId = args.invoice_id as string
       if (!invoiceId) throw badArgument('invoice_id', 'invoice_id is required')
+
+      const channel = args.channel ?? 'email'
+      if (channel === 'kivra' || channel === 'billo') {
+        if (Array.isArray(args.attachment_document_ids) && args.attachment_document_ids.length > 0) {
+          throw badArgument(
+            'attachment_document_ids',
+            'attachment_document_ids travel by email only: a Kivra or Billo send carries the invoice PDF alone. Leave them out, or send by email.',
+            'Bilagor skickas bara med e-post: till Kivra och Billo går bara fakturans PDF.',
+          )
+        }
+        return stageInvoiceMailboxSend({ supabase, companyId, userId, actor, invoiceId, provider: channel })
+      }
+      if (channel !== 'email') throw badArgument('channel', 'channel must be email, kivra or billo')
 
       const emailService = await getEmailService()
       if (!emailService.isConfigured()) {

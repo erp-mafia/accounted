@@ -32,6 +32,7 @@ import { getDigitalMailboxProviders } from '@/lib/digital-mailboxes/providers'
 import type {
   DigitalMailboxProviderId,
   MailboxRecipient,
+  MailboxSender,
   OutgoingPayment,
 } from '@/lib/digital-mailboxes/types'
 import { isLegalPersonOrgNumber, normalizeOrgNumber } from '@/lib/invariants/org-number'
@@ -214,11 +215,28 @@ async function recordDispatch(
   return (data as { id: string }).id
 }
 
-export async function sendInvoiceToDigitalMailbox(
-  ctx: DigitalMailboxSendContext,
+export type MailboxSendRefusal = Extract<DigitalMailboxSendOutcome, { ok: false }>
+
+interface MailboxSendReady {
+  ok: true
+  sender: MailboxSender
+  tenantRef: string
+  invoice: LoadedInvoice
+  recipient: MailboxRecipient
+  settings: CompanySettings
+}
+
+/**
+ * Every check of the send that can refuse, in the send's order, changing
+ * nothing: the provider, the demo company, the company's active sending,
+ * the usage gate, the invoice, its recipient and the recipient's mailbox
+ * (the provider's match, a read there), the company settings.
+ */
+async function mailboxSendPreflight(
+  ctx: Pick<DigitalMailboxSendContext, 'supabase' | 'service' | 'companyId' | 'log'>,
   invoiceId: string,
   providerId: DigitalMailboxProviderId,
-): Promise<DigitalMailboxSendOutcome> {
+): Promise<MailboxSendReady | MailboxSendRefusal> {
   const sender = getDigitalMailboxProviders()[providerId]?.sender
   if (!sender) return { ok: false, code: 'DIGITAL_MAILBOX_NOT_CONFIGURED' }
   if (await isSandboxCompany(ctx.supabase, ctx.companyId)) return { ok: false, code: 'DIGITAL_MAILBOX_SANDBOX' }
@@ -233,7 +251,7 @@ export async function sendInvoiceToDigitalMailbox(
   const usageGate = await usageGateRefusal(ctx.service, ctx.companyId, `${providerId}_send`)
   if (usageGate) return usageGate
 
-  let invoice = await loadInvoice(ctx.supabase, ctx.companyId, invoiceId)
+  const invoice = await loadInvoice(ctx.supabase, ctx.companyId, invoiceId)
   if (!invoice) return { ok: false, code: 'INVOICE_NOT_FOUND' }
   const block = invoiceMailboxBlock(invoice)
   if (block) return { ok: false, code: block, details: { status: invoice.status } }
@@ -251,7 +269,44 @@ export async function sendInvoiceToDigitalMailbox(
 
   const { data: settingsRow } = await ctx.supabase.from('company_settings').select('*').eq('company_id', ctx.companyId).single()
   if (!settingsRow) return { ok: false, code: 'INVOICE_SEND_COMPANY_SETTINGS_MISSING' }
-  const settings = settingsRow as CompanySettings
+  return { ok: true, sender, tenantRef, invoice, recipient, settings: settingsRow as CompanySettings }
+}
+
+export interface InvoiceMailboxSendCheck {
+  provider: DigitalMailboxProviderId
+  recipient_kind: MailboxRecipient['kind']
+  /** True for a draft: the send numbers, issues and books it before it leaves. */
+  will_issue: boolean
+}
+
+/**
+ * Whether sendInvoiceToDigitalMailbox would go ahead, without issuing or
+ * sending anything: the same checks, refused with the same codes. An agent's
+ * staged send (gnubok_send_invoice with channel kivra or billo) runs it, so a
+ * customer the mailbox cannot reach is refused before anyone approves.
+ */
+export async function checkInvoiceMailboxSend(
+  ctx: Pick<DigitalMailboxSendContext, 'supabase' | 'service' | 'companyId' | 'log'>,
+  invoiceId: string,
+  providerId: DigitalMailboxProviderId,
+): Promise<{ ok: true; data: InvoiceMailboxSendCheck } | MailboxSendRefusal> {
+  const ready = await mailboxSendPreflight(ctx, invoiceId, providerId)
+  if (!ready.ok) return ready
+  return {
+    ok: true,
+    data: { provider: providerId, recipient_kind: ready.recipient.kind, will_issue: ready.invoice.status === 'draft' },
+  }
+}
+
+export async function sendInvoiceToDigitalMailbox(
+  ctx: DigitalMailboxSendContext,
+  invoiceId: string,
+  providerId: DigitalMailboxProviderId,
+): Promise<DigitalMailboxSendOutcome> {
+  const ready = await mailboxSendPreflight(ctx, invoiceId, providerId)
+  if (!ready.ok) return ready
+  const { sender, tenantRef, recipient, settings } = ready
+  let invoice = ready.invoice
 
   let issued = false
   let journalEntryId: string | null = null

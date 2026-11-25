@@ -1787,10 +1787,10 @@ Example response `200`:
 
 ### `POST /api/v1/companies/{companyId}/salary-runs/{id}/send-payslips`
 
-**Email the employees on an approved salary run a secure link to their payslip.**
+**Send the employees on an approved salary run their payslip: a secure email link, or the PDF to their Kivra or Billo mailbox.**
 `scope:payroll:write · risk:medium · idempotent · dry-run`
 
-Sends each employee on the run (or only those in employee_ids) an email with a secure link to their lönebesked (never a PDF attachment: salary data and personnummer must not sit in inboxes). Each send rotates the employee's link, so a link emailed earlier for the run stops working. Every attempt, sent, failed or skipped for a missing email address, is written to the delivery log (salary_payslip_deliveries, BFL 7 kap.). One employee failing does not stop the others. Requires the run to be approved, paid or booked. Dry-runnable: the dry run lists the recipients and who lacks an email address, and sends nothing.
+Sends each employee on the run (or only those in employee_ids) an email with a secure link to their lönebesked (never a PDF attachment: salary data and personnummer must not sit in inboxes). Each send rotates the employee's link, so a link emailed earlier for the run stops working. With channel kivra or billo, the payslip PDF goes to each employee's mailbox there first, found by the employee's personnummer (Kivra: the employees Kivra matches as its users; Billo: everyone with a personnummer), and whoever it does not reach gets the email link; each delivery says which channel reached the employee. Every attempt, sent, failed or skipped for a missing email address, is written to the delivery log (salary_payslip_deliveries, BFL 7 kap.). One employee failing does not stop the others. Requires the run to be approved, paid or booked. Dry-runnable: the dry run lists the recipients and who lacks an email address, and sends nothing.
 
 **Use when:** The run is approved (or paid/booked) and the employees should get their payslips, a group paid on its own day should get theirs (employee_ids), or a payslip should be re-sent after an employee's email address was corrected.
 **Do not use for:** Fetching the payslip document yourself (GET /salary-runs/{id}/payslips/{employeeId}/pdf) or reading payslip amounts (GET /salary-runs/{id}/employees/{employeeId}).
@@ -1801,6 +1801,7 @@ Sends each employee on the run (or only those in employee_ids) an email with a s
 - An employee_ids entry not on the run refuses the whole send with 400 SALARY_PAYSLIPS_EMPLOYEE_NOT_ON_RUN (details.employee_ids); nothing is sent.
 - Employees without an email address are skipped and counted in `skipped`, not an error: fix the address with PATCH /employees/{id} and send again.
 - Refused with 403 from the sandbox company (SALARY_PAYSLIPS_SEND_SANDBOX) and without the email capability (SALARY_PAYSLIPS_SEND_CAPABILITY_BLOCKED).
+- channel kivra or billo is refused before anything is sent while the company has not switched on sending through that mailbox (409 DIGITAL_MAILBOX_SENDING_NOT_ACTIVE: a person does that under Settings, Connections), while Kivra lacks the employer address, email and phone in the company settings (400 DIGITAL_MAILBOX_EMPLOYER_CONTACT_MISSING), and, for Kivra, which is priced per payslip, past what the month includes until the company has asked for more and it is open (409 USAGE_LIMIT_REACHED, or USAGE_SUBSCRIPTION_REQUIRED without a subscription). The dry run applies the same refusals.
 - Not idempotent towards the recipients: a replay with a new Idempotency-Key emails everyone again.
 - The first send (or the first employee-copy PDF, whichever comes first) fixes which payslip sections the employee copy of this run prints, from salary_payslip_show_employer_cost / salary_payslip_show_breakdown at that moment. Changing those settings afterwards never changes a payslip of this run that employees already have; re-sending keeps the fixed sections.
 
@@ -1813,15 +1814,13 @@ Sends each employee on the run (or only those in employee_ids) an email with a s
 
 Request body:
 ```ts
-{ employee_ids?: string[] }
+{ employee_ids?: string[], channel?: "email" | "kivra" | "billo" }
 ```
 
 Example request:
 ```json
 {
-  "employee_ids": [
-    "emp_1…"
-  ]
+  "channel": "kivra"
 }
 ```
 
@@ -1834,7 +1833,7 @@ Response `200`:
     skipped: number,
     failed: number,
     total: number,
-    deliveries: { employee_id: string, employee_name: string, status: "sent" | "failed" | "skipped", error: string | null }[]
+    deliveries: { employee_id: string, employee_name: string, status: "sent" | "failed" | "skipped", channel: "email" | "kivra" | "billo", error: string | null }[]
   },
   meta: {
     request_id: string,
@@ -1862,12 +1861,14 @@ Example response `200`:
         "employee_id": "emp_1…",
         "employee_name": "Anna Andersson",
         "status": "sent",
+        "channel": "kivra",
         "error": null
       },
       {
         "employee_id": "emp_2…",
         "employee_name": "Björn Berg",
         "status": "skipped",
+        "channel": "email",
         "error": "Anställd saknar e-postadress"
       }
     ]
