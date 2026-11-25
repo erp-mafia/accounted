@@ -167,6 +167,11 @@
   .bks-host:has(> .theater) > .jny-qstep > :last-child { margin-bottom: 0; }
   .bks-host > .theater { flex: 1 1 auto; display: flex; flex-direction: column; }
   .bks-host > .theater > .th-stage { flex: 1 1 0; height: auto; min-height: 280px; max-height: 490px; }
+  /* The books are in (sources arrangement): the way on stands over the theater, and the settled stage may be lower so the summary under it stays in the window. */
+  .bks-host.is-done > .theater > .th-stage { min-height: 200px; }
+  /* The title and the way on keep their height: the stage is what gives. */
+  .bks-host.is-done > .jny-qstep { flex: none; }
+  .bks-host.is-done > .jny-qstep > .jny-qactions { margin: 18px 0 8px; }
 }
 
 /* ── waiting ──────────────────────────────────────────────────────── */
@@ -209,13 +214,15 @@
 .skv-body.is-away .jny-qsub { opacity: 0; }
 .jny-qactions .is-away { opacity: 0; transition: opacity 300ms var(--ease-out); pointer-events: none; }
 .skv-stage { display: flex; justify-content: center; margin: 2px auto 0; animation: jnyQIn 300ms var(--ease-emphasized); }
+/* the mark above the title, with no hold line of its own: the room under the chip and over its ring is given back */
+.skv-stage.is-compact .stamp { margin: -14px 0 -50px; }
 /* stämpeln: one mark, a slow waiting ring, then the sage ring drawn around it in one stroke */
 .stamp { overflow: visible; max-width: 100%; margin: 6px 0 2px; }
 .stamp .chip { fill: hsl(var(--background)); stroke: hsl(var(--border)); stroke-width: 1; opacity: 0; transform-origin: 120px 88px; }
-.stamp.is-away .chip, .stamp.is-back .chip { animation: stamp-in 300ms var(--ease-emphasized) both; }
+.stamp.is-idle .chip, .stamp.is-away .chip, .stamp.is-back .chip { animation: stamp-in 300ms var(--ease-emphasized) both; }
 @keyframes stamp-in { from { opacity: 0; transform: scale(0.8); } to { opacity: 1; transform: scale(1); } }
 .stamp .mark { opacity: 0; transform-origin: 120px 88px; }
-.stamp.is-away .mark, .stamp.is-back .mark { animation: stamp-in 300ms var(--ease-emphasized) 80ms both; }
+.stamp.is-idle .mark, .stamp.is-away .mark, .stamp.is-back .mark { animation: stamp-in 300ms var(--ease-emphasized) 80ms both; }
 .stamp .wait { fill: none; stroke: hsl(var(--muted-foreground)); stroke-width: 1; stroke-dasharray: 2 6; stroke-linecap: round; opacity: 0; transform-origin: 120px 88px; }
 .stamp.is-away .wait { animation: stamp-wait-in 300ms var(--ease-out) 300ms both, stamp-turn 14s linear infinite; }
 .stamp.is-back .wait { animation: skv-fade-out 300ms var(--ease-out) both; }
@@ -298,6 +305,8 @@
 /* one column of actions: the primary alone, the quiet choice under it */
 .jny-qactions.is-stack { flex-direction: column; gap: 14px; }
 /* Tillbaka for the whole act: the page's top left corner, level with the rail, one place on every step */
+/* Once the books are in, the step has its own way on: the skip is not offered beside it. */
+.bks:has(.bks-host.is-done) .bks-skip { visibility: hidden; }
 .bks-backrow { position: sticky; top: 0; z-index: 3; align-self: stretch; background: hsl(var(--background)); display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .imp-info { max-width: 480px; margin: 10px auto 0; font-size: 12.5px; line-height: 1.55; color: hsl(var(--muted-foreground)); animation: jnyQIn 300ms var(--ease-emphasized); }
 

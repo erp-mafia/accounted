@@ -16,19 +16,31 @@ export function DoneChip({ children, className }: { children: React.ReactNode; c
         className,
       )}
     >
-      <svg className="check-draw shrink-0" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
-        <circle cx="8" cy="8" r="6.5" className="fill-success" />
-        <path
-          pathLength={1}
-          d="m5.3 8.2 1.8 1.8 3.6-3.8"
-          fill="none"
-          className="stroke-background"
-          strokeWidth="1.4"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      </svg>
+      <DrawnCheck />
       {children}
     </span>
+  )
+}
+
+/**
+ * The green check that draws itself once (check draw). `delayMs` moves the
+ * start, for several checks that draw one after the other; without it the
+ * check starts when the stylesheet says (.check-draw).
+ */
+export function DrawnCheck({ delayMs }: { delayMs?: number }) {
+  return (
+    <svg className="check-draw shrink-0" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+      <circle cx="8" cy="8" r="6.5" className="fill-success" />
+      <path
+        pathLength={1}
+        d="m5.3 8.2 1.8 1.8 3.6-3.8"
+        fill="none"
+        className="stroke-background"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        style={delayMs === undefined ? undefined : { animationDelay: `${delayMs}ms` }}
+      />
+    </svg>
   )
 }

@@ -219,12 +219,17 @@ export function SkvStep({ ctx }: { ctx: BooksCtx }) {
 
   const open = phase === 'open' || phase === 'leaving'
   const bodyCls = phase === 'leaving' ? ' is-away' : ''
+  const sourcesFlow = flags.sourcesFlow === true
+  const holdText = ombudMode ? t('skv_ombud_hold') : t('skv_hold')
 
   return (
     <div className="jny-qstep">
+      {/* The sources arrangement: the mark stands over the title from the start, and the same chip carries the ring and the badge. */}
+      {sourcesFlow ? <SkvHandshake phase={phase} holdText="" mark="tax" idle compact /> : null}
       <h1 className="jny-qtitle">
         <InkText text={phase === 'done' ? t('skv_title_done') : t('skv_title')} />
       </h1>
+      {sourcesFlow && phase === 'away' ? <p className="jny-qsub">{holdText}</p> : null}
       {open ? (
         <div className={`skv-body${bodyCls}`}>
           <p className="jny-qsub">
@@ -253,10 +258,10 @@ export function SkvStep({ ctx }: { ctx: BooksCtx }) {
           )}
         </div>
       ) : null}
-      {phase === 'away' || phase === 'back' || phase === 'done' ? (
+      {!sourcesFlow && (phase === 'away' || phase === 'back' || phase === 'done') ? (
         <SkvHandshake
           phase={phase}
-          holdText={ombudMode ? t('skv_ombud_hold') : t('skv_hold')}
+          holdText={holdText}
           leftLabel={appName}
           rightLabel={t('station_skv')}
         />
