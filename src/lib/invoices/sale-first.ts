@@ -123,7 +123,15 @@ export interface SaleFirstRefusal {
 }
 
 export type SaleFirstPlan =
-  | { ok: true; required: false }
+  | {
+      ok: true
+      required: false
+      /**
+       * A concurrent Bokför booked the sale since the caller read the
+       * invoice: the row's journal_entry_id is stale, the ledger has the sale.
+       */
+      bookedSince?: true
+    }
   | {
       ok: true
       required: true
@@ -276,7 +284,7 @@ async function planDeferred(
   const dryRun = await bookInvoice(ctx, invoiceId, { dryRun: true })
   if (!dryRun.ok) {
     // Booked since the caller read it: the settlement clears that verifikat.
-    if (dryRun.code === 'INVOICE_BOOK_ALREADY_BOOKED') return NOT_REQUIRED
+    if (dryRun.code === 'INVOICE_BOOK_ALREADY_BOOKED') return { ok: true, required: false, bookedSince: true }
     return refusal(invoiceId, dryRun.code, dryRun.details, dryRun.error)
   }
   if (!dryRun.dryRun) return refusal(invoiceId, 'INVOICE_BOOK_FAILED')
