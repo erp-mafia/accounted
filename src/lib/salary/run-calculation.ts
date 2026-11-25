@@ -60,7 +60,7 @@ import { fetchAllTaxTableRatesForRun, TaxTableUnavailableError } from './tax-tab
 import { REGIONAL_SUPPORT_PARAM } from './regional-support'
 import { AbsenceInputError, deriveEmployeeAbsence, loadRunAbsence, type DerivedLineItem } from './derive-absence-line-items'
 import { monthWindow, runDeviationWindow } from './deviation-period'
-import { isHandDeductionLine, lateDayReaderRunIds, lateDaysSuffix, registerRowReadByRun } from './late-days'
+import { describeLateDates, isHandDeductionLine, lateDayReaderRunIds, lateDaysSuffix, registerRowReadByRun } from './late-days'
 import type { MoneyLineItemType } from './account-mapping'
 import { RECURRING_TEXT_SORT_ORDER, isTextRow } from './text-rows'
 import { computePremiumLines, premiumPayBasis } from './shift-premium-engine'
@@ -559,10 +559,10 @@ export async function runSalaryCalculation(
       earningYearStart: getVacationYearStart(deviation.start, vacationYearBasis),
       readerRunIds,
     }),
-    workedDayEmployeeIds.length === 0
-      ? Promise.resolve<WorkedDayRow[]>([])
-      : Promise.all([
-          fetchAllRows<WorkedDayRow>(({ from, to }) =>
+    Promise.all([
+      workedDayEmployeeIds.length === 0
+        ? Promise.resolve<WorkedDayRow[]>([])
+        : fetchAllRows<WorkedDayRow>(({ from, to }) =>
             supabase
               .from('salary_worked_days')
               .select('employee_id, hours, work_date, start_time, end_time, carried_to_run_id')
@@ -575,21 +575,22 @@ export async function runSalaryCalculation(
               .order('work_date')
               .range(from, to),
           ),
-          fetchAllRows<WorkedDayRow>(({ from, to }) =>
-            supabase
-              .from('salary_worked_days')
-              .select('employee_id, hours, work_date, start_time, end_time, carried_to_run_id')
-              .eq('company_id', companyId)
-              .in('employee_id', workedDayEmployeeIds)
-              .in('carried_to_run_id', readerRunIds)
-              .order('employee_id')
-              .order('work_date')
-              .range(from, to),
-          ),
-        ]).then(([windowRows, lateRows]) => [
-          ...windowRows.filter((row) => registerRowReadByRun(row, readerRunIds, true)),
-          ...lateRows.filter((row) => row.work_date < deviation.start || row.work_date > deviation.end),
-        ]),
+      // Every employee's late hours, not only the roster's: hours carried here
+      // for an employee no longer on the run have no other reader.
+      fetchAllRows<WorkedDayRow>(({ from, to }) =>
+        supabase
+          .from('salary_worked_days')
+          .select('employee_id, hours, work_date, start_time, end_time, carried_to_run_id')
+          .eq('company_id', companyId)
+          .in('carried_to_run_id', readerRunIds)
+          .order('employee_id')
+          .order('work_date')
+          .range(from, to),
+      ),
+    ]).then(([windowRows, lateRows]) => [
+      ...windowRows.filter((row) => registerRowReadByRun(row, readerRunIds, true)),
+      ...lateRows.filter((row) => row.work_date < deviation.start || row.work_date > deviation.end),
+    ]),
     employeeIds.length === 0
       ? Promise.resolve<BenefitRow[]>([])
       : fetchAllRows<BenefitRow>(({ from, to }) =>
@@ -653,6 +654,49 @@ export async function runSalaryCalculation(
   if (procentregelnBasisLoad.status === 'rejected') return databaseError(procentregelnBasisLoad.reason)
   const absenceByEmployee = absenceLoad.value
   const workedDaysByEmployee = groupByEmployee(workedLoad.value)
+
+  // Late days carried to this run for an employee no longer on it (removed
+  // while a day was being carried): no other run reads them, so the run is
+  // refused by name until the employee is back or the days are gone.
+  const onRun = new Set(employeeIds)
+  const strandedDates = new Map<string, string[]>()
+  for (const [employeeId, rows] of absenceByEmployee) {
+    if (!onRun.has(employeeId) && rows.lateDays.length > 0) strandedDates.set(employeeId, rows.lateDays.map((d) => d.absence_date))
+  }
+  for (const [employeeId, rows] of workedDaysByEmployee) {
+    if (onRun.has(employeeId)) continue
+    const late = rows.filter((d) => d.carried_to_run_id).map((d) => d.work_date)
+    if (late.length > 0) strandedDates.set(employeeId, [...(strandedDates.get(employeeId) ?? []), ...late])
+  }
+  if (strandedDates.size > 0) {
+    const { data: names } = await supabase
+      .from('employees')
+      .select('id, first_name, last_name')
+      .eq('company_id', companyId)
+      .in('id', Array.from(strandedDates.keys()))
+    const nameOf = new Map(
+      ((names ?? []) as Array<{ id: string; first_name: string | null; last_name: string | null }>).map((e) => [
+        e.id,
+        `${e.first_name ?? ''} ${e.last_name ?? ''}`.trim(),
+      ]),
+    )
+    return {
+      ok: false,
+      code: 'VALIDATION_ERROR',
+      details: {
+        reason: 'late_days_without_payslip',
+        issues: Array.from(strandedDates.entries()).map(
+          ([employeeId, dates]) =>
+            `${nameOf.get(employeeId) || employeeId}: dagar från en tidigare period (${describeLateDates(dates)}) är knutna till lönekörningen, ` +
+            'men den anställde finns inte på den. Lägg till den anställde igen, eller ta bort dagarna.',
+        ),
+      },
+    }
+  }
+  // Only the roster's hourly and premium employees price worked days.
+  for (const employeeId of Array.from(workedDaysByEmployee.keys())) {
+    if (!workedDayEmployeeIds.includes(employeeId)) workedDaysByEmployee.delete(employeeId)
+  }
   const benefitsByEmployee = groupByEmployee(benefitsLoad.value)
   const recurringByEmployee = groupByEmployee(recurringLoad.value)
   const variablePayRunsByEmployee = variablePayLoad.value

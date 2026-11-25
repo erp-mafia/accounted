@@ -1024,12 +1024,14 @@ export async function loadRunAbsence(
         .order('absence_type')
         .range(from, to),
     ),
+    // Every employee's, not only the roster's: a day carried here for an
+    // employee no longer on the run has no other reader, and the calculation
+    // refuses it by name (run-calculation.ts).
     read('Failed to load late absence days', ({ from, to }) =>
       supabase
         .from('salary_absence_days')
         .select('employee_id, absence_date, absence_type, hours, carried_to_run_id')
         .eq('company_id', companyId)
-        .in('employee_id', employeeIds)
         .in('carried_to_run_id', [...readerRunIds])
         .order('employee_id')
         .order('absence_date')

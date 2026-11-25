@@ -493,6 +493,22 @@ describe('runSalaryCalculation: late days carried to the run', () => {
     expect((result as { details: { issues: string[] } }).details.issues[0]).toContain('månadslönen är 0 kr')
   })
 
+  it('refuses a run whose late days belong to an employee no longer on it, naming them and the days', async () => {
+    const bo = employee(C, 'emp-bo', { first_name: 'Bo', last_name: 'Berg', monthly_salary: 30000 })
+    const s = scenario({
+      absences: carried(absence(C, 'emp-bo', [['2026-10-20', 'vab']]), NOVEMBER),
+      workedDays: carried(worked(C, 'emp-bo', [['2026-10-21', 8, null, null]]), NOVEMBER),
+    })
+    s.seed.employees.push(bo)
+    const { result, db } = await calculate(s)
+    expect(result).toMatchObject({ ok: false, code: 'VALIDATION_ERROR', details: { reason: 'late_days_without_payslip' } })
+    const issue = (result as { details: { issues: string[] } }).details.issues[0]
+    expect(issue).toContain('Bo Berg')
+    expect(issue).toContain('2026-10-20 till 2026-10-21')
+    // Nothing was written.
+    expect(db.rows('salary_line_items').filter((li) => li.item_type !== 'monthly_salary')).toEqual([])
+  })
+
   it('a day carried to another run is not one of this window\'s days', async () => {
     // October's correction draft again, now with an hourly employee whose
     // late October hours went to November.
