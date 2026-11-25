@@ -59,7 +59,8 @@ import {
   type TicketSummary,
   whenConversationsReady,
 } from '@/lib/support/conversations'
-import { dialogMaxHeight, dialogViewportStyle, fitTextarea, useVisualViewport } from '@/components/support/composer-fit'
+import { dialogMaxHeight, fitTextarea } from '@/components/support/composer-fit'
+import { dialogViewportStyle, useVisualViewport } from '@/components/ui/visual-viewport'
 import { mergeIntoDraft } from '@/lib/support/assistant-handoff'
 import { openSupportDock } from '@/lib/support/dock'
 import { stockholmYearMonth } from '@/lib/dates/iso'
