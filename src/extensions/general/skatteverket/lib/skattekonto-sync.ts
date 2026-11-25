@@ -272,15 +272,17 @@ function upcomingToRow(companyId: string, tx: SkatteverketUpcomingTransaction): 
 }
 
 /**
- * One row per dedup_key for the upsert. Postgres refuses an INSERT ... ON
+ * One row per dedup_key of a response. Postgres refuses an INSERT ... ON
  * CONFLICT DO UPDATE that proposes one key twice ("ON CONFLICT DO UPDATE
  * command cannot affect row a second time"), so a response that carried a key
  * twice failed the whole sync, every hour until Skatteverket's answer changed
- * (2026-11-25). A booked row wins over an upcoming one with the same key: the
- * booked row is the transaction, the upcoming one only predicts it, the order
- * the takeover of file-imported rows and partitionFileRows keep too. Of two
- * rows with the same status the first in the response stays. Each row left
- * out comes back with the row kept in its place.
+ * (2026-11-25). The takeover of file-imported rows must see each key once
+ * too: a repeat would use up a second file row. A booked row wins over an
+ * upcoming one with the same key: the booked row is the transaction, the
+ * upcoming one only predicts it, the order the takeover and
+ * partitionFileRows keep too. Of two rows with the same status the first in
+ * the response stays. Each row left out comes back with the row kept in its
+ * place.
  */
 function oneRowPerDedupKey(rows: SyncRow[]): { rows: SyncRow[]; dropped: { row: SyncRow; kept: SyncRow }[] } {
   const kept = new Map<string, SyncRow>()
@@ -483,12 +485,29 @@ export async function syncSkattekonto(
     })
   }
 
-  const bookedRows = tidigare.map(tx => bookedToRow(ctx.companyId, tx))
-  const upcomingRows = kommande.map(tx => upcomingToRow(ctx.companyId, tx))
-
   // Upsert in two steps to keep the conflict target consistent. We rely on
   // the (company_id, dedup_key) unique constraint defined in the migration.
-  const allRows = [...bookedRows, ...upcomingRows]
+  // One row per key from here on: the takeover, the upsert, the AGI
+  // settlement and the counts all see a repeated transaction once.
+  const { rows: allRows, dropped } = oneRowPerDedupKey([
+    ...tidigare.map(tx => bookedToRow(ctx.companyId, tx)),
+    ...kommande.map(tx => upcomingToRow(ctx.companyId, tx)),
+  ])
+  if (dropped.length > 0) {
+    // Minimized like the skipped-row warning above: no text, no amounts.
+    log.warn('skattekonto response repeated a transaction, one row kept per key', {
+      companyId: ctx.companyId,
+      rows: dropped.map(d => ({
+        transaktionsidentitet: d.row.transaktionsidentitet,
+        transaktionsdatum: d.row.transaktionsdatum,
+        droppedStatus: d.row.status,
+        keptStatus: d.kept.status,
+        amountDiffers: d.row.belopp_skatteverket !== d.kept.belopp_skatteverket,
+      })),
+    })
+  }
+  const bookedRows = allRows.filter(r => r.status === 'booked')
+  const upcomingRows = allRows.filter(r => r.status === 'upcoming')
 
   // Find which dedup_keys are NEW (not yet in the table) so we can fire
   // the `skattekonto.transaction.upcoming` event only for first-appearance
@@ -612,24 +631,9 @@ export async function syncSkattekonto(
   // hash-keys on the same material an id-less kommande row would, so an
   // upcoming row colliding with an existing booked row is dropped rather
   // than upserted.
-  const { rows: safeRows, dropped } = oneRowPerDedupKey(
-    allRows.filter(
-      r => r.status !== 'upcoming' || existingMap.get(r.dedup_key)?.status !== 'booked',
-    ),
+  const safeRows = allRows.filter(
+    r => r.status !== 'upcoming' || existingMap.get(r.dedup_key)?.status !== 'booked',
   )
-  if (dropped.length > 0) {
-    // Minimized like the skipped-row warning above: no text, no amounts.
-    log.warn('skattekonto response repeated a transaction, one row kept per key', {
-      companyId: ctx.companyId,
-      rows: dropped.map(d => ({
-        transaktionsidentitet: d.row.transaktionsidentitet,
-        transaktionsdatum: d.row.transaktionsdatum,
-        droppedStatus: d.row.status,
-        keptStatus: d.kept.status,
-        amountDiffers: d.row.belopp_skatteverket !== d.kept.belopp_skatteverket,
-      })),
-    })
-  }
 
   if (safeRows.length > 0) {
     const { error } = await ctx.supabase

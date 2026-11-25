@@ -36,6 +36,7 @@ vi.mock('@/lib/logger', () => ({
 }))
 
 import { syncSkattekonto } from '../lib/skattekonto-sync'
+import { settleAgiTaxPayments } from '../lib/agi-tax-settlement'
 import type { ExtensionContext } from '@/lib/extensions/types'
 
 function makeCtx(): ExtensionContext {
@@ -107,7 +108,7 @@ describe('syncSkattekonto: a response that repeats a dedup_key', () => {
     enqueueFreshCompany()
     const ctx = makeCtx()
 
-    await expect(syncSkattekonto(ctx)).resolves.toMatchObject({ booked: 1 })
+    await expect(syncSkattekonto(ctx)).resolves.toMatchObject({ booked: 1, upcoming: 0 })
 
     const rows = upsertedRows()
     expect(rows).toHaveLength(1)
@@ -162,5 +163,50 @@ describe('syncSkattekonto: a response that repeats a dedup_key', () => {
       companyId: 'company-1',
       rows: [{ transaktionsidentitet: 4711, transaktionsdatum: '2026-11-12', droppedStatus: 'booked', keptStatus: 'booked', amountDiffers: true }],
     })
+    // The AGI settlement sees the transaction once, as the upsert does: a repeated draw would not match the declaration.
+    expect(vi.mocked(settleAgiTaxPayments).mock.calls[0][2]).toEqual([expect.objectContaining({ dedup_key: 'id:4711', belopp_skatteverket: -10500 })])
+  })
+
+  it('takes over one file-imported row per transaction when an id is repeated', async () => {
+    // Two equal payments the file import holds as two hash rows; Skatteverket repeats the first id.
+    // The repeat must not use up the second file row, or id 4712 would be stored beside it.
+    const payment = {
+      transaktionsdatum: '2026-11-12',
+      ranteberakningsdatum: '2026-11-12',
+      transaktionstext: 'Inbetalning bokförd 261112',
+      beloppSkatteverket: 5000,
+      beloppKronofogden: null,
+    }
+    const fileRow = (id: string, dedupKey: string) => ({
+      id,
+      dedup_key: dedupKey,
+      status: 'booked',
+      transaktionsdatum: payment.transaktionsdatum,
+      transaktionstext: payment.transaktionstext,
+      belopp_skatteverket: payment.beloppSkatteverket,
+    })
+    getTransaktionerMock.mockResolvedValue({
+      tidigareTransaktioner: [
+        { ...payment, transaktionsidentitet: 4711 },
+        { ...payment, transaktionsidentitet: 4711 },
+        { ...payment, transaktionsidentitet: 4712 },
+      ],
+      kommandeTransaktioner: [],
+      listed: true,
+    })
+    enqueue({ data: { org_number: '556677-8899', entity_type: 'aktiebolag' } }) // company_settings
+    enqueue({ data: [] }) // fiscal_periods: none
+    enqueue({ data: [] }) // existing dedup_key lookup: none stored
+    enqueue({ data: [fileRow('file-a', 'h:first'), fileRow('file-b', 'h:second')] }) // hash rows to take over
+    enqueue({ data: null }) // takeover of file-a
+    enqueue({ data: null }) // takeover of file-b
+    enqueue({ data: null }) // upsert
+    enqueue({ data: [] }) // stored upcoming rows: none
+
+    await syncSkattekonto(makeCtx())
+
+    const takeovers = findCalls('skattekonto_transactions', 'update').map(u => (u[0] as { dedup_key: string }).dedup_key)
+    expect(takeovers).toEqual(['id:4711', 'id:4712'])
+    expect(upsertedRows().map(r => r.dedup_key)).toEqual(['id:4711', 'id:4712'])
   })
 })
