@@ -578,7 +578,7 @@ function apigwOrScopeMessage(url: string): string {
     'tjänsten kräver. Kontrollera båda i Utvecklarportalen: prenumerationen på ' +
     'API:et, och att applikationens scope-lista täcker det. Om ett scope har ' +
     'lagts till behöver du koppla bort och ansluta igen via Inställningar → ' +
-    'Skatteverket för att få en ny token.'
+    'Kopplingar → Skatteverket för att få en ny token.'
   )
 }
 
@@ -984,7 +984,7 @@ async function sendSkvRequest(
     ) {
       throw new SkatteverketAuthError(
         'Anslutningen mot Skatteverket saknar nödvändig behörighet för denna ' +
-        'tjänst. Koppla bort och anslut igen via Inställningar → Skatteverket ' +
+        'tjänst. Koppla bort och anslut igen via Inställningar → Kopplingar → Skatteverket ' +
         'för att förnya tokenen med rätt scope.',
         'MISSING_SCOPE'
       )
@@ -1057,7 +1057,7 @@ async function sendSkvRequest(
         `inte prenumeration på tjänsten "${apiHint}" i Utvecklarportalen, ` +
         'eller den lagrade tokenen saknar rätt scope. Kontrollera ' +
         'prenumerationen, koppla annars bort och anslut igen via ' +
-        'Inställningar → Skatteverket.',
+        'Inställningar → Kopplingar → Skatteverket.',
         'ACCESS_DENIED'
       )
     }
@@ -1132,7 +1132,7 @@ async function sendSkvRequest(
     if (isTokenScopeRejection(text)) {
       throw new SkatteverketAuthError(
         'Anslutningen mot Skatteverket saknar nödvändig behörighet för denna ' +
-        'tjänst. Koppla bort och anslut igen via Inställningar → Skatteverket ' +
+        'tjänst. Koppla bort och anslut igen via Inställningar → Kopplingar → Skatteverket ' +
         'för att förnya tokenen med rätt scope.',
         'MISSING_SCOPE'
       )

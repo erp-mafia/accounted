@@ -239,11 +239,12 @@ describe('planSaleBeforeSettlement', () => {
     expect(plan.ok === false && plan.details).toMatchObject({ sale_first: true, invoice_id: 'inv-1' })
   })
 
-  it('needs nothing when a concurrent Bokför booked the invoice since it was read', async () => {
+  it('needs nothing when a concurrent Bokför booked the invoice since it was read, and says so', async () => {
     vi.mocked(bookInvoice).mockResolvedValue({ ok: false, code: 'INVOICE_BOOK_ALREADY_BOOKED' })
     const { supabase } = fakeSupabase({ company_settings: [{ data: DEFERRING, error: null }] })
     const plan = await planSaleBeforeSettlement(ctxFor(supabase), UNBOOKED, { settlementDate: '2026-10-10' })
-    expect(plan).toEqual(SALE_FIRST_NOT_REQUIRED)
+    // bookedSince: the row's empty journal_entry_id is stale, the ledger has the sale.
+    expect(plan).toEqual({ ...SALE_FIRST_NOT_REQUIRED, bookedSince: true })
   })
 
   it('refuses a partially paid invoice the way the Bokför step does', async () => {

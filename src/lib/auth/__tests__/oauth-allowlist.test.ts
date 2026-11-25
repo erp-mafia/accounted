@@ -5,6 +5,7 @@ import {
   isAllowedRedirectUri,
   isBuiltInRedirectUri,
   lookupCompanyRole,
+  nativeAppScheme,
   resolveRedirectUri,
 } from '../oauth-allowlist'
 import { ALL_SCOPES, type ApiKeyScope } from '../scope-catalog'
@@ -127,6 +128,8 @@ describe('isBuiltInRedirectUri', () => {
     ['https://evil.com/cb', false],
     ['https://example.com/api/foo', false],
     ['ftp://localhost/cb', false],
+    ['se.example.dashboard:/oauth/callback', true],
+    ['se.example.dashboard://oauth/callback', true],
     ['', false],
   ])('classifies %s as %s', (uri, expected) => {
     expect(isBuiltInRedirectUri(uri)).toBe(expected)
@@ -157,10 +160,58 @@ describe('builtInRedirectProvider', () => {
     ['http://localhost:8787/callback', 'local'],
     ['http://localhost:3000/cb', 'local'],
     ['http://127.0.0.1:8080/cb', 'local'],
+    ['se.example.dashboard:/oauth/callback', 'native_app'],
     ['https://claude-login.example/cb', null],
     ['', null],
   ])('maps %s to %s', (uri, expected) => {
     expect(builtInRedirectProvider(uri)).toBe(expected)
+  })
+})
+
+describe('native app callbacks (RFC 8252 private-use schemes)', () => {
+  it.each([
+    ['se.example.dashboard:/oauth/callback', 'se.example.dashboard'],
+    ['se.example.dashboard://oauth/callback', 'se.example.dashboard'],
+    ['se.example.dashboard://callback', 'se.example.dashboard'],
+    ['se.example.dashboard:/oauth/callback/', 'se.example.dashboard'],
+    ['com.googleusercontent.apps.123-abc:/oauth2redirect', 'com.googleusercontent.apps.123-abc'],
+  ])('accepts %s as the app %s', (uri, scheme) => {
+    expect(builtInRedirectProvider(uri)).toBe('native_app')
+    expect(nativeAppScheme(uri)).toBe(scheme)
+  })
+
+  it.each([
+    // A scheme without a dot: every scheme a browser handles itself has none.
+    ['myapp://callback'],
+    ['javascript:alert(1)'],
+    ['data:text/html,x'],
+    ['intent://callback'],
+    // Upper case: a URL parser lower-cases the scheme, so the code would go
+    // to another string than the one the token route compares.
+    ['Se.Example.Dashboard:/oauth/callback'],
+    // No path, no slash, or a third slash.
+    ['se.example.dashboard:/'],
+    ['se.example.dashboard:callback'],
+    ['se.example.dashboard:///callback'],
+    // Dot segment, percent-encoding, query, fragment, whitespace.
+    ['se.example.dashboard:/../callback'],
+    ['se.example.dashboard:/%2e%2e/callback'],
+    ['se.example.dashboard:/callback?next=x'],
+    ['se.example.dashboard:/callback#x'],
+    ['se.example.dashboard:/call back'],
+    // Empty or malformed labels.
+    ['se..dashboard:/callback'],
+    ['se.-dashboard:/callback'],
+    ['.example.dashboard:/callback'],
+  ])('refuses %s', (uri) => {
+    expect(builtInRedirectProvider(uri)).toBeNull()
+    expect(nativeAppScheme(uri)).toBeNull()
+  })
+
+  it('leaves an https or loopback callback to its own rule', () => {
+    expect(nativeAppScheme('https://claude.ai/api/mcp/auth_callback')).toBeNull()
+    expect(nativeAppScheme('http://127.0.0.1:8080/cb')).toBeNull()
+    expect(builtInRedirectProvider('cursor://anysphere.cursor-mcp/oauth/callback')).toBe('cursor_deeplink')
   })
 })
 

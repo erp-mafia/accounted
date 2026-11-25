@@ -171,7 +171,7 @@ describe('validateAnnualReportCompleteness', () => {
     const issue = result.issues.find((item) => item.code === 'AR-COMPANY-REGISTERED-OFFICE')
     expect(issue?.severity).toBe('error')
     // Says where to enter it and that it is not the postal town.
-    expect(issue?.remediation).toContain('Inställningar → Företag')
+    expect(issue?.remediation).toContain('Inställningar → Företaget → Företagsuppgifter')
     expect(issue?.remediation).toContain('orten i postadressen')
     expect(result.ok).toBe(false)
   })

@@ -87,8 +87,8 @@ export async function fetchVatDeclarationStatus(
         http_status: 401,
         error:
           resolved.reason === 'needs_reconsent'
-            ? 'Anslutningen mot Skatteverket behöver förnyas: Skatteverkets personliga inloggning räcker i ungefär tio timmar, så detta är normalt. Be användaren ansluta igen med BankID under Inställningar → Skatteverket. Bara en person kan göra det; försök inte igen förrän användaren bekräftat.'
-            : 'Inte ansluten till Skatteverket. Be användaren ansluta med BankID under Inställningar → Skatteverket.',
+            ? 'Anslutningen mot Skatteverket behöver förnyas: Skatteverkets personliga inloggning räcker i ungefär tio timmar, så detta är normalt. Be användaren ansluta igen med BankID under Inställningar → Kopplingar → Skatteverket. Bara en person kan göra det; försök inte igen förrän användaren bekräftat.'
+            : 'Inte ansluten till Skatteverket. Be användaren ansluta med BankID under Inställningar → Kopplingar → Skatteverket.',
       }
     }
 

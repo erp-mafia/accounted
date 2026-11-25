@@ -17,6 +17,7 @@ import {
   builtInOnwardOrigins,
   capScopesForRole,
   lookupCompanyRole,
+  nativeAppScheme,
   resolveRedirectUri,
   type RedirectUriResolution,
 } from '@/lib/auth/oauth-allowlist'
@@ -330,9 +331,11 @@ export async function GET(request: Request) {
 
   // Client identity and the host the browser will be sent to after consent.
   // Both are shown unconditionally so a look-alike registration cannot pass
-  // for Claude and the user always sees where the code is going.
+  // for Claude and the user always sees where the code is going. A native
+  // app's callback has no host (se.example.app:/cb), so its scheme, the app's
+  // own reverse domain name, is what the page names instead.
   const client = describeClient(resolution)
-  const redirectHost = new URL(redirectUri).host
+  const redirectHost = nativeAppScheme(redirectUri) ?? new URL(redirectUri).host
   const clientRowsHtml = `<div class="fact">
         <span class="fact-label">Klient</span>
         <span class="fact-value">${escapeHtml(client.name)} <span class="fact-tag${client.verified ? ' verified' : ''}">${escapeHtml(client.tag)}</span></span>
@@ -1494,6 +1497,11 @@ function describeClient(
         return { name: 'Celemine', shortName: 'Celemine', tag: 'Verifierad', verified: true }
       case 'flytt_extension':
         return { name: 'Flytta till Accounted', shortName: 'Flytta till Accounted', tag: 'Verifierad', verified: true }
+      case 'native_app':
+        // Any app on the device can claim a private-use scheme, so it carries
+        // the loopback's trust: named by kind, the scheme shown as where the
+        // code goes, never marked verified.
+        return { name: 'Mobil- eller datorapp', shortName: 'Appen', tag: 'Din egen enhet', verified: false }
       case 'local':
         return { name: 'Lokal utveckling (localhost)', shortName: 'Klienten', tag: 'Din egen dator', verified: false }
     }

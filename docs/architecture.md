@@ -126,7 +126,10 @@ declarations.
   per key). Claude, ChatGPT, Grok, Gemini and Copilot Studio connectors instead authenticate with OAuth 2.1
   (PKCE; `src/app/api/mcp-oauth/{authorize,register,token}` plus the
   `.well-known` discovery documents), which mints a scoped API key behind the
-  scenes. Authentication is lazy: a client can connect, list tools, and call a
+  scenes. A native app (iPhone, Android, desktop) signs in the same way through
+  the system browser, with the code sent back to its own reverse-domain URI
+  scheme (RFC 8252, for example `se.example.app:/oauth/callback`), so its users
+  never paste a key. Authentication is lazy: a client can connect, list tools, and call a
   small set of public discovery tools before an account exists; the first
   tenant-touching call answers 401 and triggers the client's connect prompt
   (`src/extensions/general/mcp-server/public-tools.ts`).

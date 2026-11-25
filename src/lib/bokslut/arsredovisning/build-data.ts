@@ -634,7 +634,7 @@ export async function buildArsredovisningReport(
   }
   if (entityType === 'unknown') {
     warnings.push(
-      'Företagsform saknas i inställningarna: fyll i Inställningar → Företag för att få rätt redovisningsprinciper i not 1.',
+      'Företagsform saknas i inställningarna (Inställningar → Bokföring → Moms och skatt), och bara supporten kan ändra den: kontakta supporten för att få rätt redovisningsprinciper i not 1.',
     )
   }
   // The adopting meeting is the årsstämma of an aktiebolag (ABL 7 kap. 10 §)
@@ -1194,7 +1194,7 @@ async function buildK2Noter(
       // registered amount). Omit the note entirely and surface a warning so
       // the UI can flag this pre-download.
       warnings.push(
-        'Aktiekapitalnoten saknas eftersom uppgifter om aktiekapital inte finns i Inställningar → Företag. K2 / ÅRL kräver att noten innehåller registrerat belopp innan inlämning till Bolagsverket.',
+        'Aktiekapitalnoten saknas eftersom uppgifter om aktiekapital inte finns i Inställningar → Företaget → Företagsuppgifter. K2 / ÅRL kräver att noten innehåller registrerat belopp innan inlämning till Bolagsverket.',
       )
     }
   }
@@ -1743,7 +1743,7 @@ async function buildK3Noter(
       })
     } else if (isAb) {
       warnings.push(
-        'Aktiekapitalnoten utelämnas eftersom uppgifter om aktiekapital saknas i Inställningar → Företag. För ett mindre företag är noten frivillig; ett större företag ska ange antal aktier och kvotvärde (ÅRL 5 kap. 34 §).',
+        'Aktiekapitalnoten utelämnas eftersom uppgifter om aktiekapital saknas i Inställningar → Företaget → Företagsuppgifter. För ett mindre företag är noten frivillig; ett större företag ska ange antal aktier och kvotvärde (ÅRL 5 kap. 34 §).',
       )
     }
   }

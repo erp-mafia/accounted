@@ -256,7 +256,7 @@ describe('commitPendingOperation: create_transaction through ingestTransactions'
       expect(result.error).toBe(
         'Bankkontot på 1930 är avstängt och markerat att visas på fakturor, så transaktionen sparades inte. ' +
           'En ägare eller administratör behöver aktivera det under Inställningar → Bokföring (då visas det på fakturor igen) ' +
-          'eller dölja det på fakturor under Inställningar → Fakturering.',
+          'eller dölja det på fakturor under Inställningar → Försäljning → Fakturor.',
       )
       expect(statusWrites.at(-1)).toEqual({ status: 'pending' })
       expect(mockIngest).not.toHaveBeenCalled()

@@ -236,6 +236,7 @@ const CONNECTOR_LABELS: Readonly<Record<string, string>> = {
   squidler: 'Squidler',
   celemine: 'Celemine',
   flytt_extension: 'Flytta till Accounted',
+  native_app: 'App',
 }
 
 /** The facts of a validated key that decide who it is. */

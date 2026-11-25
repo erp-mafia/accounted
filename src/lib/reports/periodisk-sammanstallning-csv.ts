@@ -92,7 +92,7 @@ export function buildPeriodiskSammanstallningCsv(
   if (!orgnr || !filer.contactName?.trim() || !filer.contactPhone?.trim() || !filer.contactEmail?.trim()) {
     throw new PsCsvBuildError(
       'MISSING_FILER_INFO',
-      'Kontaktuppgifter för skatterapportering saknas. Fyll i namn, telefon och e-post under Inställningar → Företag.',
+      'Kontaktuppgifter för skatterapportering saknas. Fyll i namn, telefon och e-post under Inställningar → Bokföring → Moms och skatt → Kontaktperson för skatteärenden.',
     )
   }
 

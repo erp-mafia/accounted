@@ -8741,7 +8741,7 @@ export const tools: McpTool[] = [
         skatteverket_connection: {
           type: 'object',
           description:
-            'Connection status and grant detail, if connected. needs_reconsent requires a person using BankID in Settings > Skatteverket; warn before SKV work. filing.ready: can THIS user file.',
+            'Connection status and grant detail, if connected. needs_reconsent requires a person using BankID in Settings → Connections → Skatteverket; warn before SKV work. filing.ready: can THIS user file.',
         },
       },
       required: ['company', 'user_name', 'atoms', 'memory', 'recommended_tools'],

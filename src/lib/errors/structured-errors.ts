@@ -2813,10 +2813,10 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
   },
   INVOICE_SEND_PAYMENT_ACCOUNT_INVALID: {
     httpStatus: 400,
-    message_sv: 'Bankkontot som fakturan ska betalas till kan inte längre användas: det är avstängt, borttaget från kundfakturor eller saknar uppgifter för fakturans valuta. Välj ett annat konto på fakturan eller uppdatera kontot under Inställningar → Fakturering.',
-    message_en: 'The bank account this invoice is to be paid to can no longer be used: it is disabled, no longer shown on customer invoices, or lacks details for the invoice currency. Pick another account on the invoice or update the account under Inställningar → Fakturering (Settings → Invoicing).',
+    message_sv: 'Bankkontot som fakturan ska betalas till kan inte längre användas: det är avstängt, borttaget från kundfakturor eller saknar uppgifter för fakturans valuta. Välj ett annat konto på fakturan eller uppdatera kontot under Inställningar → Försäljning → Fakturor.',
+    message_en: 'The bank account this invoice is to be paid to can no longer be used: it is disabled, no longer shown on customer invoices, or lacks details for the invoice currency. Pick another account on the invoice or update the account under Inställningar → Försäljning → Fakturor (Settings → Sales → Invoices).',
     remediation: {
-      description: 'Välj ett annat bankkonto på fakturan, eller återaktivera kontot och fyll i dess betaluppgifter under Inställningar → Fakturering.',
+      description: 'Välj ett annat bankkonto på fakturan, eller återaktivera kontot och fyll i dess betaluppgifter under Inställningar → Försäljning → Fakturor.',
     },
   },
   INVOICE_PAYEE_SNAPSHOT_FAILED: {
@@ -2846,9 +2846,9 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
   CASH_ACCOUNT_DISABLED_PAYEE: {
     httpStatus: 409,
     message_sv:
-      'Bankkontot är avstängt och markerat att visas på fakturor. En ägare eller administratör behöver aktivera det under Inställningar → Bokföring (då visas det på fakturor igen) eller dölja det på fakturor under Inställningar → Fakturering innan transaktioner kan läggas på det.',
+      'Bankkontot är avstängt och markerat att visas på fakturor. En ägare eller administratör behöver aktivera det under Inställningar → Bokföring (då visas det på fakturor igen) eller dölja det på fakturor under Inställningar → Försäljning → Fakturor innan transaktioner kan läggas på det.',
     message_en:
-      'This bank account is turned off and marked to be printed on invoices. An owner or admin needs to turn it on under Inställningar → Bokföring (Settings → Bookkeeping; it is then printed on invoices again) or hide it on invoices under Inställningar → Fakturering (Settings → Invoicing) before transactions can be put on it.',
+      'This bank account is turned off and marked to be printed on invoices. An owner or admin needs to turn it on under Inställningar → Bokföring (Settings → Bookkeeping; it is then printed on invoices again) or hide it on invoices under Inställningar → Försäljning → Fakturor (Settings → Sales → Invoices) before transactions can be put on it.',
     remediation: {
       description:
         'Retrying does not help until an owner or admin turns the account on (it is then printed on invoices again) or hides it on invoices: gnubok_update_cash_account stages either (enabled or invoice_payee). Or send the row with the ledger_account of another bank account (gnubok_list_cash_accounts).',
@@ -2982,18 +2982,18 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     // Currency-neutral by necessity (the registry has no details). Surfaces
     // that know the invoice currency say exactly what is missing through
     // describeMissingInvoicePaymentAccount() (lib/cash-accounts/invoice-payment-accounts.ts).
-    message_sv: 'Fakturan saknar betalningsuppgifter för sin valuta: bankgiro, plusgiro, Swish eller bankkonto för SEK, IBAN för andra valutor. Lägg till dem under Inställningar → Fakturering innan du skapar PDF-filen eller skickar fakturan.',
-    message_en: 'The invoice has no payment details for its currency: bankgiro, plusgiro, Swish or a bank account for SEK, an IBAN for other currencies. Add them under Inställningar → Fakturering (Settings → Invoicing) before generating the PDF or sending the invoice.',
+    message_sv: 'Fakturan saknar betalningsuppgifter för sin valuta: bankgiro, plusgiro, Swish eller bankkonto för SEK, IBAN för andra valutor. Lägg till dem under Inställningar → Försäljning → Fakturor innan du skapar PDF-filen eller skickar fakturan.',
+    message_en: 'The invoice has no payment details for its currency: bankgiro, plusgiro, Swish or a bank account for SEK, an IBAN for other currencies. Add them under Inställningar → Försäljning → Fakturor (Settings → Sales → Invoices) before generating the PDF or sending the invoice.',
     remediation: {
-      description: 'Lägg till betalningsuppgifter för fakturans valuta under Inställningar → Fakturering: bankgiro, plusgiro, Swish eller bankkonto för SEK, IBAN för andra valutor.',
+      description: 'Lägg till betalningsuppgifter för fakturans valuta under Inställningar → Försäljning → Fakturor: bankgiro, plusgiro, Swish eller bankkonto för SEK, IBAN för andra valutor.',
     },
   },
   INVOICE_SEND_VAT_NUMBER_MISSING: {
     httpStatus: 400,
-    message_sv: 'Företaget är momsregistrerat men saknar momsregistreringsnummer, som måste anges på fakturan (ML 17 kap. 24 §). Lägg till det under Inställningar → Skatt innan du skickar fakturan.',
-    message_en: 'The company is VAT-registered but has no VAT number, which is a mandatory invoice element (ML 17 kap. 24 §). Add it under Inställningar → Skatt (Settings → Tax) before issuing the invoice.',
+    message_sv: 'Företaget är momsregistrerat men saknar momsregistreringsnummer, som måste anges på fakturan (ML 17 kap. 24 §). Lägg till det under Inställningar → Bokföring → Moms och skatt innan du skickar fakturan.',
+    message_en: 'The company is VAT-registered but has no VAT number, which is a mandatory invoice element (ML 17 kap. 24 §). Add it under Inställningar → Bokföring → Moms och skatt (Settings → Bookkeeping → VAT and tax) before issuing the invoice.',
     remediation: {
-      description: 'Lägg till företagets momsregistreringsnummer under Inställningar → Skatt.',
+      description: 'Lägg till företagets momsregistreringsnummer under Inställningar → Bokföring → Moms och skatt.',
     },
   },
   // crm#2080: ML 17 kap. 24 § p.5-6 and 26-28 §§, the rule in lib/invoices/invoice-parties.ts.
@@ -5800,8 +5800,8 @@ const BANK_SYNC: Record<string, StructuredErrorEntry> = {
   },
   BANK_SYNC_NO_ACCOUNTS: {
     httpStatus: 409,
-    message_sv: 'Inga konton är valda för synkning. Aktivera minst ett konto under Inställningar, Bank.',
-    message_en: 'No accounts are selected for syncing. The user must enable at least one under Settings, Bank.',
+    message_sv: 'Inga konton är valda för synkning. Aktivera minst ett konto under Inställningar → Kopplingar → Bank.',
+    message_en: 'No accounts are selected for syncing. The user must enable at least one under Settings → Connections → Bank.',
   },
   BANK_SYNC_COOLDOWN: {
     httpStatus: 429,
@@ -8639,11 +8639,11 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     message_sv:
       'Verifikationen makulerar en ångrad SIE-import och kan inte raderas: då blir importens verifikationer aktiva igen. Importera filen på nytt under Bokföring > Importera/Exportera, eller börja om med tomma verifikationsserier med Gör om migrering under Inställningar > Företaget > Företagsuppgifter > Riskzon.',
     message_en:
-      'This voucher reverses an undone SIE import and cannot be deleted: the import\'s vouchers would become active again. Import the file again, or start over with empty voucher series via Redo migration under Settings > Company.',
+      'This voucher reverses an undone SIE import and cannot be deleted: the import\'s vouchers would become active again. Import the file again, or start over with empty voucher series via Redo migration under Settings → Company → Company details → Danger zone.',
     retryable: false,
     remediation: {
       description:
-        'The storno belongs to an undone or replaced SIE import (retain_sie_undo_reversal). To bring the vouchers back, import the file again (gnubok_import_sie). To start the books over, the owner uses Redo migration (Gör om migrering) under Settings > Company in the app.',
+        'The storno belongs to an undone or replaced SIE import (retain_sie_undo_reversal). To bring the vouchers back, import the file again (gnubok_import_sie). To start the books over, the owner uses Redo migration (Gör om migrering) under Settings → Company → Company details → Danger zone in the app.',
       tool: 'gnubok_import_sie',
       resource: '/settings/company',
     },
@@ -9176,7 +9176,7 @@ const PACKAGE: Record<string, StructuredErrorEntry> = {
     retryable: false,
     remediation: {
       description:
-        'For Lön in an enskild firma: set pays_salaries in the company tax profile (Inställningar, Skatt), then switch the package on.',
+        'For Lön in an enskild firma: set pays_salaries in the company tax profile (Inställningar → Bokföring → Löner), then switch the package on.',
     },
   },
 }
@@ -10252,12 +10252,12 @@ const SKATTEVERKET: Record<string, StructuredErrorEntry> = {
   SKATTEVERKET_NOT_CONNECTED: {
     httpStatus: 401,
     message_sv:
-      'Anslutningen till Skatteverket saknas eller har gått ut. Om företaget varit anslutet tidigare är detta normalt: Skatteverkets personliga inloggning räcker i ungefär tio timmar. Be användaren ansluta (igen) med BankID under Inställningar → Skatteverket.',
+      'Anslutningen till Skatteverket saknas eller har gått ut. Om företaget varit anslutet tidigare är detta normalt: Skatteverkets personliga inloggning räcker i ungefär tio timmar. Be användaren ansluta (igen) med BankID under Inställningar → Kopplingar → Skatteverket.',
     message_en:
-      'The Skatteverket connection is missing or has expired. If the company was connected before this is expected: Skatteverket personal sessions last about ten hours. Tell the user to connect (or reconnect) with BankID under Inställningar → Skatteverket in Accounted. Only a person can do this; do not retry until they confirm they have reconnected.',
+      'The Skatteverket connection is missing or has expired. If the company was connected before this is expected: Skatteverket personal sessions last about ten hours. Tell the user to connect (or reconnect) with BankID under Settings → Connections → Skatteverket in Accounted. Only a person can do this; do not retry until they confirm they have reconnected.',
     remediation: {
       description:
-        'A person must connect (or reconnect) to Skatteverket with BankID: call gnubok_connect_skatteverket for the connect_url and give it to the user, or they open Inställningar → Skatteverket. Personal Skatteverket sessions expire after about ten hours by SKV design, so an expired session is normal, not a fault. Do not retry until the user confirms they have reconnected.',
+        'A person must connect (or reconnect) to Skatteverket with BankID: call gnubok_connect_skatteverket for the connect_url and give it to the user, or they open Settings → Connections → Skatteverket. Personal Skatteverket sessions expire after about ten hours by SKV design, so an expired session is normal, not a fault. Do not retry until the user confirms they have reconnected.',
       tool: 'gnubok_connect_skatteverket',
     },
   },
@@ -10373,9 +10373,9 @@ const SKATTEVERKET: Record<string, StructuredErrorEntry> = {
   ORG_NUMBER_CONTESTED: {
     httpStatus: 409,
     message_sv:
-      'Organisationsnumret används av fler än ett företag. Anslut det här företaget till Skatteverket med BankID under Inställningar → Skatteverket och försök sedan igen. Den som ansluter måste få företräda företaget hos Skatteverket.',
+      'Organisationsnumret används av fler än ett företag. Anslut det här företaget till Skatteverket med BankID under Inställningar → Kopplingar → Skatteverket och försök sedan igen. Den som ansluter måste få företräda företaget hos Skatteverket.',
     message_en:
-      'The organisation number is used by more than one company. Connect this company to Skatteverket with BankID under Settings → Skatteverket, then try again. The person connecting must be allowed to represent the company at Skatteverket.',
+      'The organisation number is used by more than one company. Connect this company to Skatteverket with BankID under Settings → Connections → Skatteverket, then try again. The person connecting must be allowed to represent the company at Skatteverket.',
   },
   // Two or more claimants are proven: the connection follows neither.
   ORG_NUMBER_PROVEN_TWICE: {
@@ -12808,10 +12808,10 @@ const PAYMENT_ORDERS: Record<string, StructuredErrorEntry> = {
   USAGE_LIMIT_REACHED: {
     httpStatus: 409,
     message_sv: 'Det som ingår är använt. Fler kostar en avgift per styck. Begär fler under Inställningar, Abonnemang, Användning, så öppnar vi.',
-    message_en: 'The included amount is used up. More cost a fee each. Ask for more under Settings, Billing, Usage, and we open it.',
+    message_en: 'The included amount is used up. More cost a fee each. Ask for more under Settings → Company → Subscription → Usage, and we open it.',
     remediation: {
       description:
-        'More than details.included of details.kind costs details.unit_price_ore öre each, and the charge is not open for this company. A person asks for more under Settings, Billing, Usage (POST /api/billing/usage/requests); Accounted opens the charge by hand. An agent cannot open it: tell the person, then retry once it is open.',
+        'More than details.included of details.kind costs details.unit_price_ore öre each, and the charge is not open for this company. A person asks for more under Settings → Company → Subscription → Usage (POST /api/billing/usage/requests); Accounted opens the charge by hand. An agent cannot open it: tell the person, then retry once it is open.',
     },
     thrown_message_sv: true,
   },
@@ -12819,10 +12819,10 @@ const PAYMENT_ORDERS: Record<string, StructuredErrorEntry> = {
   USAGE_SUBSCRIPTION_REQUIRED: {
     httpStatus: 409,
     message_sv: 'Det som ingår är använt. Fler kräver ett abonnemang. Starta det under Inställningar, Abonnemang.',
-    message_en: 'The included amount is used up. More need a subscription. Start one under Settings, Billing.',
+    message_en: 'The included amount is used up. More need a subscription. Start one under Settings → Company → Subscription.',
     remediation: {
       description:
-        'The company has no active subscription of its own and no byrå agreement (a trial or a free period), so nothing above details.included of details.kind can be opened or billed. A person starts a subscription under Settings, Billing; an agent cannot.',
+        'The company has no active subscription of its own and no byrå agreement (a trial or a free period), so nothing above details.included of details.kind can be opened or billed. A person starts a subscription under Settings → Company → Subscription; an agent cannot.',
     },
     thrown_message_sv: true,
   },
@@ -12833,7 +12833,7 @@ const PAYMENT_ORDERS: Record<string, StructuredErrorEntry> = {
     message_en: 'The included amount is used up. More can be requested after the first charge of the subscription.',
     remediation: {
       description:
-        'The company has a subscription, started during the trial, that has no payer until its first charge at the end of the trial, so nothing above details.included of details.kind can be opened or billed before then. Nothing is to be started: after the first charge a person asks for more under Settings, Billing, Usage.',
+        'The company has a subscription, started during the trial, that has no payer until its first charge at the end of the trial, so nothing above details.included of details.kind can be opened or billed before then. Nothing is to be started: after the first charge a person asks for more under Settings → Company → Subscription → Usage.',
     },
     thrown_message_sv: true,
   },
