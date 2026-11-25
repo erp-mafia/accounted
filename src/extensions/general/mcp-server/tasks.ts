@@ -56,6 +56,8 @@ export interface McpTaskRow {
   poll_interval_ms: number
   ttl_ms: number
   created_at: string
+  /** Set by the mcp_tasks_updated_at trigger on every write. */
+  updated_at?: string
 }
 
 /**
@@ -173,20 +175,40 @@ export async function abandonMcpTaskIfStale(supabase: SupabaseClient, row: McpTa
       companyId: row.company_id,
       ageMs,
     })
-    return { ...row, status: 'failed', error: ABANDONED_TASK_ERROR, status_message: statusMessage }
+    // lastUpdatedAt is the database's time of the write, as on every later poll.
+    const { data: written } = await supabase.from('mcp_tasks').select('updated_at').eq('id', row.id).maybeSingle()
+    const updatedAt = (written as { updated_at?: string } | null)?.updated_at ?? new Date(now).toISOString()
+    return { ...row, status: 'failed', error: ABANDONED_TASK_ERROR, status_message: statusMessage, updated_at: updatedAt }
   }
   const { data } = await supabase.from('mcp_tasks').select('*').eq('id', row.id).eq('user_id', row.user_id).single()
   return (data as McpTaskRow | null) ?? row
 }
 
-/** Map a row to the wire Task object shared by CreateTaskResult and tasks/get. */
+/**
+ * Map a row to the wire Task object shared by CreateTaskResult and tasks/get.
+ * createdAt, lastUpdatedAt and ttlMs are required by the extension schema;
+ * Claude Code before 2.1.317 refused a task answer without any of them.
+ */
 export function taskToWire(row: McpTaskRow): Record<string, unknown> {
   return {
     taskId: row.id,
     status: row.status,
     createdAt: row.created_at,
+    lastUpdatedAt: row.updated_at ?? row.created_at,
     ttlMs: Number(row.ttl_ms),
     pollIntervalMs: row.poll_interval_ms,
     ...(row.status_message ? { statusMessage: row.status_message } : {}),
   }
+}
+
+/**
+ * The answer to a tools/call the server runs as a task: CreateTaskResult is
+ * the Task flat on the result (`Result & Task`, resultType "task"); a client
+ * reads taskId and status from the top level, and refuses the answer without
+ * them. `task` repeats the same object for accounted CLI 0.1.0, which reads
+ * the nested copy the 2025-11-25 core shape had.
+ */
+export function createTaskResult(row: McpTaskRow): Record<string, unknown> {
+  const task = taskToWire(row)
+  return { resultType: 'task', ...task, task }
 }

@@ -65,6 +65,10 @@ export interface Skill {
   name: string
   /** One-line summary used by gnubok_list_skills. */
   summary: string
+  /** An atom's full SKILL.md description (the trigger text a host matches a
+   *  task against); the MCP skills extension serves it where present, and
+   *  `summary` otherwise. */
+  description?: string
   /** Tags for filtering (e.g. ['monthly', 'vat', 'reconciliation']). */
   tags: string[]
   /** Full skill body as Markdown. */

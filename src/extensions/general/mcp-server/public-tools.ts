@@ -53,4 +53,8 @@ export const ANONYMOUS_METHODS: ReadonlySet<string> = new Set([
   'prompts/list',
   'resources/list',
   'resources/templates/list',
+  // The skills extension's catalog: the same company-independent skills
+  // resources/list names and gnubok_load_skill serves without a token.
+  'skills/list',
+  'skills/get',
 ])
