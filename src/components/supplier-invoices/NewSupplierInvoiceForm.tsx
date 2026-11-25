@@ -33,6 +33,7 @@ import { cn, formatAmount, formatCurrency, formatDate } from '@/lib/utils'
 import {
   invoiceTotalsCrosscheck,
   invoiceVatIsBooked,
+  isInputVatAccountRow,
   rowNetFromInvoiceTotals,
   rowsAgainstInvoiceTotals,
   totalFirstFill,
@@ -97,6 +98,7 @@ import {
   ReusedReferenceSentence,
   duplicateNumberSentence,
 } from '@/components/supplier-invoices/DuplicateWarnings'
+import { InputVatRowHint, RowsCarryNoVatLine } from '@/components/supplier-invoices/VatGuidanceLines'
 import { PayerChoiceSelect } from '@/components/expenses/PayerChoiceSelect'
 import { ExpenseClaimantFields } from '@/components/expenses/ExpenseClaimantFields'
 import { isPersonPayer } from '@/lib/expenses/payer'
@@ -1189,6 +1191,14 @@ export default function NewSupplierInvoiceForm({
     return limitedDeductionAvailable(index) && watchedItems?.[index]?.vat_deduction_share != null
   }
 
+  // A row on an ingående moms account at 0 % is moms typed by hand: it books
+  // as typed, and a caption under it says it is not the invoice's moms. Where
+  // the invoice's moms is booked, the case the Moms field covers.
+  function inputVatRowHintVisible(index: number): boolean {
+    const item = watchedItems?.[index]
+    return fakturaVatVisible && !!item && isInputVatAccountRow(item)
+  }
+
   function toggleLimitedDeduction(index: number) {
     const item = watchedItems?.[index]
     if (!item) return
@@ -1404,6 +1414,7 @@ export default function NewSupplierInvoiceForm({
     totalMatches: crosscheckMatches,
     vatDiff: vatCrosscheckDiff,
     vatMatches: vatCrosscheckMatches,
+    rowsCarryNoVat,
   } = invoiceTotalsCrosscheck({
     invoiceTotal: enteredFakturaTotal,
     invoiceVat: enteredFakturaVat,
@@ -1411,6 +1422,12 @@ export default function NewSupplierInvoiceForm({
     totalVat,
     deductibleVat,
   })
+  // Rows that carry no moms against an invoice that states some: the red
+  // line says where the moms belongs instead of "check the moms sats". It
+  // names Begränsat momsavdrag, which a self-billing invoice does not have:
+  // there the general line stays.
+  const vatOnNoRow = rowsCarryNoVat &&
+    limitedDeductionApplies({ reverse_charge: watchedReverseCharge, is_self_billed: watchedSelfBilled })
 
   // A Moms lower than the rows deduct is usually the deductible moms typed in
   // (crm#1954): offer to book the rest as cost on the rows, a personbil row
@@ -2407,9 +2424,14 @@ export default function NewSupplierInvoiceForm({
                   </p>
                 )}
                 {vatCrosscheckDiff != null && !vatCrosscheckMatches && (
-                  <p className="text-destructive">
-                    {t('crosscheck_vat_diff', { diff: signedAmount(vatCrosscheckDiff) })}
-                  </p>
+                  vatOnNoRow ? (
+                    // The rows carry no moms, so the difference is the invoice's whole moms.
+                    <RowsCarryNoVatLine vat={vatCrosscheckDiff} currency={watchedCurrency} />
+                  ) : (
+                    <p className="text-destructive">
+                      {t('crosscheck_vat_diff', { diff: signedAmount(vatCrosscheckDiff) })}
+                    </p>
+                  )
                 )}
                 {/* Less moms than the rows deduct is often the deductible
                     moms typed into the invoice's Moms field (crm#1617,
@@ -2549,7 +2571,8 @@ export default function NewSupplierInvoiceForm({
                           (canUseAccrual && isAccrualOpen(index)) ||
                             (dimensionsEnabled && isDimOpen(index)) ||
                             slpRowVisible(index) ||
-                            isLimitedDeductionOpen(index)
+                            isLimitedDeductionOpen(index) ||
+                            inputVatRowHintVisible(index)
                             ? 'border-0'
                             : 'border-b-hairline',
                           settledFields.has('items') && 'prefill-settle',
@@ -2717,6 +2740,13 @@ export default function NewSupplierInvoiceForm({
                           </span>
                         </td>
                       </tr>
+                      {inputVatRowHintVisible(index) && (
+                        <tr className={cn((canUseAccrual && isAccrualOpen(index)) || (dimensionsEnabled && isDimOpen(index)) || slpRowVisible(index) || isLimitedDeductionOpen(index) ? 'border-0' : 'border-b-hairline')}>
+                          <td colSpan={vatColsVisible ? 6 : 4} className="pb-2">
+                            <InputVatRowHint />
+                          </td>
+                        </tr>
+                      )}
                       {canUseAccrual && isAccrualOpen(index) && (
                         <tr className={cn((dimensionsEnabled && isDimOpen(index)) || slpRowVisible(index) || isLimitedDeductionOpen(index) ? 'border-0' : 'border-b-hairline')}>
                           <td colSpan={vatColsVisible ? 6 : 4} className="pb-3">

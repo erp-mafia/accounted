@@ -1,6 +1,7 @@
 import { isZeroOre, roundOre } from '@/lib/money'
 import { splitGrossVat } from '@/lib/bookkeeping/gross-split'
 import { getDisplayTotal } from '@/lib/bookkeeping/invoice-rounding'
+import { getBoxForAccount } from '@/lib/vat/moms-box-mapping'
 import { supplierInvoiceEditorAmounts } from './editor-amounts'
 import { statedVatFromInvoiceField } from './form-payload'
 
@@ -112,6 +113,12 @@ export function rowsAgainstInvoiceTotals(input: {
  * With begränsat momsavdrag the Moms field may hold either the moms the
  * invoice charges (`totalVat`) or the moms the rows deduct
  * (`deductibleVat`, crm#1954): both match.
+ *
+ * `rowsCarryNoVat`: the invoice states moms and the rows, which have amounts,
+ * carry none at all, so the whole moms is the difference. The usual cause is
+ * moms typed by hand on rows at 0 %, where the moms sats on the cost row
+ * belongs. Rows without amounts are not that case: they are still being
+ * filled in.
  */
 export function invoiceTotalsCrosscheck(input: {
   invoiceTotal: number | null
@@ -129,5 +136,17 @@ export function invoiceTotalsCrosscheck(input: {
     totalMatches: totalDiff != null && isZeroOre(totalDiff),
     vatDiff,
     vatMatches: vatDiff == null || isZeroOre(vatDiff) || deductibleMatches,
+    rowsCarryNoVat: input.invoiceVat != null && roundOre(input.invoiceVat) > 0 &&
+      isZeroOre(input.totalVat) && !isZeroOre(input.toPay),
   }
+}
+
+/**
+ * A row booked straight on an ingående moms account (one that reports to
+ * ruta 48) at 0 %: moms typed by hand as a row of its own. It books on its
+ * account as typed, but the editor and the stored invoice take the
+ * invoice's moms from the rows' moms sats, so the row is not counted as it.
+ */
+export function isInputVatAccountRow(row: { account_number?: string | null; vat_rate?: number | null }): boolean {
+  return !!row.account_number && getBoxForAccount(row.account_number) === '48' && !((row.vat_rate ?? 0) > 0)
 }
