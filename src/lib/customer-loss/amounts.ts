@@ -199,7 +199,11 @@ export function openClaim(params: {
   const gap = roundOre(amount - remaining)
   if (amount <= 0) return null
   if (gap !== 0 && (gap !== roundOre(params.ore) || bookedOreRounding(remaining, amount) === 0)) return null
-  return { amount, shares: vatSharesOfPart(params.openVat, roundOre(params.basis - gap), remaining) }
+  const shares = vatSharesOfPart(params.openVat, roundOre(params.basis - gap), remaining)
+  // Rounded down with less than the öre left on 151x, the reskontra's VAT is
+  // more than 151x carries: no claim a decision can book net of VAT.
+  if (gap !== 0 && totalVat(shares) > amount) return null
+  return { amount, shares }
 }
 
 /** The reserve a still-open claim calls for: the claim net of its VAT. */

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  bookedOreOnLedger,
   confirmedLines,
   doubtfulLines,
   liveRows,
@@ -89,6 +90,16 @@ describe('open VAT per account, net of credit notes', () => {
     expect(reachedLedgerAsReceivable([l('1930', 1250, 0), l('3001', 0, 1000), l('2611', 0, 250)])).toBe(false)
     // A year-end carry puts the full claim on 1510 and counts as booked.
     expect(reachedLedgerAsReceivable([l('1510', 1250, 0), l('3001', 0, 1000), l('2611', 0, 250)])).toBe(true)
+  })
+
+  it('reads the öresavrundning the invoice and its credit notes booked on 3740, as a credit', () => {
+    const roundedUp = [l('1510', 1000, 0), l('3001', 0, 799.8), l('2611', 0, 199.95), l('3740', 0, 0.25)]
+    const roundedDown = [l('1510', 1000, 0), l('3740', 0.4, 0), l('3001', 0, 800.32), l('2611', 0, 200.08)]
+    expect(bookedOreOnLedger(roundedUp, [])).toBe(0.25)
+    expect(bookedOreOnLedger(roundedDown, [])).toBe(-0.4)
+    expect(bookedOreOnLedger(mixedInvoice, [])).toBe(0)
+    // A whole credit note mirrors the öre and leaves none.
+    expect(bookedOreOnLedger(roundedUp, [l('1510', 0, 1000), l('3001', 799.8, 0), l('2611', 199.95, 0), l('3740', 0.25, 0)])).toBe(0)
   })
 })
 

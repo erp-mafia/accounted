@@ -584,4 +584,35 @@ describe('an invoice whose issue verifikat booked its öresavrundning', () => {
     expect(await recordConfirmedLoss(supabase, COMPANY, USER, params)).toEqual({ ok: false, code: 'CUSTOMER_LOSS_LEDGER_MISMATCH' })
     expect(createJournalEntry).not.toHaveBeenCalled()
   })
+
+  describe('rounded down with less than the öre left on 1510', () => {
+    // 1 000.40 to pay 1 000, paid 999.95: 1510 carries 0.05, the reskontra 0.45,
+    // and the reskontra's VAT (0.09) is more than 1510 carries.
+    const almostPaid = {
+      openVat: new Map([['2611', 200.08]]),
+      basis: 1000,
+      oreRounding: -0.4,
+      invoice: { total: 1000.4, status: 'partially_paid', paid_amount: 999.95, remaining_amount: 0.45 },
+    }
+
+    it('refuses konstaterad and befarad', async () => {
+      vi.mocked(loadCustomerLossState).mockResolvedValue({ ok: true, state: makeState(almostPaid) })
+      const { supabase } = mockSupabase()
+      expect(await recordConfirmedLoss(supabase, COMPANY, USER, params)).toEqual({ ok: false, code: 'CUSTOMER_LOSS_LEDGER_MISMATCH' })
+      expect(
+        await recordDoubtfulLoss(supabase, COMPANY, USER, { invoiceId: INVOICE, entryDate: '2026-06-01', reason: 'x', decidedBy: USER }),
+      ).toEqual({ ok: false, code: 'CUSTOMER_LOSS_LEDGER_MISMATCH' })
+      expect(createJournalEntry).not.toHaveBeenCalled()
+    })
+
+    it('never releases more reserve than 1519 holds', async () => {
+      const reserved = [{ id: 'f', kind: 'doubtful', net_amount: 799.92 } as unknown as WriteOffRow]
+      vi.mocked(loadCustomerLossState).mockResolvedValue({ ok: true, state: makeState({ ...almostPaid, rows: reserved }) })
+      const { supabase } = mockSupabase()
+      await releaseDoubtfulReserve(supabase, COMPANY, USER, { invoiceId: INVOICE, entryDate: '2026-06-05', decidedBy: USER, reason: 'Betalning' })
+      const [[account, released]] = lineTuples()
+      expect(account).toBe('1519')
+      expect(released).toBeLessThanOrEqual(799.92)
+    })
+  })
 })
