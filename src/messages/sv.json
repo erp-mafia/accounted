@@ -4145,6 +4145,8 @@
     "tax_ocr_note": "Betalfil använder ditt Skattekonto-OCR (org-nummer + Luhn-kontrollsiffra). Skatteverket applicerar betalningen på det belopp du deklarerat i AGI för perioden.",
     "tax_file_generated": "Betalfil senast genererad",
     "tax_marked_paid": "Markerad som betald",
+    "tax_bank_payment": "Betalning via banken",
+    "tax_bank_payment_value": "{status}: {amount} den {date}.",
     "tax_skattekonto_button": "Skattekontot",
     "tax_download_button": "Ladda ner betalfil",
     "tax_mark_paid_button": "Markera som betald",
