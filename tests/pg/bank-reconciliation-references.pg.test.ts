@@ -28,10 +28,11 @@ async function reference(kind: Kind, key = `bank:${twinId}`, db = client) {
   const id = randomUUID()
   if (kind === 'sign-off') await db.query(`INSERT INTO account_reconciliations(id,company_id,account_key,through_date,signed_by)
     VALUES($1,$2,$3,'2026-06-01',$4)`, [id, owner.companyId, key, owner.userId])
+  // The file where attachUnderlag puts it: a member's row names no other key.
   else await db.query(`INSERT INTO account_reconciliation_attachments(id,company_id,account_key,through_date,uploaded_by,
     file_name,mime_type,size_bytes,storage_bucket,storage_path,sha256)
-    VALUES($1::uuid,$2,$3,'2026-06-01',$4,'synthetic.txt','text/plain',0,'pg-reference-fixture',$1::uuid::text,repeat('a',64))`,
-  [id, owner.companyId, key, owner.userId])
+    VALUES($1::uuid,$2,$3,'2026-06-01',$4,'synthetic.txt','text/plain',0,'documents',$5,repeat('a',64))`,
+  [id, owner.companyId, key, owner.userId, `documents/${owner.companyId}/reconciliation/${id}_synthetic.txt`])
   return id
 }
 async function promote(db = client) {
