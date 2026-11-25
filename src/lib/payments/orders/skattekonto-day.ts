@@ -11,6 +11,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { OperationOutcome } from '@/lib/operations/types'
 import { roundOre } from '@/lib/money'
 import { executionDateFor, previousBankDayIso } from '@/lib/payments/bank-days'
+import { SIGNED_PAYMENT_ORDER_STATUSES, type PaymentOrderStatus } from './status'
 import type { PaymentOrderRow } from './types'
 
 /**
@@ -61,11 +62,12 @@ export async function readOpenSkattekontoOrderOnDay(
 }
 
 /**
- * Whether a day's open order is in payment: signed, or at the bank. A new
- * payment on that day is then refused (SKATTEKONTO_PAYMENT_ALREADY_IN_PAYMENT),
- * and a declaration paid on it offers no second payment. An order nobody
- * signed yet (a draft, or approved and not claimed for signing) takes a new
- * payment as an addition instead.
+ * Whether a day's open order is in payment: claimed for signing, signed, or
+ * at the bank. A new payment on that day is then refused
+ * (SKATTEKONTO_PAYMENT_ALREADY_IN_PAYMENT). An order nobody signed yet (a
+ * draft, or approved and not claimed for signing) takes a new payment as an
+ * addition instead. In payment is not paying: only a signed or executed order
+ * pays a declaration (isSkattekontoPaymentSigned).
  */
 export function isSkattekontoDayInPayment(order: Pick<OpenSkattekontoOrder, 'status' | 'batch_id'>): boolean {
   return (order.status !== 'draft' && order.status !== 'approved') || !!order.batch_id
@@ -77,15 +79,29 @@ export interface SkattekontoPaymentTowards extends OpenSkattekontoOrder {
 }
 
 /**
- * The bank payments to the skattekonto made towards a due date: signed, at
- * the bank or executed, on a day from the one it goes out on by default (the
- * banking day before the draw) through the due date itself, where a payment
- * signed on that banking day after the bank's cut-off goes out. The days do
- * not move with today, and the next due date's payment goes out on its own
- * banking day before, a month later. A payment made after the due date, or on
- * a day picked earlier, is not read: the orders do not record which
- * declaration they pay, and such a day may be another period's. An order
- * nobody signed yet pays nothing and is left out. Earliest day first.
+ * Whether a bank payment to the skattekonto will pay: signed, or being
+ * signed, so the bank pays it on its date unless it is cancelled there
+ * (SIGNED_PAYMENT_ORDER_STATUSES), or executed. One that reached the bank
+ * unsigned (submitted, e.g. after a BankID nobody finished) never executes
+ * (status.ts), and one claimed for signing is not signed yet: both are in
+ * payment for the day (isSkattekontoDayInPayment), and neither pays.
+ */
+export function isSkattekontoPaymentSigned(order: Pick<OpenSkattekontoOrder, 'status'>): boolean {
+  return order.status === 'executed' || SIGNED_PAYMENT_ORDER_STATUSES.has(order.status as PaymentOrderStatus)
+}
+
+/**
+ * The bank payments to the skattekonto made towards a due date: in payment
+ * (claimed for signing, signed or at the bank) or executed, on a day from the
+ * one it goes out on by default (the banking day before the draw) through the
+ * due date itself, where a payment signed on that banking day after the
+ * bank's cut-off goes out. The days do not move with today, and the next due
+ * date's payment goes out on its own banking day before, a month later. A
+ * payment made after the due date, or on a day picked earlier, is not read:
+ * the orders do not record which declaration they pay, and such a day may be
+ * another period's. A draft, or an approved order nobody claimed for signing,
+ * is left out: a new payment joins it. Of the rest, only a signed or executed
+ * one pays (isSkattekontoPaymentSigned). Earliest day first.
  */
 export async function readSkattekontoPaymentsTowards(
   client: SupabaseClient,
@@ -107,16 +123,20 @@ export async function readSkattekontoPaymentsTowards(
 }
 
 /**
- * Whether a bank payment to the skattekonto pays a declaration: its amount is
- * the declaration's, to the öre, as the dialog's possible_duplicate reads a
+ * Whether a bank payment to the skattekonto pays a declaration: it is signed
+ * or executed (isSkattekontoPaymentSigned), and its amount is the
+ * declaration's, to the öre, as the dialog's possible_duplicate reads a
  * payment of the same amount (prepare-skattekonto.ts). The orders do not
  * record which declaration they pay, and a larger one on the same day may be
  * another declaration's (the momsdeklaration is often due the same 12th as
  * the AGI), so a larger amount is never read as paying this one.
  */
-export function skattekontoPaymentPaysDeclaration(paymentAmount: number, declared: number): boolean {
+export function skattekontoPaymentPaysDeclaration(
+  payment: Pick<SkattekontoPaymentTowards, 'status' | 'amount'>,
+  declared: number,
+): boolean {
   const owed = roundOre(declared)
-  return owed > 0 && roundOre(paymentAmount) === owed
+  return isSkattekontoPaymentSigned(payment) && owed > 0 && roundOre(Number(payment.amount)) === owed
 }
 
 export const SKATTEKONTO_DAY_TAKEN = 'SKATTEKONTO_PAYMENT_DAY_TAKEN'

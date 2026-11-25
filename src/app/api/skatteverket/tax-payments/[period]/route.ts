@@ -4,7 +4,11 @@ import { getAgiPaymentDueDate } from '@/lib/tax/deadline-config'
 import { readAgiPaymentPeriodConflict } from '@/lib/deadlines/agi-payable-declaration'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { roundOre } from '@/lib/money'
-import { readSkattekontoPaymentsTowards, skattekontoPaymentPaysDeclaration } from '@/lib/payments/orders/skattekonto-day'
+import {
+  isSkattekontoPaymentSigned,
+  readSkattekontoPaymentsTowards,
+  skattekontoPaymentPaysDeclaration,
+} from '@/lib/payments/orders/skattekonto-day'
 import { resolveSkattekontoDueDate } from '@/lib/payments/orders/skattekonto-sources'
 
 /**
@@ -25,15 +29,18 @@ import { resolveSkattekontoDueDate } from '@/lib/payments/orders/skattekonto-sou
  * paid.
  *
  * `bank_payment` is a payment to the skattekonto through the bank made
- * towards the period's due date: signed, at the bank or executed, from the
- * banking day before it through the due date (readSkattekontoPaymentsTowards).
- * The panel shows it, and offers no second payment when `pays_declaration`:
- * its amount is the declaration's to the öre, or the sum of everything
- * declared due that day with it (resolveSkattekontoDueDate). Any other larger
- * amount may be the momsdeklaration due the same day alone. A payment that
- * pays it is the one shown, else the earliest. null when there is none, when the period is marked paid or may not be paid, and when the
- * payments cannot be read: it only informs, so a failed read never takes the
- * panel down.
+ * towards the period's due date: in payment (claimed for signing, signed or
+ * at the bank) or executed, from the banking day before it through the due
+ * date (readSkattekontoPaymentsTowards). The panel shows it, and offers no
+ * second payment when `pays_declaration` (skattekontoPaymentPaysDeclaration):
+ * it is signed or executed, and its amount is the declaration's to the öre,
+ * or the sum of everything declared due that day with it
+ * (resolveSkattekontoDueDate). One that reached the bank unsigned never
+ * executes, and any other larger amount may be the momsdeklaration due the
+ * same day alone: shown, with the button kept. A payment that pays it is the
+ * one shown, else the earliest. null when there is none, when the period is
+ * marked paid or may not be paid, and when the payments cannot be read: it
+ * only informs, so a failed read never takes the panel down.
  */
 export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
   'tax_payment.status',
@@ -100,16 +107,16 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
       if (orders.length > 0) {
         const amountOf = (order: { amount: number | string }) => roundOre(Number(order.amount))
         const declared = roundOre(Number(payment.total_tax) + Number(payment.total_avgifter))
-        let paying = orders.find((order) => skattekontoPaymentPaysDeclaration(amountOf(order), declared))
-        // A larger payment pays it only as the sum of everything declared due
-        // that day with this AGI in it (Betala allt som förfaller, or the AGI
-        // added to the day's open moms payment); any other amount may be
-        // another declaration's alone.
-        if (!paying && orders.some((order) => amountOf(order) > declared)) {
+        let paying = orders.find((order) => skattekontoPaymentPaysDeclaration(order, declared))
+        // A larger signed payment pays it only as the sum of everything
+        // declared due that day with this AGI in it (Betala allt som
+        // förfaller, or the AGI added to the day's open moms payment); any
+        // other amount may be another declaration's alone.
+        if (!paying && orders.some((order) => isSkattekontoPaymentSigned(order) && amountOf(order) > declared)) {
           try {
             const day = await resolveSkattekontoDueDate(supabase, companyId, paymentDueDate, todayIsoStockholm())
             if (day.ok && day.combined.components.some((part) => part.source === 'agi' && part.period === period)) {
-              paying = orders.find((order) => skattekontoPaymentPaysDeclaration(amountOf(order), day.combined.total))
+              paying = orders.find((order) => skattekontoPaymentPaysDeclaration(order, day.combined.total))
             }
           } catch (error) {
             log.warn('skattekonto due day read failed', { error })

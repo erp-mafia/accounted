@@ -313,14 +313,89 @@ describe('GET /api/skatteverket/tax-payments/[period]', () => {
       expect(body.data.bank_payment).toBeNull()
     })
 
-    it('counts an approved payment once it is claimed for signing', async () => {
+    it('shows an approved payment once it is claimed for signing, and keeps the button: it is not signed yet', async () => {
       enqueue({ data: FILED })
       enqueue({ data: SETTINGS })
       enqueue({ data: [{ id: 'order-1', status: 'approved', amount: '24568.00', batch_id: 'batch-1', requested_execution_date: '2026-12-11' }] })
 
       const { body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await get('2026-11'))
 
-      expect(body.data.bank_payment).toMatchObject({ status: 'approved' })
+      expect(body.data.bank_payment).toEqual({
+        status: 'approved',
+        amount: 24568,
+        requested_execution_date: '2026-12-11',
+        pays_declaration: false,
+      })
+    })
+
+    it('shows a payment that reached the bank unsigned, and keeps the button: it never executes', async () => {
+      // A BankID nobody finished: the order sits at the bank as submitted.
+      enqueue({ data: FILED })
+      enqueue({ data: SETTINGS })
+      enqueue({ data: [{ id: 'order-1', status: 'submitted', amount: '24568.00', batch_id: 'batch-1', requested_execution_date: '2026-12-11' }] })
+
+      const { status, body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await get('2026-11'))
+
+      expect(status).toBe(200)
+      expect(body.data.bank_payment).toEqual({
+        status: 'submitted',
+        amount: 24568,
+        requested_execution_date: '2026-12-11',
+        pays_declaration: false,
+      })
+    })
+
+    it.each(['awaiting_signature', 'awaiting_second_signer', 'accepted', 'executed'])(
+      'leaves the button out for a %s payment of the declaration: signed, or executed',
+      async (orderStatus) => {
+        enqueue({ data: FILED })
+        enqueue({ data: SETTINGS })
+        enqueue({ data: [{ id: 'order-1', status: orderStatus, amount: '24568.00', batch_id: 'batch-1', requested_execution_date: '2026-12-11' }] })
+
+        const { body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await get('2026-11'))
+
+        expect(body.data.bank_payment).toEqual({
+          status: orderStatus,
+          amount: 24568,
+          requested_execution_date: '2026-12-11',
+          pays_declaration: true,
+        })
+      },
+    )
+
+    it('reads no due day for an unsigned payment larger than the declaration: it pays nothing', async () => {
+      // The whole day's sum, but never signed.
+      resolveDueDateMock.mockResolvedValue(DUE_DAY)
+      enqueue({ data: FILED })
+      enqueue({ data: SETTINGS })
+      enqueue({ data: [{ id: 'order-1', status: 'submitted', amount: '84568.00', batch_id: 'batch-1', requested_execution_date: '2026-12-11' }] })
+
+      const { body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await get('2026-11'))
+
+      expect(body.data.bank_payment).toMatchObject({ status: 'submitted', amount: 84568, pays_declaration: false })
+      expect(resolveDueDateMock).not.toHaveBeenCalled()
+    })
+
+    it('shows the signed payment of the declaration over an unsigned one of the same days', async () => {
+      // The Friday's payment was left unsigned at the bank; the declaration
+      // was then paid again, signed, for the Monday.
+      enqueue({ data: FILED })
+      enqueue({ data: SETTINGS })
+      enqueue({
+        data: [
+          { id: 'order-unsigned', status: 'submitted', amount: '24568.00', batch_id: 'batch-1', requested_execution_date: '2026-12-11' },
+          { id: 'order-signed', status: 'accepted', amount: '24568.00', batch_id: 'batch-2', requested_execution_date: '2026-12-14' },
+        ],
+      })
+
+      const { body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await get('2026-11'))
+
+      expect(body.data.bank_payment).toEqual({
+        status: 'accepted',
+        amount: 24568,
+        requested_execution_date: '2026-12-14',
+        pays_declaration: true,
+      })
     })
 
     it('reads no payments for a period marked paid', async () => {
