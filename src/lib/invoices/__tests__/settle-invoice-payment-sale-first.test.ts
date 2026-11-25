@@ -45,6 +45,8 @@ import {
 } from '@/lib/bookkeeping/invoice-entries'
 import { createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { settleInvoicePayment } from '@/lib/invoices/settle-invoice-payment'
+import { saleReceivableSek } from '@/lib/invoices/sale-first'
+import { proposePaymentLines } from '@/lib/bookkeeping/propose-payment-lines'
 import { eventBus } from '@/lib/events'
 
 const DEFERRING = { accounting_method: 'accrual', defer_invoice_booking: true }
@@ -428,6 +430,74 @@ describe('settleInvoicePayment: the payment clears what the sale booked first le
 
     expect(result).toMatchObject({ ok: true, newStatus: 'paid', newRemaining: 0, saleJournalEntryId: 'je-sale' })
     expect(realBookCalls()).toHaveLength(1)
+  })
+
+  /**
+   * The rows PaymentBookingDialog proposes and submits, from the figure it
+   * gives the proposal as what the payment clears on 1510: for an invoice
+   * with no verifikat, GET mark-paid answers what the sale will leave there.
+   * It used to read the ledger, which answers null for such an invoice.
+   */
+  function dialogRows(carriedSek: number | null) {
+    const invoice = oreInvoice()
+    return proposePaymentLines({
+      invoice: { ...invoice, invoice_number: invoice.invoice_number ?? null, carried_sek: carriedSek },
+      accountingMethod: 'accrual',
+      entityType: 'aktiebolag',
+      paymentAccount: '1930',
+      companyOreRounding: true,
+    }).map((line) => ({
+      account_number: line.account_number,
+      debit_amount: parseFloat(line.debit_amount) || 0,
+      credit_amount: parseFloat(line.credit_amount) || 0,
+    }))
+  }
+
+  it('settles the rows the payment dialog proposes from what the sale will leave on 1510', async () => {
+    const rows = dialogRows(saleReceivableSek(ORE_SALE_ENTRY))
+    expect(rows).toEqual([
+      { account_number: '1930', debit_amount: 1000, credit_amount: 0 },
+      { account_number: '1510', debit_amount: 0, credit_amount: 1000 },
+    ])
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: DEFERRING, error: null }) // company_settings (the plan)
+    enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
+    enqueue({ data: [{ id: 'inv-1' }] }) // CAS update matched
+
+    const result = await settleInvoicePayment(supabase as unknown as SupabaseClient, 'company-1', 'user-1', {
+      ...BASE_PARAMS,
+      invoice: oreInvoice(),
+      paymentAmountInInvoiceCurrency: 1000,
+      customLines: rows,
+    })
+
+    expect(result).toMatchObject({ ok: true, newStatus: 'paid', newRemaining: 0, saleJournalEntryId: 'je-sale' })
+  })
+
+  it('refuses the rows the dialog proposed from the ledger, which has no sale yet', async () => {
+    const rows = dialogRows(null)
+    expect(rows).toEqual([
+      { account_number: '1930', debit_amount: 1000, credit_amount: 0 },
+      { account_number: '1510', debit_amount: 0, credit_amount: 999.75 },
+      { account_number: '3740', debit_amount: 0, credit_amount: 0.25 },
+    ])
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: DEFERRING, error: null }) // company_settings (the plan)
+
+    const result = await settleInvoicePayment(supabase as unknown as SupabaseClient, 'company-1', 'user-1', {
+      ...BASE_PARAMS,
+      invoice: oreInvoice(),
+      paymentAmountInInvoiceCurrency: 1000,
+      customLines: rows,
+    })
+
+    expect(result).toMatchObject({ ok: false, code: 'MATCH_AMOUNT_EXCEEDS_REMAINING' })
+  })
+
+  it('proposes the same rows as before for a sale that leaves the reskontra on 1510', () => {
+    // A sale booked at the öre total (no öresavrundning on 1510) leaves 999,75:
+    // the bank takes 1 000, 1510 gives up 999,75 and 3740 the 0,25, as before.
+    expect(dialogRows(999.75)).toEqual(dialogRows(null))
   })
 
   it('refuses lines that book the öre on 3740 again, before the sale is written', async () => {
