@@ -2496,8 +2496,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       return
     }
     // The confirm names the customer: a click while the customers list is
-    // still loading (or failed to load) must say so rather than do nothing
-    // (support: cbysea.se).
+    // still loading (or failed to load) must say so rather than do nothing.
     if (!selectedCustomer) {
       toast({
         title: t('review_customer_missing_title'),
