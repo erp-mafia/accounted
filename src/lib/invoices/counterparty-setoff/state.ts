@@ -1,13 +1,15 @@
 /**
  * What the set-off reads: invoices and supplier invoices as SetoffInvoiceFacts
  * and SetoffSupplierInvoiceFacts (./plan.ts), with their customer's and
- * supplier's canonical party, an open collection case on the claim and a
- * payment the bank may still carry out on the debt.
+ * supplier's canonical party, an open collection case on the claim, a
+ * payment the bank may still carry out on the debt, and what 151x carries for
+ * a customer invoice whose issue verifikat booked its öresavrundning.
  *
  * Reads the parties table directly (merged_into) rather than lib/parties, so
  * the invoicing block takes no new edge to the parties feature.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { carriedSekOf } from '@/lib/bookkeeping/ledger-carried-sek'
 import { isOpenPaymentOrder, OPEN_PAYMENT_ORDER_CANDIDATE_STATUSES } from '@/lib/payments/orders/status'
 import type { SetoffInvoiceFacts, SetoffSupplierInvoiceFacts } from './plan'
 
@@ -238,19 +240,33 @@ export async function loadSetoffPair(
     supplier: { name: string | null; party_id: string | null } | null
   }
   const partyIds = [invoiceRow.customer?.party_id, supplierRow.supplier?.party_id].filter((id): id is string => !!id)
-  const [canonical, collections, inFlight] = await Promise.all([
+  const [canonical, collections, inFlight, carriedSek] = await Promise.all([
     resolveCanonicalParties(supabase, companyId, partyIds),
     openCollectionInvoiceIds(supabase, companyId, [invoiceRow.id]),
     paymentInFlightSupplierInvoiceIds(supabase, companyId, [supplierRow]),
+    // What 151x carries when the issue verifikat booked the öresavrundning,
+    // null otherwise (and with no read for a whole-krona remainder): a full
+    // set-off clears it (crm#2283).
+    carriedSekOf(supabase, companyId, 'customer', {
+      id: invoiceRow.id,
+      currency: invoiceRow.currency,
+      remaining_amount: invoiceRow.remaining_amount == null ? null : num(invoiceRow.remaining_amount),
+      total: num(invoiceRow.total),
+      paid_amount: num(invoiceRow.paid_amount),
+      journal_entry_id: invoiceRow.journal_entry_id,
+    }),
   ])
   const party = (id: string | null | undefined) => (id ? (canonical.get(id) ?? null) : null)
   return {
     ok: true,
     state: {
-      invoice: toSetoffInvoiceFacts(invoiceRow, {
-        partyId: party(invoiceRow.customer?.party_id),
-        collectionOpen: collections.has(invoiceRow.id),
-      }),
+      invoice: {
+        ...toSetoffInvoiceFacts(invoiceRow, {
+          partyId: party(invoiceRow.customer?.party_id),
+          collectionOpen: collections.has(invoiceRow.id),
+        }),
+        carriedSek,
+      },
       supplierInvoice: toSetoffSupplierInvoiceFacts(supplierRow, {
         partyId: party(supplierRow.supplier?.party_id),
         paymentInFlight: inFlight.has(supplierRow.id),

@@ -175,6 +175,47 @@ describe('bookCounterpartySetoff: dry run', () => {
     })
   })
 
+  it('clears what 1510 carries when the issue verifikat booked the öresavrundning (crm#2283)', async () => {
+    const state = pair()
+    h.loadSetoffPair.mockResolvedValue({
+      ok: true,
+      state: { ...state, invoice: { ...state.invoice, total: 999.75, remaining: 999.75, carriedSek: 1000 } },
+    })
+    const rounded = await bookCounterpartySetoff(
+      context(),
+      { invoiceId: 'inv-1', supplierInvoiceId: 'si-1', amount: 1000, setoffDate: '2026-09-30' },
+      { dryRun: true },
+    )
+    expect(rounded).toMatchObject({
+      ok: true,
+      preview: {
+        invoice: { remaining_after: 0, status_after: 'paid', ore_rounding: 0 },
+        lines: [
+          { account_number: '2440', debit_amount: 1000, credit_amount: 0 },
+          { account_number: '1510', debit_amount: 0, credit_amount: 1000 },
+        ],
+      },
+    })
+    expect((rounded as unknown as { preview: { lines: unknown[] } }).preview.lines).toHaveLength(2)
+
+    const exact = await bookCounterpartySetoff(
+      context(),
+      { invoiceId: 'inv-1', supplierInvoiceId: 'si-1', amount: 999.75, setoffDate: '2026-09-30' },
+      { dryRun: true },
+    )
+    expect(exact).toMatchObject({
+      ok: true,
+      preview: {
+        invoice: { ore_rounding: 0.25 },
+        lines: [
+          { account_number: '2440', debit_amount: 999.75, credit_amount: 0 },
+          { account_number: '1510', debit_amount: 0, credit_amount: 1000 },
+          { account_number: '3740', debit_amount: 0.25, credit_amount: 0 },
+        ],
+      },
+    })
+  })
+
   it('refuses before the database: not found, planner refusals, a pinned party, a locked or missing period', async () => {
     h.loadSetoffPair.mockResolvedValueOnce({ ok: false, code: 'SETOFF_INVOICE_NOT_FOUND' })
     expect(await bookCounterpartySetoff(context(), { invoiceId: 'x', supplierInvoiceId: 'si-1' }, { dryRun: false })).toEqual({

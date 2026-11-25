@@ -25,6 +25,7 @@ import { todayIsoStockholm } from '@/lib/dates/iso'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
 import { emitInvoicePaidIfSettled, emitSupplierInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
 import { linkBasisColumns } from '@/lib/links/stamp'
+import { roundOre } from '@/lib/money'
 import type { OperationContext, OperationOutcome, OperationWarning } from '@/lib/operations/types'
 import { postingPort } from '@/lib/posting/port'
 import type { Invoice, SupplierInvoice } from '@/types'
@@ -123,7 +124,10 @@ export function setoffPreview(plan: SetoffPlan, state: Pick<SetoffPairState, 'cu
     // vouchers booked, which are these unless the company booked others.
     lines: [
       { account_number: payable, debit_amount: plan.amount, credit_amount: 0 },
-      { account_number: receivable, debit_amount: 0, credit_amount: plan.invoice.applied },
+      // 151x takes the amount and the 3740 line's other side: the whole
+      // remaining amount when the set-off absorbs öresavrundning, and all 151x
+      // carries when the issue verifikat booked the öre itself (crm#2283).
+      { account_number: receivable, debit_amount: 0, credit_amount: roundOre(plan.amount + plan.invoice.oreRounding) },
       ...(plan.invoice.oreRounding !== 0 ? [oreLine(plan.invoice.oreRounding)] : []),
     ],
   }

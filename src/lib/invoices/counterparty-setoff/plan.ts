@@ -9,7 +9,7 @@
  */
 import { isOwedInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
 import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
-import { oreSettlementResidual } from '@/lib/bookkeeping/ore-rounding'
+import { bookedOreRounding, oreSettlementResidual } from '@/lib/bookkeeping/ore-rounding'
 import { futurePaymentDateRefusal } from '@/lib/invoices/payment-date'
 import { roundOre } from '@/lib/money'
 import type { SetoffErrorCode } from './errors'
@@ -36,6 +36,13 @@ export interface SetoffInvoiceFacts {
   partyId: string | null
   /** An open collection case: the provider holds the claim. */
   collectionOpen: boolean
+  /**
+   * What 151x carries for the invoice when its issue verifikat booked its
+   * öresavrundning (carriedSekOf): 1 000 for a total of 999,75 issued at the
+   * rounded Att betala. Null or absent for every other invoice, whose 151x
+   * carries just the remaining amount.
+   */
+  carriedSek?: number | null
 }
 
 /** A supplier invoice as the set-off reads it. */
@@ -133,14 +140,17 @@ export interface SetoffPlan {
     remainingAfter: number
     statusAfter: 'paid' | 'partially_paid'
     /**
-     * What the set-off clears off the customer invoice (and 151x): `amount`,
-     * or the whole remaining amount when the gap is öresavrundning.
+     * What the set-off clears off the customer invoice's remaining amount (the
+     * debt settled, its payment row): `amount`, or the whole remaining amount
+     * when the gap is öresavrundning.
      */
     applied: number
     /**
-     * The öresavrundning the set-off absorbs on 3740 (oreSettlementResidual of
-     * the remaining amount and `amount`): > 0 set off less than owed (Dr
-     * 3740), < 0 more (Cr 3740), 0 none.
+     * What the set-off books on 3740: the öresavrundning it absorbs
+     * (oreSettlementResidual of the remaining amount and `amount`) less the öre
+     * the invoice's issue verifikat already booked (bookedOreRounding,
+     * crm#2283). > 0 Dr 3740, < 0 Cr 3740, 0 none. 151x is credited
+     * `amount + oreRounding`: on a full settlement all it carries.
      */
     oreRounding: number
   }
@@ -203,8 +213,8 @@ export function planSetoff(input: {
   // by (oreSettlementResidual), so setting off the rounded "Att betala" of an
   // invoice with öresavrundning leaves no öre open. Only the customer side:
   // a supplier invoice's rounding is an item inside its total.
-  const oreRounding = oreSettlementResidual(invoiceRemaining, amount)
-  if ((amount > invoiceRemaining && oreRounding === 0) || amount > supplierRemaining) {
+  const residual = oreSettlementResidual(invoiceRemaining, amount)
+  if ((amount > invoiceRemaining && residual === 0) || amount > supplierRemaining) {
     return {
       ok: false,
       code: 'SETOFF_AMOUNT_EXCEEDS_REMAINING',
@@ -219,7 +229,14 @@ export function planSetoff(input: {
     return { ok: false, code: 'SETOFF_DATE_INVALID', details: { reason: 'before_invoice', setoff_date: setoffDate } }
   }
 
-  const applied = oreRounding !== 0 ? invoiceRemaining : amount
+  const applied = residual !== 0 ? invoiceRemaining : amount
+  // crm#2283: a set-off that settles the invoice in full clears what 151x
+  // carries. An issue verifikat that booked the öresavrundning put 151x at
+  // the rounded Att betala, so 3740 takes only the set-off's own gap less
+  // that öre, the rule of the payment builders (book_counterparty_setoff,
+  // migration 20261125160100, books the same).
+  const issueOre = applied === invoiceRemaining ? bookedOreRounding(invoiceRemaining, invoice.carriedSek) : 0
+  const oreRounding = roundOre(residual - issueOre)
   const invoiceAfter = roundOre(invoiceRemaining - applied)
   const supplierAfter = roundOre(supplierRemaining - amount)
   const netValue = roundOre(invoiceAfter - supplierAfter)
