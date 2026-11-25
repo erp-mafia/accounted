@@ -16283,7 +16283,8 @@
     "skv_reconciled_short": "Matches the books",
     "skv_diff_short": "The books ({account}) say {ledger}",
     "bank_open_flow": "Connect the bank",
-    "bank_open_flow_hint": "BankID at the bank, choose accounts, done in a couple of minutes."
+    "bank_open_flow_hint": "BankID at the bank, choose accounts, done in a couple of minutes.",
+    "bank_more_banks": "More banks"
   },
   "import_notices": {
     "source_chart_empty_file": "The chart of accounts file was empty.",
@@ -17891,6 +17892,8 @@
     "affiliate_label": "Which savings bank?",
     "affiliate_search": "Search savings bank",
     "affiliate_no_matches": "No savings banks match the search.",
+    "bank_swedbank_and_sparbanker": "Swedbank and the savings banks",
+    "bank_sparbank_row": "Savings bank",
     "office_label": "Which office?",
     "office_search": "Search office",
     "office_no_matches": "No offices match the search.",

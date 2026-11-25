@@ -11,6 +11,7 @@ import { bankGuideUrl, bankPrerequisiteKey, bankRequiresOffice } from '../bank-h
 import { bankDetailsSettled, officeChoiceMissing, type FlowAction, type FlowState } from '../connect-flow-reducer'
 import type { AccountContext, OpenPaymentsBank } from '../open-payments-client'
 import { AffiliatePicker } from './AffiliatePicker'
+import { actionsForAffiliateResult, flowBankFromList, type SparbankGroup } from '../bank-search-results'
 import { LoadError } from '@/components/ui/empty-state'
 
 interface BankPickStepProps {
@@ -18,6 +19,8 @@ interface BankPickStepProps {
   dispatch: (action: FlowAction) => void
   banks: OpenPaymentsBank[] | null
   banksFailed: boolean
+  /** The sparbanker behind Swedbank's BIC, once read: the search finds them too. Absent where they are not read. */
+  sparbanker?: SparbankGroup | null
   /** Ask for the bank list again; with it, a failed list offers "Försök igen" in place. */
   onRetryBanks?: () => void
   /** Enskild firma: the private account used in the business is a choice. */
@@ -40,7 +43,7 @@ interface BankPickStepProps {
  * needs one of its offices chosen; the choice travels as the party's
  * affiliated_aspsp_id and names the connection.
  */
-export function BankPickStep({ state, dispatch, banks, banksFailed, onRetryBanks, soleTrader, onContinue, onEarlierConnection, closeButton }: BankPickStepProps) {
+export function BankPickStep({ state, dispatch, banks, banksFailed, sparbanker = null, onRetryBanks, soleTrader, onContinue, onEarlierConnection, closeButton }: BankPickStepProps) {
   const t = useTranslations('bank_connect')
   const chosen = state.bank ? (banks?.find((b) => b.bic === state.bank?.bic) ?? null) : null
   const bankName = state.bank?.name ?? chosen?.name ?? ''
@@ -78,7 +81,10 @@ export function BankPickStep({ state, dispatch, banks, banksFailed, onRetryBanks
         <BankList
           banks={banks}
           selectedBic={state.bank?.bic ?? null}
-          onPick={(bank) => dispatch({ type: 'bank_picked', bank: { bic: bank.bic, name: bank.name, decoupled: bank.decoupled, redirect: bank.redirect } })}
+          onPick={(bank) => dispatch({ type: 'bank_picked', bank: flowBankFromList(bank) })}
+          sparbanker={sparbanker}
+          selectedAffiliateId={state.affiliate?.id ?? null}
+          onPickAffiliate={(parent, affiliate) => actionsForAffiliateResult(parent, affiliate).forEach((action) => dispatch(action))}
         />
       )}
 

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useReducer, useRef, useState } from 'react'
+import { useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { useToast } from '@/components/ui/use-toast'
 import { useQrCountdown } from '@/components/bankid/use-qr-countdown'
@@ -10,6 +10,7 @@ import { normalizePsuAuthoriserId, takesPsuAuthoriserId } from '@/lib/bank-feed/
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { useMediaQuery } from '@/lib/hooks/use-media-query'
 import { resolveBankByName, type SigningApproach } from './bank-help'
+import { sparbankParent, type SparbankGroup } from './bank-search-results'
 import { displayBankName, flowReducer, openFlow, pollingActive, redirectInFlight, removesConnectionOnClose, signingApproach, type FlowAction, type FlowState } from './connect-flow-reducer'
 import {
   isBankBusy,
@@ -106,6 +107,8 @@ export interface BankConnectController {
   mobile: boolean
   /** The bank as the person knows it: the sparbank when one is chosen, else the bank, else the connection's name. */
   bankName: string | null
+  /** The sparbanker behind Swedbank's BIC for the bank list's search; null until read, or when the list or the read has none. */
+  sparbanker: SparbankGroup | null
   /** A failed call as a sentence in the person's language. */
   describe: (error: unknown, fallback: string) => string
   start: (method: ConnectMethod) => Promise<void>
@@ -230,6 +233,33 @@ export function useBankConnectController({ session, backend, banks, banksFailed,
   useEffect(() => {
     if (bankDetails && bankDetails !== knownDetails) dispatch({ type: 'bank_details_loaded', details: bankDetails })
   }, [bankDetails, knownDetails])
+
+  // The sparbanker behind the shared BIC, read once the bank list is on screen
+  // so the list's search can find a savings bank directly. The same details
+  // read the bank step does for a chosen bank (the server caches it); a read
+  // that fails leaves the search to banks, and the picker after Swedbank as is.
+  const sparbankParentBank = useMemo(() => (banks && state.step === 'bank' && !state.bankLocked ? sparbankParent(banks) : null), [banks, state.step, state.bankLocked])
+  const parentBic = sparbankParentBank?.bic ?? null
+  const [parentDetails, setParentDetails] = useState<OpenPaymentsBankDetails | null>(null)
+  useEffect(() => {
+    if (!parentBic) return
+    let cancelled = false
+    backendRef.current.bank
+      .fetchBankDetails(parentBic)
+      .then((details) => {
+        if (!cancelled) setParentDetails(details)
+      })
+      .catch(() => {
+        // Safe to ignore: without the sparbanker the search finds banks only, and the picker after Swedbank still lists them.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [parentBic])
+  const sparbanker = useMemo<SparbankGroup | null>(
+    () => (sparbankParentBank && parentDetails?.bic === sparbankParentBank.bic && parentDetails.affiliates.length > 0 ? { parent: sparbankParentBank, affiliates: parentDetails.affiliates } : null),
+    [sparbankParentBank, parentDetails],
+  )
 
   // A resumed connection names its bank on the row: read it once, so the
   // title and the bank's-page texts can say where the person signs.
@@ -537,6 +567,7 @@ export function useBankConnectController({ session, backend, banks, banksFailed,
     redirectHelp: approach === 'redirect' || redirectInFlight(state),
     mobile,
     bankName: displayBankName(state),
+    sparbanker,
     describe,
     start,
     restart,

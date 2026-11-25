@@ -16283,7 +16283,8 @@
     "skv_reconciled_short": "Stämmer mot bokföringen",
     "skv_diff_short": "Bokföringen ({account}) säger {ledger}",
     "bank_open_flow": "Koppla banken",
-    "bank_open_flow_hint": "BankID hos banken, välj konton, klart på ett par minuter."
+    "bank_open_flow_hint": "BankID hos banken, välj konton, klart på ett par minuter.",
+    "bank_more_banks": "Fler banker"
   },
   "import_notices": {
     "source_chart_empty_file": "Kontoplansfilen var tom.",
@@ -17891,6 +17892,8 @@
     "affiliate_label": "Vilken sparbank?",
     "affiliate_search": "Sök sparbank",
     "affiliate_no_matches": "Inga sparbanker matchar sökningen.",
+    "bank_swedbank_and_sparbanker": "Swedbank och sparbankerna",
+    "bank_sparbank_row": "Sparbank",
     "office_label": "Vilket kontor?",
     "office_search": "Sök kontor",
     "office_no_matches": "Inga kontor matchar sökningen.",
