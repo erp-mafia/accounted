@@ -275,6 +275,8 @@ export interface BankPaymentsUsage {
   billed_above_included?: boolean
   /** Whether more would be offered with a subscription of its own: the company has none. */
   subscription_required?: boolean
+  /** Whether more will be offered once the company's subscription, started during the trial, has its first charge. */
+  subscription_starting?: boolean
   /** Öre exkl. moms per payment above included_payments. */
   unit_price_ore?: number
   /** Payments the month still takes. Absent from servers before the cap. */
@@ -324,6 +326,7 @@ export function allowanceRefusalOf(error: unknown): BankPaymentsAllowanceRefusal
     extra_offered: details.extra_offered === true,
     billed: details.billed === true,
     subscription_required: details.subscription_required === true,
+    subscription_starting: details.subscription_starting === true,
     unit_price_ore: typeof details.unit_price_ore === 'number' ? details.unit_price_ore : 0,
     remaining: typeof details.remaining === 'number' ? details.remaining : Math.max(0, details.included - details.used),
     requested: typeof details.requested === 'number' ? details.requested : 0,

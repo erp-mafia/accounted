@@ -11,7 +11,9 @@
  * A trial (trialing, or a trial grant without a subscription), a free period
  * granted by hand, a lapsed subscription and a sandbox have no payer: such a
  * company stops at what is included until it subscribes, and is never billed
- * for more.
+ * for more. A subscription started during the trial (subscriptionStarting)
+ * has no payer either until its first charge; only what the company is told
+ * differs.
  *
  * Imports nothing that reads the payments cap, so the cap
  * (lib/payments/usage.ts) can read it without a cycle.
@@ -33,8 +35,30 @@ export function subscriptionPays(facts: SubscriptionFacts): boolean {
   return !facts.isSandbox && facts.status === 'active' && !!facts.customerId && !!facts.subscriptionId
 }
 
+/**
+ * A subscription started during the product trial: billing/checkout defers
+ * its first charge to the trial's end, so Stripe holds it 'trialing' until
+ * then. The company has a subscription (the billing page shows it as one)
+ * but no payer yet: it stops at what is included until the first charge
+ * makes the subscription active, and is told so rather than to start one.
+ */
+export function subscriptionStarting(facts: SubscriptionFacts): boolean {
+  return !facts.isSandbox && facts.status === 'trialing' && !!facts.customerId && !!facts.subscriptionId
+}
+
+export interface CompanyPayerState {
+  payer: CompanyPayer | null
+  /** No payer yet, but the company's subscription waits for its first charge (subscriptionStarting). */
+  subscriptionStarting: boolean
+}
+
 /** One company's payer, or null. Throws on a failed read. */
 export async function readCompanyPayer(db: SupabaseClient, companyId: string): Promise<CompanyPayer | null> {
+  return (await readCompanyPayerState(db, companyId)).payer
+}
+
+/** One company's payer and, when it has none, whether its subscription waits for its first charge. Throws on a failed read. */
+export async function readCompanyPayerState(db: SupabaseClient, companyId: string): Promise<CompanyPayerState> {
   const [subscription, settings] = await Promise.all([
     db.from('company_subscriptions').select('status, stripe_customer_id, stripe_subscription_id').eq('company_id', companyId).maybeSingle(),
     db.from('company_settings').select('is_sandbox').eq('company_id', companyId).maybeSingle(),
@@ -43,16 +67,17 @@ export async function readCompanyPayer(db: SupabaseClient, companyId: string): P
   if (settings.error) throw new Error(`company_settings read failed: ${settings.error.message}`)
   const isSandbox = (settings.data as { is_sandbox: boolean | null } | null)?.is_sandbox === true
   const sub = subscription.data as { status: string | null; stripe_customer_id: string | null; stripe_subscription_id: string | null } | null
-  const pays = subscriptionPays({
+  const facts: SubscriptionFacts = {
     isSandbox,
     status: sub?.status ?? null,
     customerId: sub?.stripe_customer_id ?? null,
     subscriptionId: sub?.stripe_subscription_id ?? null,
-  })
-  if (pays) return { kind: 'subscription' }
-  if (isSandbox) return null
+  }
+  if (subscriptionPays(facts)) return { payer: { kind: 'subscription' }, subscriptionStarting: false }
+  if (isSandbox) return { payer: null, subscriptionStarting: false }
   const agreement = await getTeamAgreement(db, companyId)
-  return agreement ? { kind: 'byra', teamName: agreement.teamName } : null
+  if (agreement) return { payer: { kind: 'byra', teamName: agreement.teamName }, subscriptionStarting: false }
+  return { payer: null, subscriptionStarting: subscriptionStarting(facts) }
 }
 
 /** Whether the company has a payer. Throws on a failed read. */
