@@ -141,6 +141,18 @@ const GENERIC: Record<string, StructuredErrorEntry> = {
     message_sv: 'Ingen aktiv företagskontext. Välj ett företag och försök igen.',
     message_en: 'No active company context resolved for the request.',
   },
+  // A write from a browser tab that shows another company than the one the
+  // account has active now (x-tab-company-id names the tab's company). The
+  // same code the tab's own guard answers with before a request leaves it.
+  ACTIVE_COMPANY_CHANGED: {
+    httpStatus: 409,
+    message_sv: 'Aktivt företag har bytts i en annan flik.',
+    message_en: 'The active company was switched in another tab.',
+    remediation: {
+      description:
+        'The request named, in x-tab-company-id, a company other than the active one, so nothing was written. Reload the page to work in the active company, or switch back to the company the page shows.',
+    },
+  },
   IDEMPOTENCY_KEY_REUSE: {
     httpStatus: 409,
     message_sv: 'Idempotensnyckeln har redan använts med en annan begäran.',
