@@ -141,6 +141,7 @@ describe('GET /api/skatteverket/tax-payments/[period]', () => {
         status: 'accepted',
         amount: 24568,
         requested_execution_date: '2026-12-11',
+        signed: true,
         pays_declaration: true,
       })
       expect(findCalls('payment_orders', 'eq')).toEqual([
@@ -195,10 +196,13 @@ describe('GET /api/skatteverket/tax-payments/[period]', () => {
 
       const { body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await get('2026-11'))
 
+      // Signed all the same: the panel keeps its status word (Planerad), and
+      // the amount beside it is what says it is not this declaration's.
       expect(body.data.bank_payment).toEqual({
         status: 'accepted',
         amount: 60000,
         requested_execution_date: '2026-12-11',
+        signed: true,
         pays_declaration: false,
       })
       expect(resolveDueDateMock).toHaveBeenCalledWith(mockSupabase, 'company-1', '2026-12-14', '2026-11-24')
@@ -258,6 +262,7 @@ describe('GET /api/skatteverket/tax-payments/[period]', () => {
         status: 'executed',
         amount: 24568,
         requested_execution_date: '2026-12-14',
+        signed: true,
         pays_declaration: true,
       })
       // The days read do not move with today.
@@ -282,6 +287,7 @@ describe('GET /api/skatteverket/tax-payments/[period]', () => {
         status: 'accepted',
         amount: 24568,
         requested_execution_date: '2026-12-14',
+        signed: true,
         pays_declaration: true,
       })
       expect(resolveDueDateMock).not.toHaveBeenCalled()
@@ -313,7 +319,7 @@ describe('GET /api/skatteverket/tax-payments/[period]', () => {
       expect(body.data.bank_payment).toBeNull()
     })
 
-    it('shows an approved payment once it is claimed for signing, and keeps the button: it is not signed yet', async () => {
+    it('shows an approved payment once it is claimed for signing as not signed, and keeps the button: it is not signed yet', async () => {
       enqueue({ data: FILED })
       enqueue({ data: SETTINGS })
       enqueue({ data: [{ id: 'order-1', status: 'approved', amount: '24568.00', batch_id: 'batch-1', requested_execution_date: '2026-12-11' }] })
@@ -324,12 +330,14 @@ describe('GET /api/skatteverket/tax-payments/[period]', () => {
         status: 'approved',
         amount: 24568,
         requested_execution_date: '2026-12-11',
+        signed: false,
         pays_declaration: false,
       })
     })
 
-    it('shows a payment that reached the bank unsigned, and keeps the button: it never executes', async () => {
-      // A BankID nobody finished: the order sits at the bank as submitted.
+    it('shows a payment that reached the bank unsigned as not signed, and keeps the button: it never executes', async () => {
+      // A BankID nobody finished: the order sits at the bank as submitted,
+      // which Betalningar calls I betalning. The panel says Inte signerad.
       enqueue({ data: FILED })
       enqueue({ data: SETTINGS })
       enqueue({ data: [{ id: 'order-1', status: 'submitted', amount: '24568.00', batch_id: 'batch-1', requested_execution_date: '2026-12-11' }] })
@@ -341,6 +349,7 @@ describe('GET /api/skatteverket/tax-payments/[period]', () => {
         status: 'submitted',
         amount: 24568,
         requested_execution_date: '2026-12-11',
+        signed: false,
         pays_declaration: false,
       })
     })
@@ -353,7 +362,7 @@ describe('GET /api/skatteverket/tax-payments/[period]', () => {
       ['accepted', 'signed', null],
       ['executed', 'paid', null],
     ])(
-      'leaves the button out for a %s payment of the declaration (%s)',
+      'leaves the button out for a %s payment of the declaration (%s), shown by its own status',
       async (orderStatus, _what, signing) => {
         enqueue({ data: FILED })
         enqueue({ data: SETTINGS })
@@ -367,12 +376,13 @@ describe('GET /api/skatteverket/tax-payments/[period]', () => {
           status: orderStatus,
           amount: 24568,
           requested_execution_date: '2026-12-11',
+          signed: true,
           pays_declaration: true,
         })
       },
     )
 
-    it('keeps the button for a BankID nobody finished once it can no longer finish, though the bank was never read', async () => {
+    it('keeps the button for a BankID nobody finished once it can no longer finish, though the bank was never read, and shows it as not signed', async () => {
       // Abandoned at 19:30; the status sync could not read the bank, so the
       // order still says awaiting_signature 100 minutes on. It never executes.
       enqueue({ data: FILED })
@@ -396,6 +406,7 @@ describe('GET /api/skatteverket/tax-payments/[period]', () => {
         status: 'awaiting_signature',
         amount: 24568,
         requested_execution_date: '2026-12-11',
+        signed: false,
         pays_declaration: false,
       })
     })
@@ -409,7 +420,7 @@ describe('GET /api/skatteverket/tax-payments/[period]', () => {
 
       const { body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await get('2026-11'))
 
-      expect(body.data.bank_payment).toMatchObject({ status: 'submitted', amount: 84568, pays_declaration: false })
+      expect(body.data.bank_payment).toMatchObject({ status: 'submitted', amount: 84568, signed: false, pays_declaration: false })
       expect(resolveDueDateMock).not.toHaveBeenCalled()
     })
 
@@ -431,6 +442,7 @@ describe('GET /api/skatteverket/tax-payments/[period]', () => {
         status: 'accepted',
         amount: 24568,
         requested_execution_date: '2026-12-14',
+        signed: true,
         pays_declaration: true,
       })
     })
@@ -454,6 +466,7 @@ describe('GET /api/skatteverket/tax-payments/[period]', () => {
         status: 'submitted',
         amount: 24568,
         requested_execution_date: '2026-12-14',
+        signed: false,
         pays_declaration: false,
       })
     })

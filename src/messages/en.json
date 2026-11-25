@@ -4151,6 +4151,7 @@
     "tax_marked_paid": "Marked as paid",
     "tax_bank_payment": "Bank payment",
     "tax_bank_payment_value": "{status}: {amount} on {date}.",
+    "tax_bank_payment_not_signed": "Not signed",
     "tax_skattekonto_button": "Skattekontot",
     "tax_download_button": "Download payment file",
     "tax_mark_paid_button": "Mark as paid",

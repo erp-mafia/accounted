@@ -40,7 +40,11 @@ import { resolveSkattekontoDueDate } from '@/lib/payments/orders/skattekonto-sou
  * executes, and any other larger amount may be the momsdeklaration due the
  * same day alone: shown, with the button kept. A payment that pays it is the
  * one shown, else one of the declaration's amount (its own payment, left
- * unsigned), else the earliest. null when there is none, when the period is
+ * unsigned), else the earliest. `signed` is the signing half of that rule
+ * for the payment shown (isSkattekontoPaymentSigned): false, nothing pays it
+ * as it stands, and the panel names it Inte signerad instead of by its
+ * status (an order at the bank unsigned is I betalning on Betalningar),
+ * beside the button it keeps. null when there is none, when the period is
  * marked paid or may not be paid, and when the payments cannot be read: it
  * only informs, so a failed read never takes the panel down.
  */
@@ -101,6 +105,7 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
     status: string
     amount: number
     requested_execution_date: string
+    signed: boolean
     pays_declaration: boolean
   } | null = null
   if (!payment.tax_paid_at && !periodConflict && paymentDueDate) {
@@ -132,6 +137,9 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
           status: shown.status,
           amount: amountOf(shown),
           requested_execution_date: shown.requested_execution_date,
+          // The rule pays_declaration reads, at the same instant: a payment
+          // that pays it is always signed.
+          signed: isSkattekontoPaymentSigned(shown, nowMs),
           pays_declaration: paying !== undefined,
         }
       }
