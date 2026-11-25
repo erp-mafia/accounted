@@ -75,6 +75,8 @@ interface TransactionHistoryListProps {
   jeUnderlagStatus?: Record<string, JeUnderlagStatus>
   onOpenMatchDialog: (transaction: TransactionWithInvoice) => void
   onOpenCategoryDialog: (transaction: TransactionWithInvoice) => void
+  /** Bokför opens the row on the booking screen, as in Obokförda, when the page hands this (the screen is switched on). */
+  onOpenBookingScreen?: (transaction: TransactionWithInvoice) => void
   /** Open the attach-underlag dialog (pin an inbox doc / fresh upload). */
   onOpenAttachDocument?: (transaction: TransactionWithInvoice) => void
   /** Detach the pinned underlag. Unbooked rows only (see canDetachDocument). */
@@ -116,6 +118,7 @@ export default function TransactionHistoryList({
   jeUnderlagStatus,
   onOpenMatchDialog,
   onOpenCategoryDialog,
+  onOpenBookingScreen,
   onOpenAttachDocument,
   onDetachDocument,
   onOpenMatchVoucher,
@@ -227,6 +230,7 @@ export default function TransactionHistoryList({
                     jeUnderlagStatus={jeUnderlagStatus}
                     onOpenMatchDialog={onOpenMatchDialog}
                     onOpenCategoryDialog={onOpenCategoryDialog}
+                    onOpenBookingScreen={onOpenBookingScreen}
                     onOpenAttachDocument={onOpenAttachDocument}
                     onDetachDocument={onDetachDocument}
                     onOpenMatchVoucher={onOpenMatchVoucher}
@@ -276,6 +280,7 @@ function BankHistoryRow({
   jeUnderlagStatus,
   onOpenMatchDialog,
   onOpenCategoryDialog,
+  onOpenBookingScreen,
   onOpenAttachDocument,
   onDetachDocument,
   onOpenMatchVoucher,
@@ -289,6 +294,7 @@ function BankHistoryRow({
   jeUnderlagStatus?: Record<string, JeUnderlagStatus>
   onOpenMatchDialog: (transaction: TransactionWithInvoice) => void
   onOpenCategoryDialog: (transaction: TransactionWithInvoice) => void
+  onOpenBookingScreen?: (transaction: TransactionWithInvoice) => void
   onOpenAttachDocument?: (transaction: TransactionWithInvoice) => void
   onDetachDocument?: (transaction: TransactionWithInvoice) => void
   onOpenMatchVoucher?: (transaction: TransactionWithInvoice) => void
@@ -467,10 +473,11 @@ function BankHistoryRow({
             <span className="text-muted-foreground">{t('private_badge')}</span>
           ) : (
             // One signal per row: the Bokför button already says the row is
-            // not booked, so no "Ej bokförd" chip beside it.
+            // not booked, so no "Ej bokförd" chip beside it. It opens the
+            // booking screen where it is switched on, else the picker.
             <Button
               variant="outline"
-              onClick={() => onOpenCategoryDialog(transaction)}
+              onClick={() => (onOpenBookingScreen ?? onOpenCategoryDialog)(transaction)}
               disabled={!canWrite}
               title={lockedTitle}
             >

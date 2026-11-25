@@ -35,6 +35,10 @@ The first stable release of the public REST API. Six phases of development cover
 - **Reads**: \`GET /accounts\`, \`GET /fiscal-periods\`.
 - All write surfaces honour strict-mode (commit fully or error with no side effects).
 
+### Supplier invoices: attest is a step only with the attest policy on (2026-11)
+
+- **Change: a company on faktureringsmetoden without the attest policy on has no attest step, as under kontantmetoden** (2026-11-24). \`POST /supplier-invoices/{id}/bank-entered\` marks such a company's \`registered\` invoice (it answered \`400 SI_BANK_ENTERED_NOT_PAYABLE\`), and \`POST /supplier-payment-batches/preview\`, \`POST /supplier-payment-batches\` and \`POST /payment-orders\` no longer warn \`unattested\` there. With the policy on nothing changes: \`attest_required\` still leaves out an invoice the policy holds back, and the \`unattested\` warning stays. \`POST /supplier-invoices/{id}/approve\` still attests any invoice, and \`approved_at\` is set only by an attest. The API version date is unchanged.
+
 ### Transactions: a template refuses a reverse-charge box it does not book (2026-11)
 
 - **Fix: \`POST /transactions/{id}/categorize\` answers \`400 VALIDATION_ERROR\` (\`details.field\`: \`reverse_charge_kind\`) for a \`reverse_charge_kind\` beside a \`template_id\` or \`counterparty_template_id\` whose purchase lands in another box, or that books no reverse-charge purchase (a reverse-charge sale)** (#3867, 2026-11-24), on a dry run too, and \`POST /transactions/batch-categorize\` refuses such an item with the same code. The template's box is its basis pair's, or the one its cost account reports itself, each by its number or its momskod; \`details.template_boxes\` names it (empty for no purchase) and \`details.requested_box\` the one sent. **Before**, the template's box was booked and the one sent dropped, while a dry run echoed the one sent as \`reverse_charge_kind\`. Send the template's box or none, or book the purchase by category with the box. The API version date is unchanged.

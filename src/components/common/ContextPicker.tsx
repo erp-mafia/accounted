@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
+import Link from 'next/link'
 import { cn } from '@/lib/utils'
 import { POPOVER_ENTER_CLASS, POPOVER_SURFACE_CLASS } from '@/components/ui/popover-surface'
 import { CheckIcon, ChevronDownIcon } from '@/components/icons'
@@ -31,6 +32,8 @@ interface ContextPickerProps {
   variant?: 'toolbar' | 'quiet'
   /** Quiet variant inside a row that carries its own chevron (the sidebar's company row): the label alone. */
   hideChevron?: boolean
+  /** A link under the list, over a hairline: where the thing the picker only views is set. */
+  footerLink?: { href: string; label: string }
   className?: string
 }
 
@@ -49,6 +52,7 @@ export function ContextPicker({
   ariaLabel,
   variant = 'toolbar',
   hideChevron = false,
+  footerLink,
   className,
 }: ContextPickerProps) {
   const [open, setOpen] = useState(false)
@@ -180,6 +184,17 @@ export function ContextPicker({
                 </button>
               ))}
             </div>
+            {footerLink && (
+              <div className="mt-1 border-t-hairline pt-1">
+                <Link
+                  href={footerLink.href}
+                  onClick={() => setOpen(false)}
+                  className="flex min-h-7.5 w-full items-center rounded-md px-2.5 text-[13px] text-foreground/80 transition-colors duration-150 hover:bg-secondary/60 hover:text-foreground"
+                >
+                  {footerLink.label}
+                </Link>
+              </div>
+            )}
           </div>,
           document.body,
         )}

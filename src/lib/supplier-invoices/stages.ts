@@ -43,10 +43,13 @@ export interface StageInput {
   /** Every paying bank row is signed off in a reconciliation through its date. */
   reconciled: boolean
   /**
-   * The company's method, which picks its ladder (stagesFor): kontantmetoden
-   * has no attest step. Omitted reads as faktureringsmetoden.
+   * The company's method and whether its attest policy is on, which pick its
+   * ladder (stagesFor): only faktureringsmetoden with the policy on has an
+   * attest step. An omitted method reads as faktureringsmetoden, an omitted
+   * policy as off.
    */
   accounting_method?: string | null
+  attest_policy_on?: boolean | null
 }
 
 /** The invoice's step, always one on the company's own ladder (stagesFor). */
@@ -54,11 +57,11 @@ export function deriveStage(i: StageInput): SupplierInvoiceStage {
   if (i.is_credit_note || i.status === 'credited' || i.status === 'reversed') return 'credited'
   if (i.status === 'paid') return i.reconciled ? 'reconciled' : 'paid'
   if (i.in_open_batch) return 'in_file'
-  // An attest on a kontantmetod company's invoice (given before a switch of
-  // method, or through the API) has no step on its ladder: the invoice is
-  // still registered and waiting for its payment (#93).
-  if (isSupplierInvoiceAttested(i) && companyAttestsSupplierInvoices(i.accounting_method)) return 'approved'
-  // registered, overdue, partially_paid, disputed: still a debt awaiting attest.
+  // An attest where the company has no attest step (kontantmetoden, #93, or
+  // no attest policy; given before a switch, or through the API) has no step
+  // on its ladder: the invoice is still registered and waiting for its payment.
+  if (isSupplierInvoiceAttested(i) && companyAttestsSupplierInvoices(i.accounting_method, i.attest_policy_on)) return 'approved'
+  // registered, overdue, partially_paid, disputed: still a debt awaiting attest or payment.
   return 'registered'
 }
 
@@ -68,11 +71,15 @@ export function stageIndex(stage: SupplierInvoiceStage): number {
 }
 
 /**
- * Ladder for a company. Kontantmetod companies do not attest (the debt is
- * never booked before payment), so their ladder skips Attesterad.
+ * Ladder for a company. Only a company with an attest step
+ * (companyAttestsSupplierInvoices: faktureringsmetoden and the attest policy
+ * on) shows Attesterad; every other ladder skips it.
  */
-export function stagesFor(accountingMethod: 'accrual' | 'cash' | null | undefined): readonly SupplierInvoiceLadderStage[] {
-  return companyAttestsSupplierInvoices(accountingMethod)
+export function stagesFor(
+  accountingMethod: 'accrual' | 'cash' | null | undefined,
+  attestPolicyOn: boolean | null | undefined,
+): readonly SupplierInvoiceLadderStage[] {
+  return companyAttestsSupplierInvoices(accountingMethod, attestPolicyOn)
     ? SUPPLIER_INVOICE_STAGES
     : SUPPLIER_INVOICE_STAGES.filter((s) => s !== 'approved')
 }

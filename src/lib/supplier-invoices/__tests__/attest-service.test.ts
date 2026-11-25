@@ -394,17 +394,35 @@ describe('loadAttestBlockedInvoiceIds', () => {
 
 // crm#1141: the payment paths' unattested warning asks this, the one rule.
 describe('loadCompanyAttestsSupplierInvoices', () => {
-  it('kontantmetoden has no attest step; faktureringsmetoden and a company without a setting attest', async () => {
-    for (const [method, attests] of [['cash', false], ['accrual', true], [null, true]] as const) {
-      const mock = createTableMockSupabase({ company_settings: { data: method === null ? null : { accounting_method: method } } })
-      expect(await loadCompanyAttestsSupplierInvoices(mock.supabase as unknown as SupabaseClient, 'company-1'), String(method)).toBe(attests)
+  it('attests only under faktureringsmetoden (or no setting) with the attest policy on', async () => {
+    const cases = [
+      ['cash', { enabled: true }, false],
+      ['cash', null, false],
+      ['accrual', { enabled: true }, true],
+      [null, { enabled: true }, true],
+      ['accrual', { enabled: false }, false],
+      ['accrual', null, false],
+      [null, null, false],
+    ] as const
+    for (const [method, policy, attests] of cases) {
+      const mock = createTableMockSupabase({
+        company_settings: { data: method === null ? null : { accounting_method: method } },
+        company_attest_policies: { data: policy },
+      })
+      expect(await loadCompanyAttestsSupplierInvoices(mock.supabase as unknown as SupabaseClient, 'company-1'), `${method} ${JSON.stringify(policy)}`).toBe(attests)
       expect(mock.findCall('company_settings', 'eq')).toEqual(['company_id', 'company-1'])
+      expect(mock.findCall('company_attest_policies', 'eq')).toEqual(['company_id', 'company-1'])
     }
   })
 
   it('a failed read answers true: the warning it decides never blocks, so it stays', async () => {
-    const mock = createTableMockSupabase({ company_settings: { error: { message: 'boom' } } })
-    expect(await loadCompanyAttestsSupplierInvoices(mock.supabase as unknown as SupabaseClient, 'company-1')).toBe(true)
+    const settingsFailed = createTableMockSupabase({ company_settings: { error: { message: 'boom' } }, company_attest_policies: { data: null } })
+    expect(await loadCompanyAttestsSupplierInvoices(settingsFailed.supabase as unknown as SupabaseClient, 'company-1')).toBe(true)
+    const policyFailed = createTableMockSupabase({
+      company_settings: { data: { accounting_method: 'accrual' } },
+      company_attest_policies: { error: { message: 'boom' } },
+    })
+    expect(await loadCompanyAttestsSupplierInvoices(policyFailed.supabase as unknown as SupabaseClient, 'company-1')).toBe(true)
   })
 })
 

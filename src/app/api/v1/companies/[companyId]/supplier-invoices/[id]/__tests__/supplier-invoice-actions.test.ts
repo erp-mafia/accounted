@@ -573,17 +573,36 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/bank-entered',
     expect((await post({ entered: 'yes' })).status).toBe(400)
   })
 
-  it('400 SI_BANK_ENTERED_NOT_PAYABLE on a registered invoice still waiting for attest (faktureringsmetoden)', async () => {
+  it('400 SI_BANK_ENTERED_NOT_PAYABLE on a registered invoice still waiting for attest (faktureringsmetoden with the attest policy on)', async () => {
     const client = makeClient({
       company_members: OWNER,
       supplier_invoices: { data: invoice({ status: 'registered' }) },
       company_settings: { data: { accounting_method: 'accrual' }, error: null },
+      company_attest_policies: { data: { enabled: true }, error: null },
     })
     mockServiceClient.mockReturnValue(client)
     const res = await post({ entered: true })
     expect(res.status).toBe(400)
     expect((await res.json()).error.code).toBe('SI_BANK_ENTERED_NOT_PAYABLE')
     expect(wrote(client)).toBe(false)
+  })
+
+  it('marks a registered invoice under faktureringsmetoden without an attest policy on: no attest step', async () => {
+    const client = makeClient({
+      company_members: OWNER,
+      supplier_invoices: [{ data: invoice({ status: 'registered' }) }, { data: { id: SI_ID, bank_entered_at: '2026-10-20T10:00:00.000Z' } }],
+      company_settings: { data: { accounting_method: 'accrual' }, error: null },
+      company_attest_policies: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post({ entered: true })
+    expect(res.status).toBe(200)
+    expect(client.calls).toContainEqual({ table: 'company_attest_policies', method: 'eq', args: ['company_id', COMPANY_ID] })
+    expect(client.calls).toContainEqual({
+      table: 'supplier_invoices',
+      method: 'in',
+      args: ['status', ['registered', 'approved', 'overdue', 'partially_paid']],
+    })
   })
 
   it('marks a registered invoice under kontantmetoden, which has no attest step (crm#1141)', async () => {

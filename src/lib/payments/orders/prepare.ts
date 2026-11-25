@@ -192,7 +192,8 @@ export async function preparePaymentOrders(
   }
 
   // The attest policy's exclusion, and whether the company attests at all
-  // (the unattested warning; kontantmetoden has none, crm#1141): the same
+  // (the unattested warning; a company without an attest step has none,
+  // crm#1141): the same
   // reads the payment file makes, the second only when an invoice lacks attest.
   const [attestBlocked, companyAttests] = await Promise.all([
     PAYMENT_ATTEST_GATE.blockedInvoiceIds(supabase, companyId, ids),
