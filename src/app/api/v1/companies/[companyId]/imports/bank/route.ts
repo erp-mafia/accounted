@@ -22,6 +22,7 @@
  */
 
 import { z } from 'zod'
+import { BANK_FILE_FORMAT_IDS } from '@/lib/api/schemas'
 import { accepted } from '@/lib/api/v1/response'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
@@ -61,22 +62,7 @@ const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB: matches dashboard
 // The canonical BankFileFormatId values a `format` override may name. The
 // handler validates the parameter against it before anything reaches the
 // format module.
-const BankFormatEnum = z.enum([
-  'nordea',
-  'nordea_business',
-  'seb',
-  'swedbank',
-  'handelsbanken',
-  'lansforsakringar',
-  'ica_banken',
-  'skandia',
-  'lunar',
-  'northmill',
-  'wise',
-  'wise_statement',
-  'generic_csv',
-  'camt053',
-])
+const BankFormatEnum = z.enum(BANK_FILE_FORMAT_IDS)
 
 const ImportQuery = z.object({
   format: BankFormatEnum.optional().describe(
@@ -97,7 +83,7 @@ registerEndpoint({
     'SIE bookkeeping import (use /imports/sie). Auto-bank sync (use the enable-banking extension). Single-transaction creation (use POST /transactions/ingest with a 1-element array).',
   pitfalls: [
     'File size cap: 10 MB. Larger files require splitting client-side.',
-    '`format` query parameter is optional; auto-detection works for all supported banks. Pass `format` only to force a specific format. Accepted values: seb, swedbank, handelsbanken, nordea, nordea_business, lansforsakringar, ica_banken, skandia, lunar, northmill, wise, wise_statement, generic_csv, camt053.',
+    '`format` query parameter is optional; auto-detection works for all supported banks. Pass `format` only to force a specific format. Accepted values: seb, swedbank, handelsbanken, nordea, nordea_business, lansforsakringar, ica_banken, skandia, lunar, northmill, avanza, wise, wise_statement, generic_csv, camt053.',
     'Wise transaction-history rows with refunded or unknown statuses, unknown directions, or different source and target currencies are rejected instead of guessed. Import the matching per-currency Wise balance statements.',
     'Duplicate detection is by external_id (composed from format + date + description + amount + row index, or the camt.053 entry reference / Wise transfer id where the file carries one); a re-import of the same file typically deduplicates rather than creating doubles.',
     'Rows bind to the cash account the file names when the company already has it. A file covering a period a completed SIE import booked is matched against the imported vouchers and never auto-categorized.',
