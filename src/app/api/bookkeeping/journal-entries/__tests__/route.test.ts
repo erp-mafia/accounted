@@ -1163,6 +1163,13 @@ describe('GET /api/bookkeeping/journal-entries', () => {
         offset: 40,
         limit: 20,
       })
+      // Neither the bound context nor the error line itself carries the needle.
+      const logged = mockLogError.mock.calls
+        .flat()
+        .map((arg) => (arg instanceof Error ? arg.message : JSON.stringify(arg)))
+        .join(' ')
+      expect(logged).toContain('statement timeout')
+      expect(logged).not.toContain('Hemlig')
       expect(JSON.stringify(logChildContexts)).not.toContain('Hemlig')
     })
 
