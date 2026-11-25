@@ -17,8 +17,10 @@
 --     no empty, "." or ".." part and no control character, \, %, ? or #:
 --     Storage builds its request URL from the key as written.
 --
--- Anything else is refused with 42501. The same rule in TypeScript is
--- isCompanyFolderObject; the register entry is
+-- Anything else is refused with 42501. This is the rule of
+-- isCompanyFolderObject in TypeScript, held a little tighter where no upload
+-- goes: the company id only as the database writes it (lower case), and
+-- [[:cntrl:]] also takes the C1 control characters. The register entry is
 -- scripts/checks/one-definition/document-key-of-company.mjs.
 --
 -- Only the insert is checked: trg_account_reconciliation_attachments_freeze
@@ -55,7 +57,7 @@ $$;
 REVOKE ALL ON FUNCTION public.guard_reconciliation_attachment_storage_path() FROM PUBLIC, anon, authenticated;
 
 COMMENT ON FUNCTION public.guard_reconciliation_attachment_storage_path() IS
-  'A member''s reconciliation attachment names a file in its company''s own folder of the documents bucket. Same rule as isCompanyFolderObject in src/lib/core/documents/storage-key.ts.';
+  'A member''s reconciliation attachment names a file in its company''s own folder of the documents bucket: the rule of isCompanyFolderObject in src/lib/core/documents/storage-key.ts.';
 
 DROP TRIGGER IF EXISTS guard_reconciliation_attachment_storage_path ON public.account_reconciliation_attachments;
 CREATE TRIGGER guard_reconciliation_attachment_storage_path

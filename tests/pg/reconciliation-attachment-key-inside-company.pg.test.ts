@@ -66,6 +66,8 @@ describe('guard_reconciliation_attachment_storage_path (pg)', () => {
       `documents/${userA}/1767000000000_kontoutdrag.pdf`,
       `documents/${companyA}`,
       `documents/${companyA}x/kontoutdrag.pdf`,
+      // The company id as the database writes it, in lower case: the folder a member's upload can reach.
+      `documents/${companyA.toUpperCase()}/reconciliation/kontoutdrag.pdf`,
     ]) {
       await expect(memberAttach(userA, companyA, key), key).rejects.toMatchObject({ code: '42501' })
     }

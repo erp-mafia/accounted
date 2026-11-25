@@ -149,8 +149,9 @@ export async function downloadDocumentObject(
  * True when a row that names its file by bucket and key names one in the
  * company's own folder of the documents bucket: the only place such rows (the
  * reconciliation attachments) keep their files. The database holds a row
- * written with a member's own token to the same rule
- * (guard_reconciliation_attachment_storage_path, migration 20261125162000).
+ * written with a member's own token to this rule, with the company id in lower
+ * case only (guard_reconciliation_attachment_storage_path, migration
+ * 20261125162000).
  */
 export function isCompanyFolderObject(bucket: string, storagePath: string, companyId: string): boolean {
   return bucket === DOCUMENTS_BUCKET && isCompanyFolderDocumentKey(storagePath, companyId)
