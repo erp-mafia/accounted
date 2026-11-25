@@ -76,7 +76,6 @@ export function HemFirstThing({ kind, lead, after, clients, bankHref, receiptsHr
   let why: string
   let primary: ReactNode
   let second: ReactNode = null
-  let quote: string | null = null
 
   if (kind === 'connect_bank') {
     title = t('first_thing_connect_title')
@@ -87,7 +86,6 @@ export function HemFirstThing({ kind, lead, after, clients, bankHref, receiptsHr
     if (client) {
       title = t('first_thing_book_ai_title', { client: client.name })
       why = t('first_thing_book_ai_why')
-      quote = prompt
       primary = (
         <Button type="button" onClick={() => openAiConnector(aiPrefilledChatLink(client.id, prompt))}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -124,7 +122,6 @@ export function HemFirstThing({ kind, lead, after, clients, bankHref, receiptsHr
           {title}
         </h2>
         <p className="text-[13px] text-muted-foreground">{why}</p>
-        {quote && <blockquote className="border-l border-border pl-3 text-[13px] text-foreground/80">{quote}</blockquote>}
       </div>
 
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">

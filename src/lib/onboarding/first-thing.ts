@@ -73,11 +73,12 @@ export function pickFirstThing(input: FirstThingInput): FirstThing | null {
   if (!input.inRollout || input.closed) return null
   if (!isNewCompany(input.companyCreatedAt, input.today)) return null
 
-  const connected = input.hasBankFeed || input.hasImportedBooks || input.hasTransactions
+  // Bank rows reach the company through a bank connection or as rows already in it.
+  const hasBankRows = input.hasBankFeed || input.hasTransactions
   const count = (category: AiTaskCategory) => input.counts[category] ?? 0
 
   let kind: FirstThingKind | null = null
-  if (!connected) kind = 'connect_bank'
+  if (!hasBankRows) kind = 'connect_bank'
   else if (count('book_transaction') > 0) kind = 'book_bank_rows'
   else if (count('verifikat_missing_document') > 0) kind = 'find_receipts'
   else if (input.hasAi && count('inbox_document') > 0) kind = 'go_through_documents'

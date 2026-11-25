@@ -67,12 +67,18 @@ describe('pickFirstThing: the first thing', () => {
     expect(r?.kind).toBe('connect_bank')
   })
 
-  it('imported books count as connected', () => {
-    const r = pickFirstThing(
-      input({ hasBankFeed: false, hasTransactions: false, hasImportedBooks: true, counts: counts({ book_transaction: 1 }) }),
-    )
-    expect(r?.kind).toBe('book_bank_rows')
+  it('a: imported books without any bank rows still open on connecting the bank', () => {
+    const r = pickFirstThing(input({ hasBankFeed: false, hasTransactions: false, hasImportedBooks: true }))
+    expect(r?.kind).toBe('connect_bank')
     expect(r?.lead).toBe('books')
+  })
+
+  it('a wins over missing receipts when the books are in and the bank is not', () => {
+    const r = pickFirstThing(
+      input({ hasBankFeed: false, hasTransactions: false, hasImportedBooks: true, counts: counts({ verifikat_missing_document: 4 }) }),
+    )
+    expect(r?.kind).toBe('connect_bank')
+    expect(r?.after.map((task) => task.category)).toEqual(['verifikat_missing_document'])
   })
 
   it('any transactions count as connected', () => {
