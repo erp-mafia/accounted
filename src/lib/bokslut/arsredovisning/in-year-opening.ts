@@ -84,8 +84,9 @@ export interface InYearOpeningOutcome {
   moved: number
   /**
    * The register categories the move was shared between when the books held
-   * a different amount than the assets' plans give: the note's total for the
-   * post is the books', its split between the categories an estimate.
+   * more than a krona more or less than the assets' plans give: the note's
+   * total for the post is the books', its split between the categories an
+   * estimate.
    */
   estimatedAcross: string[]
   /**
@@ -282,9 +283,11 @@ export function moveInYearOpenings(params: {
 
     const items = inYear.map(({ asset, amount }) => ({ id: asset.id, inYear: amount, weight: inYearWeight(asset, period, amount) }))
     const shares = shareOut(outcome.moved, items)
-    // Only the plans' own amounts are an exact split; anything else is shared by estimate.
+    // The plans' own amounts are the split; when the books hold more than a
+    // krona more or less, the difference is shared by estimate. Within the
+    // krona every share is within it too, the note's tolerance.
     const planned = roundOre(items.reduce((sum, item) => sum + item.weight, 0))
-    if (Math.abs(planned - outcome.moved) >= 0.005) {
+    if (Math.abs(planned - outcome.moved) > KRONA) {
       outcome.estimatedAcross = [...new Set(inYear.filter(({ asset }) => shares.has(asset.id)).map(({ asset }) => asset.category))]
     }
     for (const [id, share] of shares) {

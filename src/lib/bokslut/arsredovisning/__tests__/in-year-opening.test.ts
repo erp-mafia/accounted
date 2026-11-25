@@ -221,6 +221,15 @@ describe('moveInYearOpenings', () => {
     expect(r.amount(INV, 'depreciation.opening')).toBe(48_000)
   })
 
+  it('shares by the plans without an estimate when the books are within a krona of them', () => {
+    // A previous system that booked each month to the öre: 0.60 kr off the plans in all.
+    const computer = asset({ id: 'c1', category: 'computer', bas_asset_account: '1224', acquisition_cost: 36_000, useful_life_months: 36 })
+    const plan = computeAssetNoteFigures({ assets: [asset(), computer], postedSchedules: [], fiscalPeriods: PERIODS, currentPeriodId: 'fy2025' })
+    const booked = plan.get('a1')!.aretsAvskrivning + plan.get('c1')!.aretsAvskrivning
+    const r = run([asset(), computer], [row('1220', 96_000), row('1229', -48_000.6, 0, 11_999.4 + booked)])
+    expect(r.outcomes[0]).toMatchObject({ moved: 11_999.4, estimatedAcross: [], reason: 'moved' })
+  })
+
   it('never moves more than the openings dated inside the year: the rest stays the opening warning', () => {
     // a2 states nothing; the register plans 36 000 on it before 2025, the
     // books held none of it and caught all of it up in 2025. Only a1's
