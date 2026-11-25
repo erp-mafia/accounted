@@ -3,11 +3,15 @@ import { beforeAll, describe, expect, it } from 'vitest'
 import { getPool, withUserContext } from './setup'
 import {
   seedCompany,
+  insertCashAccount,
   insertDraftJournalEntry,
   insertFiscalPeriod,
   insertPostedJournalEntry,
   insertBalancedLines,
 } from './fixtures'
+import { orderByShownAmount, shownAmounts } from './shown-amount-order'
+import { missingUnderlagOrder, type JournalListSortKey } from '@/lib/bookkeeping/missing-underlag'
+import { VOUCHER_SHAPES, type ShapeLine } from '@/lib/bookkeeping/__tests__/voucher-display-amount.shapes'
 
 /**
  * list_verifikat_missing_underlag (migration 20261023001000, crm#1390): the
@@ -21,9 +25,14 @@ import {
  *     label matching series + number;
  *   - total_count spans every page, and consecutive pages are disjoint and
  *     complete in the requested order;
- *   - an amount sort orders by display_amount, the amount the list shows;
+ *   - an amount sort orders by the amount the list shows: read for the whole
+ *     set in one pass (verifikat_display_amounts, 20261125143100), its pages
+ *     follow voucherDisplayAmount with the list's other keys for every sort
+ *     and filter the list sends, and display_amount, the per-row column it
+ *     read before, is gone;
  *   - the order allowlist refuses anything else, and the tenant guard refuses
- *     a company the caller is no member of;
+ *     a company the caller is no member of; another company's verifikat and
+ *     cash accounts never reach an amount sort;
  *   - a document or a waiver of another company backs nothing, in both
  *     functions (20261023093920, 20261023093930).
  */
@@ -67,6 +76,19 @@ function listArgs(p: ListParams): unknown[] {
 async function list(p: ListParams): Promise<ListResult> {
   const { rows } = await getPool().query<{ r: ListResult }>(LIST_SQL, listArgs(p))
   return rows[0].r
+}
+
+/** As the company's member, the way the list calls it. */
+async function listAs(userId: string, p: ListParams): Promise<ListResult> {
+  return withUserContext(userId, async (client) => {
+    const { rows } = await client.query<{ r: ListResult }>(LIST_SQL, listArgs(p))
+    return rows[0].r
+  })
+}
+
+/** The RPC's order tokens for a sort stack, as the list route sends them. */
+function orderTokens(sort: JournalListSortKey[]): string[] {
+  return missingUnderlagOrder(sort, null).map((t) => `${t.column}.${t.ascending ? 'asc' : 'desc'}`)
 }
 
 async function badgeSet(companyId: string): Promise<{ total: number; ids: string[] }> {
@@ -300,9 +322,8 @@ describe('list_verifikat_missing_underlag', () => {
     expect(res.total_count).toBe(4)
   })
 
-  it('orders an amount sort by display_amount, the amount the list shows', async () => {
-    // display_amount answers only for an entry the caller may read, so the
-    // amount sort runs as the member, as the list does.
+  it('orders an amount sort by the amount the list shows', async () => {
+    // As the member, as the list calls it.
     const res = await withUserContext(userId, async (client) => {
       const { rows } = await client.query<{ r: ListResult }>(
         LIST_SQL,
@@ -338,5 +359,262 @@ describe('list_verifikat_missing_underlag', () => {
          has_function_privilege('authenticated', 'public.list_verifikat_missing_underlag(uuid, uuid, text, date, date, text, text, integer, text[], integer, integer)', 'EXECUTE') AS authenticated`,
     )
     expect(rows[0]).toEqual({ anon: false, authenticated: true })
+  })
+})
+
+describe('list_verifikat_missing_underlag sorted by Belopp', () => {
+  let userId: string
+  let companyId: string
+  let y2026: string
+  let y2025: string
+  let otherUserId: string
+  let otherCompanyId: string
+  // This company's verifikat that lack underlag, by name.
+  const v: Record<string, string> = {}
+  // Its verifikat that do not, and the other company's: never in the set.
+  const excluded: string[] = []
+  const foreign: Record<string, string> = {}
+
+  const shape = (name: string): ShapeLine[] => {
+    const found = VOUCHER_SHAPES.find((s) => s.name === name)
+    if (!found) throw new Error(`no voucher shape named ${name}`)
+    return found.lines
+  }
+  const toLines = (lines: ShapeLine[]) =>
+    lines.map(([accountNumber, debit, credit]) => ({
+      accountNumber,
+      debitAmount: Number(debit),
+      creditAmount: Number(credit),
+    }))
+  // A reverse-charge payment from a balance on 1687: Belopp 200 where 1687 is
+  // a money account of the company, else its omslutning, 250.
+  const FROM_1687: ShapeLine[] = [
+    ['2645', 50, 0],
+    ['2614', 0, 50],
+    ['6540', 200, 0],
+    ['1687', 0, 200],
+  ]
+  const purchase = (amount: number): ShapeLine[] => [
+    ['5410', amount, 0],
+    ['1930', 0, amount],
+  ]
+
+  beforeAll(async () => {
+    const s = await seedCompany()
+    userId = s.userId
+    companyId = s.companyId
+    y2026 = s.fiscalPeriodId
+    y2025 = await insertFiscalPeriod({ userId, companyId, name: '2025', periodStart: '2025-01-01', periodEnd: '2025-12-31' })
+    // A payment provider's balance: 1686 is a money account of this company.
+    await insertCashAccount({ companyId, ledgerAccount: '1686', source: 'manual' })
+
+    const other = await seedCompany()
+    otherUserId = other.userId
+    otherCompanyId = other.companyId
+    // 1687 is a money account of the other company only.
+    await insertCashAccount({ companyId: otherCompanyId, ledgerAccount: '1687', source: 'manual' })
+
+    const entry = (p: {
+      periodId?: string
+      series?: string
+      number: number
+      date: string
+      description: string
+      lines: ShapeLine[]
+      sourceType?: string
+    }) =>
+      insertPostedJournalEntry({
+        userId,
+        companyId,
+        fiscalPeriodId: p.periodId ?? y2026,
+        voucherSeries: p.series ?? 'A',
+        voucherNumber: p.number,
+        entryDate: p.date,
+        description: p.description,
+        sourceType: p.sourceType ?? 'manual',
+        lines: toLines(p.lines),
+      })
+
+    // The Belopp differs from the omslutning on most of these, and several
+    // share a Belopp, a description or a voucher label, so a sort by the
+    // omslutning, by another company's cash accounts or with a broken
+    // tiebreak reads in another order.
+    const rc = shape('reverse-charge bank payment') // 200, omslutning 450
+    v.rc2026A1 = await entry({ number: 1, date: '2026-03-01', description: 'Programvara', lines: rc })
+    v.provider = await entry({
+      number: 2, date: '2026-03-01', description: 'Leverantör',
+      lines: shape('payment from a provider balance kept as a cash account'), // 200 on 1686, omslutning 250
+    })
+    v.rc2026B1 = await entry({ series: 'B', number: 1, date: '2026-03-02', description: 'Programvara', lines: rc })
+    v.salary = await entry({
+      number: 3, date: '2026-04-25', description: 'Lön april',
+      lines: shape('salary payment (net pay left the bank)'), // 23 000, omslutning 39 426
+    })
+    v.card = await entry({
+      number: 4, date: '2026-04-30', description: 'Kortutbetalning',
+      lines: shape('card payout (receivable on the opposite side)'), // 970, omslutning 1 000
+    })
+    v.accrual = await entry({
+      number: 5, date: '2026-05-02', description: 'Periodisering',
+      lines: shape('manual voucher without a money line'), // 250
+    })
+    v.transfer = await entry({
+      number: 6, date: '2026-05-02', description: 'Överföring',
+      lines: shape('transfer between two 19xx accounts'), // 5 000
+    })
+    v.ore = await entry({
+      number: 7, date: '2026-05-03', description: 'Öresbelopp',
+      lines: shape('öre amounts as numeric strings'), // 0,20, omslutning 0,30
+    })
+    // 1687 is no money account of this company: the omslutning, 250.
+    v.from1687 = await entry({ number: 8, date: '2026-06-01', description: 'Programvara', lines: FROM_1687 })
+    // The earlier year: the same label as the first, A1, and the same Belopp.
+    v.rc2025A1 = await entry({ periodId: y2025, number: 1, date: '2025-03-01', description: 'Programvara', lines: rc })
+    v.sale2025 = await entry({
+      periodId: y2025, number: 2, date: '2025-11-30', description: 'Försäljning',
+      lines: shape('plain sale paid to the bank'), // 1 250
+    })
+
+    // Not missing, each with an amount that would top a Belopp sort.
+    const withDoc = await entry({ number: 9, date: '2026-06-02', description: 'Programvara med kvitto', lines: purchase(99999) })
+    await getPool().query(
+      `INSERT INTO public.document_attachments
+         (id, user_id, company_id, journal_entry_id, file_name, mime_type,
+          file_size_bytes, storage_path, sha256_hash, upload_source)
+       VALUES ($1, $2, $3, $4, 'kvitto.pdf', 'application/pdf', 1024, $5, $6, 'file_upload')`,
+      [
+        randomUUID(),
+        userId,
+        companyId,
+        withDoc,
+        `documents/${companyId}/kvitto.pdf`,
+        randomUUID().replace(/-/g, '').padEnd(64, '0'),
+      ],
+    )
+    const waived = await entry({ number: 10, date: '2026-06-03', description: 'Programvara intern', lines: purchase(88888) })
+    await getPool().query(
+      `INSERT INTO public.journal_entry_no_doc_required (journal_entry_id, company_id, user_id, reason)
+       VALUES ($1, $2, $3, 'internal transfer')`,
+      [waived, companyId, userId],
+    )
+    const invoiced = await entry({
+      number: 11, date: '2026-06-04', description: 'Programvara faktura', sourceType: 'invoice_created',
+      lines: [['1510', 77777, 0], ['3001', 0, 77777]],
+    })
+    const draft = await insertDraftJournalEntry({
+      userId, companyId, fiscalPeriodId: y2026, entryDate: '2026-06-05', description: 'Programvara utkast',
+    })
+    await insertBalancedLines(draft, 66666)
+    excluded.push(withDoc, waived, invoiced, draft)
+
+    // The other company: undocumented too, and alike in every filter below.
+    const theirs = (p: { series?: string; number: number; date: string; lines: ShapeLine[] }) =>
+      insertPostedJournalEntry({
+        userId: other.userId,
+        companyId: other.companyId,
+        fiscalPeriodId: other.fiscalPeriodId,
+        voucherSeries: p.series ?? 'A',
+        voucherNumber: p.number,
+        entryDate: p.date,
+        description: 'Programvara',
+        lines: toLines(p.lines),
+      })
+    foreign.big = await theirs({ number: 1, date: '2026-03-01', lines: purchase(1000000) })
+    foreign.mid = await theirs({ number: 2, date: '2026-03-02', lines: purchase(225) })
+    // 1687 is this company's money account: Belopp 200, below the 225.
+    foreign.from1687 = await theirs({ series: 'B', number: 1, date: '2026-03-02', lines: FROM_1687 })
+  })
+
+  it('orders every year by the amount on screen, not the omslutning, with the voucher and id tiebreaks', async () => {
+    const res = await listAs(userId, { companyId, order: orderTokens([{ column: 'total', ascending: false }]) })
+    expect(res.ok).toBe(true)
+    const ids = res.ids ?? []
+    expect(ids.slice(0, 4)).toEqual([v.salary, v.transfer, v.sale2025, v.card])
+    // 250: the later voucher number first.
+    expect(ids.slice(4, 6)).toEqual([v.from1687, v.accrual])
+    // 200: series B before A, A2 before A1, and the two A1 of two years by id.
+    expect(ids.slice(6, 8)).toEqual([v.rc2026B1, v.provider])
+    expect([...ids.slice(8, 10)].sort()).toEqual([v.rc2026A1, v.rc2025A1].sort())
+    expect(ids.slice(10)).toEqual([v.ore])
+    expect(res.total_count).toBe(11)
+  })
+
+  it('pages every sort the list sends, under every filter, in the order the amounts on screen give', async () => {
+    // What the list sends for a Belopp sort (missingUnderlagOrder) and the
+    // filters as listMissingUnderlagPage passes them: a needle is a pattern,
+    // and a voucher label also matches series + number.
+    const sorts: JournalListSortKey[][] = [
+      [{ column: 'total', ascending: false }],
+      [{ column: 'total', ascending: true }],
+      [{ column: 'total', ascending: false }, { column: 'description', ascending: true }],
+      [{ column: 'voucher', ascending: true }, { column: 'total', ascending: false }],
+      [{ column: 'date', ascending: false }, { column: 'total', ascending: true }],
+      [{ column: 'description', ascending: true }, { column: 'total', ascending: false }],
+    ]
+    const filters: Array<[string, Omit<ListParams, 'companyId'>]> = [
+      ['every year', {}],
+      ['one fiscal year', { periodId: y2026 }],
+      ['a series', { series: 'B' }],
+      ['a date range', { dateFrom: '2026-03-01', dateTo: '2026-04-30' }],
+      ['a text', { searchPattern: '%programvara%' }],
+      ['a voucher label', { searchPattern: '%A1%', searchVoucherSeries: 'A', searchVoucherNumber: 1 }],
+    ]
+    const amounts = await shownAmounts(userId, companyId)
+    const own = new Set(Object.values(v))
+
+    let pages = 0
+    for (const [filterName, filter] of filters) {
+      const set = await listAs(userId, { companyId, ...filter, order: ['id.asc'] })
+      expect(set.ok).toBe(true)
+      const ids = set.ids ?? []
+      expect(ids.length).toBeGreaterThan(0)
+      for (const id of ids) expect({ filterName, own: own.has(id) }).toEqual({ filterName, own: true })
+      if (filterName === 'every year') expect([...ids].sort()).toEqual([...own].sort())
+
+      for (const sort of sorts) {
+        const order = orderTokens(sort)
+        const expected = await orderByShownAmount(ids, amounts, order)
+        const paged: string[] = []
+        for (let offset = 0; offset < ids.length + 2; offset += 2) {
+          const page = await listAs(userId, { companyId, ...filter, order, limit: 2, offset })
+          expect(page.ok).toBe(true)
+          expect(page.total_count).toBe(ids.length)
+          paged.push(...(page.ids ?? []))
+          pages += 1
+        }
+        expect({ filterName, order, paged }).toEqual({ filterName, order, paged: expected })
+      }
+    }
+    expect(pages).toBeGreaterThan(100)
+  })
+
+  it("never returns another company's verifikat or reads its cash accounts, and refuses its company", async () => {
+    const order = orderTokens([{ column: 'total', ascending: false }])
+    const mine = await listAs(userId, { companyId, order, searchPattern: '%programvara%' })
+    expect(mine.ok).toBe(true)
+    for (const id of [...Object.values(foreign), ...excluded]) expect(mine.ids).not.toContain(id)
+    // 1687 is the other company's money account, not this one's: the
+    // verifikat shows its omslutning, 250, above its three 200s.
+    expect(mine.ids?.[0]).toBe(v.from1687)
+    expect([...(mine.ids ?? [])].sort()).toEqual([v.from1687, v.rc2026B1, v.rc2026A1, v.rc2025A1].sort())
+
+    // The other company's member sees its own, its 1687 line as money.
+    const theirs = await listAs(otherUserId, { companyId: otherCompanyId, order, searchPattern: '%programvara%' })
+    expect(theirs).toEqual({ ok: true, total_count: 3, ids: [foreign.big, foreign.mid, foreign.from1687] })
+
+    const refused = await listAs(userId, { companyId: otherCompanyId, order })
+    expect(refused).toEqual({ ok: false, code: 'LIST_VERIFIKAT_MISSING_UNDERLAG_FORBIDDEN' })
+  })
+
+  it('reads the amounts through the set function, and display_amount, the per-row column, is gone', async () => {
+    const { rows } = await getPool().query<{ per_row: boolean; set: boolean; definition: string }>(
+      `SELECT to_regprocedure('public.display_amount(public.journal_entries)') IS NOT NULL AS per_row,
+              to_regprocedure('public.verifikat_display_amounts(uuid, uuid[])') IS NOT NULL AS set,
+              pg_get_functiondef('public.list_verifikat_missing_underlag(uuid, uuid, text, date, date, text, text, integer, text[], integer, integer)'::regprocedure) AS definition`,
+    )
+    expect({ per_row: rows[0].per_row, set: rows[0].set }).toEqual({ per_row: false, set: true })
+    // No body of the rule of its own: the amounts come from the set function.
+    expect(rows[0].definition).toContain('public.verifikat_display_amounts($1,')
+    expect(rows[0].definition).not.toMatch(/money_net|debit_total|cash_accounts/)
   })
 })

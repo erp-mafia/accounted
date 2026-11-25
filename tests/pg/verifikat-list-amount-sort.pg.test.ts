@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { getPool, withUserContext } from './setup'
 import { insertCashAccount, insertDraftJournalEntry, insertFiscalPeriod, seedCompany } from './fixtures'
+import { orderByShownAmount, shownAmounts } from './shown-amount-order'
 import { voucherDisplayAmount } from '@/lib/bookkeeping/voucher-display-amount'
 import { VOUCHER_SHAPES, type ShapeLine } from '@/lib/bookkeeping/__tests__/voucher-display-amount.shapes'
 import { readVerifikatQuerySearch, verifikatSearchParams } from '@/lib/bookkeeping/verifikat-search'
@@ -9,11 +10,11 @@ import { readVerifikatQuerySearch, verifikatSearchParams } from '@/lib/bookkeepi
 /**
  * The verifikat list sorted by Belopp (migration 20261125130100). Pins, on
  * real Postgres:
- *   - verifikat_display_amounts gives every voucher shape the amount the list
- *     shows (voucherDisplayAmount) and the amount display_amount gives it;
- *   - list_verifikat_by_amount orders exactly as the direct list query does
- *     with ORDER BY display_amount, pages disjointly and counts every page's
- *     total;
+ *   - verifikat_display_amounts, the one SQL body of the Belopp rule
+ *     (display_amount, the per-row column, went in 20261125143100), gives
+ *     every voucher shape the amount the list shows (voucherDisplayAmount);
+ *   - list_verifikat_by_amount orders exactly as the direct list query would
+ *     by that amount, pages disjointly and counts every page's total;
  *   - it applies the list's filters one for one (period, status, drafts,
  *     dates, series, every search reading, hidden pairs, folded corrections);
  *   - another company's verifikat are never returned, and the caller must be
@@ -127,7 +128,7 @@ async function post(p: PostParams): Promise<string> {
 }
 
 describe('verifikat_display_amounts', () => {
-  it('gives every voucher shape the amount the list shows, as display_amount does', async () => {
+  it('gives every voucher shape the amount the list shows', async () => {
     // One company per set of extra cash ledgers: a cash account on 1686
     // makes that ledger a money account for every voucher of its company.
     const groups = new Map<string, typeof VOUCHER_SHAPES>()
@@ -136,7 +137,7 @@ describe('verifikat_display_amounts', () => {
       groups.set(key, [...(groups.get(key) ?? []), shape])
     }
 
-    const results: Array<{ name: string; expected: number; helper: number; set: number; perRow: number }> = []
+    const results: Array<{ name: string; expected: number; helper: number; set: number }> = []
     for (const [key, shapes] of groups) {
       const { userId, companyId, fiscalPeriodId } = await seedCompany()
       for (const ledger of key ? key.split(',') : []) {
@@ -160,20 +161,12 @@ describe('verifikat_display_amounts', () => {
         [companyId, ids],
       )
       const setAmount = new Map(setRows.map((r) => [r.journal_entry_id, Number(r.display_amount)]))
-      const perRow = await withUserContext(userId, async (client) => {
-        const { rows } = await client.query<{ id: string; amount: string }>(
-          `SELECT je.id, public.display_amount(je.*)::text AS amount
-             FROM public.journal_entries je WHERE je.id = ANY ($1::uuid[])`,
-          [ids],
-        )
-        return new Map(rows.map((r) => [r.id, Number(r.amount)]))
-      })
       for (const { id, shape } of entries) {
         const helper = voucherDisplayAmount(
           { source_type: shape.source_type, lines: shape.lines.map(([a, d, c]) => ({ account_number: a, debit_amount: d, credit_amount: c })) },
           new Set(shape.extraMoneyAccounts ?? []),
         ).amount
-        results.push({ name: shape.name, expected: shape.expected.amount, helper, set: setAmount.get(id)!, perRow: perRow.get(id)! })
+        results.push({ name: shape.name, expected: shape.expected.amount, helper, set: setAmount.get(id)! })
       }
     }
 
@@ -181,11 +174,10 @@ describe('verifikat_display_amounts', () => {
     for (const r of results) {
       expect({ name: r.name, set: r.set }).toEqual({ name: r.name, set: r.expected })
       expect({ name: r.name, set: r.set }).toEqual({ name: r.name, set: r.helper })
-      expect({ name: r.name, set: r.set }).toEqual({ name: r.name, set: r.perRow })
     }
   })
 
-  it('answers 0 for a verifikat without lines, like the helper and display_amount', async () => {
+  it('answers 0 for a verifikat without lines, like the helper', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
     const empty = await insertDraftJournalEntry({ userId, companyId, fiscalPeriodId })
     const { rows } = await getPool().query<{ display_amount: string }>(
@@ -293,18 +285,19 @@ describe('list_verifikat_by_amount', () => {
     return r.ids ?? []
   }
 
-  it('orders exactly as the direct list query does with ORDER BY display_amount, page by page', async () => {
-    // What the route sent before: the computed column, the voucher tiebreak
-    // in the last key's direction, then the id (route.ts on main).
-    const today = await withUserContext(userId, async (client) => {
+  it('orders exactly as the direct list query would by the amount on screen, page by page', async () => {
+    // The direct query's scope, ordered as the route sent it before: the
+    // amount (from the helper the Belopp column renders), the voucher
+    // tiebreak in the last key's direction, then the id.
+    const scope = await withUserContext(userId, async (client) => {
       const { rows } = await client.query<{ id: string }>(
         `SELECT je.id FROM public.journal_entries je
-          WHERE je.company_id = $1 AND je.status <> 'cancelled' AND je.status <> 'draft'
-          ORDER BY public.display_amount(je) DESC, je.voucher_series DESC, je.voucher_number DESC, je.id DESC`,
+          WHERE je.company_id = $1 AND je.status <> 'cancelled' AND je.status <> 'draft'`,
         [companyId],
       )
       return rows.map((r) => r.id)
     })
+    const today = await orderByShownAmount(scope, await shownAmounts(userId, companyId), BY_AMOUNT_DESC)
 
     const paged: string[] = []
     for (let offset = 0; offset < today.length + 2; offset += 2) {

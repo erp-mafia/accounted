@@ -244,10 +244,10 @@ describe('voucherDisplayAmount', () => {
   })
 })
 
-// The shapes the display_amount computed column (the amount sort) is checked
-// against in tests/pg/journal-entry-display-amount.pg.test.ts: the helper must
-// give each one's expected amount, so a rule change here fails until the
-// shapes, and with them the SQL mirror, are updated too.
+// The shapes verifikat_display_amounts (the amount sorts) is checked against
+// in tests/pg/verifikat-list-amount-sort.pg.test.ts: the helper must give
+// each one's expected amount, so a rule change here fails until the shapes,
+// and with them the SQL mirror, are updated too.
 describe('voucherDisplayAmount over the shapes the amount sort mirrors', () => {
   it.each(VOUCHER_SHAPES.map((s) => [s.name, s] as const))('%s', (_name, shape) => {
     const result = voucherDisplayAmount(
