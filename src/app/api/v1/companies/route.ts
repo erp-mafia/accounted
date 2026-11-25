@@ -168,22 +168,25 @@ export const POST = withApiV1('companies.create', async (request, ctx) => {
 
   // Team: explicit, else the caller's personal team (defaultTeamForNewCompany,
   // WL-08). create_company_for_user re-checks membership (and byrå role) in
-  // the DB. A failed lookup refuses the request before anything is claimed or
-  // written, the dry run included: a company created on it would have no team.
-  let teamId: string | null = setup.team_id ?? null
-  if (!teamId) {
+  // the DB. A failed read refuses the request, the dry run included: a
+  // company created on it would have no team. Read after the Idempotency-Key
+  // claim, as the MCP door does, so a replay never depends on it.
+  const readTeam = async (): Promise<{ teamId: string | null } | { refused: Response }> => {
+    if (setup.team_id) return { teamId: setup.team_id }
     try {
-      teamId = await defaultTeamForNewCompany(ctx.supabase, ctx.userId)
+      return { teamId: await defaultTeamForNewCompany(ctx.supabase, ctx.userId) }
     } catch (err) {
       ctx.log.error('companies.create: personal team lookup failed', err as Error)
-      return v1ErrorResponseFromCode('INTERNAL_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: { message: 'The personal team could not be read. Nothing was created; retry the request.' },
-      })
+      return {
+        refused: await v1ErrorResponseFromCode('INTERNAL_ERROR', ctx.log, {
+          requestId: ctx.requestId,
+          details: { message: 'The personal team could not be read, so this request created nothing.' },
+        }),
+      }
     }
   }
 
-  const shape = (id: string) => ({
+  const shape = (id: string, teamId: string | null) => ({
     id,
     name: setup.name,
     entity_type: setup.entity_type,
@@ -200,7 +203,9 @@ export const POST = withApiV1('companies.create', async (request, ctx) => {
   })
 
   if (ctx.dryRun) {
-    return dryRunPreview(shape('00000000-0000-4000-8000-000000000000'), {
+    const previewTeam = await readTeam()
+    if ('refused' in previewTeam) return previewTeam.refused
+    return dryRunPreview(shape('00000000-0000-4000-8000-000000000000', previewTeam.teamId), {
       requestId: ctx.requestId,
       log: ctx.log,
     })
@@ -232,6 +237,13 @@ export const POST = withApiV1('companies.create', async (request, ctx) => {
     claim = claimed.claim
   }
 
+  const team = await readTeam()
+  if ('refused' in team) {
+    // Nothing was created: give the key back, so a retry runs again.
+    await claim?.release()
+    return team.refused
+  }
+
   let result: Awaited<ReturnType<typeof createCompanyCore>>
   try {
     result = await createCompanyCore(ctx.supabase, plan.input, () =>
@@ -239,7 +251,7 @@ export const POST = withApiV1('companies.create', async (request, ctx) => {
         p_user_id: ctx.userId,
         p_name: setup.name,
         p_entity_type: setup.entity_type,
-        p_team_id: teamId,
+        p_team_id: team.teamId,
       }),
     )
   } catch (err) {
@@ -263,7 +275,7 @@ export const POST = withApiV1('companies.create', async (request, ctx) => {
     })
   }
 
-  const response = created(shape(result.companyId), { requestId: ctx.requestId })
+  const response = created(shape(result.companyId, team.teamId), { requestId: ctx.requestId })
   // Best-effort like the wrapper's cache: the company exists either way, and
   // a failed write only weakens a later retry (logged inside).
   await claim?.complete('success', (await response.clone().json()) as Record<string, unknown>, {

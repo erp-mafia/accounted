@@ -12,7 +12,9 @@ const hits = (line: string) => findRuleLines(line, rule).length > 0
 describe('default-team-for-new-company', () => {
   it.each([
     "      .eq('teams.kind', 'personal')",
+    "      .eq('team.kind', 'personal')",
     '  .eq("kind", "personal")',
+    "  .filter('teams.kind', 'eq', 'personal')",
     "  .match({ 'teams.kind': 'personal' })",
   ])('catches %s', (line) => {
     expect(hits(line)).toBe(true)

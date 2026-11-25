@@ -20,8 +20,8 @@ import { codedRefusal } from '@/lib/errors/refusal'
  * null when the owner has no personal team: create_company_for_user then
  * leaves team_id NULL. A failed read throws COMPANY_CREATE_FAILED: it is not
  * an answer that the owner has no personal team, and a company created on it
- * loses its team without a word, so the door refuses before anything is
- * written and a retry is safe.
+ * loses its team without a word, so the door refuses before the company is
+ * created and a retry is safe.
  */
 export async function defaultTeamForNewCompany(
   supabase: SupabaseClient,
@@ -40,9 +40,11 @@ export async function defaultTeamForNewCompany(
     .limit(1)
     .maybeSingle()
   if (error) {
+    // The database's own sentence stays in the message: whether a retry can
+    // help (a timeout, a dropped connection) is read from it.
     throw codedRefusal(
       'COMPANY_CREATE_FAILED',
-      `The owner's personal team could not be read, so no company was created (${error.message}). Retry the call.`,
+      `The owner's personal team could not be read, so no company was created (${error.message}).`,
     )
   }
   return (data?.team_id as string | undefined) ?? null
