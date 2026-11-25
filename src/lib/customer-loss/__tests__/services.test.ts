@@ -605,14 +605,15 @@ describe('an invoice whose issue verifikat booked its öresavrundning', () => {
       expect(createJournalEntry).not.toHaveBeenCalled()
     })
 
-    it('never releases more reserve than 1519 holds', async () => {
+    it('keeps the reserve on the reskontra figure, never releasing more than 1519 holds', async () => {
       const reserved = [{ id: 'f', kind: 'doubtful', net_amount: 799.92 } as unknown as WriteOffRow]
       vi.mocked(loadCustomerLossState).mockResolvedValue({ ok: true, state: makeState({ ...almostPaid, rows: reserved }) })
       const { supabase } = mockSupabase()
       await releaseDoubtfulReserve(supabase, COMPANY, USER, { invoiceId: INVOICE, entryDate: '2026-06-05', decidedBy: USER, reason: 'Betalning' })
       const [[account, released]] = lineTuples()
       expect(account).toBe('1519')
-      expect(released).toBeLessThanOrEqual(799.92)
+      // The reskontra's 0.45 net of its 0.09 VAT stays reserved: 799.92 - 0.36.
+      expect(released).toBe(799.56)
     })
   })
 })
