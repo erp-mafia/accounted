@@ -681,6 +681,11 @@ export const enableBankingExtension: Extension = {
               .from('bank_connections')
               .update({
                 oauth_state: oauthState,
+                // Who started this login: the callback binds the returning
+                // browser to them. user_id stays the member whose consent the
+                // row holds until the callback stores the new one, since any
+                // member with write access may renew a colleague's connection.
+                oauth_user_id: ctx.userId,
                 oauth_origin: oauthOrigin,
                 status: 'expired',
                 // session_id is deliberately KEPT here. The callback needs the
@@ -764,6 +769,7 @@ export const enableBankingExtension: Extension = {
               bank_name: resolvedAspspName,
               authorization_id,
               oauth_state: oauthState,
+              oauth_user_id: ctx.userId,
               oauth_origin: oauthOrigin,
               status: 'pending',
               psu_type: psuType,

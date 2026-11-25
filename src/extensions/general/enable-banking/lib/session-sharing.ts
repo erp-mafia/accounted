@@ -584,6 +584,13 @@ export interface SessionRenewalResult {
  * pointing at the session the bank just replaced and would fail on their next
  * sync, which is the original problem wearing a different hat.
  *
+ * Only the renewer's own rows follow. A session is shared between one
+ * person's companies (attach_shared_bank_session takes a source the same user
+ * holds), so on the user's own renewal that is every sharer. When a colleague
+ * renews the connection instead, the new consent is the colleague's: the
+ * previous holder's rows in other companies keep the session they share, and
+ * are renewed by someone who can sign for them.
+ *
  * Siblings parked in 'expired'/'error' are revived to 'active' (a live session
  * is exactly what they were missing); 'active' and 'pending_selection' rows
  * keep their status, since pending_selection means the user still owes that
@@ -595,12 +602,14 @@ export async function fanOutSessionRenewal(
     oldSessionId: string
     newSessionId: string
     consentExpires: string | null
+    /** Who signed the new consent: the holder of the renewed connection. */
+    userId: string
     excludeConnectionId: string
     /** Accounts the renewed session returned, for remapping sibling uids. */
     sessionAccounts: readonly { uid: string; iban?: string | null; currency: string }[]
   },
 ): Promise<SessionRenewalResult> {
-  const { oldSessionId, newSessionId, consentExpires, excludeConnectionId, sessionAccounts } = input
+  const { oldSessionId, newSessionId, consentExpires, userId, excludeConnectionId, sessionAccounts } = input
   if (!oldSessionId || oldSessionId === newSessionId) return { movedCount: 0 }
 
   let siblings: Array<{ id: string; company_id: string }>
@@ -610,6 +619,7 @@ export async function fanOutSessionRenewal(
       .select('id, company_id')
       .eq('aggregator', ENABLE_BANKING_AGGREGATOR)
       .eq('session_id', oldSessionId)
+      .eq('user_id', userId)
       .neq('id', excludeConnectionId)
       .neq('status', 'revoked')
       .order('id')

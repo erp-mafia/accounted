@@ -438,6 +438,65 @@ describe('POST /connect auth-method pinning wired into startAuthorization', () =
   })
 })
 
+describe('POST /connect records who starts the login', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(requireCapability).mockResolvedValue(null)
+    mockGetPreferredAuthMethod.mockResolvedValue(undefined)
+    mockStartAuthorization.mockResolvedValue({ url: 'https://bank.example/auth', authorization_id: 'auth-1' })
+  })
+
+  it('stages a renewal for the member who starts it and leaves the row with the member whose consent it holds', async () => {
+    const chains: RecordedChain[] = []
+    let call = 0
+    const ctx = makeContext(() => {
+      call++
+      // The connection a colleague connected, then the staging update and the
+      // authorization_id follow-up write.
+      const chain = makeChain(call === 1
+        ? { data: { id: 'conn-1', bank_name: 'Nordea', provider: 'nordea-se', session_id: 'colleague-consent', psu_type: 'business' } }
+        : { data: null })
+      chains.push(chain)
+      return chain
+    })
+    const req = new Request('https://test.local/api/extensions/ext/enable-banking/connect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ connection_id: 'conn-1' }),
+    })
+
+    const response = await connectRoute().handler(req, ctx)
+    expect(response.status).toBe(200)
+
+    const staged = chains[1]._calls.find((c) => c.method === 'update')!.args[0] as Record<string, unknown>
+    expect(staged).toMatchObject({ oauth_user_id: 'user-1', status: 'expired' })
+    expect(staged.oauth_state).toEqual(expect.any(String))
+    // The row changes hands when the callback stores the new consent, never
+    // here: an abandoned login would leave the colleague's consent under this
+    // member's name, and session reuse reads user_id.
+    expect(staged).not.toHaveProperty('user_id')
+    expect(staged).not.toHaveProperty('session_id')
+  })
+
+  it('records the starter on a new connection', async () => {
+    const chains: RecordedChain[] = []
+    let call = 0
+    const ctx = makeContext(() => {
+      call++
+      // Recent-pending check, zombie sweep, existing-connection guard, insert.
+      const chain = makeChain(call === 1 ? { data: null } : call === 2 ? { data: [] } : call === 3 ? { data: null } : { data: { id: 'new-conn' } })
+      chains.push(chain)
+      return chain
+    })
+
+    const response = await connectRoute().handler(makeConnectRequest(), ctx)
+    expect(response.status).toBe(200)
+
+    const inserted = chains.at(-1)!._calls.find((c) => c.method === 'insert')!.args[0]
+    expect(inserted).toMatchObject({ user_id: 'user-1', oauth_user_id: 'user-1', status: 'pending' })
+  })
+})
+
 describe('POST /connect existing-connection guard', () => {
   beforeEach(() => {
     vi.clearAllMocks()

@@ -37,7 +37,13 @@ type ServiceClient = Awaited<ReturnType<typeof createServiceClient>>
 
 interface PendingConnection {
   id: string
+  /** Whose consent the row holds: on a renewal, the member who signed last time. */
   user_id: string
+  /**
+   * Who started this login. Null on a row staged without a starter (one in
+   * flight from before the column): its holder started it.
+   */
+  oauth_user_id: string | null
   company_id: string
   bank_name: string | null
   status: string
@@ -145,15 +151,17 @@ export async function GET(request: Request) {
         // (which stays 'expired' during the round-trip) is also handled.
         const { data: pendingConn } = await supabase
           .from('bank_connections')
-          .select('id, user_id, company_id, bank_name, psu_type, status, oauth_origin')
+          .select('id, user_id, oauth_user_id, company_id, bank_name, psu_type, status, oauth_origin')
           .eq('oauth_state', state)
           .in('status', ['pending', 'expired', 'error'])
           .single()
 
         if (pendingConn) {
+          // The member the bank refused: whoever started this login.
+          const starterId = pendingConn.oauth_user_id ?? pendingConn.user_id
           console.warn('[enable-banking] Authorization denied details', {
             connection_id: pendingConn.id,
-            user_id: pendingConn.user_id,
+            user_id: starterId,
             bank_name: pendingConn.bank_name,
             error_code: error,
             error_description: errorDescription,
@@ -186,7 +194,7 @@ export async function GET(request: Request) {
 
             await supabase
               .from('bank_connections')
-              .update({ status: isSessionExpiry ? 'expired' : 'error', error_message: userMessage, oauth_state: null })
+              .update({ status: isSessionExpiry ? 'expired' : 'error', error_message: userMessage, oauth_state: null, oauth_user_id: null })
               .eq('id', pendingConn.id)
               .eq('company_id', pendingConn.company_id)
               .eq('oauth_state', state)
@@ -207,7 +215,7 @@ export async function GET(request: Request) {
                 errorCode: error,
                 errorDescription: errorDescription ?? null,
                 priorStatus: pendingConn.status,
-                userId: pendingConn.user_id,
+                userId: starterId,
                 companyId: pendingConn.company_id,
               },
             })
@@ -272,7 +280,7 @@ export async function GET(request: Request) {
   // state stays a plain redirect.
   const { data: pendingConnection, error: findError } = await supabase
     .from('bank_connections')
-    .select('id, user_id, company_id, bank_name, status, session_id, accounts_data, oauth_origin')
+    .select('id, user_id, oauth_user_id, company_id, bank_name, status, session_id, accounts_data, oauth_origin')
     .eq('oauth_state', state)
     .in('status', ['pending', 'expired', 'error'])
     .single()
@@ -315,7 +323,15 @@ export async function GET(request: Request) {
     onLookupFailure: 'canonical',
   })
 
-  const initiator = await requireFlowInitiator(request, pendingConnection.user_id, {
+  // The login belongs to whoever started it. On a renewal that need not be
+  // the member whose consent the row holds (user_id): any member with write
+  // access may renew a colleague's connection, and finalize_bank_callback
+  // moves the row to them together with the new consent, never earlier (an
+  // abandoned login must not leave one person's consent under another's
+  // name). A row staged without a starter belongs to its holder.
+  const starterId = pendingConnection.oauth_user_id ?? pendingConnection.user_id
+
+  const initiator = await requireFlowInitiator(request, starterId, {
     flow: 'enable-banking.callback',
     returnOrigin,
   })
@@ -342,7 +358,7 @@ export async function GET(request: Request) {
   // failures resolve to the cleanup redirect target.
   const finalizePromise = (async (): Promise<string> => {
     try {
-      return await finalizeConnection(supabase, pendingConnection, code, connectorState, state)
+      return await finalizeConnection(supabase, pendingConnection, starterId, code, connectorState, state)
     } catch (finalizeError) {
       const reason =
         finalizeError instanceof Error ? finalizeError.message : String(finalizeError)
@@ -370,7 +386,7 @@ export async function GET(request: Request) {
             bankName: pendingConnection.bank_name ?? null,
             reason,
             priorStatus: pendingConnection.status,
-            userId: pendingConnection.user_id,
+            userId: starterId,
             companyId: pendingConnection.company_id,
           },
         })
@@ -449,16 +465,16 @@ export async function GET(request: Request) {
 async function finalizeConnection(
   supabase: ServiceClient,
   pendingConnection: PendingConnection,
+  /** The member who started this login and whose browser returned from the bank. */
+  userId: string,
   code: string,
   connectorState: string | null,
   oauthState: string,
 ): Promise<string> {
   const snapshot = await readBankCallbackConfiguration(supabase, pendingConnection.company_id,
-    pendingConnection.user_id, pendingConnection.id, oauthState)
+    userId, pendingConnection.id, oauthState)
   pendingConnection = { ...pendingConnection, ...snapshot.connection,
     accounts_data: snapshot.connection.accounts_data as StoredAccount[] }
-
-  const userId = pendingConnection.user_id
 
   log.info('Exchanging code for session', {
     connectionId: pendingConnection.id,
@@ -468,7 +484,7 @@ async function finalizeConnection(
 
   const sessionData = await createSession(code, connectorState ?? undefined)
   try {
-    return await persistBankSession(supabase, pendingConnection, sessionData, oauthState, snapshot.token)
+    return await persistBankSession(supabase, pendingConnection, userId, sessionData, oauthState, snapshot.token)
   } catch (error) {
     // A lost RPC response may still mean the transaction committed. The
     // all-holder claim refuses cleanup of a session now in use anywhere.
@@ -482,10 +498,9 @@ async function finalizeConnection(
 }
 
 async function persistBankSession(
-  supabase: ServiceClient, pendingConnection: PendingConnection,
+  supabase: ServiceClient, pendingConnection: PendingConnection, userId: string,
   sessionData: Awaited<ReturnType<typeof createSession>>, oauthState: string, expectedToken: string,
 ): Promise<string> {
-  const userId = pendingConnection.user_id
   const { session_id, accounts, access } = sessionData
   const consentExpiresAt = access.valid_until
 
@@ -712,12 +727,14 @@ async function persistBankSession(
   })
   const updatedConnection = receipt.connection
 
-  // A renewed consent belongs to every company that shared the old session,
-  // including consents on superseded rows after a fresh bank-list connect.
-  // Without this the siblings keep
+  // A renewed consent belongs to every company of this person that shared the
+  // old session, including consents on superseded rows after a fresh bank-list
+  // connect. Without this the siblings keep
   // pointing at the session the bank has just replaced and die on their next
   // sync, which is the original one-session-per-PSU problem wearing a
   // different hat. Non-fatal: this connection is already renewed and correct.
+  // A colleague's renewal is another person's consent: the previous holder's
+  // rows in other companies stay on the session they share.
   const replacedSessions = new Set([receipt.old_session_id, ...receipt.superseded.map(row => row.session_id)]
     .filter((id): id is string => Boolean(id) && id !== session_id))
   for (const oldSessionId of replacedSessions) {
@@ -726,6 +743,7 @@ async function persistBankSession(
         oldSessionId,
         newSessionId: session_id,
         consentExpires: consentExpiresAt ?? null,
+        userId,
         excludeConnectionId: pendingConnection.id,
         // Several ASPSPs mint new account uids on re-authorization, so the
         // siblings need their stored uids re-pointed by IBAN too. Carrying the
@@ -806,7 +824,7 @@ async function cleanupFailedFinalize(
     } else {
       await supabase
         .from('bank_connections')
-        .update({ status: 'error', error_message: FINALIZE_FAILED_MESSAGE, oauth_state: null })
+        .update({ status: 'error', error_message: FINALIZE_FAILED_MESSAGE, oauth_state: null, oauth_user_id: null })
         .eq('id', pendingConnection.id)
         .eq('company_id', pendingConnection.company_id)
         .eq('oauth_state', oauthState)

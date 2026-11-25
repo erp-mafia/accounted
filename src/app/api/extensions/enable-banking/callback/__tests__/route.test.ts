@@ -26,7 +26,7 @@ vi.mock('@/lib/branding/resolve', () => ({ resolveBrandResultByHost: mocks.brand
 import { GET } from '../route'
 import { eventBus } from '@/lib/events/bus'
 
-const row = { id: 'conn-1', company_id: 'company-1', user_id: 'user-1', bank_name: 'TestBank',
+const row = { id: 'conn-1', company_id: 'company-1', user_id: 'user-1', oauth_user_id: null as string | null, bank_name: 'TestBank',
   status: 'pending', session_id: null as string | null, accounts_data: null as StoredAccount[] | null, oauth_origin: null as string | null }
 const iban = 'SE0000000000000000000001'
 const expires = '2027-12-31T00:00:00Z'
@@ -120,6 +120,39 @@ describe('callback authentication and redirects', () => {
     expect(new URL(response.headers.get('location')!).searchParams.get('bank_error')).toContain('annat användarkonto')
     expect(mocks.read).not.toHaveBeenCalled(); expect(mocks.createSession).not.toHaveBeenCalled()
     expect(chains[0].delete).not.toHaveBeenCalled(); expect(chains[0].update).not.toHaveBeenCalled()
+  })
+  it('completes a renewal a colleague started as that colleague, not as the member whose consent the row held', async () => {
+    reconnect([{ uid: 'a', currency: 'SEK', iban }])
+    pending!.oauth_user_id = 'colleague'
+    mocks.getUser.mockResolvedValue({ data: { user: { id: 'colleague' } }, error: null })
+    mocks.finalize.mockImplementation(async (_db, input) => ({ connection: { ...row, user_id: input.userId }, accounts: input.accounts,
+      old_session_id: 'old-session', superseded: [] }))
+    expect((await complete()).body).toContain('select_accounts=conn-1')
+    expect(mocks.read).toHaveBeenCalledWith(expect.anything(), row.company_id, 'colleague', row.id, 'valid-state')
+    expect(plan().userId).toBe('colleague')
+    // The account guard asks about the signer's other companies, and only the signer's own rows follow the new consent.
+    expect(mocks.crossCompany).toHaveBeenCalledWith(expect.anything(), 'colleague', row.company_id, row.id)
+    expect(mocks.fanOut).toHaveBeenCalledExactlyOnceWith(expect.anything(), expect.objectContaining({ oldSessionId: 'old-session', userId: 'colleague' }))
+    expect(emitted).toHaveBeenCalledWith(expect.objectContaining({ type: 'bank_connection.consent_granted',
+      payload: expect.objectContaining({ userId: 'colleague' }) }))
+  })
+  it("refuses the first connector's browser on a renewal a colleague started", async () => {
+    reconnect([{ uid: 'a', currency: 'SEK', iban }])
+    pending!.oauth_user_id = 'colleague'
+    const { response } = await complete()
+    expect(new URL(response.headers.get('location')!).searchParams.get('bank_error')).toContain('annat användarkonto')
+    expect(mocks.read).not.toHaveBeenCalled(); expect(mocks.createSession).not.toHaveBeenCalled()
+    expect(chains[0].delete).not.toHaveBeenCalled(); expect(chains[0].update).not.toHaveBeenCalled()
+  })
+  it('names the colleague on a failed renewal and clears the staged login', async () => {
+    reconnect([{ uid: 'a', currency: 'SEK', iban }])
+    pending!.oauth_user_id = 'colleague'
+    mocks.getUser.mockResolvedValue({ data: { user: { id: 'colleague' } }, error: null })
+    mocks.createSession.mockRejectedValue(new Error('Provider refused exchange'))
+    expect((await complete()).body).toContain('bank_error=')
+    expect(emitted).toHaveBeenCalledWith(expect.objectContaining({ type: 'bank_connection.finalize_failed',
+      payload: expect.objectContaining({ userId: 'colleague' }) }))
+    expect(chains.at(-1)!.update).toHaveBeenCalledWith(expect.objectContaining({ status: 'error', oauth_state: null, oauth_user_id: null }))
   })
   it.each([null, 'https://books.partner.example', 'https://unregistered.example'])('returns anonymous users to the trusted initiating origin %s', async origin => {
     pending!.oauth_origin = origin
@@ -411,5 +444,12 @@ describe('bank denial', () => {
     await complete({ error: 'session_expired', state: 'valid-state' })
     expect(chains.at(-1)!.update).toHaveBeenCalledWith(expect.objectContaining({ status: 'expired', oauth_state: null }))
     expect(chains.at(-1)!.in).toHaveBeenCalledWith('status', ['pending','expired','error'])
+  })
+  it('records the denial for the colleague who started the renewal and clears the staged login', async () => {
+    pending!.status = 'expired'; pending!.oauth_user_id = 'colleague'
+    await complete({ error: 'access_denied', state: 'valid-state', error_description: 'Cancelled by user' })
+    expect(emitted).toHaveBeenCalledWith(expect.objectContaining({ type: 'bank_connection.consent_denied',
+      payload: expect.objectContaining({ userId: 'colleague', priorStatus: 'expired' }) }))
+    expect(chains.at(-1)!.update).toHaveBeenCalledWith(expect.objectContaining({ status: 'error', oauth_state: null, oauth_user_id: null }))
   })
 })

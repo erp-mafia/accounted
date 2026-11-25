@@ -341,7 +341,8 @@ describe('findReusableSessions', () => {
 })
 
 describe('fanOutSessionRenewal', () => {
-  const input = { oldSessionId: 'sess-old', newSessionId: 'sess-new', consentExpires: FUTURE, excludeConnectionId: 'conn-a',
+  const input = { oldSessionId: 'sess-old', newSessionId: 'sess-new', consentExpires: FUTURE, userId: 'user-renewer',
+    excludeConnectionId: 'conn-a',
     sessionAccounts: [{ uid: 'new-uid', iban: 'SE4444444444444444444444', currency: 'SEK' }] }
 
   it('does nothing when the session did not change', async () => {
@@ -358,6 +359,11 @@ describe('fanOutSessionRenewal', () => {
     expect(await fanOutSessionRenewal(supabase, input)).toEqual({ movedCount: 2 })
     expect(supabase.used.bank_connections).toHaveLength(1)
     expect(supabase.used.bank_connections[0].calls).toContainEqual(['neq', ['id', 'conn-a']])
+    // Only the renewer's own rows on the old session follow: a colleague's
+    // renewal is another person's consent, and the previous holder's rows in
+    // other companies stay on the session they share.
+    expect(supabase.used.bank_connections[0].calls).toContainEqual(['eq', ['session_id', 'sess-old']])
+    expect(supabase.used.bank_connections[0].calls).toContainEqual(['eq', ['user_id', 'user-renewer']])
     expect(supabase.rpcMock).toHaveBeenCalledTimes(2)
     for (const suffix of ['b', 'c']) {
       expect(supabase.rpcMock).toHaveBeenCalledWith('renew_shared_bank_connection', {
