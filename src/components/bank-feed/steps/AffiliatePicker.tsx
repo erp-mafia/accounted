@@ -25,7 +25,9 @@ function matches(name: string, query: string): boolean {
  * "Vilken sparbank?": the savings banks reached through a shared BIC, as a
  * searchable list under the bank list. The bank itself is the first row and
  * the default, so a Swedbank customer changes nothing; a sparbank customer
- * types a few letters and picks theirs. A bank that takes no request for
+ * types a few letters and picks theirs. The provider lists Swedbank among the
+ * affiliates as well: that row keeps to Swedbank's own accounts, for someone
+ * with accounts in Swedbank and a sparbank. A bank that takes no request for
  * itself has no row of its own: "Vilket kontor?" lists only its offices, and
  * nothing is chosen until the person picks one. The choice travels as the
  * party's affiliated_aspsp_id and names the connection.
