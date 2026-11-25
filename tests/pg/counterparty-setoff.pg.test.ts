@@ -3,6 +3,10 @@ import type { PoolClient } from 'pg'
 import { describe, expect, it } from 'vitest'
 import { getClient, getPool, runAsServiceRole, withUserContext } from './setup'
 import { insertAuthUser, insertCompanyMember, insertPostedJournalEntry, seedCompany } from './fixtures'
+import { stagingSIEClient } from './sie-client'
+import { carriedSekOf } from '@/lib/bookkeeping/ledger-carried-sek'
+import { setoffPreview } from '@/lib/invoices/counterparty-setoff/book'
+import { planSetoff } from '@/lib/invoices/counterparty-setoff/plan'
 
 /**
  * Migration 20261022130100_counterparty_setoffs (crm#1367), and
@@ -627,5 +631,202 @@ describe('counterparty set-off absorbs öresavrundning (migration 20261104100600
       ['2440', 1387, 0],
       ['1510', 0, 1387],
     ])
+  })
+})
+
+// A customer invoice whose issue verifikat already booked its öresavrundning:
+// 1510 at the rounded "Att betala" and the öre on 3740 (an issuance edited by
+// hand, an import). The set-off clears what 1510 carries and books on 3740
+// only the rest of the öre, the rule of every other settlement door
+// (bookedOreRounding over carriedSekOf, match_batch_allocate).
+describe('counterparty set-off clears what 1510 carries when the issue verifikat booked the öre', () => {
+  async function voucherLines(entryId: string): Promise<Array<[string, number, number]>> {
+    const { rows } = await getPool().query(
+      `SELECT account_number, debit_amount::numeric AS debit, credit_amount::numeric AS credit
+         FROM public.journal_entry_lines WHERE journal_entry_id = $1 ORDER BY sort_order`,
+      [entryId],
+    )
+    return rows.map((l) => [l.account_number, Number(l.debit), Number(l.credit)])
+  }
+
+  /** Debit less credit on `account` over the given verifikat. */
+  async function balance(entryIds: string[], account: string): Promise<number> {
+    const { rows } = await getPool().query<{ balance: string }>(
+      `SELECT COALESCE(SUM(debit_amount - credit_amount), 0) AS balance
+         FROM public.journal_entry_lines WHERE journal_entry_id = ANY($1::uuid[]) AND account_number = $2`,
+      [entryIds, account],
+    )
+    return Number(rows[0]!.balance)
+  }
+
+  /** A sent SEK invoice of `total` whose issue verifikat debits 1510 with `receivable` and puts the gap on 3740. */
+  async function insertIssuedRounded(s: Seeded, customerId: string, total: number, receivable: number): Promise<{ invoiceId: string; issueId: string }> {
+    const gap = Math.round((receivable - total) * 100) / 100
+    const invoiceId = randomUUID()
+    const issueId = await insertPostedJournalEntry({
+      userId: s.userId,
+      companyId: s.companyId,
+      fiscalPeriodId: s.fiscalPeriodId,
+      entryDate: '2026-08-31',
+      description: 'Kundfaktura',
+      sourceType: 'invoice_created',
+      sourceId: invoiceId,
+      lines: [
+        { accountNumber: '1510', debitAmount: receivable, creditAmount: 0 },
+        gap > 0
+          ? { accountNumber: '3740', debitAmount: 0, creditAmount: gap }
+          : { accountNumber: '3740', debitAmount: -gap, creditAmount: 0 },
+        { accountNumber: '3001', debitAmount: 0, creditAmount: total },
+      ],
+    })
+    await getPool().query(
+      `INSERT INTO public.invoices
+         (id, user_id, company_id, customer_id, invoice_number, invoice_date, due_date,
+          currency, subtotal, vat_amount, total, vat_treatment, vat_rate, status,
+          paid_amount, remaining_amount, deduction_total, journal_entry_id)
+       VALUES ($1, $2, $3, $4, $5, '2026-08-31', '2026-09-10', 'SEK', $6, 0, $6, 'exempt', 0, 'sent',
+               0, $6, 0, $7)`,
+      [invoiceId, s.userId, s.companyId, customerId, `F-${invoiceId.slice(0, 8)}`, total, issueId],
+    )
+    return { invoiceId, issueId }
+  }
+
+  async function roundedPair(s: Seeded, total: number, receivable: number) {
+    const counterparty = await insertCounterparty(s)
+    const issued = await insertIssuedRounded(s, counterparty.customerId, total, receivable)
+    const supplierInvoiceId = await insertRegisteredSupplierInvoice(s, counterparty.supplierId, { total: 4504 })
+    return { invoiceId: issued.invoiceId, issueId: issued.issueId, supplierInvoiceId }
+  }
+
+  it('sets off the rounded Att betala of an invoice issued rounded up: 1510 cleared, no second 3740', async () => {
+    const s = await seedCompany()
+    const pair = await roundedPair(s, 999.75, 1000)
+
+    const result = await bookAsService(s, pair, { amount: 1000 })
+    expect(result).toMatchObject({ ok: true, invoice: { status: 'paid', remaining_amount: 0 } })
+    expect(await voucherLines(result.journal_entry_id!)).toEqual([
+      ['2440', 1000, 0],
+      ['1510', 0, 1000],
+    ])
+    const entries = [pair.issueId, result.journal_entry_id!]
+    expect(await balance(entries, '1510')).toBe(0)
+    expect(await balance(entries, '3740')).toBe(-0.25)
+    expect(Number((await invoiceState(pair.invoiceId)).paid_amount)).toBe(999.75)
+    expect(Number((await supplierInvoiceState(pair.supplierInvoiceId)).remaining_amount)).toBe(3504)
+  })
+
+  it('sets off what the reskontra owes of an invoice issued rounded up: 1510 cleared, the issue öre given back on 3740', async () => {
+    const s = await seedCompany()
+    const pair = await roundedPair(s, 999.75, 1000)
+
+    const result = await bookAsService(s, pair, { amount: 999.75 })
+    expect(result).toMatchObject({ ok: true, invoice: { status: 'paid' } })
+    expect(await voucherLines(result.journal_entry_id!)).toEqual([
+      ['2440', 999.75, 0],
+      ['1510', 0, 1000],
+      ['3740', 0.25, 0],
+    ])
+    const entries = [pair.issueId, result.journal_entry_id!]
+    expect(await balance(entries, '1510')).toBe(0)
+    expect(await balance(entries, '3740')).toBe(0)
+  })
+
+  it('sets off the rounded Att betala of an invoice issued rounded down: 1510 cleared, no second 3740', async () => {
+    const s = await seedCompany()
+    const pair = await roundedPair(s, 1000.4, 1000)
+
+    const result = await bookAsService(s, pair, { amount: 1000 })
+    expect(result).toMatchObject({ ok: true, invoice: { status: 'paid' } })
+    expect(await voucherLines(result.journal_entry_id!)).toEqual([
+      ['2440', 1000, 0],
+      ['1510', 0, 1000],
+    ])
+    const entries = [pair.issueId, result.journal_entry_id!]
+    expect(await balance(entries, '1510')).toBe(0)
+    expect(await balance(entries, '3740')).toBe(0.4)
+  })
+
+  it('clears its own kronor on a part set-off and what 1510 still carries on the last one', async () => {
+    const s = await seedCompany()
+    const pair = await roundedPair(s, 999.75, 1000)
+
+    const part = await bookAsService(s, pair, { amount: 500 })
+    expect(part).toMatchObject({ ok: true, invoice: { status: 'partially_paid', remaining_amount: 499.75 } })
+    expect(await voucherLines(part.journal_entry_id!)).toEqual([
+      ['2440', 500, 0],
+      ['1510', 0, 500],
+    ])
+    const rest = await bookAsService(s, pair, { amount: 500 })
+    expect(rest).toMatchObject({ ok: true, invoice: { status: 'paid', remaining_amount: 0 } })
+    expect(await voucherLines(rest.journal_entry_id!)).toEqual([
+      ['2440', 500, 0],
+      ['1510', 0, 500],
+    ])
+    expect(await balance([pair.issueId, part.journal_entry_id!, rest.journal_entry_id!], '1510')).toBe(0)
+  })
+
+  it('previews the lines it posts: the planner reads what 1510 carries off the same rows', async () => {
+    for (const [total, receivable, amount] of [
+      [999.75, 1000, 1000],
+      [999.75, 1000, 999.75],
+      [1000.4, 1000, 1000],
+      [999.75, 1000, 500],
+    ] as const) {
+      const s = await seedCompany()
+      const pair = await roundedPair(s, total, receivable)
+      const client = await getPool().connect()
+      let previewed: Array<[string, number, number]>
+      try {
+        await client.query('BEGIN')
+        const { rows } = await client.query(
+          `SELECT id, currency, total::float8 AS total, remaining_amount::float8 AS remaining_amount,
+                  paid_amount::float8 AS paid_amount, journal_entry_id
+             FROM public.invoices WHERE id = $1`,
+          [pair.invoiceId],
+        )
+        const row = rows[0]
+        const carriedSek = await carriedSekOf(stagingSIEClient(client, ''), s.companyId, 'customer', row)
+        const planned = planSetoff({
+          invoice: {
+            id: row.id, number: null, status: 'sent', documentType: 'invoice', creditedInvoiceId: null, currency: 'SEK',
+            total: row.total, remaining: row.remaining_amount, paid: row.paid_amount, deductionTotal: 0,
+            invoiceDate: '2026-08-31', dueDate: '2026-09-10', booked: true, carriedSek, partyId: 'p', collectionOpen: false,
+          },
+          supplierInvoice: {
+            id: pair.supplierInvoiceId, number: null, arrivalNumber: 1, status: 'registered', isCreditNote: false, currency: 'SEK',
+            total: 4504, remaining: 4504, paid: 0, invoiceDate: '2026-09-11', dueDate: '2026-10-11', booked: true, partyId: 'p',
+            paymentInFlight: false,
+          },
+          amount,
+          setoffDate: '2026-09-30',
+          today: '2026-10-21',
+        })
+        if (!planned.ok) throw new Error(planned.code)
+        previewed = setoffPreview(planned.plan, { customerName: null, supplierName: null }, null).lines.map((l) => [
+          l.account_number,
+          l.debit_amount,
+          l.credit_amount,
+        ])
+      } finally {
+        await client.query('ROLLBACK')
+        client.release()
+      }
+      const result = await bookAsService(s, pair, { amount })
+      expect(result.ok).toBe(true)
+      expect(await voucherLines(result.journal_entry_id!)).toEqual(previewed)
+    }
+  })
+
+  it('gives the invoice back exactly what the set-off applied after a storno', async () => {
+    const s = await seedCompany()
+    const pair = await roundedPair(s, 999.75, 1000)
+    const setoffId = randomUUID()
+    const result = await bookAsService(s, pair, { setoffId, amount: 1000 })
+    const stornoId = await insertStorno(s, result.journal_entry_id!)
+    expect(await reverseAsService(s, setoffId, stornoId)).toMatchObject({ ok: true })
+    const invoice = await invoiceState(pair.invoiceId)
+    expect(Number(invoice.paid_amount)).toBe(0)
+    expect(Number(invoice.remaining_amount)).toBe(999.75)
+    expect(await balance([pair.issueId, result.journal_entry_id!, stornoId], '1510')).toBe(1000)
   })
 })

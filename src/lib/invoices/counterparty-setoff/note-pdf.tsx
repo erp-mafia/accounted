@@ -23,12 +23,24 @@ export interface SetoffNoteInput {
   voucherLabel: string | null
   amount: number
   /**
-   * The öresavrundning the set-off absorbed on 3740 (SetoffPlan
-   * invoice.oreRounding): > 0 Dr, < 0 Cr, 0 or omitted none. The customer
-   * invoice's line then clears amount + oreRounding.
+   * The öresavrundning the set-off's verifikat books on 3740 (SetoffPlan
+   * invoice.oreRounding, as the RPC answered it): > 0 Dr, < 0 Cr, 0 or
+   * omitted none. The receivable line then clears amount + oreRounding.
    */
   oreRounding?: number
-  invoice: { number: string | null; invoiceDate: string; total: number; remainingBefore: number; remainingAfter: number }
+  invoice: {
+    number: string | null
+    invoiceDate: string
+    total: number
+    remainingBefore: number
+    remainingAfter: number
+    /**
+     * What the set-off settled on the invoice (SetoffPlan invoice.applied).
+     * It differs from the receivable line when the invoice's own verifikat
+     * booked the öresavrundning; omitted, the receivable line.
+     */
+    applied?: number
+  }
   supplierInvoice: {
     number: string | null
     arrivalNumber: number | null
@@ -117,6 +129,10 @@ function netSentence(input: SetoffNoteInput): string {
 export function SetoffNotePDF({ input }: { input: SetoffNoteInput }) {
   const ore = input.oreRounding ?? 0
   const receivableCredit = roundOre(input.amount + ore)
+  const invoiceSettled = input.invoice.applied ?? receivableCredit
+  // The öre the invoice's own verifikat booked on 3740: the set-off cleared
+  // what 151x carries, and the invoice row settles its remainder.
+  const issueOre = roundOre(receivableCredit - invoiceSettled)
   const debitSum = roundOre(input.amount + Math.max(ore, 0))
   const creditSum = roundOre(receivableCredit + Math.max(-ore, 0))
   const supplierLabel = supplierInvoiceLabel(input.supplierInvoice)
@@ -167,7 +183,7 @@ export function SetoffNotePDF({ input }: { input: SetoffNoteInput }) {
           <Text style={styles.colDate}>{input.invoice.invoiceDate}</Text>
           <Text style={styles.colAmount}>{pdfAmount(input.invoice.total)}</Text>
           <Text style={styles.colAmount}>{pdfAmount(input.invoice.remainingBefore)}</Text>
-          <Text style={styles.colAmount}>{pdfAmount(receivableCredit)}</Text>
+          <Text style={styles.colAmount}>{pdfAmount(invoiceSettled)}</Text>
           <Text style={styles.colAmount}>{pdfAmount(input.invoice.remainingAfter)}</Text>
         </View>
         <View style={styles.row} wrap={false}>
@@ -182,6 +198,12 @@ export function SetoffNotePDF({ input }: { input: SetoffNoteInput }) {
         {ore !== 0 ? (
           <Text style={styles.note}>
             Kundfakturan är reglerad i sin helhet: öresavrundningen på {pdfAmount(Math.abs(ore))} kr bokförs på konto {ORE_ROUNDING_ACCOUNT}.
+          </Text>
+        ) : null}
+        {issueOre !== 0 ? (
+          <Text style={styles.note}>
+            Fakturans eget verifikat bokförde redan {pdfAmount(Math.abs(issueOre))} kr öresavrundning på konto {ORE_ROUNDING_ACCOUNT}, så
+            kvittningen krediterar kundfordran med {pdfAmount(receivableCredit)} kr.
           </Text>
         ) : null}
 

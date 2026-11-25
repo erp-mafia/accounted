@@ -7,6 +7,7 @@ import {
   type SetoffInvoiceFacts,
   type SetoffSupplierInvoiceFacts,
 } from '../plan'
+import { setoffPreview } from '../book'
 
 const PARTY = 'party-exempel-energi'
 
@@ -63,7 +64,7 @@ describe('planSetoff', () => {
         amount: 1388,
         setoffDate: '2026-09-30',
         partyId: PARTY,
-        invoice: { id: 'inv-1', number: '2631', remainingBefore: 1388, remainingAfter: 0, statusAfter: 'paid', applied: 1388, oreRounding: 0 },
+        invoice: { id: 'inv-1', number: '2631', remainingBefore: 1388, remainingAfter: 0, statusAfter: 'paid', applied: 1388, receivableCleared: 1388, oreRounding: 0 },
         supplierInvoice: {
           id: 'si-1',
           number: 'SF-CE-202607',
@@ -143,6 +144,39 @@ describe('planSetoff', () => {
     const exact = planSetoff({ ...base, invoice: invoice({ total: 3136.18, remaining: 3136.18 }) })
     expect(exact.ok && exact.plan.invoice).toMatchObject({ remainingAfter: 0, applied: 3136.18, oreRounding: 0 })
     expect(exact.ok && exact.plan.amount).toBe(3136.18)
+  })
+
+  // The issue verifikat booked the öresavrundning (1510 at the rounded "Att
+  // betala", the öre on 3740): a set-off in full clears what 1510 carries and
+  // books on 3740 only the rest, as book_counterparty_setoff does.
+  it('clears what 1510 carries when the issue verifikat booked the öre, and books no second 3740', () => {
+    const base = { supplierInvoice: supplierInvoice(), setoffDate: TODAY, today: TODAY }
+    const roundedUp = invoice({ total: 999.75, remaining: 999.75, carriedSek: 1000 })
+    const atBetala = planSetoff({ ...base, invoice: roundedUp, amount: 1000 })
+    expect(atBetala.ok && atBetala.plan.invoice).toMatchObject({ remainingAfter: 0, statusAfter: 'paid', applied: 999.75, receivableCleared: 1000, oreRounding: 0 })
+    const remaining = planSetoff({ ...base, invoice: roundedUp })
+    expect(remaining.ok && remaining.plan.invoice).toMatchObject({ remainingAfter: 0, applied: 999.75, receivableCleared: 1000, oreRounding: 0.25 })
+    const roundedDown = planSetoff({ ...base, invoice: invoice({ total: 1000.4, remaining: 1000.4, carriedSek: 1000 }), amount: 1000 })
+    expect(roundedDown.ok && roundedDown.plan.invoice).toMatchObject({ remainingAfter: 0, applied: 1000.4, receivableCleared: 1000, oreRounding: 0 })
+    // A part set-off clears its own kronor; the öre wait for the settlement.
+    const part = planSetoff({ ...base, invoice: roundedUp, amount: 500 })
+    expect(part.ok && part.plan.invoice).toMatchObject({ remainingAfter: 499.75, applied: 500, receivableCleared: 500, oreRounding: 0 })
+  })
+
+  it('previews the lines book_counterparty_setoff posts, balanced', () => {
+    const plan = planSetoff({
+      invoice: invoice({ total: 999.75, remaining: 999.75, carriedSek: 1000 }),
+      supplierInvoice: supplierInvoice(),
+      setoffDate: TODAY,
+      today: TODAY,
+    })
+    if (!plan.ok) throw new Error(plan.code)
+    const { lines } = setoffPreview(plan.plan, { customerName: null, supplierName: null }, null)
+    expect(lines).toEqual([
+      { account_number: '2440', debit_amount: 999.75, credit_amount: 0 },
+      { account_number: '1510', debit_amount: 0, credit_amount: 1000 },
+      { account_number: '3740', debit_amount: 0.25, credit_amount: 0 },
+    ])
   })
 
   it('refuses a date in the future or before either invoice', () => {
