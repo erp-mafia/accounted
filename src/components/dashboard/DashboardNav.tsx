@@ -555,8 +555,9 @@ export default function DashboardNav({ navGate, isSandbox = false, extensionNavI
           sidebar; on default hosts the attribute matches nothing.
           Height is --bottom-nav-h (globals.css): the tab row plus the safe
           area inset, the same token every bottom-pinned bar offsets by, so
-          the nav and the bars cannot drift apart (#2738). */}
-      <nav data-mobile-nav="" data-ph-unmask className="md:hidden fixed bottom-0 left-0 right-0 z-50 h-[var(--bottom-nav-h)] border-t-hairline bg-[var(--material)] backdrop-blur-xl backdrop-saturate-[1.8] reduced-transparency:bg-background reduced-transparency:backdrop-blur-none" style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }} aria-label={tNav('mobile_navigation')}>
+          the nav and the bars cannot drift apart (#2738). The side insets
+          keep the tabs clear of a notch on a phone held sideways. */}
+      <nav data-mobile-nav="" data-ph-unmask className="safe-area-x-padding md:hidden fixed bottom-0 left-0 right-0 z-50 h-[var(--bottom-nav-h)] border-t-hairline bg-[var(--material)] backdrop-blur-xl backdrop-saturate-[1.8] reduced-transparency:bg-background reduced-transparency:backdrop-blur-none" style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }} aria-label={tNav('mobile_navigation')}>
         <div className="flex items-center justify-around h-full px-2">
           {mobileNavItems.map((item) => {
             const enabled = isItemEnabled(item.href)
@@ -616,7 +617,7 @@ export default function DashboardNav({ navGate, isSandbox = false, extensionNavI
           {/* Bottom sheet */}
           <div
             className={cn(
-              "md:hidden fixed inset-x-0 bottom-0 z-50 bg-popover rounded-t-xl shadow-float overflow-y-auto overscroll-contain",
+              "safe-area-x-padding md:hidden fixed inset-x-0 bottom-0 z-50 bg-popover rounded-t-xl shadow-float overflow-y-auto overscroll-contain",
               isClosing
                 ? "animate-out slide-out-to-bottom duration-150"
                 : "animate-in slide-in-from-bottom duration-300"
