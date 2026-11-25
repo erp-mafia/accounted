@@ -12757,8 +12757,8 @@ const PAYMENT_ORDERS: Record<string, StructuredErrorEntry> = {
   // Use above the included amount for a company whose subscription, started during the trial, waits for its first charge.
   USAGE_SUBSCRIPTION_STARTING: {
     httpStatus: 409,
-    message_sv: 'Det som ingår är använt. Fler går att begära när abonnemanget har startat efter provperioden.',
-    message_en: 'The included amount is used up. More can be requested once the subscription has started after the trial.',
+    message_sv: 'Det som ingår är använt. Fler går att begära efter abonnemangets första dragning.',
+    message_en: 'The included amount is used up. More can be requested after the subscription's first charge.',
     remediation: {
       description:
         'The company has a subscription, started during the trial, that has no payer until its first charge at the end of the trial, so nothing above details.included of details.kind can be opened or billed before then. Nothing is to be started: after the first charge a person asks for more under Settings, Billing, Usage.',

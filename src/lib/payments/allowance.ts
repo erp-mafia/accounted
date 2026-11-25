@@ -64,7 +64,7 @@ export function allowanceExceededMessage(details: BankPaymentsAllowanceDetails):
   const month = swedishMonthName(details.period)
   const noun = details.remaining === 1 ? 'betalning' : 'betalningar'
   if (details.subscription_starting) {
-    const head = `Ni har använt ${details.used} av ${details.included} betalningar som ingår i ${month}. Fler kostar ${formatOre(details.unit_price_ore)} st och går att begära när abonnemanget har startat efter provperioden.`
+    const head = `Ni har använt ${details.used} av ${details.included} betalningar som ingår i ${month}. Fler kostar ${formatOre(details.unit_price_ore)} st och går att begära efter abonnemangets första dragning.`
     return details.remaining <= 0 ? head : `${head} Välj högst ${details.remaining} ${noun}.`
   }
   if (details.subscription_required) {

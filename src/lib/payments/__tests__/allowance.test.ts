@@ -167,11 +167,11 @@ describe('bankPaymentsAllowanceRefusal while extra payments are billed', () => {
         remaining: 0,
         requested: 1,
       },
-      messageSv: 'Ni har använt 10 av 10 betalningar som ingår i oktober. Fler kostar 2,00 kr st och går att begära när abonnemanget har startat efter provperioden.',
+      messageSv: 'Ni har använt 10 av 10 betalningar som ingår i oktober. Fler kostar 2,00 kr st och går att begära efter abonnemangets första dragning.',
     })
     const some = createTableMockSupabase({ payment_orders: { data: sent(4) }, ...starting })
     expect((await bankPaymentsAllowanceRefusal(some.supabase as unknown as SupabaseClient, COMPANY, ['n1', 'n2', 'n3', 'n4', 'n5', 'n6', 'n7'], '2026-10'))?.messageSv).toBe(
-      'Ni har använt 4 av 10 betalningar som ingår i oktober. Fler kostar 2,00 kr st och går att begära när abonnemanget har startat efter provperioden. Välj högst 6 betalningar.',
+      'Ni har använt 4 av 10 betalningar som ingår i oktober. Fler kostar 2,00 kr st och går att begära efter abonnemangets första dragning. Välj högst 6 betalningar.',
     )
   })
 })

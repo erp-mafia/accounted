@@ -4381,7 +4381,7 @@
     "usage_charge_off": "{included, plural, =0 {Kostar {price} st. Begär det så öppnar vi.} other {Stannar vid #. Fler kostar {price} st: begär fler så öppnar vi.}}",
     "usage_charge_on": "{included, plural, =0 {Öppet sedan {date}: {price} st.} other {Öppet sedan {date}: {price} st över #.}}",
     "usage_charge_needs_subscription": "{included, plural, =0 {Kostar {price} st och kräver ett abonnemang.} other {Stannar vid #. Fler kostar {price} st och kräver ett abonnemang.}}",
-    "usage_charge_subscription_starting": "{included, plural, =0 {Kostar {price} st och går att begära när abonnemanget har startat efter provperioden.} other {Stannar vid #. Fler kostar {price} st och går att begära när abonnemanget har startat efter provperioden.}}",
+    "usage_charge_subscription_starting": "{included, plural, =0 {Kostar {price} st och går att begära efter abonnemangets första dragning.} other {Stannar vid #. Fler kostar {price} st och går att begära efter abonnemangets första dragning.}}",
     "usage_charge_request": "Begär fler"
   },
   "settings_invoice_form": {
@@ -18067,7 +18067,7 @@
     "billed_extra": "{extra, plural, one {# betalning} other {# betalningar}} går över det som ingår i {month} och kostar {price} st, faktureras i efterskott.",
     "offered_none_left": "Ni har använt {used} av {included} bankbetalningar som ingår i {month}. Fler kostar {price} st: begär fler så öppnar vi.",
     "subscription_none_left": "Ni har använt {used} av {included} bankbetalningar som ingår i {month}. Fler kostar {price} st och kräver ett abonnemang.",
-    "subscription_starting_none_left": "Ni har använt {used} av {included} bankbetalningar som ingår i {month}. Fler kostar {price} st och går att begära när abonnemanget har startat efter provperioden.",
+    "subscription_starting_none_left": "Ni har använt {used} av {included} bankbetalningar som ingår i {month}. Fler kostar {price} st och går att begära efter abonnemangets första dragning.",
     "start_subscription": "Starta abonnemang"
   },
   "payments_page": {

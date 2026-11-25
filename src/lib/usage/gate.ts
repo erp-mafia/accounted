@@ -67,7 +67,7 @@ export function usageSubscriptionRequiredMessage(details: UsageLimitDetails): st
 
 /** The refusal for a company whose subscription, started during the trial, waits for its first charge (paying.ts). */
 export function usageSubscriptionStartingMessage(details: UsageLimitDetails): string {
-  return `${priceSentence(details)} och går att begära när abonnemanget har startat efter provperioden.`
+  return `${priceSentence(details)} och går att begära efter abonnemangets första dragning.`
 }
 
 /**

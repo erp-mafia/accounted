@@ -105,7 +105,7 @@ describe('usageGateRefusal without a subscription of its own', () => {
       ok: false,
       code: 'USAGE_SUBSCRIPTION_STARTING',
       details: { kind: 'signing', period: '2026-11', used: 3, included: 3, requested: 1, unit_price_ore: 1000 },
-      messageSv: 'De 3 signeringar som ingår är använda. Fler kostar 10,00 kr st och går att begära när abonnemanget har startat efter provperioden.',
+      messageSv: 'De 3 signeringar som ingår är använda. Fler kostar 10,00 kr st och går att begära efter abonnemangets första dragning.',
     })
   })
 
