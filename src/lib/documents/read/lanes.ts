@@ -95,7 +95,8 @@ export const ON_DEMAND_REASONS = ['ai_gated', 'partial:ai_gated', 'partial:budge
 
 /**
  * Failures a later reader cures: a photo over the model's 5 MB limit (read
- * before downscaling existed), a HEIC stamped unsupported (read before it
+ * before downscaling existed) or with a side over its 8000 px limit (read
+ * before the fitter checked sides), a HEIC stamped unsupported (read before it
  * was decoded) and a CSV whose format AnyDoc could not detect (read before
  * the reader named it). Stamped once, they were never tried again, so an
  * agent asking for the page got nothing (seen 2026-09-24: 5 photos on
@@ -104,6 +105,7 @@ export const ON_DEMAND_REASONS = ['ai_gated', 'partial:ai_gated', 'partial:budge
 export function isCuredFailure(doc: { read_error?: string | null; mime_type?: string | null }): boolean {
   const reason = doc.read_error ?? ''
   if (/exceeds 5 MB maximum/.test(reason)) return true
+  if (doc.mime_type?.startsWith('image/') && /image dimensions exceed max allowed size/.test(reason)) return true
   if (doc.mime_type === 'text/csv' && reason.startsWith('read_failed: unsupported input: unrecognized file content')) return true
   return reason === 'unsupported_mime' && (doc.mime_type === 'image/heic' || doc.mime_type === 'image/heif')
 }
