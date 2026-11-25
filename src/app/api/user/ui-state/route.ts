@@ -55,6 +55,11 @@ const BodySchema = z
     setup_skipped: z
       .record(z.string().uuid(), z.array(z.enum(SKIPPABLE_SETUP_STEPS)).max(SKIPPABLE_SETUP_STEPS.length))
       .optional(),
+    // Hem's first-thing block closed, per company: companyId -> ISO
+    // timestamp of the close. Merged per key like trial_expired_ack.
+    first_thing_closed: z
+      .record(z.string().uuid(), z.string().datetime())
+      .optional(),
     // One-time Discord invite card: when it was closed or used. Plain
     // top-level value, so the default spread below replaces it.
     discord_invite_dismissed_at: z.string().datetime().optional(),
@@ -120,6 +125,9 @@ export async function POST(request: Request) {
       : {}),
     ...(patch.trial_expired_ack
       ? { trial_expired_ack: { ...current.trial_expired_ack, ...patch.trial_expired_ack } }
+      : {}),
+    ...(patch.first_thing_closed
+      ? { first_thing_closed: { ...current.first_thing_closed, ...patch.first_thing_closed } }
       : {}),
     ...(patch.setup_skipped
       ? { setup_skipped: { ...current.setup_skipped, ...patch.setup_skipped } }
