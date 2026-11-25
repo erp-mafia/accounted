@@ -398,6 +398,42 @@ describe('GET /api/skatteverket/tax-payments/[period]', () => {
       })
     })
 
+    it('shows the declaration\'s own unsigned payment when nothing pays it, not another declaration\'s', async () => {
+      // The quarter's moms paid alone on the Friday; the AGI's own payment
+      // for the Monday was left unsigned at the bank.
+      resolveDueDateMock.mockResolvedValue(DUE_DAY)
+      enqueue({ data: FILED })
+      enqueue({ data: SETTINGS })
+      enqueue({
+        data: [
+          { id: 'order-agi', status: 'submitted', amount: '24568.00', batch_id: 'batch-2', requested_execution_date: '2026-12-14' },
+          { id: 'order-moms', status: 'executed', amount: '60000.00', batch_id: 'batch-1', requested_execution_date: '2026-12-11' },
+        ],
+      })
+
+      const { body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await get('2026-11'))
+
+      expect(body.data.bank_payment).toEqual({
+        status: 'submitted',
+        amount: 24568,
+        requested_execution_date: '2026-12-14',
+        pays_declaration: false,
+      })
+    })
+
+    it('keeps the button when the declarations due that day cannot be summed', async () => {
+      resolveDueDateMock.mockResolvedValue({ ok: false, code: 'VAT_REPORT_GENERATION_FAILED' })
+      enqueue({ data: FILED })
+      enqueue({ data: SETTINGS })
+      enqueue(accepted('84568.00'))
+
+      const { status, body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await get('2026-11'))
+
+      expect(status).toBe(200)
+      expect(body.data.bank_payment).toMatchObject({ amount: 84568, pays_declaration: false })
+      expect(resolveDueDateMock).toHaveBeenCalledTimes(1)
+    })
+
     it('reads no payments for a period marked paid', async () => {
       enqueue({ data: { ...FILED, tax_paid_at: '2026-11-24T20:00:00Z' } })
       enqueue({ data: SETTINGS })

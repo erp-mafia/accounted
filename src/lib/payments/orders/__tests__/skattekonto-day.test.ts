@@ -58,6 +58,10 @@ describe('readSkattekontoPaymentsTowards', () => {
     ])
     expect(findCalls('payment_orders', 'gte')).toEqual([['requested_execution_date', '2026-12-11']])
     expect(findCalls('payment_orders', 'lte')).toEqual([['requested_execution_date', '2026-12-14']])
+    // Cancelled, failed and rejected orders pay nothing: never read.
+    expect(findCalls('payment_orders', 'in')).toEqual([
+      ['status', ['draft', 'approved', 'submitted', 'awaiting_signature', 'awaiting_second_signer', 'accepted', 'executed']],
+    ])
   })
 
   it('answers nothing for a draft or an approved order nobody claimed for signing', async () => {

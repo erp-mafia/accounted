@@ -38,7 +38,8 @@ import { resolveSkattekontoDueDate } from '@/lib/payments/orders/skattekonto-sou
  * (resolveSkattekontoDueDate). One that reached the bank unsigned never
  * executes, and any other larger amount may be the momsdeklaration due the
  * same day alone: shown, with the button kept. A payment that pays it is the
- * one shown, else the earliest. null when there is none, when the period is
+ * one shown, else one of the declaration's amount (its own payment, left
+ * unsigned), else the earliest. null when there is none, when the period is
  * marked paid or may not be paid, and when the payments cannot be read: it
  * only informs, so a failed read never takes the panel down.
  */
@@ -122,7 +123,9 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
             log.warn('skattekonto due day read failed', { error })
           }
         }
-        const shown = paying ?? orders[0]
+        // Nothing pays it: the declaration's own payment left unsigned is the
+        // one to sign again, not another declaration's payment of the days.
+        const shown = paying ?? orders.find((order) => amountOf(order) === declared) ?? orders[0]
         bankPayment = {
           status: shown.status,
           amount: amountOf(shown),
