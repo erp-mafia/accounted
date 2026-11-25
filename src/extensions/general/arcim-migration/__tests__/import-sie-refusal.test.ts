@@ -102,7 +102,7 @@ describe('POST /import-sie: job refusals', () => {
   // SIE_IMPORT_UNEXPECTED the wizard got a 500 "kunde inte bekräftas".
   it('400 with the sentence when the file\'s fiscal year overlaps a company year without matching it', async () => {
     const sentence = 'SIE-filens räkenskapsår (2026-09-21 till 2027-12-31) överlappar men matchar inte ett befintligt räkenskapsår i Accounted ' +
-      '(Första räkenskapsåret 2026/2027: 2026-10-05 till 2027-12-31). Justera räkenskapsåret i Inställningar → Företag så att det matchar ' +
+      '(Första räkenskapsåret 2026/2027: 2026-10-05 till 2027-12-31). Justera räkenskapsåret i Inställningar → Bokföring → Räkenskapsår så att det matchar ' +
       'SIE-filen exakt, eller importera en SIE-fil som täcker exakt samma period.'
     ;(submitSIEJob as Mock).mockRejectedValueOnce(userFacing(new Error(sentence)))
     const { status, body } = await parseJsonResponse<Envelope>(await post(BODY))

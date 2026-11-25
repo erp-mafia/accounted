@@ -128,7 +128,7 @@ describe('POST /api/pending-operations/:id/commit: create_transaction on a turne
     expect(error.message).toBe(
       'Bankkontot på 1930 är avstängt och markerat att visas på fakturor, så transaktionen sparades inte. ' +
         'En ägare eller administratör behöver aktivera det under Inställningar → Bokföring (då visas det på fakturor igen) ' +
-        'eller dölja det på fakturor under Inställningar → Fakturering.',
+        'eller dölja det på fakturor under Inställningar → Försäljning → Fakturor.',
     )
     expect(error.details).toEqual({ ledger_account: '1930', operation_status: 'pending' })
     expect(mockIngest).not.toHaveBeenCalled()

@@ -36,7 +36,7 @@ const CONTENT: Record<
   },
   failed: {
     heading: 'Länken är ogiltig eller har gått ut',
-    body: 'Bekräftelselänken kunde inte användas. Begär bytet igen under Inställningar: Konto, så skickas två nya bekräftelsemail direkt.',
+    body: 'Bekräftelselänken kunde inte användas. Begär bytet igen under Inställningar → Du → Ditt konto, så skickas två nya bekräftelsemail direkt.',
     cta: 'Gå till kontoinställningar',
     href: '/settings/account',
   },

@@ -537,7 +537,7 @@ describe('ensureFiscalPeriod validation', () => {
         '2025-03-01', // a broken FY March-Feb
         '2026-02-28',
       ),
-    ).rejects.toThrow(/Inställningar → Företag/)
+    ).rejects.toThrow(/Inställningar → Bokföring → Räkenskapsår/)
   })
 
   it('replaces an overlapping period when it is empty (onboarding-seeded)', async () => {
@@ -611,7 +611,7 @@ describe('ensureFiscalPeriod validation', () => {
         '2025-10-20',
         '2026-12-31',
       ),
-    ).rejects.toThrow(/Inställningar → Företag/)
+    ).rejects.toThrow(/Inställningar → Bokföring → Räkenskapsår/)
   })
 
   it('refuses to replace an overlapping period that is locked', async () => {
@@ -1642,7 +1642,7 @@ describe('precheckFiscalPeriod', () => {
       periodEnd: '2026-12-31',
     })
     expect(verdict.message).toMatch(/2025-03-01 till 2026-02-28/)
-    expect(verdict.message).toMatch(/Inställningar → Företag/)
+    expect(verdict.message).toMatch(/Inställningar → Bokföring → Räkenskapsår/)
   })
 
   it('reports conflict without reading entries when opening balances are set', async () => {

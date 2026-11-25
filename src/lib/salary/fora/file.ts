@@ -179,7 +179,7 @@ export function buildForaFile(input: BuildForaFileInput): BuildForaFileResult {
   if (!organizationNumber) {
     issues.push({
       code: 'FORA_ORG_NUMBER_MISSING',
-      message: 'Företaget saknar organisationsnummer. Lägg in det under Inställningar > Företag.',
+      message: 'Företaget saknar organisationsnummer. Lägg in det under Inställningar → Företaget → Företagsuppgifter.',
     })
   }
 
