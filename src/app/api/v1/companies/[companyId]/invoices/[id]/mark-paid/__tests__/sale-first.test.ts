@@ -159,8 +159,22 @@ describe('v1 mark-paid: sale first (defer_invoice_booking)', () => {
   it('lines that clear what a sale booking the öresavrundning leaves on 1510 settle the invoice', async () => {
     // The sale books 1510 at the rounded "Att betala" 1 000 and the 0,25 on
     // 3740, so the reskontra's 999,75 is paid by clearing 1 000, no 3740.
-    useSupabase({ data: { ...SENT_UNBOOKED, total: 999.75, remaining_amount: 999.75 }, error: null })
-    mockPlanSale.mockResolvedValue({ ok: true, required: true, invoiceId: INVOICE_ID, entry: SALE_ENTRY, receivableSek: 1000 })
+    useSupabase({
+      data: { ...SENT_UNBOOKED, subtotal: 799.8, vat_amount: 199.95, total: 999.75, remaining_amount: 999.75 },
+      error: null,
+    })
+    const roundedSale = {
+      ...SALE_ENTRY,
+      lines: [
+        { account_number: '1510', debit_amount: 1000, credit_amount: 0, line_description: null },
+        { account_number: '3001', debit_amount: 0, credit_amount: 799.8, line_description: null },
+        { account_number: '2611', debit_amount: 0, credit_amount: 199.95, line_description: null },
+        { account_number: '3740', debit_amount: 0, credit_amount: 0.25, line_description: null },
+      ],
+      total_debit: 1000,
+      total_credit: 1000,
+    }
+    mockPlanSale.mockResolvedValue({ ok: true, required: true, invoiceId: INVOICE_ID, entry: roundedSale, receivableSek: 1000 })
 
     const res = await markPaid(
       makeRequest(`${URL_BASE}?dry_run=true`, {
@@ -178,6 +192,7 @@ describe('v1 mark-paid: sale first (defer_invoice_booking)', () => {
     expect(body.data.preview.status).toBe('paid')
     expect(body.data.preview.remaining_amount).toBe(0)
     expect(body.data.preview.books_sale_first).toBe(true)
+    expect(body.data.preview.sale_entry).toEqual(roundedSale)
     // One plan serves the lines' plan and the preview.
     expect(mockPlanSale).toHaveBeenCalledTimes(1)
   })
