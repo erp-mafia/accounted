@@ -18,6 +18,7 @@ vi.mock('@/lib/sandbox/guard', () => ({ isSandboxCompany }))
 vi.mock('@/lib/usage/gate', () => ({ usageGateRefusal }))
 
 import {
+  checkInvoiceMailboxSend,
   invoiceMailboxBlock,
   invoiceMailboxPayment,
   invoiceMailboxRecipient,
@@ -201,6 +202,37 @@ describe('sendInvoiceToDigitalMailbox', () => {
     const outcome = await sendInvoiceToDigitalMailbox(ctx(), 'inv-1', 'kivra')
     expect(outcome).toMatchObject({ ok: false, code: 'DIGITAL_MAILBOX_SEND_FAILED', details: { issued: true, journal_entry_id: 'je-1' } })
     expect(dispatches[0]).toMatchObject({ status: 'failed', error_code: 'DIGITAL_MAILBOX_SEND_FAILED' })
+  })
+
+  it('checks what the send checks, the mailbox match included, and issues, sends and logs nothing', async () => {
+    sender.isReachable.mockResolvedValue(true)
+    await expect(checkInvoiceMailboxSend(ctx(), 'inv-1', 'kivra')).resolves.toEqual({
+      ok: true,
+      data: { provider: 'kivra', recipient_kind: 'company', will_issue: true },
+    })
+    expect(sender.isReachable).toHaveBeenCalledWith('tk1', { kind: 'company', orgNumber: '4420059208' })
+    expect(usageGateRefusal).toHaveBeenCalledWith(service, 'company-1', 'kivra_send')
+    expect(issueAndBookInvoice).not.toHaveBeenCalled()
+    expect(renderInvoicePdfBuffer).not.toHaveBeenCalled()
+    expect(sender.sendInvoice).not.toHaveBeenCalled()
+    expect(dispatches).toEqual([])
+
+    invoiceRow = { ...invoiceRow, status: 'sent', invoice_number: '1042' }
+    await expect(checkInvoiceMailboxSend(ctx(), 'inv-1', 'kivra')).resolves.toMatchObject({ ok: true, data: { will_issue: false } })
+  })
+
+  it('refuses in the check with the send\'s codes', async () => {
+    sender.isReachable.mockResolvedValue(false)
+    await expect(checkInvoiceMailboxSend(ctx(), 'inv-1', 'kivra')).resolves.toEqual({
+      ok: false,
+      code: 'DIGITAL_MAILBOX_RECIPIENT_NOT_REACHABLE',
+      details: { recipient_kind: 'company' },
+    })
+    sender.isReachable.mockRejectedValue(new Error('timeout'))
+    await expect(checkInvoiceMailboxSend(ctx(), 'inv-1', 'kivra')).resolves.toMatchObject({ code: 'DIGITAL_MAILBOX_PROVIDER_FAILED' })
+    getConnection.mockResolvedValue({ send_state: 'pending', tenant_ref: null })
+    await expect(checkInvoiceMailboxSend(ctx(), 'inv-1', 'kivra')).resolves.toMatchObject({ code: 'DIGITAL_MAILBOX_SENDING_NOT_ACTIVE' })
+    expect(dispatches).toEqual([])
   })
 
   it('passes the issue path\'s refusal through untouched', async () => {
