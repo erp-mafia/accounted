@@ -14026,7 +14026,7 @@
     "cloud_row_description": "Continuous backup of the archive to Google Drive or Dropbox",
     "export_archive_title": "Complete archive",
     "export_archive_description": "Your entire bookkeeping as a ZIP: SIE, reports and all supporting documents",
-    "archive_dialog_description": "Download a complete archive to your computer, with SIE files, reports and all supporting documents organized per voucher. The archive is a copy to keep, not a restore point: to start a migration over, use Redo migration under Settings > Company > General > Danger zone.",
+    "archive_dialog_description": "Download a complete archive to your computer, with SIE files, reports and all supporting documents organized per voucher. The archive is a copy to keep, not a restore point: to start a migration over, use Redo migration under Settings → Company → Company details → Danger zone.",
     "archive_scope_label": "Scope",
     "archive_scope_all": "Full history",
     "archive_scope_period": "Single fiscal year",

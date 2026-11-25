@@ -109,6 +109,7 @@ export async function loadAtomsAsSkills(supabase: SupabaseClient): Promise<Skill
       slug: row.id,
       name: row.title ?? row.id,
       summary: toSummary(row.description),
+      description: row.description,
       tags,
       body,
       tier: row.tier as SkillTier,

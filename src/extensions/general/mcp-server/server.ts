@@ -21,10 +21,12 @@ import {
   isTaskCapableClient,
   abandonMcpTaskIfStale,
   createMcpTask,
+  createTaskResult,
   resolveMcpTask,
   taskToWire,
   type McpTaskRow,
 } from './tasks'
+import { SKILLS_EXTENSION_ID, buildSkillFiles, skillEntry, slugFromSkillFileUri } from './skills/extension'
 import {
   clientInfoNameFromMeta,
   clientTelemetryFields,
@@ -31051,6 +31053,10 @@ const SERVER_CAPABILITIES = {
     'io.modelcontextprotocol/ui': {},
     // MCP Tasks: durable handles for long-running tool calls (see tasks.ts).
     [TASKS_EXTENSION_ID]: {},
+    // MCP Skills: the skill catalog as native skills, skills/list and
+    // skills/get plus skill://<slug>/SKILL.md (see skills/extension.ts).
+    // No directoryRead: every skill is one file, so its entry is its tree.
+    [SKILLS_EXTENSION_ID]: {},
   },
 }
 
@@ -32088,6 +32094,14 @@ async function handleMcpMessage(request: Request, parsed: ParsedMcpBody): Promis
     return decorated
   }
 
+  // The skills served under the skills extension: the company-independent
+  // catalog resources/list lists, each SKILL.md built with this connection's
+  // tool names (skills/extension.ts).
+  const loadServedSkillFiles = async () =>
+    buildSkillFiles(await loadAllSkills(supabase), (text) =>
+      projectToolReferencesInText(text, toolNamespace, getCanonicalToolNames())
+    )
+
   // ── Dispatch ──
   const { method, id, params } = body
 
@@ -32899,8 +32913,7 @@ async function handleMcpMessage(request: Request, parsed: ParsedMcpBody): Promis
         })
         return NextResponse.json(
           jsonRpc(id ?? null, {
-            resultType: 'task',
-            task: taskToWire(task),
+            ...createTaskResult(task),
             _meta: { [META_SERVER_INFO]: SERVER_INFO_BY_NAMESPACE[toolNamespace] },
           })
         )
@@ -33210,6 +33223,31 @@ async function handleMcpMessage(request: Request, parsed: ParsedMcpBody): Promis
         )
       }
 
+      // skill://<slug>/SKILL.md: a skill under the skills extension, served
+      // byte for byte as its skills/list entry's digest describes.
+      const servedSkillSlug = slugFromSkillFileUri(uri)
+      if (servedSkillSlug) {
+        const file = (await loadServedSkillFiles()).find((f) => f.slug === servedSkillSlug)
+        if (file) {
+          emitResourceReadTelemetry({
+            uri,
+            kind: 'skill',
+            success: true,
+            errorCode: null,
+            actor,
+            latencyMs: Date.now() - readStartedAt,
+            requestId: id ?? null,
+            userId,
+            companyId,
+          })
+          return NextResponse.json(
+            jsonRpc(id ?? null, decorate({
+              contents: [{ uri, mimeType: SKILL_MIME_TYPE, text: file.text }],
+            }, CACHE_SKILLS))
+          )
+        }
+      }
+
       // Skills exposed at Accounted://skill/<slug>: Markdown bodies, forward-compatible
       // with a future native MCP skills/list primitive. Atom slugs (slash-bearing
       // registry ids) are URL-encoded in the URI; skillSlugFromUri decodes.
@@ -33331,6 +33369,29 @@ async function handleMcpMessage(request: Request, parsed: ParsedMcpBody): Promis
       })
       return NextResponse.json(
         jsonRpcError(id ?? null, -32602, `Resource not found: "${uri}"`)
+      )
+    }
+
+    // Skills extension (io.modelcontextprotocol/skills): one page holds the
+    // whole catalog, so no cursor is ever returned.
+    case 'skills/list': {
+      const files = await loadServedSkillFiles()
+      return NextResponse.json(
+        jsonRpc(id ?? null, decorate({ skills: files.map(skillEntry) }, CACHE_SKILLS))
+      )
+    }
+
+    case 'skills/get': {
+      const uri = (params as Record<string, unknown> | undefined)?.uri
+      const slug = slugFromSkillFileUri(uri)
+      const file = slug ? (await loadServedSkillFiles()).find((f) => f.slug === slug) : undefined
+      if (!file) {
+        return NextResponse.json(
+          jsonRpcError(id ?? null, -32602, `No skill is served at ${typeof uri === 'string' ? uri : '(no uri)'}`)
+        )
+      }
+      return NextResponse.json(
+        jsonRpc(id ?? null, decorate({ skill: skillEntry(file) }, CACHE_SKILLS))
       )
     }
 
