@@ -936,11 +936,11 @@ describe('POST /submit-token WINT error mapping', () => {
 
     expect(status).toBe(422)
     expect(body.error.code).toBe('WINT_API_KEY_INVALID')
-    expect(body.error.message).toContain('Inställningar > Integrationer')
+    expect(body.error.message).toContain('under Integrationer i WINT:s inställningar')
     expect(body.error.message).toContain('Lösenordet')
     expect(body.error.message).toContain('SIE-fil')
     expect(body.error.message).not.toContain('avvisade autentiseringen')
-    expect(body.error.message_en).toContain('Settings > Integrations')
+    expect(body.error.message_en).toContain('under Integrations in the WINT settings')
   })
 })
 

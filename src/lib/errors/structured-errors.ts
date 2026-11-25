@@ -6382,9 +6382,9 @@ const PROVIDER_MIGRATION: Record<string, StructuredErrorEntry> = {
     // texts, read 2026-11-24).
     httpStatus: 422,
     message_sv:
-      'API-nyckeln från WINT har fel format. Det är en lång kod med bokstäver, siffror och bindestreck (ett GUID) som står tillsammans med användarnamnet vid din egna app under Inställningar > Integrationer i WINT. Lösenordet du loggar in i WINT med går inte att använda här. Finns det ingen egen app att skapa: ta ut bokföringen som SIE-fil från WINT och importera den.',
+      'API-nyckeln från WINT har fel format. Det är en lång kod med bokstäver, siffror och bindestreck (ett GUID) som står tillsammans med användarnamnet vid din egna app under Integrationer i WINT:s inställningar. Lösenordet du loggar in i WINT med går inte att använda här. Finns det ingen egen app att skapa: ta ut bokföringen som SIE-fil från WINT och importera den.',
     message_en:
-      'The API key from WINT has the wrong format. It is a long code of letters, digits and hyphens (a GUID) shown together with the username at your own app under Settings > Integrations in WINT. The password you sign in to WINT with cannot be used here. If there is no such app to create: export the bookkeeping from WINT as a SIE file and import that.',
+      'The API key from WINT has the wrong format. It is a long code of letters, digits and hyphens (a GUID) shown together with the username at your own app under Integrations in the WINT settings. The password you sign in to WINT with cannot be used here. If there is no such app to create: export the bookkeeping from WINT as a SIE file and import that.',
   },
   PROVIDER_COMPANY_MISMATCH: {
     // 422, same reasoning as PROVIDER_TOKEN_INVALID: the credentials are valid,
