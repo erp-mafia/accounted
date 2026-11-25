@@ -130,6 +130,7 @@ import {
 } from '@/lib/invoices/recurring-placeholders'
 import { stockholmYearMonth, todayIsoStockholm } from '@/lib/dates/iso'
 import { lineQuantityIssue, LINE_QUANTITY_MESSAGES } from '@/lib/invoices/line-quantity'
+import { SEND_ORDER_WAYS } from '@/lib/invoices/send-order'
 
 export const SIECreateAccountsSchema = z.object({
   accounts: z.array(z.object({ number: accountNumberSchema, name: z.string().max(500) })).min(1).max(10_000),
@@ -4235,6 +4236,15 @@ export const UpdateSettingsSchema = z.object({
   // Opt-in for the invoice payment-link feature (editor field + automatic
   // Stripe link on send). Default off at the DB level.
   invoice_payment_links_enabled: z.boolean().optional(),
+  // The ways invoices go out, in the order the editor tries them: a non-empty
+  // list of distinct ways; null clears the order.
+  invoice_send_order: z
+    .array(z.enum(SEND_ORDER_WAYS))
+    .min(1)
+    .refine((ways) => new Set(ways).size === ways.length, { message: 'Each way may appear once.' })
+    .nullable()
+    .optional()
+    .describe('The order invoices are sent in: peppol, kivra, billo, email, each at most once. The invoice editor picks the first way in the list that the invoice can use. Null clears the order.'),
   // Editable invoice email texts: { sv?: {...}, en?: {...} }; null clears
   // all overrides. Without this entry the generic PUT would silently strip
   // the field (the schema is the de-facto column whitelist).

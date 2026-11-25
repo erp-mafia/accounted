@@ -2027,6 +2027,7 @@
       "ore_rounding": "Öresavrundning",
       "invoice_show_ocr": "Visa OCR-nummer på fakturan",
       "invoice_ocr_length_digit": "OCR-nummer med längdsiffra",
+      "invoice_send_order": "Ordning för utskick",
       "invoice_show_bankgiro": "Visa bankgiro på fakturan",
       "invoice_show_plusgiro": "Visa plusgiro på fakturan",
       "invoice_show_swish": "Visa Swish på fakturan",
@@ -22321,5 +22322,30 @@
     "empty_title": "Inga perioder att periodisera",
     "empty_opens_on": "Periodiseringar görs efter att räkenskapsårets slutdatum har passerat. Steget öppnar {date}.",
     "empty_all_closed": "Periodiseringar görs efter att räkenskapsårets slutdatum har passerat. Alla räkenskapsår har redan sitt bokslut eller är stängda."
+  },
+  "invoice_send_order": {
+    "heading": "Hur ska fakturorna gå ut?",
+    "intro": "Vi provar uppifrån och ner för varje kund. Flytta det ni vill ha först högst upp.",
+    "customers_here": "{count, plural, one {# kund finns här.} other {# kunder finns här.}}",
+    "customers_none": "Inga kunder här än. Det här gäller från er första faktura.",
+    "way_peppol": "E-faktura",
+    "way_email": "E-post",
+    "line_peppol": "Direkt in i kundens system",
+    "line_mailbox": "Till kundens digitala brevlåda",
+    "line_email": "Som PDF i ett mejl",
+    "reach_count": "{count, plural, one {# kund} other {# kunder}}",
+    "move_up": "Flytta {way} upp",
+    "use_way": "Använd {way}",
+    "split_label": "Så fördelas kunderna över vägarna i den här ordningen",
+    "without_way": "{count} utan väg",
+    "apply": "Använd den här ordningen",
+    "turn_one_on": "Slå på minst ett sätt.",
+    "cancel": "Avbryt",
+    "saved": "Sparat. Varje faktura går ut den bästa vägen kunden har.",
+    "save_failed": "Kunde inte spara ordningen",
+    "row_label": "Ordning för utskick",
+    "row_help": "Varje faktura går ut den första vägen i ordningen som kunden har. Saknar kunden alla går fakturan ut som vanligt.",
+    "recommended_order": "Rekommenderad ordning",
+    "change": "Ändra"
   }
 }
