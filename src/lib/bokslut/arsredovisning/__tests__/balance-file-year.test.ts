@@ -79,6 +79,7 @@ describe('balanceFileYearTrialBalance', () => {
     ['a file without #RES whose balances moved', file(IB, UB), 'jämnt'],
     ['a file of another year', file(IB, UB, RES).replace('#RAR 0 20240101 20241231', '#RAR 0 20240101 20240630'), '2024-06-30'],
     ['a file that moves an account the import did not map', file(IB, UB, RES, ['#RES 0 6110 1000.00', '#UB 0 1910 184000.00']), 'konto 6110'],
+    ['a file that holds unchanged balances on accounts the import did not map', file(IB, UB, RES, ['#IB 0 1510 500.00', '#UB 0 1510 500.00', '#IB 0 2890 -500.00', '#UB 0 2890 -500.00']), 'konto 1510'],
     ['a file whose close does not balance against its opening', file(IB, UB, ['#RES 0 3010 -90000.00', '#RES 0 5010 60000.00']), 'jämnt'],
   ])('refuses %s, saying why', (_label, content, words) => {
     expect(refusalOf(balanceFileYearTrialBalance(parseSIEFile(content), ACCOUNT_MAP, BOOKS, YEAR))).toContain(words)

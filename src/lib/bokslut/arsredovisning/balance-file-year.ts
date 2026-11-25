@@ -49,8 +49,9 @@ export function holdsOnlyOpeningBalances(rows: readonly TrialBalanceRow[]): bool
  * where it was booked.
  *
  * A refusal, in words for the report, when the file cannot give the year:
- * it has verifikat, lacks #UB, is another year, moves an account without a
- * target, does not balance, or the books open on other balances than it.
+ * it has verifikat, lacks #UB, is another year, holds or moves an amount on
+ * an account without a target, does not balance, or the books open on other
+ * balances than it.
  * A file without #RES is a year without result, as a dormant year is.
  */
 export function balanceFileYearTrialBalance(
@@ -95,6 +96,17 @@ export function balanceFileYearTrialBalance(
     movement.set(target, roundOre((movement.get(target) ?? 0) + amount))
     const name = parsed.accounts.find((account) => account.number === source)?.name
     if (name && !names.has(target)) names.set(target, name)
+  }
+
+  // A balance the file closes on belongs in the close even when the year did
+  // not move it: on an account without a target it would drop out, and two
+  // that cancel out would pass the balance check below unseen.
+  for (const b of closingBalances) {
+    if (!isBalanceSheetAccount(b.account) || isZeroOre(b.amount)) continue
+    const target = accountMap.get(b.account)
+    if (!target || !isBalanceSheetAccount(target)) {
+      return { refusal: `konto ${b.account} i filen har inget motsvarande konto i Accounted` }
+    }
   }
 
   // The import may not have booked the file's #IB (a year continued from
