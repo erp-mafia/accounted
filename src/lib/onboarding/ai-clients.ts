@@ -51,6 +51,17 @@ export function connectedAiClients(rows: { client: string | null }[]): AiClient[
 }
 
 /**
+ * The verified clients whose connection acts on `companyId` when a call names
+ * no company. A connection follows the person and reaches every company of
+ * theirs, but its key is bound to one company (the one active at sign-in),
+ * and a hand-off whose prompt names no company starts there. A key not bound
+ * yet binds to the active company at its first call, so it counts. Pure.
+ */
+export function aiClientsBoundTo(rows: { client: string | null; company_id: string | null }[], companyId: string): AiClient[] {
+  return connectedAiClients(rows.filter((row) => row.company_id === null || row.company_id === companyId))
+}
+
+/**
  * Whether an agent is connected, and which of the three it is when known.
  *
  * `connected` is the one fact every "is an agent connected" readout answers

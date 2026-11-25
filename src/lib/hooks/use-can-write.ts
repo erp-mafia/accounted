@@ -1,6 +1,7 @@
 'use client'
 
 import { useCompany } from '@/contexts/CompanyContext'
+import { roleMayWrite } from '@/lib/auth/role-may-write'
 
 /**
  * Returns whether the current user can perform write actions in the
@@ -19,5 +20,5 @@ import { useCompany } from '@/contexts/CompanyContext'
  */
 export function useCanWrite(): { canWrite: boolean } {
   const { role } = useCompany()
-  return { canWrite: role !== null && role !== 'viewer' }
+  return { canWrite: roleMayWrite(role) }
 }

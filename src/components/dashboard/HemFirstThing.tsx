@@ -1,9 +1,12 @@
 'use client'
 
-import { useState, type ReactNode } from 'react'
+import { useRef, useState, type ReactNode } from 'react'
+import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
+import { useBankConnectFlow, type BankConnectFlow } from '@/components/bank-feed/use-bank-connect-flow'
+import { useOpenPaymentsAvailability } from '@/components/bank-feed/use-open-payments-availability'
 import { Button } from '@/components/ui/button'
 import { DrawnCheck } from '@/components/ui/done-chip'
 import { useBookingScreenEnabled } from '@/contexts/CompanyContext'
@@ -25,12 +28,12 @@ interface HemFirstThingProps {
   lead: FirstThingLead
   /** What comes after the first thing (at most three). */
   after: AiTask[]
-  /** The AI clients this person has connected. */
+  /** The AI clients whose connection belongs to this company (a hand-off prompt names no company). */
   clients: AiClient[]
-  /** Where "connect the bank" leads (the checklist's bank step). */
+  /** Where "connect the bank" leads where the bank dialog does not open in place (the checklist's bank step). */
   bankHref: string
-  /** Where a bank statement file is imported; null when connecting the bank already leads there. */
-  bankFileHref: string | null
+  /** Where a bank statement file is imported. */
+  bankFileHref: string
   /** The company's inbox page (WorklistCounts.inboxHref). */
   inboxHref: string | null
   companyId: string
@@ -92,8 +95,12 @@ export function HemFirstThing({ kind, lead, after, clients, bankHref, bankFileHr
   if (kind === 'connect_bank') {
     title = t('first_thing_connect_title')
     why = t('first_thing_connect_why')
-    primary = link(bankHref, t('first_thing_connect_action'), 'default')
-    second = bankFileHref ? link(bankFileHref, t('first_thing_connect_file'), 'link') : null
+    primary = <ConnectBank href={bankHref} label={t('first_thing_connect_action')} />
+    second = link(bankFileHref, t('first_thing_connect_file'), 'link')
+  } else if (kind === 'import_bank_file') {
+    title = t('first_thing_import_title')
+    why = t('first_thing_import_why')
+    primary = link(bankFileHref, t('first_thing_import_action'), 'default')
   } else if (kind === 'book_bank_rows') {
     if (client) {
       title = t('first_thing_book_ai_title', { client: client.name })
@@ -189,5 +196,53 @@ export function HemFirstThing({ kind, lead, after, clients, bankHref, bankFileHr
         )}
       </div>
     </section>
+  )
+}
+
+/** The bank dialog, loaded when it is first opened. */
+const BankConnectDialog = dynamic(() => import('@/components/bank-feed/BankConnectDialog').then((mod) => mod.BankConnectDialog), { ssr: false })
+
+/**
+ * "Koppla banken". Where the company's bank is connected through the BankID
+ * dialog, the button opens that dialog right here, and once it closes after a
+ * connection the page reads the company again (the first thing is then the
+ * next one). Elsewhere, and until that is known, it is the link to where a
+ * bank is connected. A bank that signs on its own page comes back to the bank
+ * settings, which take the dialog up again.
+ */
+function ConnectBank({ href, label }: { href: string; label: string }) {
+  const router = useRouter()
+  const openPayments = useOpenPaymentsAvailability()
+  const bankFlow = useBankConnectFlow('banking')
+  const connected = useRef(false)
+  if (openPayments.status !== 'available') {
+    return (
+      <Button asChild size="toolbar">
+        <Link href={href}>{label}</Link>
+      </Button>
+    )
+  }
+  // The dialog shows its own last step first: the page is read again when it closes.
+  const flow: BankConnectFlow = {
+    ...bankFlow,
+    close: () => {
+      bankFlow.close()
+      if (connected.current) router.refresh()
+    },
+  }
+  return (
+    <>
+      <Button type="button" size="toolbar" onClick={() => bankFlow.open('new')}>
+        {label}
+      </Button>
+      {bankFlow.isOpen ? (
+        <BankConnectDialog
+          flow={flow}
+          onConnected={() => {
+            connected.current = true
+          }}
+        />
+      ) : null}
+    </>
   )
 }
