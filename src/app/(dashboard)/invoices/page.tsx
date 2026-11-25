@@ -123,7 +123,9 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { StartCard } from '@/components/dashboard/StartCard'
-import { useCompany } from '@/contexts/CompanyContext'
+import { useCompany, useSendOrderSetupEnabled } from '@/contexts/CompanyContext'
+import { SendOrderSetup } from '@/components/invoices/send-order/SendOrderSetup'
+import { parseSendOrder } from '@/lib/invoices/send-order'
 import { useIsInvoicer } from '@/lib/hooks/use-is-invoicer'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import type { FiscalPeriod } from '@/types'
@@ -288,7 +290,7 @@ export default function InvoicesPage() {
           collectionAttention: collectionAttention.all,
           today,
         })
-  const { company } = useCompany()
+  const { company, role } = useCompany()
   // The invoicing-only role reaches the invoice list, not the reminder
   // overview or the Peppol failures (lib/auth/invoicer-role.ts): those reads
   // are left out for it instead of being refused on every visit (for #206).
@@ -303,6 +305,17 @@ export default function InvoicesPage() {
   // Settings-driven gates from the session-cached settings row
   // (lib/reference-data), derived instead of copied into state.
   const { settings: companySettings } = useCompanySettings()
+  // The send-order setup block: the invoices list only, for the users in the
+  // rollout who may change settings, while the company has no saved order
+  // (and for the rest of the visit once it saved one here).
+  const sendOrderRollout = useSendOrderSetupEnabled()
+  const [sendOrderSavedHere, setSendOrderSavedHere] = useState(false)
+  const showSendOrderSetup =
+    sendOrderRollout &&
+    !isQuotesList &&
+    (role === 'owner' || role === 'admin') &&
+    companySettings !== null &&
+    (sendOrderSavedHere || parseSendOrder(companySettings.invoice_send_order) === null)
   const oreRounding: boolean = companySettings?.ore_rounding ?? true
   // Invoice kinds hidden in Inställningar > Försäljning drop out of the
   // Ny faktura menu and the status views; existing rows stay under Alla.
@@ -1358,6 +1371,10 @@ export default function InvoicesPage() {
         </div>
       )}
 
+      {showSendOrderSetup && (
+        <SendOrderSetup saved={sendOrderSavedHere} onSaved={() => setSendOrderSavedHere(true)} />
+      )}
+
       {isLoading ? (
         <LateReveal>
           {[1, 2, 3, 4, 5, 6].map((i) => (
@@ -1393,7 +1410,7 @@ export default function InvoicesPage() {
               {tCommon('clear_search')}
             </Button>
           </div>
-        ) : invoices.length === 0 && !isQuotesList && !registerFacts?.anyRow ? (
+        ) : invoices.length === 0 && !isQuotesList && !registerFacts?.anyRow && showSendOrderSetup ? null : invoices.length === 0 && !isQuotesList && !registerFacts?.anyRow ? (
           <div className="animate-fade-in">
             <StartCard
               card="venice"

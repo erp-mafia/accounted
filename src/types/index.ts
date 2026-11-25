@@ -716,6 +716,10 @@ export interface CompanySettings {
   // payment links on send. Enforced server-side in
   // lib/extensions/payment-links.ts, not just in the UI.
   invoice_payment_links_enabled: boolean
+  // The ways invoices go out, in the order the editor tries them
+  // (lib/invoices/send-order.ts); null = no order chosen. Optional in TS: a
+  // row read before the column's migration has it absent.
+  invoice_send_order?: string[] | null
 
   // Invoice branding (per-company colors, font, optional header/footer text).
   // Defaults preserve the legacy hardcoded palette so unbranded companies

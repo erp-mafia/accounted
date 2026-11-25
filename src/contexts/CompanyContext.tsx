@@ -115,6 +115,12 @@ interface CompanyContextValue {
    * (lib/env/booking-screen-switch.ts). Absent reads as no: the dialogs stay.
    */
   bookingScreen?: boolean
+  /**
+   * Whether this user sees the send-order setup block on the invoices page,
+   * as the layout read INVOICE_SEND_ORDER_USER_IDS
+   * (lib/invoices/send-order-rollout.ts). Absent reads as no.
+   */
+  sendOrderSetup?: boolean
 }
 
 const CompanyContext = createContext<CompanyContextValue | null>(null)
@@ -125,6 +131,11 @@ const CompanyContext = createContext<CompanyContextValue | null>(null)
  */
 export function useBookingScreenEnabled(): boolean {
   return useContext(CompanyContext)?.bookingScreen === true
+}
+
+/** Whether the send-order setup block is switched on for this user. Off outside a CompanyProvider. */
+export function useSendOrderSetupEnabled(): boolean {
+  return useContext(CompanyContext)?.sendOrderSetup === true
 }
 
 export function CompanyProvider({
