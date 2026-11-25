@@ -240,7 +240,7 @@ GET /companies/{companyId}/capabilities : Which building blocks this company can
 GET /companies/{companyId}/packages : List the company packages with their status and what keeps a switched-off one winding down [scope:companies:read risk:low idempotent]
 POST /companies/{companyId}/packages/{packageId}/disable : Stage switching a package off, for an owner or admin to approve [scope:companies:write risk:low idempotent dry-run reversible]
 POST /companies/{companyId}/packages/{packageId}/enable : Stage switching a package on, for an owner or admin to approve [scope:companies:write risk:low idempotent dry-run reversible]
-POST /companies/{companyId}/peppol/access-request : Ask the operators to switch on Peppol for the company (sending, optionally receiving) [scope:companies:write risk:medium idempotent dry-run]
+POST /companies/{companyId}/peppol/access-request : Switch on Peppol for the company (sending, and receiving when chosen); needs a paid plan [scope:companies:write risk:medium idempotent dry-run]
 GET /companies/{companyId}/peppol/registration : Read the company's Peppol receiving status: access grant, eligibility and registration [scope:companies:read risk:low idempotent]
 POST /companies/{companyId}/peppol/registration : Register the company as a Peppol participant so it can receive e-invoices [scope:companies:write risk:high idempotent dry-run]
 GET /companies/{companyId}/service-accounts : List the company's service accounts [scope:service_accounts:manage risk:low idempotent]

@@ -39,6 +39,10 @@ vi.mock('@/lib/invoices/peppol-registration', () => ({
   withdrawRevokedPeppolRegistrations: (...args: unknown[]) => withdrawMock(...args),
   registerGrantedPeppolReceivers: (...args: unknown[]) => registerGrantedMock(...args),
 }))
+const planRuleMock = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/invoices/peppol-plan-rule', () => ({
+  applyPeppolPlanRule: (...args: unknown[]) => planRuleMock(...args),
+}))
 const proposeMock = vi.fn()
 vi.mock('@/lib/operations/inbox-bank-match', () => ({
   proposeBankMatchForInboxItem: (...args: unknown[]) => proposeMock(...args),
@@ -68,6 +72,7 @@ function makeTransport(overrides: Partial<PeppolTransport> = {}): PeppolTranspor
 
 const cleanSync = { listed: 1, archived: 1, duplicates: 0, routed: 0, unrouted: 0, delivered: 1, failed: 0, terminal: 0, terminalDocuments: [], errors: [] }
 const cleanReprocess = { candidates: 2, xmlFetched: 1, xmlMissed: 0, retried: 0, held: 0, routed: 1, delivered: 1, terminal: 0, terminalDocuments: [], errors: [] }
+const NO_PLAN_CHANGE = { enabled: [], paused: [], failed: [] }
 const pages = () => logMock.error.mock.calls.filter(([, context]) => (context as { alert?: boolean } | undefined)?.alert === true)
 
 describe('GET /api/peppol/inbound/cron', () => {
@@ -82,6 +87,7 @@ describe('GET /api/peppol/inbound/cron', () => {
     withdrawMock.mockResolvedValue({ withdrawn: [], failed: [] })
     registerGrantedMock.mockResolvedValue({ registered: [], failed: [], skipped: [] })
     receiversCount.mockResolvedValue({ count: 0, error: null })
+    planRuleMock.mockResolvedValue(NO_PLAN_CHANGE)
   })
 
   afterEach(() => {
@@ -103,7 +109,7 @@ describe('GET /api/peppol/inbound/cron', () => {
     delete process.env.PEPPOL_TRANSPORT_PROVIDER
     const response = await GET(request('cron-secret'))
     expect(response.status).toBe(200)
-    expect(await response.json()).toEqual({ data: { skipped: true, reason: 'provider_selection_required' } })
+    expect(await response.json()).toEqual({ data: { skipped: true, reason: 'provider_selection_required', plan: NO_PLAN_CHANGE } })
     expect(syncMock).not.toHaveBeenCalled()
     expect(reprocessMock).not.toHaveBeenCalled()
     // No company asked to receive: said at info, nothing pages.
@@ -127,7 +133,7 @@ describe('GET /api/peppol/inbound/cron', () => {
     process.env.PEPPOL_TRANSPORT_PROVIDER = 'not-registered-here'
     receiversCount.mockResolvedValue({ count: null, error: { message: 'statement timeout' } })
     const response = await GET(request('cron-secret'))
-    expect(await response.json()).toEqual({ data: { skipped: true, reason: 'provider_adapter_unavailable' } })
+    expect(await response.json()).toEqual({ data: { skipped: true, reason: 'provider_adapter_unavailable', plan: NO_PLAN_CHANGE } })
     expect(logMock.error).toHaveBeenCalledWith('peppol inbound skipped, and the companies with receiving on could not be counted',
       expect.objectContaining({ message: 'statement timeout' }), { alert: true, reason: 'provider_adapter_unavailable' })
   })
@@ -136,7 +142,7 @@ describe('GET /api/peppol/inbound/cron', () => {
     unregister = registerPeppolTransport(makeTransport({ listInboundDocuments: undefined }))
     receiversCount.mockResolvedValue({ count: 1, error: null })
     const response = await GET(request('cron-secret'))
-    expect(await response.json()).toEqual({ data: { skipped: true, reason: 'receiving_unsupported' } })
+    expect(await response.json()).toEqual({ data: { skipped: true, reason: 'receiving_unsupported', plan: NO_PLAN_CHANGE } })
     expect(reprocessMock).not.toHaveBeenCalled()
     expect(pages()).toEqual([[expect.any(String), { alert: true, reason: 'receiving_unsupported', receivers: 1 }]])
   })
@@ -255,6 +261,46 @@ describe('GET /api/peppol/inbound/cron', () => {
     expect(logMock.warn).not.toHaveBeenCalledWith('peppol inbound reprocess left failures to retry', expect.anything())
     expect(logMock.error).not.toHaveBeenCalled()
     expect(pages()).toHaveLength(0)
+  })
+
+  it('applies the plan rule first, before the withdrawal, and reports what it switched', async () => {
+    unregister = registerPeppolTransport(makeTransport())
+    planRuleMock.mockResolvedValue({ enabled: ['c-paying'], paused: ['c-lapsed'], failed: [] })
+    const body = await (await GET(request('cron-secret'))).json()
+    expect(planRuleMock).toHaveBeenCalledTimes(1)
+    expect(planRuleMock.mock.invocationCallOrder[0]).toBeLessThan(withdrawMock.mock.invocationCallOrder[0])
+    expect(body.data.plan).toEqual({ enabled: ['c-paying'], paused: ['c-lapsed'], failed: [] })
+    expect(logMock.info).toHaveBeenCalledWith('peppol access follows the plan', { enabled: ['c-paying'], paused: ['c-lapsed'] })
+    expect(pages()).toHaveLength(0)
+  })
+
+  it('applies the plan rule even when no access point is switched on', async () => {
+    delete process.env.PEPPOL_TRANSPORT_PROVIDER
+    planRuleMock.mockResolvedValue({ enabled: ['c-paying'], paused: [], failed: [] })
+    const body = await (await GET(request('cron-secret'))).json()
+    expect(planRuleMock).toHaveBeenCalledTimes(1)
+    expect(body.data).toMatchObject({ skipped: true, plan: { enabled: ['c-paying'] } })
+  })
+
+  it('pages when the plan rule fails, and still runs the rest', async () => {
+    unregister = registerPeppolTransport(makeTransport())
+    planRuleMock.mockResolvedValue({ enabled: [], paused: [], failed: [{ companyId: 'c-x', reason: 'boom' }] })
+    await GET(request('cron-secret'))
+    expect(pages()).toHaveLength(1)
+    expect(pages()[0][1]).toMatchObject({ alert: true, failed: [{ companyId: 'c-x', reason: 'boom' }] })
+    expect(syncMock).toHaveBeenCalledTimes(1)
+
+    vi.clearAllMocks()
+    syncMock.mockResolvedValue(cleanSync)
+    reprocessMock.mockResolvedValue(cleanReprocess)
+    withdrawMock.mockResolvedValue({ withdrawn: [], failed: [] })
+    registerGrantedMock.mockResolvedValue({ registered: [], failed: [], skipped: [] })
+    planRuleMock.mockRejectedValue(new Error('grants read timed out'))
+    const body = await (await GET(request('cron-secret'))).json()
+    expect(body.data.plan).toEqual({ failed: true })
+    expect(logMock.error).toHaveBeenCalledWith('peppol plan rule failed', expect.any(Error), { alert: true })
+    expect(withdrawMock).toHaveBeenCalledTimes(1)
+    expect(syncMock).toHaveBeenCalledTimes(1)
   })
 
   it('withdraws revoked registrations before the sync and reports them', async () => {

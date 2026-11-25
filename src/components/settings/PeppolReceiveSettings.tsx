@@ -2,6 +2,7 @@
 
 import { useTranslations } from 'next-intl'
 import { useCallback, useEffect, useState } from 'react'
+import { UpgradeNote } from '@/components/billing/UpgradeNote'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { LoadError } from '@/components/ui/empty-state'
@@ -52,6 +53,8 @@ interface PeppolSettingsPayload {
   transport: { available: boolean }
   receiving_supported: boolean
   access: PeppolAccessView
+  /** No Peppol yet and no paid plan: it switches on by itself once the company pays. */
+  plan_required: boolean
   participant: PeppolParticipantView
   registration: PeppolRegistrationView | null
 }
@@ -66,10 +69,11 @@ function registryText(code: string, locale: UiLocale): string | null {
 }
 
 /**
- * E-invoicing via Peppol for one company. Access is granted per company by
- * the operators, so the first row is the grant itself: ask, wait, see what you got.
- * Receiving is a second, separate grant and its switch publishes the
- * company's 0007:orgnr through the Access Point.
+ * E-invoicing via Peppol for one company. Peppol is part of the paid plans:
+ * a paying company switches it on here and has it at once, one that does not
+ * pay is told to choose a plan and gets Peppol by itself once it does. The
+ * first row is that access; receiving is the company's own choice, and its
+ * switch publishes the company's 0007:orgnr through the Access Point.
  */
 export function PeppolReceiveSettings() {
   const t = useTranslations('settings_peppol')
@@ -104,7 +108,9 @@ export function PeppolReceiveSettings() {
   const registration = state?.registration ?? null
   const isOn = peppolReceivingOn(registration?.status)
   const transportAvailable = !!state?.transport.available
-  const receivingAvailable = transportAvailable && !!state?.receiving_supported && !!access?.receive_enabled
+  // Receiving comes with access; the switch records the company's choice.
+  const receivingAvailable = transportAvailable && !!state?.receiving_supported && !!access?.send_enabled
+  const planRequired = !!state?.plan_required
   // The company cannot be a Peppol participant at all (personnummer, no org
   // number, no name): it can neither send nor receive, so the access request
   // is refused. Say why where the request would otherwise be.
@@ -134,10 +140,13 @@ export function PeppolReceiveSettings() {
         body: JSON.stringify({ wants_receiving: wantsReceiving }),
       })
       const body = await response.json().catch(() => null) as {
+        data?: { plan_required?: boolean }
         error?: { code?: string; message?: string; message_en?: string }
       } | null
       if (!response.ok) throw body?.error ?? new Error()
-      toast({ title: t('request_sent_title'), description: t('request_sent_description') })
+      toast(body?.data?.plan_required
+        ? { title: t('request_plan_required_title'), description: t('request_plan_required_description') }
+        : { title: t('request_sent_title'), description: t('request_sent_description') })
       await load()
     } catch (error) {
       toast({
@@ -175,13 +184,15 @@ export function PeppolReceiveSettings() {
     }
   }, [load, localeKey, t, toast])
 
+  // Without a paid plan the upgrade note below says what to do instead, and a
+  // company that cannot be a participant is told why under the line.
   const accessLine = (() => {
     if (!access) return null
     switch (access.status) {
       case 'enabled': return access.receive_enabled ? t('access_enabled_receiving') : t('access_enabled_send_only')
-      case 'requested': return t('access_requested')
+      case 'requested': return planRequired || participantBlocked ? null : t('access_requested')
       case 'disabled': return t('access_disabled')
-      default: return t('access_none')
+      default: return planRequired ? null : t('access_none')
     }
   })()
   const sendsLine = access?.send_enabled
@@ -226,9 +237,12 @@ export function PeppolReceiveSettings() {
             </SettingsRowNote>
           ) : (
             <div className="space-y-1">
-              <span className="block">{accessLine}</span>
+              {accessLine && <span className="block">{accessLine}</span>}
               {sendsLine && <SettingsRowNote className="block tabular-nums">{sendsLine}</SettingsRowNote>}
             </div>
+          )}
+          {state !== null && transportAvailable && planRequired && !participantBlocked && (
+            <UpgradeNote linkLabel={t('upgrade_link')}>{t('access_plan_required')}</UpgradeNote>
           )}
           {/* The request controls live under the status text and wrap: a long
               checkbox label next to a button in a shrink-0 end slot pushed the
@@ -236,7 +250,9 @@ export function PeppolReceiveSettings() {
           {state !== null && transportAvailable && participantBlocked && access?.status !== 'enabled' && (
             <SettingsRowNote className="block min-w-0">{eligibilityText}</SettingsRowNote>
           )}
-          {state !== null && transportAvailable && !participantBlocked && (access?.status === 'none' || access?.status === 'disabled') && (
+          {/* A row the operators switched off is not asked for again here:
+              the plan would switch it straight back on. */}
+          {state !== null && transportAvailable && !participantBlocked && access?.status === 'none' && (
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
               <label className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
                 <input
@@ -262,9 +278,8 @@ export function PeppolReceiveSettings() {
         </div>
       </SettingsRow>
 
-      {/* Receiving is a separate grant (one contracted slot each): the switch
-          exists only once the operators granted it, or a registration already
-          exists that the company must be able to see and withdraw. */}
+      {/* Receiving is the company's choice once it has access, or a
+          registration already exists that it must be able to see and withdraw. */}
       {(receivingAvailable || isOn) && (
         <>
           <SettingsRow label={t('enable_label')} help={t('enable_help')}>

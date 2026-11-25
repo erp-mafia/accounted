@@ -130,7 +130,7 @@ export const invoicesPeppolReadiness = defineOperation({
   docs: {
     summary: 'Check whether a customer invoice can be sent over Peppol, to which participant, and what is missing.',
     description:
-      'Runs every gate the Peppol send applies, as reads, and lists each failing one: the access point is configured, the company is not the demo company, the operators granted Peppol access and sends remain, the invoice is a plain invoice in draft/sent/overdue, a draft can be issued (payee account), and the BIS Billing 3 document builds (EN 16931 + Sweden CIUS preflight). Answers the sender and recipient participant ids (0007 + org number). The recipient\'s registration in the Peppol network is not looked up here: the send does that on commit.',
+      'Runs every gate the Peppol send applies, as reads, and lists each failing one: the access point is configured, the company is not the demo company, the company has Peppol access and sends remain, the invoice is a plain invoice in draft/sent/overdue, a draft can be issued (payee account), and the BIS Billing 3 document builds (EN 16931 + Sweden CIUS preflight). Answers the sender and recipient participant ids (0007 + org number). The recipient\'s registration in the Peppol network is not looked up here: the send does that on commit.',
     useWhen:
       'Before POST /invoices/{id}/send-peppol, to fix what is missing (a buyer reference, a Bankgiro, the org number) instead of learning it from a refused send.',
     doNotUseFor:
@@ -224,7 +224,7 @@ export const invoicesSendPeppol = defineOperation({
     doNotUseFor:
       'Emailing the invoice (POST /invoices/{id}/send), recording one delivered another way (:mark-sent), credit notes, quotes or proformas.',
     pitfalls: [
-      'Needs the company\'s Peppol access grant: 403 PEPPOL_ACCESS_REQUIRED until the operators enable it (POST /peppol/access-request), 409 PEPPOL_SEND_LIMIT_REACHED once the sending cap is used.',
+      'Needs the company\'s Peppol access: 403 PEPPOL_ACCESS_REQUIRED until it is switched on (POST /peppol/access-request; immediate for a company on a paid plan), 409 PEPPOL_SEND_LIMIT_REACHED once the monthly sending cap is used.',
       'A buyer not registered in Peppol answers 422 PEPPOL_RECIPIENT_NOT_REACHABLE and nothing is transmitted; a failed lookup answers 502 PEPPOL_LOOKUP_FAILED and is safe to retry.',
       '422 PEPPOL_SUBMISSION_REJECTED is the access point\'s verdict on the document and ends the delivery (failed): fix what the reason names and send again, which stages a new delivery; once issued, a correction of the invoice itself is a credit note plus a new invoice.',
       '502 PEPPOL_SUBMISSION_FAILED and 409 PEPPOL_SEND_PRECONDITION_FAILED leave the delivery resendable: retry later or fix the Peppol settings.',
@@ -490,19 +490,21 @@ export const peppolGetRegistration = defineOperation({
   docs: {
     summary: 'Read the company\'s Peppol receiving status: access grant, eligibility and registration.',
     description:
-      'Whether this environment has an access point and whether it supports receiving, the company\'s Peppol access grant (sending cap, receiving slot), whether the company can be registered at all (a 10-digit organisation number that is not a personnummer, a company name), and the registration of its participant id (0007 + org number) with its status and last error.',
+      'Whether this environment has an access point and whether it supports receiving, the company\'s Peppol access (sending cap, whether receiving is chosen), whether it needs a paid plan first (plan_required), whether the company can be registered at all (a 10-digit organisation number that is not a personnummer, a company name), and the registration of its participant id (0007 + org number) with its status and last error.',
     useWhen: 'Before POST /peppol/registration, or to explain why the company does not receive e-invoices.',
     doNotUseFor: 'Sending (GET /invoices/{id}/peppol checks an invoice) or reading received e-invoices (they arrive in the invoice inbox).',
     pitfalls: [
       'participant.ok=false with PEPPOL_REGISTRATION_PERSONAL_NUMBER means a sole trader identified by personnummer: it cannot be published in the Peppol directory.',
       'registration.can_retry says whether registering again can help; a permanent verdict (e.g. CONNECTOR_PEPPOL_PARTICIPANT_TAKEN) needs support.',
+      'plan_required=true: the company has no Peppol yet and no paid plan. Peppol is switched on by itself within minutes of the company choosing a plan (or adding a card to its trial).',
     ],
     example: {
       response: {
         data: {
           transport: { available: true, provider: 'qvalia', reason: null },
           receiving_supported: true,
-          access: { status: 'enabled', send_enabled: true, receive_enabled: true, max_sends: 50, sent_count: 3, remaining_sends: 47 },
+          access: { status: 'enabled', send_enabled: true, receive_enabled: true, max_sends: 10, sent_count: 3, remaining_sends: 7 },
+          plan_required: false,
           participant: { ok: true, code: null },
           registration: EXAMPLE_REGISTRATION,
         },
@@ -515,6 +517,7 @@ export const peppolGetRegistration = defineOperation({
     transport: Transport,
     receiving_supported: z.boolean(),
     access: Access,
+    plan_required: z.boolean().describe('True when the company has no Peppol yet and no paid plan; it is switched on by itself once it pays.'),
     participant: z.object({ ok: z.boolean(), code: z.string().nullable() }),
     registration: Registration.nullable(),
   }),
@@ -523,13 +526,13 @@ export const peppolGetRegistration = defineOperation({
     name: 'gnubok_get_peppol_registration',
     title: 'Get Peppol Registration',
     description:
-      'Read whether the company can receive Peppol e-invoices: the access grant and receiving slot, whether its org number can be registered, and the registration of its participant id with status and last error.',
+      'Read whether the company can send and receive Peppol e-invoices: its access, whether it needs a paid plan first, whether its org number can be registered, and the registration of its participant id with status and last error.',
     keywords: ['peppol', 'ta emot e-faktura', 'peppol-id', 'peppol registrering', 'mottagning'],
   },
   run: async (ctx) => {
     const outcome = await getPeppolRegistrationStatus(ctx)
     if (!outcome.ok || outcome.dryRun) return outcome
-    const { transport, receiving_supported, access, participant, registration } = outcome.data
+    const { transport, receiving_supported, access, plan_required, participant, registration } = outcome.data
     return {
       ok: true,
       data: {
@@ -540,6 +543,7 @@ export const peppolGetRegistration = defineOperation({
         },
         receiving_supported,
         access: toAccess(access),
+        plan_required,
         participant: { ok: participant.ok, code: participant.code },
         registration: toRegistration(registration),
       },
@@ -559,11 +563,11 @@ export const peppolRegister = defineOperation({
   docs: {
     summary: 'Register the company as a Peppol participant so it can receive e-invoices.',
     description:
-      'Publishes the company\'s participant id (scheme 0007 + organisation number) with a business card (name, country, city, VAT number) at the access point, for BIS Billing 3 invoices and credit notes. Received e-invoices then arrive in the invoice inbox. Needs the operators\' receiving grant. A pending attempt older than five minutes is retired and retried. Owner/admin only. The dry run checks everything as reads and contacts no network.',
-    useWhen: 'The company wants suppliers to send it e-invoices over Peppol and GET /peppol/registration shows receive_enabled.',
+      'Publishes the company\'s participant id (scheme 0007 + organisation number) with a business card (name, country, city, VAT number) at the access point, for BIS Billing 3 invoices and credit notes. Received e-invoices then arrive in the invoice inbox. Needs Peppol access; receiving is the company\'s own choice and this records it. A pending attempt older than five minutes is retired and retried. Owner/admin only. The dry run checks everything as reads and contacts no network.',
+    useWhen: 'The company wants suppliers to send it e-invoices over Peppol and GET /peppol/registration shows access.status=enabled.',
     doNotUseFor: 'Sending e-invoices (that needs no registration of the buyer side here) or asking for access (POST /peppol/access-request).',
     pitfalls: [
-      'Without the grant: 403 PEPPOL_ACCESS_REQUIRED; with sending but no receiving slot: 403 PEPPOL_RECEIVING_NOT_ENABLED.',
+      'Without Peppol access: 403 PEPPOL_ACCESS_REQUIRED (POST /peppol/access-request first).',
       'A personnummer-based sole trader answers 422 PEPPOL_REGISTRATION_PERSONAL_NUMBER: it would publish personal data in the directory.',
       '502 PEPPOL_REGISTRATION_FAILED is operational and retryable; 422 PEPPOL_REGISTRATION_REJECTED is a verdict on the identifier (details.code says which), do not retry it.',
       '409 PEPPOL_REGISTRATION_CAP_REACHED: every contracted receiving slot is taken; sending still works.',
@@ -578,7 +582,6 @@ export const peppolRegister = defineOperation({
     'PEPPOL_TRANSPORT_UNAVAILABLE',
     'PEPPOL_SANDBOX_NOT_ALLOWED',
     'PEPPOL_ACCESS_REQUIRED',
-    'PEPPOL_RECEIVING_NOT_ENABLED',
     'INVOICE_SEND_COMPANY_SETTINGS_MISSING',
     'PEPPOL_RECEIVING_UNSUPPORTED',
     'PEPPOL_REGISTRATION_ORG_NUMBER_REQUIRED',
@@ -593,7 +596,7 @@ export const peppolRegister = defineOperation({
     name: 'gnubok_register_peppol_participant',
     title: 'Register Peppol Participant',
     description:
-      'Stage publishing the company\'s Peppol participant id (0007 + org number) at the access point so it can receive e-invoices. Needs the operators\' receiving grant; owner/admin only. The preview checks everything without contacting the network.',
+      'Stage publishing the company\'s Peppol participant id (0007 + org number) at the access point so it can receive e-invoices. Needs Peppol access; owner/admin only. The preview checks everything without contacting the network.',
     keywords: ['peppol', 'ta emot e-faktura', 'registrera peppol', 'peppol-id', 'mottagning e-faktura'],
     stage: {
       pendingType: 'register_peppol_participant',
@@ -617,26 +620,30 @@ export const peppolRequestAccess = defineOperation({
   id: 'peppol.request-access',
   kind: 'write',
   scope: 'companies:write',
-  // Records the request and e-mails the operators; grants nothing by itself.
+  // Records the request; a company on a paid plan has Peppol (sending, and
+  // receiving when it chose it) as soon as this commits.
   risk: 'medium',
   reversible: false,
   docs: {
-    summary: 'Ask the operators to switch on Peppol for the company (sending, optionally receiving).',
+    summary: 'Switch on Peppol for the company (sending, and receiving when chosen); needs a paid plan.',
     description:
-      'Peppol is locked per company until the operators grant it (every transmission is billed per document and every receiving id uses a contracted slot). This records the request and notifies the operators by e-mail; they enable it with a sending cap and, when wants_receiving is true, a receiving slot. Idempotent: a second request keeps the first. Dry-runnable.',
+      'Peppol is part of the paid plans. For a company on a paid plan (or a trial with a card on file) this switches Peppol on at once: sending, capped per calendar month, and receiving when wants_receiving is true. A company without a paid plan keeps its request, the answer says plan_required=true, the person who asked is mailed where to choose a plan, and Peppol is switched on by itself within minutes of the company starting to pay. Idempotent: a second request keeps the first. Dry-runnable.',
     useWhen: 'GET /invoices/{id}/peppol or GET /peppol/registration reports PEPPOL_ACCESS_REQUIRED and the user wants Peppol.',
     doNotUseFor: 'Registering the participant id once access is granted (POST /peppol/registration).',
     pitfalls: [
-      'A company that already has access answers 409 PEPPOL_ACCESS_ALREADY_ENABLED; ask support for a higher cap or a receiving slot instead.',
+      'A company that already has access answers 409 PEPPOL_ACCESS_ALREADY_ENABLED; receiving is switched on with POST /peppol/registration, a higher cap through support.',
+      'A company whose Peppol the operators switched off answers 403 PEPPOL_ACCESS_DISABLED: getting it back goes through support.',
+      'wants_receiving=true is for owners and admins (it publishes the company in the Peppol directory): a member key gets 403 FORBIDDEN.',
       'A company that cannot be a Peppol participant answers 422 with the code GET /peppol/registration reports in participant.code (PEPPOL_REGISTRATION_PERSONAL_NUMBER for a sole trader identified by personnummer); nothing is recorded.',
-      'Nothing is enabled immediately: poll GET /peppol/registration for access.status=enabled.',
+      'plan_required=true means nothing was switched on: tell the user Peppol needs a paid plan (Inställningar > Abonnemang); it switches on by itself once they pay.',
     ],
     example: {
       request: { wants_receiving: true, note: 'Vi fakturerar kommuner.' },
       response: {
         data: {
-          access: { status: 'requested', send_enabled: false, receive_enabled: false, max_sends: null, sent_count: 0, remaining_sends: null },
+          access: { status: 'enabled', send_enabled: true, receive_enabled: true, max_sends: 10, sent_count: 0, remaining_sends: 10 },
           created: true,
+          plan_required: false,
         },
         meta: META,
       },
@@ -646,10 +653,13 @@ export const peppolRequestAccess = defineOperation({
   output: z.object({
     access: Access,
     created: z.boolean().describe('False when an open request already existed.'),
+    plan_required: z.boolean().describe('True when the company has no paid plan: the request is kept and Peppol switches on by itself once it pays.'),
   }),
   errorCodes: [
+    'FORBIDDEN',
     'PEPPOL_SANDBOX_NOT_ALLOWED',
     'PEPPOL_ACCESS_ALREADY_ENABLED',
+    'PEPPOL_ACCESS_DISABLED',
     'PEPPOL_REGISTRATION_PERSONAL_NUMBER',
     'PEPPOL_REGISTRATION_ORG_NUMBER_REQUIRED',
     'PEPPOL_REGISTRATION_COMPANY_NAME_REQUIRED',
@@ -659,16 +669,16 @@ export const peppolRequestAccess = defineOperation({
     name: 'gnubok_request_peppol_access',
     title: 'Request Peppol Access',
     description:
-      'Stage asking the operators to switch on Peppol e-invoicing for the company (sending, and receiving when wants_receiving is true). Records the request and e-mails the operators on approval; nothing is enabled immediately.',
+      'Stage switching on Peppol e-invoicing for the company (sending, and receiving when wants_receiving is true). On approval a company on a paid plan has Peppol at once; one without a paid plan is told it needs one (plan_required) and gets it by itself once it pays.',
     keywords: ['peppol', 'aktivera peppol', 'e-faktura', 'begär åtkomst', 'slå på peppol'],
     stage: {
       pendingType: 'request_peppol_access',
-      title: () => 'Begär Peppol-åtkomst',
+      title: () => 'Slå på Peppol',
     },
   },
   run: async (ctx, input, { dryRun }) => {
-    const outcome = await requestPeppolAccessForCompany(ctx, input, { dryRun })
+    const outcome = await requestPeppolAccessForCompany(ctx, input, { dryRun, requireAdminForReceiving: true })
     if (!outcome.ok || outcome.dryRun) return outcome
-    return { ...outcome, data: { access: toAccess(outcome.data.access), created: outcome.data.created } }
+    return { ...outcome, data: { access: toAccess(outcome.data.access), created: outcome.data.created, plan_required: outcome.data.plan_required } }
   },
 })

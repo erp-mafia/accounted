@@ -1,7 +1,9 @@
 /**
  * Peppol access per company: locked by default, requested by the company,
- * granted (with a monthly sending cap, and separately receiving) by the
- * operators.
+ * switched on (with a monthly sending cap, and receiving when the company
+ * chose it) by the plan rule in lib/invoices/peppol-plan-rule.ts as soon as
+ * the company pays. Operators can still grant, adjust or disable a row by
+ * hand (scripts/peppol/access.ts).
  *
  * Why a gate at all: every transmission through the Access Point is billed
  * per document and every receiving identifier consumes a contracted tenant
@@ -172,21 +174,28 @@ export async function checkPeppolSendPermission(args: {
 
 export type RequestPeppolAccessResult =
   | { ok: true; row: PeppolAccessRow; created: boolean }
-  | { ok: false; code: 'PEPPOL_ACCESS_ALREADY_ENABLED' }
+  | { ok: false; code: 'PEPPOL_ACCESS_ALREADY_ENABLED' | 'PEPPOL_ACCESS_DISABLED' }
 
 /**
  * A company asks for access. Idempotent: a second request keeps the first
- * timestamp; a company that already has access is told so. A disabled
- * company may ask again (the row goes back to `requested`).
+ * timestamp and choice (`created` false); a company that already has access
+ * is told so. `wantsReceiving` is the company's own choice, kept on the row;
+ * it takes effect when access is switched on.
+ *
+ * A row the operators disabled stays disabled: a request would be switched
+ * on at once by the plan rule, so asking again goes through support. A plan
+ * that ended is not `disabled`; it leaves the row `requested`.
  */
 export async function requestPeppolAccess(args: {
   service: SupabaseClient
   companyId: string
   userId: string
   note: string | null
+  wantsReceiving: boolean
 }): Promise<RequestPeppolAccessResult> {
   const existing = await getPeppolAccess(args.service, args.companyId)
   if (existing?.status === 'enabled') return { ok: false, code: 'PEPPOL_ACCESS_ALREADY_ENABLED' }
+  if (existing?.status === 'disabled') return { ok: false, code: 'PEPPOL_ACCESS_DISABLED' }
   if (existing?.status === 'requested') return { ok: true, row: existing, created: false }
 
   const now = new Date().toISOString()
@@ -198,12 +207,12 @@ export async function requestPeppolAccess(args: {
       requested_at: now,
       requested_by: args.userId,
       request_note: args.note,
-      disabled_at: null,
+      receive_enabled: args.wantsReceiving,
     }, { onConflict: 'company_id' })
     .select('*')
     .single()
   if (error || !data) throw new Error(`Failed to request Peppol access: ${error?.message ?? 'no row'}`)
-  return { ok: true, row: data as PeppolAccessRow, created: !existing }
+  return { ok: true, row: data as PeppolAccessRow, created: true }
 }
 
 /** Operator action (service role): grant, adjust or withdraw access. */

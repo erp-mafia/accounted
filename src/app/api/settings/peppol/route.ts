@@ -123,8 +123,9 @@ export const DELETE = withRouteContext(
       return privateNoStore(errorResponseFromCode('PEPPOL_TRANSPORT_UNAVAILABLE', log, { requestId }))
     }
     try {
+      const service = createServiceClient()
       const result = await deregisterCompanyFromPeppolReceiving({
-        service: createServiceClient(),
+        service,
         companyId,
         transport: resolved.transport,
       })
@@ -135,6 +136,13 @@ export const DELETE = withRouteContext(
           isTransportVerdict(result) ? verdictContext({ reason: result.detail, code: result.reason }, requestId) : { requestId },
         ))
       }
+      // The company switched receiving off: that is its choice now, kept
+      // through a pause so a plan that comes back does not republish the id.
+      const { error: choiceError } = await service
+        .from('peppol_access')
+        .update({ receive_enabled: false })
+        .eq('company_id', companyId)
+      if (choiceError) throw new Error(`Failed to record the receiving choice: ${choiceError.message}`)
       return privateNoStore(NextResponse.json({
         data: { registration: registrationPayload(result.registration) },
       }))
