@@ -220,6 +220,81 @@ describe('findReusableSessions', () => {
     expect(supabase.used.cash_accounts[0].calls).toContainEqual(['eq', ['enabled', true]])
   })
 
+  describe("the attaching company's own account", () => {
+    // One-session bank: company A's new login ended company B's session, and
+    // A's session now lists B's account (stored disabled, claimed by B). B
+    // still books that account on its own enabled cash account.
+    const OWN_IBAN = 'SE3333333333333333333333'
+    function sessionsWith(cashRows: Array<Record<string, unknown>>) {
+      return makeSupabase({
+        bank_connections: [
+          {
+            data: [{
+              id: 'conn-a', company_id: 'company-a', bank_name: 'SEB',
+              provider: 'seb-se', session_id: 'sess-a', psu_type: 'business',
+              consent_expires: FUTURE,
+              accounts_data: [
+                makeAccount({ uid: 'a-own', iban: 'SE1111111111111111111111' }),
+                makeAccount({
+                  uid: 'b-own', iban: OWN_IBAN, enabled: false,
+                  claimed_by_company_id: 'company-b', claimed_by_company_name: 'Bolag B',
+                }),
+              ],
+            }],
+            error: null,
+          },
+          { data: [], error: null },
+        ],
+        cash_accounts: [{
+          data: [
+            { iban: 'SE1111111111111111111111', company_id: 'company-a', bank_connection_id: 'conn-a', bank_connection: { status: 'active' } },
+            ...cashRows,
+          ],
+          error: null,
+        }],
+        companies: [{ data: [{ id: 'company-a', name: 'Bolag A' }], error: null }],
+      })
+    }
+
+    it.each([
+      ['an expired', { bank_connection_id: 'conn-b-old', bank_connection: { status: 'expired' } }],
+      ['a revoked', { bank_connection_id: 'conn-b-old', bank_connection: { status: 'revoked' } }],
+      ['no', { bank_connection_id: null, bank_connection: null }],
+    ])('is offered back when %s connection holds it', async (_label, binding) => {
+      const supabase = sessionsWith([{ iban: OWN_IBAN, company_id: 'company-b', ...binding }])
+
+      const sessions = await findReusableSessions(supabase, 'user-1', 'company-b')
+
+      expect(sessions).toHaveLength(1)
+      expect(sessions[0].availableAccounts.map(a => a.uid)).toEqual(['b-own'])
+      expect(sessions[0].availableAccounts[0]).not.toHaveProperty('claimed_by_company_id')
+    })
+
+    it.each(['active', 'error', 'pending_selection', 'pending'])(
+      'stays claimed while a %s connection may still feed it',
+      async status => {
+        const supabase = sessionsWith([
+          { iban: OWN_IBAN, company_id: 'company-b', bank_connection_id: 'conn-b', bank_connection: { status } },
+        ])
+        expect(await findReusableSessions(supabase, 'user-1', 'company-b')).toEqual([])
+      },
+    )
+
+    it('stays claimed when its connection cannot be read (fails closed)', async () => {
+      const supabase = sessionsWith([
+        { iban: OWN_IBAN, company_id: 'company-b', bank_connection_id: 'conn-b', bank_connection: null },
+      ])
+      expect(await findReusableSessions(supabase, 'user-1', 'company-b')).toEqual([])
+    })
+
+    it("is never offered to a third company while the owner's row is enabled", async () => {
+      const supabase = sessionsWith([
+        { iban: OWN_IBAN, company_id: 'company-b', bank_connection_id: 'conn-b-old', bank_connection: { status: 'expired' } },
+      ])
+      expect(await findReusableSessions(supabase, 'user-1', 'company-c')).toEqual([])
+    })
+  })
+
   it('scopes the query to the user, other companies, and a live consent', async () => {
     const supabase = makeSupabase({ bank_connections: [{ data: [], error: null }] })
 
