@@ -78,6 +78,7 @@ import { OwnedVoucherActionDialog } from '@/components/bookkeeping/OwnedVoucherA
 import { useReverseJournalEntry } from '@/components/bookkeeping/use-reverse-journal-entry'
 import type { SieDeleteBlock } from '@/lib/core/bookkeeping/voucher-delete-guard'
 import { correctionPaths } from '@/lib/core/bookkeeping/correction-paths'
+import { isUuid } from '@/lib/invariants/uuid'
 import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
 
 // Snapshot of a struck line, as stored in journal_entry_rattelse_log.
@@ -221,6 +222,14 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
     setError(null)
     setNotFound(false)
     try {
+      // An id that is not a uuid (a typed /bookkeeping/new) names no
+      // verifikat: the same not-found state as a missing one, without
+      // asking the API about it.
+      if (!isUuid(id)) {
+        setEntry(null)
+        setNotFound(true)
+        return
+      }
       const [chainRes, refsRes, retagRes, rattelseRes] = await Promise.all([
         fetch(`/api/bookkeeping/journal-entries/${id}/chain`),
         fetch(`/api/bookkeeping/journal-entries/${id}/references`),
