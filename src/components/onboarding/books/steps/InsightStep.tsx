@@ -22,7 +22,7 @@ export function InsightStep({ ctx }: { ctx: BooksCtx }) {
   // before the detail panel, so it is in view without scrolling.
   const nextFirst = flags.sourcesFlow === true && !failed
   const nextButton = (
-    <div className="jny-qactions">
+    <div className={nextFirst ? 'jny-qactions is-first' : 'jny-qactions'}>
       <Button size="lg" onClick={() => dispatch({ type: 'AFTER_BOOKS', flags })}>
         {next}
       </Button>

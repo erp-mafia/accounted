@@ -12162,7 +12162,7 @@
     "ai_kvittojakten_prompt": "Kör Kvittojakten i Accounted: anropa get_task med kind \"agent:kvittojakten\" och client \"{client}\" och följ det du får tillbaka. Hitta underlagen som saknas i min mejl, lägg in dem i Accounted och föreslå kopplingar som jag får godkänna. Är ingen brevlåda kopplad här, säg det direkt och vad jag ska göra.",
     "first_thing_in_label": "Redan inne",
     "first_thing_in_books": "Böckerna",
-    "first_thing_in_bank": "Banken",
+    "first_thing_in_bank": "Bankraderna",
     "first_thing_connect_title": "Börja här: koppla banken.",
     "first_thing_connect_why": "Utan banken finns inget att bokföra. En minut med BankID.",
     "first_thing_connect_action": "Koppla banken",
