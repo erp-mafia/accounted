@@ -1,3 +1,9 @@
+-- Merged first as 20261125130000, the version
+-- cash_account_ledger_evidence_skip_linked_verifikat also holds, so production
+-- recorded only that one and these functions were never created. Renamed to
+-- 20261125130100; the body is unchanged except CREATE OR REPLACE, so it
+-- applies both where the functions are missing and where they exist.
+--
 -- The verifikat list sorted by Belopp: the amounts of the whole scope in one
 -- set-based pass, not one function call per verifikat.
 --
@@ -33,7 +39,7 @@
 
 -- 1. The Belopp rule for a set of verifikat ------------------------------
 
-CREATE FUNCTION public.verifikat_display_amounts(p_company_id uuid, p_entry_ids uuid[])
+CREATE OR REPLACE FUNCTION public.verifikat_display_amounts(p_company_id uuid, p_entry_ids uuid[])
 RETURNS TABLE (journal_entry_id uuid, display_amount numeric)
 LANGUAGE sql
 STABLE
@@ -106,7 +112,7 @@ GRANT EXECUTE ON FUNCTION public.verifikat_display_amounts(uuid, uuid[]) TO serv
 
 -- 2. The list's page when it is sorted by Belopp ----------------------------
 
-CREATE FUNCTION public.list_verifikat_by_amount(
+CREATE OR REPLACE FUNCTION public.list_verifikat_by_amount(
   p_company_id uuid,
   p_period_id uuid DEFAULT NULL,
   p_status text DEFAULT NULL,
