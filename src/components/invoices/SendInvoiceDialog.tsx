@@ -341,11 +341,15 @@ export default function SendInvoiceDialog({
 
     // The whole row: the server books from all of it (item accounts and
     // dimensions, delivery_country), so the preview must read the same.
-    // The öresavrundning as the issue books it (issueOreRoundingOf): never on a
-    // received självfaktura, on a kreditfaktura only as its original booked it.
-    const oreRounding = invoice.is_self_billed || (isCreditNote && !creditMirrorsOre)
-      ? undefined
-      : { company: companySettings ?? null }
+    // The öresavrundning as the issue books it: never on a received
+    // självfaktura; a kreditfaktura only mirrors an original that booked it,
+    // and then rounds as the original did (createCreditNoteJournalEntry).
+    if (isCreditNote) {
+      return creditMirrorsOre
+        ? proposeSendLines({ invoice: { ...invoice, ore_rounding: true }, entityType, deductionBookedSek, oreRounding: { company: null } })
+        : proposeSendLines({ invoice, entityType, deductionBookedSek })
+    }
+    const oreRounding = invoice.is_self_billed ? undefined : { company: companySettings ?? null }
     return proposeSendLines({ invoice, entityType, deductionBookedSek, oreRounding })
   }, [isInitialized, shouldBookOnIssue, entityType, invoice, deductionBookedSek, isCreditNote, creditMirrorsOre, companySettings])
 

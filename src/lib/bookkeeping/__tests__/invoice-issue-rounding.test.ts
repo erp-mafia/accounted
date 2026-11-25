@@ -272,6 +272,22 @@ describe('the kreditfaktura mirrors what the original issue booked (crm#2283)', 
     expectBalanced(lines)
   })
 
+  it('mirrors the original even when the credit note’s own flag or the company setting now says off', async () => {
+    mockedCreateEntry.mockClear()
+    await createCreditNoteJournalEntry(
+      client({ original, issueReceivableSek: 1000, companyOreRounding: false }).supabase,
+      'company-1',
+      'user-1',
+      { ...creditNote(), ore_rounding: false },
+      'aktiebolag',
+    )
+    const lines = mockedCreateEntry.mock.calls[0][3].lines
+
+    expect(line(lines, '1510')?.credit_amount).toBe(1000)
+    expect(line(lines, '3740')?.debit_amount).toBe(0.25)
+    expectBalanced(lines)
+  })
+
   it('an original issued at the exact total (before crm#2283) is credited at the exact total', async () => {
     const lines = await credited(client({ original, issueReceivableSek: 999.75 }).supabase)
 

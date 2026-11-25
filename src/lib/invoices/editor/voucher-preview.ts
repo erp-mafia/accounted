@@ -233,7 +233,8 @@ export function proposeCreditNoteSendLines(
         credited_invoice_id: fields.credited_invoice_id,
         items,
         default_dimensions: fields.default_dimensions,
-        ore_rounding: fields.ore_rounding,
+        // A mirror rounds as the original did (createCreditNoteJournalEntry).
+        ore_rounding: options.mirrorsIssueOre ? true : fields.ore_rounding,
       },
       entityType: options.entityType,
       oreRounding: options.mirrorsIssueOre ? { company: null } : undefined,

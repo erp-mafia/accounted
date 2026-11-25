@@ -437,14 +437,18 @@ export async function createCreditNoteJournalEntry(
 
   // A kreditfaktura mirrors the öresavrundning its original's issue booked
   // (crm#2283), so the pair nets to zero on 1510 and 3740; an original issued
-  // at the exact total is credited at the exact total.
+  // at the exact total is credited at the exact total. The mirror rounds
+  // because the original did, whatever the credit note's own flag or today's
+  // company setting says.
   const mirrorsIssueOre = creditNote.credited_invoice_id && hasOreToRound(creditNote)
     ? await creditMirrorsIssueOre(supabase, companyId, creditNote.credited_invoice_id)
     : false
-  const lines = buildCreditNoteLines(creditNote, entityType, originalVoucherRef, {
-    ...options,
-    oreRounding: mirrorsIssueOre ? await issueOreRoundingOf(supabase, companyId, creditNote) : undefined,
-  })
+  const lines = mirrorsIssueOre
+    ? buildCreditNoteLines({ ...creditNote, ore_rounding: true }, entityType, originalVoucherRef, {
+        ...options,
+        oreRounding: { company: null },
+      })
+    : buildCreditNoteLines(creditNote, entityType, originalVoucherRef, options)
   // A credit of part of the share (the customer's, and what a payout booked)
   // takes back only that moms.
   const partOfShare = creditNoteDeductionSplit(creditNote, options.deductionBookedSek) !== null
