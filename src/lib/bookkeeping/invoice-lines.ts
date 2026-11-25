@@ -28,6 +28,7 @@ import { computeLineDeductions, DEDUCTION_TYPE_LABELS } from '@/lib/bookkeeping/
 import { creditNatural } from './line-side'
 import { InvoiceFxRateMissingError, getOutputVatAccount, getRevenueAccount } from './invoice-accounts'
 import { fxDifferenceLine, oreRoundingLine, oreSettlementResidual } from './ore-rounding'
+import { getDisplayTotal } from './invoice-rounding'
 import { overpaymentAllowed, overpaymentExcess, overpaymentLine } from './overpayment'
 import { paymentFeeAllowed, paymentFeeLine, paymentFeeShortfall } from './payment-fee'
 import { equalOre, roundOre, sumOre } from '@/lib/money'
@@ -957,7 +958,8 @@ function headerRecognitionLines(
  *   Debit  1513 Skatteverket        [ROT/RUT deduction]  (one step only)
  *   Credit 30xx Försäljning         [subtotal per rate]
  *   Credit 26xx Utgående moms       [vat per rate]  (if applicable)
- *   Dr/Cr  3740 Öresavrundning      [bank vs share gap]  (if applicable)
+ *   Dr/Cr  3740 Öresavrundning      [bank vs share gap, plus a header total
+ *                                    rounded off its rows]  (if applicable)
  *   Dr/Cr  7960/3960 Kursdiff       [foreign invoice: bank vs share]  (if applicable)
  *   Credit 2420/3740 Överbetalning  [bank above share]   (if applicable)
  *   Debit  6570 Avgift betaltjänst  [bank below share]   (if applicable)
@@ -1060,6 +1062,28 @@ export function buildInvoiceCashLines(
       ? roundOre(knownBankSek - customerShare)
       : 0
   const bankAmount = roundOre(customerShare - oreGap + overpayment - fee + fxGain)
+  // The invoice's own öresavrundning: a SEK header whose total is the rounded
+  // amount to pay while its rows carry the öre (an invoice imported with Att
+  // betala as its total, the rounding folded into the header net). The debit
+  // side books what is owed and the credit side the rows, so the gap goes on
+  // 3740, as the source system booked it, on a line of its own beside any
+  // bank-vs-share öre gap. Only when the debit side is the rows' total rounded
+  // to whole kronor by the öresavrundning rule (getDisplayTotal), and the
+  // header's moms is the moms the rows book: then the whole gap sits in the
+  // net and is rounding of the amount to pay. Any other gap is left as before,
+  // and the engine refuses the unbalanced entry.
+  const debitSide = roundOre(customerShare + sumOre(rotRut.lines.map((l) => l.debit_amount - l.credit_amount)))
+  const rowsTotal = roundOre(totalCredits)
+  const invoiceOre =
+    !isForeign &&
+    rowsTotal !== debitSide &&
+    getDisplayTotal({ total: rowsTotal, currency: 'SEK', ore_rounding: true }, null).displayed === debitSide &&
+    equalOre(
+      installmentOutputVat(creditLines),
+      headerToSekOrThrow(invoice.vat_amount, invoice.vat_amount_sek, invoice.currency, invoice.exchange_rate),
+    )
+      ? roundOre(rowsTotal - debitSide)
+      : 0
   lines.push({
     account_number: settlementAccountNumber,
     debit_amount: bankAmount,
@@ -1070,6 +1094,9 @@ export function buildInvoiceCashLines(
 
   lines.push(...rotRut.lines)
   lines.push(...creditLines)
+  if (invoiceOre !== 0) {
+    lines.push({ ...oreRoundingLine(invoiceOre, 'customer'), dimensions: defaultDimensions })
+  }
   if (oreGap !== 0) {
     lines.push({ ...oreRoundingLine(oreGap, 'customer'), dimensions: defaultDimensions })
   }
