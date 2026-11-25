@@ -7,6 +7,8 @@ import { StyleSheet } from '@react-pdf/renderer'
 import type { CompanySettings } from '@/types'
 import {
   BUNDLED_INVOICE_FONT_FAMILIES,
+  DEFAULT_INVOICE_ACCENT_COLOR,
+  DEFAULT_INVOICE_PRIMARY_COLOR,
   STANDARD_PDF_FONT_FAMILIES,
 } from '@/lib/invoices/branding-constants'
 import { CUSTOM_INVOICE_FONT_RENDER_PREFIX } from '@/lib/invoices/pdf-fonts'
@@ -125,8 +127,8 @@ export function brandingFromCompanySettings(
 }
 
 const DEFAULT_BRANDING: ResolvedBranding = {
-  primaryColor: '#1a1a1a',
-  accentColor: '#666666',
+  primaryColor: DEFAULT_INVOICE_PRIMARY_COLOR,
+  accentColor: DEFAULT_INVOICE_ACCENT_COLOR,
   fontFamily: 'Helvetica',
 }
 

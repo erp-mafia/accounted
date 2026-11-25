@@ -1,7 +1,7 @@
 'use client'
 
 import { useTranslations, useLocale } from 'next-intl'
-import { useState, useCallback, useRef, type ChangeEvent } from 'react'
+import { useState, useCallback, useEffect, useRef, type ChangeEvent } from 'react'
 import { ArrowUpTrayIcon, SpinnerIcon, TrashIcon } from '@/components/icons'
 import { Switch } from '@/components/ui/switch'
 import { useToast } from '@/components/ui/use-toast'
@@ -10,13 +10,22 @@ import { useViewerLock } from '@/components/ui/viewer-lock'
 import { HelpPopover } from '@/components/ui/help-popover'
 import {
   SettingsGroup,
+  SettingsInput,
   SettingsRow,
   SettingsRowEnd,
   SettingsRowNote,
   SettingsSelect,
   SettingsTextarea,
 } from '@/components/settings/SettingsRows'
-import { INVOICE_FONT_FAMILIES } from '@/lib/invoices/branding-constants'
+import {
+  DEFAULT_INVOICE_ACCENT_COLOR,
+  DEFAULT_INVOICE_PRIMARY_COLOR,
+  INVOICE_FONT_FAMILIES,
+  INVOICE_FOOTER_TEXT_MAX_LENGTH,
+  INVOICE_HEADER_TEXT_MAX_LENGTH,
+  normalizeInvoiceColor,
+} from '@/lib/invoices/branding-constants'
+import { getContrastRatio } from '@/lib/invoices/contrast-check'
 import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { cn } from '@/lib/utils'
 import { INVOICE_QR_MODES, type CompanySettings, type InvoiceFontFamily, type InvoiceQrMode } from '@/types'
@@ -61,6 +70,96 @@ function PdfToggleRow({
       </span>
       <Switch id={id} checked={checked} onCheckedChange={onCheckedChange} disabled={!canWrite} title={lockedTitle} />
     </div>
+  )
+}
+
+/** Text on the invoice is 7 to 14 pt on white: WCAG AA for normal text. */
+const INVOICE_TEXT_MIN_CONTRAST = 4.5
+
+/**
+ * One invoice colour: the browser's colour picker beside the hex code, either
+ * of which saves. The picker fires on every step of a drag, so its save waits
+ * until the hand has stopped; the hex field saves on blur or Enter. A colour
+ * too pale to read on white is saved, with a note saying so.
+ */
+function InvoiceColorRow({
+  id,
+  label,
+  help,
+  value,
+  defaultColor,
+  onSave,
+}: {
+  id: string
+  label: string
+  help: string
+  value: string
+  defaultColor: string
+  onSave: (color: string) => void
+}) {
+  const t = useTranslations('settings_pdf_print')
+  const [draft, setDraft] = useState(value)
+  const pickerTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => () => {
+    if (pickerTimer.current) clearTimeout(pickerTimer.current)
+  }, [])
+
+  const normalized = normalizeInvoiceColor(draft)
+  const shown = normalized ?? value
+
+  function commit(next: string) {
+    const color = normalizeInvoiceColor(next)
+    if (!color) return
+    setDraft(color)
+    if (color !== value.toLowerCase()) onSave(color)
+  }
+
+  function pick(next: string) {
+    setDraft(next)
+    if (pickerTimer.current) clearTimeout(pickerTimer.current)
+    pickerTimer.current = setTimeout(() => commit(next), 400)
+  }
+
+  return (
+    <SettingsRow label={label} htmlFor={id} help={help}>
+      <input
+        type="color"
+        aria-label={label}
+        value={shown.toLowerCase()}
+        onChange={(event) => pick(event.target.value)}
+        className="h-8 w-10 shrink-0 cursor-pointer rounded-lg border-hairline bg-transparent p-0.5 disabled:cursor-not-allowed pointer-coarse:h-10"
+      />
+      <SettingsInput
+        id={id}
+        value={draft}
+        maxLength={7}
+        spellCheck={false}
+        autoComplete="off"
+        aria-invalid={normalized ? undefined : true}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={() => commit(draft)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') commit(draft)
+        }}
+      />
+      {shown.toLowerCase() !== defaultColor && (
+        <SettingsRowEnd>
+          <button
+            type="button"
+            onClick={() => commit(defaultColor)}
+            className="text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {t('color_reset')}
+          </button>
+        </SettingsRowEnd>
+      )}
+      {!normalized ? (
+        <SettingsRowNote className="basis-full">{t('color_invalid')}</SettingsRowNote>
+      ) : getContrastRatio(normalized, '#ffffff') < INVOICE_TEXT_MIN_CONTRAST ? (
+        <SettingsRowNote className="basis-full">{t('color_low_contrast')}</SettingsRowNote>
+      ) : null}
+    </SettingsRow>
   )
 }
 
@@ -127,6 +226,8 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
   const [creditTermsText, setCreditTermsText] = useState(settings.invoice_credit_terms_text || '')
   const [lateFeeTextEn, setLateFeeTextEn] = useState(settings.invoice_late_fee_text_en || '')
   const [creditTermsTextEn, setCreditTermsTextEn] = useState(settings.invoice_credit_terms_text_en || '')
+  const [headerText, setHeaderText] = useState(settings.invoice_header_text || '')
+  const [footerText, setFooterText] = useState(settings.invoice_footer_text || '')
   const [isSavingFont, setIsSavingFont] = useState(false)
   const [isUploadingFont, setIsUploadingFont] = useState(false)
   const [isDeletingFont, setIsDeletingFont] = useState(false)
@@ -157,6 +258,22 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
       if (value !== (settings[field] ?? '')) void saveText(field, value)
     },
     [settings, saveText],
+  )
+
+  // The header and footer line save only a change, like the English texts.
+  const saveBrandingText = useCallback(
+    (field: 'invoice_header_text' | 'invoice_footer_text', value: string) => {
+      if (value !== (settings[field] ?? '')) void saveText(field, value)
+    },
+    [settings, saveText],
+  )
+
+  const saveColor = useCallback(
+    async (field: 'invoice_primary_color' | 'invoice_accent_color', color: string) => {
+      const update = { [field]: color } as Partial<CompanySettings>
+      if (await saveSettings(update, { failedTitle })) onUpdate(update)
+    },
+    [onUpdate, saveSettings, failedTitle],
   )
 
   const saveFont = useCallback(async (fontFamily: InvoiceFontFamily) => {
@@ -317,6 +434,44 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
           accept=".ttf,.woff,font/ttf,font/woff"
           className="hidden"
           onChange={handleFontChange}
+        />
+      </SettingsRow>
+
+      <InvoiceColorRow
+        id="invoice_primary_color"
+        label={t('primary_color_label')}
+        help={t('primary_color_help')}
+        value={settings.invoice_primary_color ?? DEFAULT_INVOICE_PRIMARY_COLOR}
+        defaultColor={DEFAULT_INVOICE_PRIMARY_COLOR}
+        onSave={(color) => void saveColor('invoice_primary_color', color)}
+      />
+      <InvoiceColorRow
+        id="invoice_accent_color"
+        label={t('accent_color_label')}
+        help={t('accent_color_help')}
+        value={settings.invoice_accent_color ?? DEFAULT_INVOICE_ACCENT_COLOR}
+        defaultColor={DEFAULT_INVOICE_ACCENT_COLOR}
+        onSave={(color) => void saveColor('invoice_accent_color', color)}
+      />
+
+      <SettingsRow label={t('header_text_label')} htmlFor="invoice_header_text" help={t('header_text_help')}>
+        <SettingsInput
+          id="invoice_header_text"
+          maxLength={INVOICE_HEADER_TEXT_MAX_LENGTH}
+          placeholder={t('header_text_placeholder')}
+          value={headerText}
+          onChange={(e) => setHeaderText(e.target.value)}
+          onBlur={() => saveBrandingText('invoice_header_text', headerText)}
+        />
+      </SettingsRow>
+      <SettingsRow label={t('footer_text_label')} htmlFor="invoice_footer_text" help={t('footer_text_help')}>
+        <SettingsInput
+          id="invoice_footer_text"
+          maxLength={INVOICE_FOOTER_TEXT_MAX_LENGTH}
+          placeholder={t('footer_text_placeholder')}
+          value={footerText}
+          onChange={(e) => setFooterText(e.target.value)}
+          onBlur={() => saveBrandingText('invoice_footer_text', footerText)}
         />
       </SettingsRow>
 
