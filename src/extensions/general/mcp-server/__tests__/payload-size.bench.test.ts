@@ -1048,6 +1048,11 @@ describe('tools/list payload size guard', () => {
     // named in the description, paid for on the same tool (a shorter title
     // and description, a bare invoice_id). Measured 63 145 (full catalog
     // 67 574; main 63 146 and 67 575). Ceiling unchanged.
+    // 2026-11-25: limit and offset on gnubok_get_general_ledger, which pages
+    // a ledger too large for one answer by line, as the register lists page:
+    // bare, with the four page fields in its output schema and one clause in
+    // its description. Wire data on an existing tool. Measured 62 529 (full
+    // catalog 66 938; main 62 472 and 66 881). Ceiling unchanged.
     expect(simple).toBeLessThan(SIMPLE_CATALOG_CEILING)
   })
 

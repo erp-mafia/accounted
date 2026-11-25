@@ -568,7 +568,7 @@ import {
   listVoucherGaps,
   voucherGapExplanationFromParams,
 } from '@/lib/core/bookkeeping/voucher-gaps'
-import { generateGeneralLedger } from '@/lib/reports/general-ledger'
+import { generateGeneralLedger, type GeneralLedgerAccount } from '@/lib/reports/general-ledger'
 // Account-keyed reconciliation (one engine, three doors): the same service
 // the dashboard routes and the v1 API call.
 import { getAccountStatus } from '@/lib/reconciliation/service'
@@ -5099,10 +5099,66 @@ function registerAnswer<Row, Out>(
       return { [key]: rows, ...pageTail(rows, rows.length, 0) }
     }
   }
-  const limit = Math.min(Math.max(1, Math.floor(Number(args.limit)) || REGISTER_PAGE_SIZE), REGISTER_PAGE_SIZE)
-  const offset = Math.max(0, Math.floor(Number(args.offset)) || 0)
+  const { limit, offset } = pageWindow(args, REGISTER_PAGE_SIZE)
   const rows = present(sorted.slice(offset, offset + limit))
   return { [key]: rows, ...pageTail(rows, sorted.length, offset) }
+}
+
+/** The page limit and offset ask for: at most `max` rows (the default too), from the start by default. */
+function pageWindow(args: Record<string, unknown>, max: number): { limit: number; offset: number } {
+  return {
+    limit: Math.min(Math.max(1, Math.floor(Number(args.limit)) || max), max),
+    offset: Math.max(0, Math.floor(Number(args.offset)) || 0),
+  }
+}
+
+// A page of 100 ledger lines is about 40 000 characters of text, as a page of
+// the register lists is.
+const LEDGER_PAGE_LINES = 100
+
+/**
+ * The huvudbok tool's answer, cut by line: the ledger's lines in report order
+ * (account by account, each account's lines by date and voucher). With limit
+ * or offset: that page, at most 100 lines. Without either: the whole ledger,
+ * as the tool has always answered, when it fits one answer; a ledger too
+ * large for one answer gets its first page, with has_more, next_offset and
+ * total_count (lines) saying there is more.
+ *
+ * Every account on a page is the account of the whole answer, with its
+ * opening and closing balance and totals for the whole range and each line's
+ * running balance, and only the page's share of its lines; line_count says
+ * how many it has in all. An account with no lines in the range (a balance
+ * carried in) is on the page that holds the line after it, the last page if
+ * no line follows. So the pages together give every account once and every
+ * line once, in the whole answer's order.
+ */
+function ledgerAnswer<Answer extends { accounts: GeneralLedgerAccount[] }>(
+  answer: Answer,
+  args: Record<string, unknown>,
+): Record<string, unknown> {
+  const total = answer.accounts.reduce((sum, account) => sum + account.lines.length, 0)
+  if (args.limit == null && args.offset == null) {
+    const whole = { ...answer, count: total, total_count: total, has_more: false }
+    if (fitsOneAnswer(whole)) return whole
+  }
+  const { limit, offset } = pageWindow(args, LEDGER_PAGE_LINES)
+  const end = offset + limit
+  const accounts: Array<GeneralLedgerAccount & { line_count: number }> = []
+  let start = 0
+  for (const account of answer.accounts) {
+    const lineCount = account.lines.length
+    const anchor = Math.min(start, Math.max(total - 1, 0))
+    const onPage = lineCount > 0 ? start < end && start + lineCount > offset : anchor >= offset && anchor < end
+    if (onPage) {
+      accounts.push({
+        ...account,
+        lines: account.lines.slice(Math.max(0, offset - start), Math.max(0, end - start)),
+        line_count: lineCount,
+      })
+    }
+    start += lineCount
+  }
+  return { ...answer, accounts, ...pageTail(accounts.flatMap((account) => account.lines), total, offset) }
 }
 
 // Shared by the report tools' optional `dimensions` filter arg: parse the raw
@@ -15293,7 +15349,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_get_general_ledger',
     keywords: ['huvudbok', 'huvudboken'],
     title: 'General Ledger (Huvudbok)',
-    description: 'General ledger (huvudbok) for a fiscal period: per-account opening, entries, closing balances. Filters: account and date range, dimensions. For ad-hoc cross-account/amount/free-text queries use gnubok_query_journal.',
+    description: 'General ledger (huvudbok) for a fiscal period: per-account opening, entries, closing balances. Filters: account and date range, dimensions; narrow a large ledger with them, or page it (100 lines, next_offset). Ad-hoc cross-account/amount/free-text: gnubok_query_journal.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -15304,11 +15360,19 @@ export const tools: McpTool[] = [
         from_date: { type: 'string' },
         to_date: { type: 'string' },
         dimensions: REPORT_DIMENSIONS_FILTER_SCHEMA,
+        limit: { type: 'integer' },
+        offset: { type: 'integer' },
       },
     },
     outputSchema: {
       type: 'object',
-      properties: { ...DIMENSION_FILTER_OUTPUT_PROPS },
+      properties: {
+        ...DIMENSION_FILTER_OUTPUT_PROPS,
+        count: { type: 'number' },
+        total_count: { type: 'number' },
+        has_more: { type: 'boolean' },
+        next_offset: { type: 'number' },
+      },
     },
     annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, userId, supabase) {
@@ -15342,12 +15406,15 @@ export const tools: McpTool[] = [
         ),
         buildReportDataStatus(supabase, companyId, { periodId: period.id, ...range }),
       ])
-      return {
-        ...report,
-        ...(dimFilter.filter ? { dimension_filter: dimFilter.filter } : {}),
-        ...(dimFilter.resolutions.length > 0 ? { dimension_resolutions: dimFilter.resolutions } : {}),
-        data_status: dataStatus,
-      }
+      return ledgerAnswer(
+        {
+          ...report,
+          ...(dimFilter.filter ? { dimension_filter: dimFilter.filter } : {}),
+          ...(dimFilter.resolutions.length > 0 ? { dimension_resolutions: dimFilter.resolutions } : {}),
+          data_status: dataStatus,
+        },
+        args,
+      )
     },
   },
 
