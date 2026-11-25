@@ -253,7 +253,7 @@ let installed = false
 
 /** The demo company around a page, with the fixture API installed once. */
 // The dashboard's frame and page classes (app/(dashboard)/layout.tsx SHELL_FRAME_CLASS and MAIN_PANEL_CLASS), copied: that layout is a server module.
-const SHELL_FRAME_CLASS = 'min-h-dvh bg-frame md:flex md:h-dvh md:flex-col md:overflow-hidden'
+const SHELL_FRAME_CLASS = 'safe-area-x-padding min-h-dvh bg-frame md:flex md:h-dvh md:flex-col md:overflow-hidden'
 const MAIN_PANEL_CLASS =
   'safe-area-main-padding md:!pb-0 relative bg-background min-h-dvh ' +
   'md:min-h-0 md:min-w-0 md:flex-1 md:overflow-y-auto'

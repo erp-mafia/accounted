@@ -727,6 +727,18 @@ summary,
   padding-bottom: calc(var(--bottom-nav-h) + 1rem);
 }
 
+/* Side padding that keeps clear of a notch: viewport-fit=cover (app/layout.tsx)
+   lets the page draw under it, and a notched phone held sideways is wider
+   than md, so it shows the rail and the panel, the rail under the notch on
+   one side and the page's right edge on the other. The dashboard frame pads
+   by the side insets, and so do the bottom nav and its menu sheet, which are
+   fixed and outside it. The insets are 0 in portrait and on a computer, where
+   nothing moves. */
+.safe-area-x-padding {
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+}
+
 /* Markdown (.prose) in dark mode: the typography plugin's palette is a fixed
    light-theme gray, so headings, inline code and kbd were near-black on the
    dark panel and rules came out bright. Map it to the theme tokens; light mode
