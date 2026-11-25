@@ -158,7 +158,7 @@ registerEndpoint({
   pitfalls: [
     'Returns 404 if the invoice does not belong to the company in the URL: does not leak existence across companies.',
     'paid_at and remaining_amount can lag behind the latest payment by a few seconds during high-volume reconciliation.',
-    'total is the exact invoice total the books carry; amount_to_pay is what the invoice asks the customer for: total after öresavrundning (ore_rounding_amount), minus any ROT/RUT deduction. Reconcile payments against amount_to_pay. A credit note carries the credited invoice\'s rounding choice, so a whole credit has the same ore_rounding_amount with the opposite sign. An issued invoice keeps the rounding it was issued with: a later change of the company setting changes neither field.',
+    'total is the exact invoice total, revenue plus moms; amount_to_pay is what the invoice asks the customer for: total after öresavrundning (ore_rounding_amount), minus any ROT/RUT deduction. A SEK invoice\'s issue verifikat debits 1510 with amount_to_pay and books ore_rounding_amount on 3740 (no moms); an invoice issued before that rule carries its exact total on 1510 until it is paid. Reconcile payments against amount_to_pay. A credit note carries the credited invoice\'s rounding choice, so a whole credit has the same ore_rounding_amount with the opposite sign. An issued invoice keeps the rounding it was issued with: a later change of the company setting changes neither field.',
     PAYMENT_REFERENCE_PITFALL,
   ],
   example: {

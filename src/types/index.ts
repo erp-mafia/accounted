@@ -1780,7 +1780,7 @@ export interface Invoice {
   total: number
   total_sek: number | null
 
-  /** Per-invoice öresavrundning override (display-only). null = inherit company_settings.ore_rounding. */
+  /** Per-invoice öresavrundning override: the printed Att betala and the issue verifikat's 1510. null = inherit company_settings.ore_rounding. */
   ore_rounding: boolean | null
 
   // VAT
