@@ -15,16 +15,18 @@ import {
 } from '../stages'
 
 const base = { status: 'registered', approved_at: null, is_credit_note: false, in_open_batch: false, reconciled: false }
+/** A company with an attest step: faktureringsmetoden with the attest policy on. */
+const attesting = { ...base, accounting_method: 'accrual', attest_policy_on: true }
 
 describe('supplier invoice stages', () => {
   it('walks the ladder from registered to reconciled', () => {
-    expect(deriveStage(base)).toBe('registered')
-    expect(deriveStage({ ...base, status: 'overdue' })).toBe('registered')
-    expect(deriveStage({ ...base, approved_at: '2026-09-06T10:00:00Z' })).toBe('approved')
-    expect(deriveStage({ ...base, status: 'approved' })).toBe('approved')
-    expect(deriveStage({ ...base, approved_at: '2026-09-06T10:00:00Z', in_open_batch: true })).toBe('in_file')
-    expect(deriveStage({ ...base, status: 'paid', approved_at: '2026-09-06T10:00:00Z' })).toBe('paid')
-    expect(deriveStage({ ...base, status: 'paid', reconciled: true })).toBe('reconciled')
+    expect(deriveStage(attesting)).toBe('registered')
+    expect(deriveStage({ ...attesting, status: 'overdue' })).toBe('registered')
+    expect(deriveStage({ ...attesting, approved_at: '2026-09-06T10:00:00Z' })).toBe('approved')
+    expect(deriveStage({ ...attesting, status: 'approved' })).toBe('approved')
+    expect(deriveStage({ ...attesting, approved_at: '2026-09-06T10:00:00Z', in_open_batch: true })).toBe('in_file')
+    expect(deriveStage({ ...attesting, status: 'paid', approved_at: '2026-09-06T10:00:00Z' })).toBe('paid')
+    expect(deriveStage({ ...attesting, status: 'paid', reconciled: true })).toBe('reconciled')
   })
 
   it('takes credit notes and credited invoices off the ladder', () => {
@@ -38,38 +40,57 @@ describe('supplier invoice stages', () => {
     expect(deriveStage({ ...base, status: 'paid', in_open_batch: true })).toBe('paid')
   })
 
-  it('kontantmetod companies skip the attest step', () => {
-    expect(stagesFor('cash')).toEqual(['incoming', 'registered', 'in_file', 'paid', 'reconciled'])
-    expect(stagesFor('accrual')).toEqual([...SUPPLIER_INVOICE_STAGES])
-    expect(stagesFor(null)).toEqual([...SUPPLIER_INVOICE_STAGES])
+  it('only faktureringsmetoden with the attest policy on has the attest step', () => {
+    const withoutAttest = ['incoming', 'registered', 'in_file', 'paid', 'reconciled']
+    expect(stagesFor('cash', true)).toEqual(withoutAttest)
+    expect(stagesFor('cash', false)).toEqual(withoutAttest)
+    expect(stagesFor('accrual', true)).toEqual([...SUPPLIER_INVOICE_STAGES])
+    expect(stagesFor(null, true)).toEqual([...SUPPLIER_INVOICE_STAGES])
+    expect(stagesFor('accrual', false)).toEqual(withoutAttest)
+    expect(stagesFor('accrual', undefined)).toEqual(withoutAttest)
   })
 
   // #93: an attest on a kontantmetod invoice (from before a switch of method,
   // or given through the API) pointed at a step the cash ladder skips, so the
   // flow strip showed no current step.
   it('keeps an attested kontantmetod invoice on its own ladder', () => {
-    const cash = { ...base, accounting_method: 'cash' }
+    const cash = { ...base, accounting_method: 'cash', attest_policy_on: true }
     for (const attested of [{ approved_at: '2026-09-06T10:00:00Z' }, { status: 'approved' }, { status: 'overdue', approved_at: 'x' }]) {
       const stage = deriveStage({ ...cash, ...attested })
       expect(stage).toBe('registered')
-      expect(stagesFor('cash')).toContain(stage)
+      expect(stagesFor('cash', true)).toContain(stage)
     }
     // The later steps are the same on both ladders.
     expect(deriveStage({ ...cash, status: 'approved', in_open_batch: true })).toBe('in_file')
     expect(deriveStage({ ...cash, status: 'paid', approved_at: 'x', reconciled: true })).toBe('reconciled')
-    // Faktureringsmetoden, and a caller that does not say, still attest.
-    expect(deriveStage({ ...base, accounting_method: 'accrual', status: 'approved' })).toBe('approved')
-    expect(deriveStage({ ...base, accounting_method: null, status: 'approved' })).toBe('approved')
+    // Faktureringsmetoden with the policy on, and a caller that does not say the method, still attest.
+    expect(deriveStage({ ...base, accounting_method: 'accrual', attest_policy_on: true, status: 'approved' })).toBe('approved')
+    expect(deriveStage({ ...base, accounting_method: null, attest_policy_on: true, status: 'approved' })).toBe('approved')
+  })
+
+  // An attest given where the company has no policy on (before this rule, or
+  // through the API) keeps its mark, but the ladder has no step for it.
+  it('keeps an attested invoice of a company without an attest policy on its own ladder', () => {
+    const noPolicy = { ...base, accounting_method: 'accrual', attest_policy_on: false }
+    for (const attested of [{ approved_at: '2026-09-06T10:00:00Z' }, { status: 'approved' }, { status: 'overdue', approved_at: 'x' }]) {
+      const stage = deriveStage({ ...noPolicy, ...attested })
+      expect(stage).toBe('registered')
+      expect(stagesFor('accrual', false)).toContain(stage)
+    }
+    expect(deriveStage({ ...noPolicy, in_open_batch: true })).toBe('in_file')
+    expect(deriveStage({ ...base, accounting_method: 'accrual', status: 'approved' })).toBe('registered')
   })
 
   it('always answers a step on the company ladder (or credited)', () => {
     const statuses = ['registered', 'approved', 'overdue', 'partially_paid', 'disputed', 'paid']
     for (const accounting_method of ['cash', 'accrual'] as const) {
-      for (const status of statuses) {
-        for (const approved_at of [null, '2026-09-06T10:00:00Z']) {
-          for (const in_open_batch of [false, true]) {
-            const stage = deriveStage({ ...base, accounting_method, status, approved_at, in_open_batch })
-            expect(stagesFor(accounting_method)).toContain(stage)
+      for (const attest_policy_on of [true, false]) {
+        for (const status of statuses) {
+          for (const approved_at of [null, '2026-09-06T10:00:00Z']) {
+            for (const in_open_batch of [false, true]) {
+              const stage = deriveStage({ ...base, accounting_method, attest_policy_on, status, approved_at, in_open_batch })
+              expect(stagesFor(accounting_method, attest_policy_on)).toContain(stage)
+            }
           }
         }
       }

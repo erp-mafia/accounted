@@ -84,6 +84,8 @@ function makeMock(opts: {
   companySettings?: Record<string, unknown>
   /** When set, the company_settings read answers exactly this (a failed or empty read). */
   settingsRead?: { data: unknown; error: unknown }
+  /** When set, company_attest_policies answers this read (the attest policy); no row otherwise. */
+  attestPolicyRead?: { data: unknown; error: unknown }
 }) {
   const inboxResult = { data: opts.inbox ?? null, error: opts.inbox ? null : { message: 'not found' } }
   const supplierByOrgResult = { data: opts.supplierByOrg ?? null, error: null }
@@ -201,6 +203,9 @@ function makeMock(opts: {
           },
           error: null,
         })
+      }
+      if (table === 'company_attest_policies') {
+        return staticChain(opts.attestPolicyRead ?? { data: null, error: null })
       }
       if (table === 'dimensions' && opts.dimensions) {
         return staticChain({ data: opts.dimensions.registry ?? [], error: null })
@@ -2348,8 +2353,9 @@ describe('gnubok_create_supplier_invoice_from_inbox: the preview says whether a 
     vi.clearAllMocks()
   })
 
-  async function stageDry(companySettings?: Record<string, unknown>) {
+  async function stageDry(companySettings?: Record<string, unknown>, attestPolicyRead?: { data: unknown; error: unknown }) {
     const supabase = makeMock({
+      ...(attestPolicyRead ? { attestPolicyRead } : {}),
       inbox: {
         id: 'inbox-will',
         status: 'received',
@@ -2392,11 +2398,25 @@ describe('gnubok_create_supplier_invoice_from_inbox: the preview says whether a 
   })
 
   it('sends a kontantmetoden agent to payment, never to an attest step the company does not have (crm#1156)', async () => {
-    const cash = await stageDry({ accounting_method: 'cash' })
+    const policyOn = { data: { enabled: true }, error: null }
+    const cash = await stageDry({ accounting_method: 'cash' }, policyOn)
     expect(cash.next?.description).toMatch(/kontantmetoden has no attest step/)
     expect(cash.next?.description).not.toMatch(/gnubok_approve_supplier_invoice/)
-    const accrual = await stageDry({ accounting_method: 'accrual', defer_invoice_booking: false })
+    const accrual = await stageDry({ accounting_method: 'accrual', defer_invoice_booking: false }, policyOn)
     expect(accrual.next?.description).toMatch(/attest via gnubok_approve_supplier_invoice/)
+  })
+
+  it('sends the agent of a company without an attest policy on to payment: no attest step there', async () => {
+    for (const attestPolicyRead of [undefined, { data: { enabled: false }, error: null }]) {
+      const accrual = await stageDry({ accounting_method: 'accrual', defer_invoice_booking: false }, attestPolicyRead)
+      expect(accrual.next?.description).toMatch(/no attest policy on/)
+      expect(accrual.next?.description).not.toMatch(/gnubok_approve_supplier_invoice/)
+    }
+  })
+
+  it('keeps the attest hint when the policy cannot be read', async () => {
+    const failed = await stageDry({ accounting_method: 'accrual', defer_invoice_booking: false }, { data: null, error: { message: 'boom' } })
+    expect(failed.next?.description).toMatch(/attest via gnubok_approve_supplier_invoice/)
   })
 
   // #96: the preview read the method fail-open. A failed read staged from a

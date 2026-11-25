@@ -72,6 +72,7 @@ import { useCompanySettings } from '@/components/settings/useSettings'
 import { fetchPaymentsAvailability, type CompanyVerification } from '@/components/payments/payments-client'
 import { PaymentsVerificationLine } from '@/components/payments/PaymentsVerificationLine'
 import { SupplierInboxAddress } from '@/components/supplier-invoices/SupplierInboxAddress'
+import { useAttestPolicyOn } from '@/components/supplier-invoices/use-attest-policy-on'
 import { supplierInvoiceStatusDisplay } from '@/lib/supplier-invoices/status-display'
 import {
   hasOpenBankPaymentOrder,
@@ -196,9 +197,12 @@ export default function SupplierInvoicesPage() {
   // the status picker (product call 2026-09-07: a bar of stages over two
   // invoices was chrome, not information).
   const { settings: companySettings } = useCompanySettings()
-  // Kontantmetoden never attests: there 'registered' is the normal open
-  // state, so the row reads "Att betala" instead of the attest chip.
-  const attests = companyAttestsSupplierInvoices(companySettings?.accounting_method)
+  // Only faktureringsmetoden with the attest policy on attests
+  // (companyAttestsSupplierInvoices): everywhere else 'registered' is the
+  // normal open state, so the row reads "Att betala" instead of the attest
+  // chip and offers no Attestera.
+  const attestPolicyOn = useAttestPolicyOn()
+  const attests = companyAttestsSupplierInvoices(companySettings?.accounting_method, attestPolicyOn)
   const [searchTerm, setSearchTerm] = useState('')
   // The list draws its first 100 rows and more on request, as the invoice
   // list does. It drew every row: 8 500 for the largest register in
@@ -626,7 +630,7 @@ export default function SupplierInvoicesPage() {
       <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <span className="flex items-center gap-2">
           <h1 className="page-header-title">{t('title')}</h1>
-          <HelpPopover>{t('help_body')}</HelpPopover>
+          <HelpPopover>{attests ? t('help_body') : t('help_body_no_attest')}</HelpPopover>
         </span>
         {/* The two ways an invoice gets here: mailed in by the supplier,
             or registered by hand. */}
@@ -849,7 +853,7 @@ export default function SupplierInvoicesPage() {
                       : inv.status
                 // Aged-but-unapproved invoices sit on 'overdue' (the cron flips
                 // them there), so attest keys off approved_at, not the status.
-                // Kontantmetoden has no attest step, so nothing waits for it.
+                // Without an attest step (attests above) nothing waits for it.
                 const canApprove =
                   attests && canApproveSupplierInvoice(inv) && !inv.is_credit_note && canWrite
                 const selectable = canWrite && isRowSelectable(inv)
@@ -865,7 +869,7 @@ export default function SupplierInvoicesPage() {
                 const showBankEntered =
                   !canApprove &&
                   !inv.auto_debit &&
-                  canMarkSupplierInvoiceBankEntered(inv, companySettings?.accounting_method) &&
+                  canMarkSupplierInvoiceBankEntered(inv, companySettings?.accounting_method, attestPolicyOn) &&
                   (bankEntered || (canWrite && !hasOpenBankPaymentOrder(openPayment)))
                 // Same shape as the customer list: the section header is a
                 // sibling row decided from the previous row's key.

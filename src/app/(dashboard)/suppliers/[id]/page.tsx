@@ -29,6 +29,7 @@ import { fromRegistry, addressRowsFromRegistry, listSv } from '@/lib/parties/reg
 import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 import { supplierInvoiceStatusDisplay } from '@/lib/supplier-invoices/status-display'
 import { companyAttestsSupplierInvoices } from '@/lib/supplier-invoices/lifecycle'
+import { useAttestPolicyOn } from '@/components/supplier-invoices/use-attest-policy-on'
 import { useCompanySettings } from '@/components/settings/useSettings'
 import {
   openPaymentMarker,
@@ -63,9 +64,11 @@ export default function SupplierDetailPage() {
   const tCommon = useTranslations('common')
   const tParties = useTranslations('parties')
   const tInvoices = useTranslations('supplier_invoices')
-  // Kontantmetoden never attests, so 'registered' reads "Att betala" there.
+  // Without an attest step (kontantmetoden, or no attest policy on)
+  // 'registered' reads "Att betala".
   const { settings: companySettings } = useCompanySettings()
-  const attests = companyAttestsSupplierInvoices(companySettings?.accounting_method)
+  const attestPolicyOn = useAttestPolicyOn()
+  const attests = companyAttestsSupplierInvoices(companySettings?.accounting_method, attestPolicyOn)
   const [supplier, setSupplier] = useState<Supplier & { stats?: SupplierStats } | null>(null)
   const partyId = (supplier as { party_id?: string | null } | null)?.party_id ?? null
   // The codes its new invoices are tagged with, in dimension-number order.

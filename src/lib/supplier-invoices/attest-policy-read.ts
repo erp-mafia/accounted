@@ -146,6 +146,18 @@ export async function loadAttestSubstitutes(supabase: SupabaseClient, companyId:
 }
 
 /**
+ * True when the company has its attest policy on: the half of
+ * companyAttestsSupplierInvoices the accounting method does not answer. No
+ * row reads as off. Throws on a failed read; each caller decides how it
+ * degrades.
+ */
+export async function loadAttestPolicyOn(supabase: SupabaseClient, companyId: string): Promise<boolean> {
+  const { data, error } = await supabase.from('company_attest_policies').select('enabled').eq('company_id', companyId).maybeSingle()
+  if (error) throw error
+  return (data as { enabled?: boolean | null } | null)?.enabled === true
+}
+
+/**
  * The company's attest policy, with its förattest and the substitutions that
  * run today (Stockholm); no row reads as no policy. One read, as before
  * #192. Throws on a failed read: payment must not read "no policy" from an
@@ -296,17 +308,20 @@ export async function loadAttestBlockedInvoiceIds(
 
 /**
  * True when the company has an attest step for supplier invoices at all
- * (companyAttestsSupplierInvoices: kontantmetoden has none). The payment
- * paths ask it before they warn that an invoice is not attested: under
- * kontantmetoden no invoice is ever attested, so the warning sat on every
- * line and told the person nothing (crm#1141). A failed read answers true,
- * the warning as it always was: a warning never blocks a payment, so showing
- * one too many is the safe side.
+ * (companyAttestsSupplierInvoices: faktureringsmetoden with the attest policy
+ * on). The payment paths ask it before they warn that an invoice is not
+ * attested: where nobody is asked to attest, the warning sat on every line
+ * and told the person nothing (crm#1141). A failed read answers true, the
+ * warning as it always was: a warning never blocks a payment, so showing one
+ * too many is the safe side.
  */
 export async function loadCompanyAttestsSupplierInvoices(supabase: SupabaseClient, companyId: string): Promise<boolean> {
-  const { data, error } = await supabase.from('company_settings').select('accounting_method').eq('company_id', companyId).maybeSingle()
-  if (error) return true
-  return companyAttestsSupplierInvoices((data as { accounting_method?: string | null } | null)?.accounting_method ?? null)
+  const [{ data, error }, policyOn] = await Promise.all([
+    supabase.from('company_settings').select('accounting_method').eq('company_id', companyId).maybeSingle(),
+    loadAttestPolicyOn(supabase, companyId).catch(() => null), // a failed read answers true below: the warning never blocks
+  ])
+  if (error || policyOn === null) return true
+  return companyAttestsSupplierInvoices((data as { accounting_method?: string | null } | null)?.accounting_method ?? null, policyOn)
 }
 
 /** The columns of a decision the rules read; ATTESTATION_STEP_COLUMNS adds the step and the substitute (migration 20261108180000). */

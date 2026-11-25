@@ -54,7 +54,7 @@ import { readPaymentAccounts } from '@/lib/payments/orders/payment-accounts'
 import { paymentsReadiness } from '@/lib/payments/orders/readiness'
 import { ATTESTABLE_SUPPLIER_INVOICE_STATUSES, companyAttestsSupplierInvoices } from '@/lib/supplier-invoices/lifecycle'
 import { attestsAtAnyStep, invoiceNeedsAttest, ruleOnApproval } from '@/lib/supplier-invoices/attest-policy'
-import { loadAttestLimits, loadAttestPolicy, loadAttestTrails, loadInvoiceProjects, withProjects } from '@/lib/supplier-invoices/attest-policy-read'
+import { loadAttestLimits, loadAttestPolicy, loadAttestPolicyOn, loadAttestTrails, loadInvoiceProjects, withProjects } from '@/lib/supplier-invoices/attest-policy-read'
 import { loadToPayQueue } from '@/lib/supplier-invoices/attest-queues'
 import { isAttestRole } from '@/lib/auth/invoicer-role'
 import { listSupplierPayeeAlerts } from '@/lib/payments/payee-alerts'
@@ -348,17 +348,18 @@ export async function countSuggestedMatches(
  * of canApproveSupplierInvoice and the list's Registrerade tab). An invoice
  * that passes its due date unattested is stored as 'overdue' and still waits
  * for its attest: counting 'registered' alone dropped it from Att göra the
- * day it fell due (crm#1631). Zero for a company on kontantmetoden: it has no
- * attest step (companyAttestsSupplierInvoices, the rule the detail page and
- * the list read), so every invoice counted here was an item nobody could
- * clear (crm#1156). Every surface reads this count: the Att göra row and
- * total, the AI task list and the MCP attention resource.
+ * day it fell due (crm#1631). Zero for a company without an attest step
+ * (companyAttestsSupplierInvoices, the rule the detail page and the list
+ * read: kontantmetoden, or no attest policy on), where the pages offer no
+ * attest, so every invoice counted here was an item nobody could clear
+ * (crm#1156). Every surface reads this count: the Att göra row and total, the
+ * AI task list and the MCP attention resource.
  */
 export async function countSupplierInvoicesAwaitingApproval(
   supabase: SupabaseClient,
   companyId: string,
 ): Promise<number> {
-  const [{ count, error }, { data: settings, error: settingsError }] = await Promise.all([
+  const [{ count, error }, { data: settings, error: settingsError }, policy] = await Promise.all([
     supabase
       .from('supplier_invoices')
       .select('id', { count: 'exact', head: true })
@@ -379,11 +380,16 @@ export async function countSupplierInvoicesAwaitingApproval(
       .select('accounting_method')
       .eq('company_id', companyId)
       .maybeSingle(),
+    loadAttestPolicyOn(supabase, companyId).then(
+      (on) => ({ on, error: null as unknown }),
+      (policyError: unknown) => ({ on: false, error: policyError }),
+    ),
   ])
   if (error) return logAndZero('supplier_invoice_approval', companyId, error)
   if (settingsError) return logAndZero('supplier_invoice_approval', companyId, settingsError)
+  if (policy.error) return logAndZero('supplier_invoice_approval', companyId, policy.error)
   const accountingMethod = (settings as { accounting_method?: string | null } | null)?.accounting_method
-  if (!companyAttestsSupplierInvoices(accountingMethod)) return 0
+  if (!companyAttestsSupplierInvoices(accountingMethod, policy.on)) return 0
   return count ?? 0
 }
 
@@ -430,7 +436,7 @@ export async function listSupplierInvoiceAttestsDue(
     const attesters = new Set(
       ((memberRows ?? []) as Array<{ user_id: string; role: string }>).filter((m) => isAttestRole(m.role)).map((m) => m.user_id),
     )
-    if (!attesters.has(userId) || !companyAttestsSupplierInvoices(accountingMethod)) return []
+    if (!attesters.has(userId) || !companyAttestsSupplierInvoices(accountingMethod, policy.enabled)) return []
 
     const { data: invoices, error } = await supabase
       .from('supplier_invoices')

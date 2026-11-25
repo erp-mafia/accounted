@@ -28,19 +28,31 @@ export function isUnsettledSupplierInvoiceStatus(
 }
 
 /**
- * True when the company has an attest step for supplier invoices at all.
- * Kontantmetoden companies never attest: the debt is not booked before
- * payment, so their ladder skips Attesterad (stages.ts) and no page offers the
- * button. One rule for the pages and the Att göra count
- * (lib/worklist countSupplierInvoicesAwaitingApproval): while the count kept
- * its own population, cash-method companies got an attest item nobody could
+ * True when attest is a step before payment for the company's supplier
+ * invoices: the company keeps faktureringsmetoden and has its attest policy
+ * on (company_attest_policies.enabled, attest-policy.ts). Everywhere else a
+ * registered invoice is ready to pay as it stands, and no page asks for
+ * Attestera.
+ *
+ * Kontantmetoden never attests: the debt is not booked before payment, so
+ * its ladder skips Attesterad (stages.ts). Without a policy nothing waits for
+ * the attest: the payment file and the Att betala tab take an unattested
+ * invoice, so the pages do not ask for it either. Attesting stays possible
+ * through the API and MCP (attest-service.ts), and an invoice that carries an
+ * attest keeps its mark (approved_at) and its status.
+ *
+ * One rule for the pages, the Att göra count
+ * (lib/worklist countSupplierInvoicesAwaitingApproval) and the payment
+ * paths' unattested warning (attest-policy-read.ts): while the count kept its
+ * own population, cash-method companies got an attest item nobody could
  * clear (crm#1156). A company without a setting reads as faktureringsmetoden,
  * as it always has on the pages.
  */
 export function companyAttestsSupplierInvoices(
   accountingMethod: string | null | undefined,
+  attestPolicyOn: boolean | null | undefined,
 ): boolean {
-  return accountingMethod !== 'cash'
+  return accountingMethod !== 'cash' && attestPolicyOn === true
 }
 
 /**
@@ -79,10 +91,11 @@ const PAYABLE_AFTER_ATTEST_STATUSES = ['approved', 'overdue', 'partially_paid'] 
  * right before it (#2220).
  *
  * Where the company attests, 'registered' waits for attest. Kontantmetoden
- * has no attest step (companyAttestsSupplierInvoices), so there a registered
- * invoice is payable as it stands. The pages used to hold the attesting
- * company's list for everyone, so a kontantmetod invoice could only be marked
- * paid once the overdue cron had moved it past its due date (crm#1141).
+ * and a company without an attest policy have no attest step
+ * (companyAttestsSupplierInvoices), so there a registered invoice is payable
+ * as it stands. The pages used to hold the attesting company's list for
+ * everyone, so a kontantmetod invoice could only be marked paid once the
+ * overdue cron had moved it past its due date (crm#1141).
  *
  * The settlement doors themselves (mark-paid, link-to-voucher, the bank
  * match) accept every unsettled status for every company
@@ -90,8 +103,9 @@ const PAYABLE_AFTER_ATTEST_STATUSES = ['approved', 'overdue', 'partially_paid'] 
  */
 export function payableSupplierInvoiceStatuses(
   accountingMethod: string | null | undefined,
+  attestPolicyOn: boolean | null | undefined,
 ): readonly string[] {
-  return companyAttestsSupplierInvoices(accountingMethod)
+  return companyAttestsSupplierInvoices(accountingMethod, attestPolicyOn)
     ? PAYABLE_AFTER_ATTEST_STATUSES
     : ['registered', ...PAYABLE_AFTER_ATTEST_STATUSES]
 }
@@ -104,8 +118,9 @@ export function payableSupplierInvoiceStatuses(
 export function canMarkSupplierInvoicePaid(
   invoice: { status: string },
   accountingMethod: string | null | undefined,
+  attestPolicyOn: boolean | null | undefined,
 ): boolean {
-  return payableSupplierInvoiceStatuses(accountingMethod).includes(invoice.status)
+  return payableSupplierInvoiceStatuses(accountingMethod, attestPolicyOn).includes(invoice.status)
 }
 
 /**
@@ -119,9 +134,10 @@ export function canMarkSupplierInvoicePaid(
 export function canMarkSupplierInvoiceBankEntered(
   invoice: { status: string; is_credit_note?: boolean | null },
   accountingMethod: string | null | undefined,
+  attestPolicyOn: boolean | null | undefined,
 ): boolean {
   if (invoice.is_credit_note) return false
-  return canMarkSupplierInvoicePaid(invoice, accountingMethod)
+  return canMarkSupplierInvoicePaid(invoice, accountingMethod, attestPolicyOn)
 }
 
 /**

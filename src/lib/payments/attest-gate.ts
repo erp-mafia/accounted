@@ -27,10 +27,11 @@ export interface PaymentAttestGate {
    */
   blockedInvoiceIds(supabase: SupabaseClient, companyId: string, invoiceIds: readonly string[]): Promise<Set<string>>
   /**
-   * True when the company has an attest step for supplier invoices at all.
-   * False under kontantmetoden: no invoice there is ever attested, so payment
-   * does not warn that one is not (unattested, batch-eligibility.ts). A
-   * failed read answers true: the warning never blocks.
+   * True when the company has an attest step for supplier invoices at all:
+   * faktureringsmetoden with the attest policy on. Elsewhere nothing waits
+   * for attest, so payment does not warn that an invoice is not attested
+   * (unattested, batch-eligibility.ts). A failed read answers true: the
+   * warning never blocks.
    */
   attestsSupplierInvoices(supabase: SupabaseClient, companyId: string): Promise<boolean>
 }
