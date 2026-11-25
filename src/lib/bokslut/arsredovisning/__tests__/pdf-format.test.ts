@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formatPdfKronor } from '../pdf-format'
+import { formatNoteKronor, formatPdfKronor } from '../pdf-format'
 
 // Build the special characters from code points so the assertions cannot be
 // corrupted by editor/encoding round-trips: U+00A0 is the sv-SE thousands
@@ -39,5 +39,16 @@ describe('formatPdfKronor', () => {
       expect(out).not.toContain(U2212)
       expect(out.startsWith('-')).toBe(true)
     }
+  })
+})
+
+describe('formatNoteKronor', () => {
+  it('signs a negative amount with U+2212, as the iXBRL document does', () => {
+    expect(formatNoteKronor(-4684.24)).toBe(`${U2212}4${NBSP}684`)
+  })
+
+  it('writes a positive amount and a zero without a sign', () => {
+    expect(formatNoteKronor(1234567.89)).toBe(`1${NBSP}234${NBSP}568`)
+    expect(formatNoteKronor(-0.4)).toBe('0')
   })
 })
