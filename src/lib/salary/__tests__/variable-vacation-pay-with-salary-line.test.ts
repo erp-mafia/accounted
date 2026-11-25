@@ -137,8 +137,10 @@ describe('createPayslipLine: semesterlön for rörliga lönedelar paid with the 
         salary_line_item_id: inserted.id,
       },
     })
-    // Ids only: never the amount.
-    expect(JSON.stringify(record)).not.toContain('600')
+    // Ids only: never the amount. The random ids are stripped first, so a
+    // uuid that happens to hold the digits 600 cannot fail the check.
+    const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g
+    expect(JSON.stringify(record).replace(UUID, '')).not.toContain('600')
   })
 
   it('writes no line and fails when the confirmation cannot be recorded', async () => {
