@@ -3,7 +3,7 @@
 // What a row's Godkänn in Rutin does, shown before the click. For low and
 // medium risk the click is the approval, so the person reads the accounts it
 // books here first. Drawn from the proposal the list already holds: nothing
-// is fetched on hover, and the verifikat is the review's own table.
+// is fetched on hover, and each verifikat is the review's own table.
 
 import type { ReactElement } from 'react'
 import { useTranslations } from 'next-intl'
@@ -13,7 +13,7 @@ import type { PostingLineLike } from '@/lib/bookkeeping/voucher-line-view'
 import type { PendingOperation } from '@/types'
 import { StagedLinesTable } from './OperationPreview'
 import { FactRows, ReviewTitleContext } from './preview-parts'
-import { APPROVAL_PREVIEW_ROWS, approvalPreviewOf, type ApprovalPreview } from './review-model'
+import { approvalPreviewOf, type ApprovalPreview } from './review-model'
 import { singleActionWarning } from './vocabulary'
 
 type PreviewOp = Pick<PendingOperation, 'operation_type' | 'params' | 'preview_data' | 'title'>
@@ -37,7 +37,7 @@ function cardParts(op: PreviewOp, lockedReason: string | null | undefined, t: T)
 }
 
 const isEmpty = ({ lockedReason, sentence, preview }: CardParts) =>
-  !lockedReason && !sentence && preview.facts.length === 0 && preview.lines.length === 0
+  !lockedReason && !sentence && preview.facts.length === 0 && preview.verifikat.length === 0
 
 function Card({ title, parts }: { title: string; parts: CardParts }) {
   const t = useTranslations('pending')
@@ -47,14 +47,23 @@ function Card({ title, parts }: { title: string; parts: CardParts }) {
       {lockedReason && <AttnLine>{lockedReason}</AttnLine>}
       {sentence && <p className="text-muted-foreground">{sentence}</p>}
       {preview.facts.length > 0 && <FactRows groups={[preview.facts]} />}
-      {preview.lines.length > 0 && (
+      {preview.verifikat.length > 0 && (
         <div>
           <p className="mb-1 text-xs font-medium text-muted-foreground">{t('review_posts_heading')}</p>
           {/* A line text the title already says (a categorisation's bank text) is not repeated on every row. */}
           <ReviewTitleContext.Provider value={title}>
-            <StagedLinesTable lines={preview.lines as PostingLineLike[]} showTotals maxRows={APPROVAL_PREVIEW_ROWS} />
+            <div className="space-y-2">
+              {preview.verifikat.map(({ lines, listed }, index) => (
+                <StagedLinesTable key={index} lines={lines as PostingLineLike[]} showTotals maxRows={listed} />
+              ))}
+            </div>
           </ReviewTitleContext.Provider>
-          {preview.hidden > 0 && <p className="mt-1 text-xs text-muted-foreground">{t('approve_preview_rest')}</p>}
+          {preview.hiddenVerifikat > 0 && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              {t('approve_preview_more_verifikat', { count: preview.hiddenVerifikat })}
+            </p>
+          )}
+          {preview.truncated && <p className="mt-1 text-xs text-muted-foreground">{t('approve_preview_rest')}</p>}
         </div>
       )}
     </div>
@@ -70,19 +79,23 @@ export function ApprovalPreviewCard({ op, lockedReason }: { op: PreviewOp; locke
 
 /**
  * A row's Godkänn with the card on hover and on keyboard focus; the click is
- * the button's own and closes the card. The trigger is a span around the
- * button: a disabled button takes no pointer events, and its reason, which
- * used to be the button's title, is the card's first line. Touch has no
- * hover, and a tap never opens it.
+ * the button's own and closes the card. The button is the trigger, so a
+ * screen reader hears the card as its description. A disabled button takes no
+ * pointer events and no focus: a span around it is the trigger instead,
+ * reached with Tab, and the reason it is locked, once its title, is the
+ * card's first line. Touch has no hover, and a tap never opens it.
  */
 export function ApprovalHoverPreview({
   op,
   lockedReason,
+  disabled,
   off = false,
   children,
 }: {
   op: PreviewOp
   lockedReason?: string | null
+  /** The button is disabled. */
+  disabled: boolean
   /** No card: the button opens a review of its own (a daily batch's Granska). */
   off?: boolean
   /** The Godkänn button. */
@@ -93,17 +106,29 @@ export function ApprovalHoverPreview({
   const parts = cardParts(op, lockedReason, t)
   if (isEmpty(parts)) return children
   return (
-    <Tooltip disableHoverableContent>
+    <Tooltip>
       <TooltipTrigger asChild>
-        <span className="inline-flex">{children}</span>
+        {disabled ? (
+          <span
+            tabIndex={0}
+            className="inline-flex rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70 focus-visible:ring-offset-1 focus-visible:ring-offset-background"
+          >
+            {children}
+          </span>
+        ) : (
+          children
+        )}
       </TooltipTrigger>
-      {/* data-ph-mask: amounts, accounts and counterparties are the company's data. */}
+      {/* data-ph-mask: amounts, accounts and counterparties are the company's
+          data. The pointer may move onto the card to read it; a click there
+          is no click on the row behind it, which opens the review. */}
       <TooltipContent
         side="left"
         sideOffset={8}
         collisionPadding={16}
         data-ph-mask=""
         className="w-[26rem] max-w-[calc(100vw-2rem)] p-3 text-[13px] leading-5"
+        onClick={(event) => event.stopPropagation()}
       >
         <Card title={op.title} parts={parts} />
       </TooltipContent>

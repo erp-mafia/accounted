@@ -120,6 +120,54 @@ describe('the card beside Godkänn', () => {
     expect(sv).not.toContain('999')
   })
 
+  it('a payment matched to an invoice whose sale is booked first: both verifikat, each with its own Summa', () => {
+    const match: Op = {
+      operation_type: 'match_transaction_invoice',
+      title: 'Matcha: Inbetalning Fjällgård → 186',
+      params: {},
+      preview_data: {
+        invoice_number: '186',
+        customer_name: 'Fjällgård Data AB',
+        invoice_total: 7000,
+        transaction_amount: 7000,
+        expected_lines: [
+          { account_number: '1930', description: 'Inbetalning', debit: 7000, credit: 0 },
+          { account_number: '1510', description: 'Kundfordran', debit: 0, credit: 7000 },
+        ],
+        sale_entry: {
+          lines: [
+            { account_number: '1510', debit_amount: 7000, credit_amount: 0 },
+            { account_number: '3001', debit_amount: 0, credit_amount: 5600 },
+            { account_number: '2611', debit_amount: 0, credit_amount: 1400 },
+          ],
+        },
+      },
+    }
+    const sv = read(match, 'sv')
+    expect(sv).toContain('Genom att klicka godkänn så matchas transaktionen mot fakturan.')
+    // The sale (3001) before the payment that clears it (1930).
+    expect(sv.indexOf('3001')).toBeGreaterThan(-1)
+    expect(sv.indexOf('3001')).toBeLessThan(sv.indexOf('1930'))
+    expect(sv.match(/Summa 7 000 kr 7 000 kr/g)).toHaveLength(2)
+  })
+
+  it('more verifikat than the room: whole ones are counted', () => {
+    const entry = (amount: number) => ({
+      lines: [
+        { account_number: '2510', debit_amount: amount, credit_amount: 0 },
+        { account_number: '1630', debit_amount: 0, credit_amount: amount },
+      ],
+    })
+    const rows: Op = {
+      operation_type: 'book_skattekonto_rows',
+      title: 'Bokför skattekontot',
+      params: {},
+      preview_data: { journal_entries: [1, 2, 3, 4, 5, 6].map((n) => entry(n * 100)) },
+    }
+    expect(read(rows, 'sv')).toMatch(/\+ 2 verifikat till Öppna förslaget för alla rader\.$/)
+    expect(read(rows, 'en')).toMatch(/\+ 2 more vouchers Open the proposal for every row\.$/)
+  })
+
   it('a locked button: its reason is the first line', () => {
     expect(read(categorised, 'sv', 'Perioden är låst')).toMatch(/^Perioden är låst Genom att klicka godkänn/)
   })

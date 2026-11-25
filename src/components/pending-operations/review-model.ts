@@ -288,14 +288,51 @@ export function stagedPostingLines(previewData: unknown): Data[] {
 }
 
 /**
- * The verifikat rows approving a proposal posts, as its preview states them.
- * A rättelse or a storno carries the verifikat it replaces beside the one it
- * posts: only the one it posts. Empty when the preview states no rows.
+ * Where a staged preview states a verifikat its approval posts, in the order
+ * the approval posts them: an invoice's sale before the payment that clears
+ * it (sale_entry), a storno before the copy it re-posts. A key holds the rows
+ * themselves, one verifikat ({ lines }) or a list of them. Never read as
+ * posted: the verifikat a rättelse or a storno replaces (original), the one a
+ * registration is tied to and that is booked already (voucher_lines), a
+ * categorisation's moms rows a second time (vat_lines), and an inline
+ * rättelse's struck, added and resulting rows, which change a verifikat in
+ * place. preview_data is jsonb, which keeps its keys sorted by length, so
+ * "the first rows the preview carries" is no order at all.
  */
-export function postedLines(previewData: unknown): Data[] {
+const POSTED_VERIFIKAT_KEYS = [
+  'sale_entry',
+  'storno',
+  'correction',
+  'reversal',
+  'corrected',
+  'journal_entry',
+  'journal_entry_preview',
+  'verifikat',
+  'lines',
+  'preview_lines',
+  'expected_lines',
+  'journal_entries',
+  'entries',
+] as const
+
+/**
+ * Every verifikat approving a proposal posts, each as the rows its preview
+ * states, in the order they are posted. Empty when the preview states none.
+ * A rättelse's storno of the original is not staged as rows: its sentence
+ * says it is posted.
+ */
+export function postedVerifikat(previewData: unknown): Data[][] {
   const data = record(previewData)
-  const posted = [record(data.correction), record(data.reversal)].find((entry) => isPostingLines(entry.lines))
-  return posted ? (posted.lines as Data[]) : stagedPostingLines(data)
+  const verifikat: Data[][] = []
+  for (const key of POSTED_VERIFIKAT_KEYS) {
+    const value = data[key]
+    const entries = Array.isArray(value) && !isPostingLines(value) ? value : [value]
+    for (const entry of entries) {
+      const lines = isPostingLines(entry) ? entry : record(entry).lines
+      if (isPostingLines(lines)) verifikat.push(lines)
+    }
+  }
+  return verifikat
 }
 
 // The preview's own statement of what the proposal is worth, in the order a
@@ -305,9 +342,10 @@ const HEADLINE_KEYS = ['total', 'amount', 'transaction_amount', 'payment_amount'
 
 /**
  * The headline number of a proposal: the amount its preview states, else the
- * debit total of the verifikat it posts (always SEK). Null when it names no
- * amount (a new customer). `currency` is null when the preview names some
- * other field's currency only: the figure then shows without a unit.
+ * debit total of the verifikat it posts, when it posts one (always SEK). Null
+ * when it names no amount (a new customer). `currency` is null when the
+ * preview names some other field's currency only: the figure then shows
+ * without a unit.
  */
 export function headlineAmount(op: Pick<PendingOperation, 'preview_data'>): { value: number; currency: string | null } | null {
   const data = record(op.preview_data)
@@ -317,15 +355,21 @@ export function headlineAmount(op: Pick<PendingOperation, 'preview_data'>): { va
   }
   const stated = finite(data.total_debit)
   if (stated !== null) return { value: stated, currency: 'SEK' }
-  const lines = postedLines(data)
-  if (lines.length === 0) return null
-  const debit = lines.reduce((sum, line) => sum + (Number(line.debit_amount ?? line.debit) || 0), 0)
+  // A rättelse or a storno carries the verifikat it replaces beside the one
+  // it posts: the headline is the one it posts. Of several, no one is the
+  // proposal's figure.
+  const posted = postedVerifikat(data)
+  if (posted.length !== 1) return null
+  const debit = posted[0].reduce((sum, line) => sum + (Number(line.debit_amount ?? line.debit) || 0), 0)
   return debit > 0 ? { value: roundOre(debit), currency: 'SEK' } : null
 }
 
 /* ------------------------------------------------------- approval preview */
 
-/** The most verifikat rows the preview beside a row's Godkänn lists; the rest are counted and left to the review. */
+/**
+ * The most verifikat rows the preview beside a row's Godkänn lists, over all
+ * the verifikat it posts; the rest are counted and left to the review.
+ */
 export const APPROVAL_PREVIEW_ROWS = 8
 
 export interface ApprovalPreview {
@@ -335,25 +379,46 @@ export interface ApprovalPreview {
    * group adds up to (an invoice's Totalt).
    */
   facts: FactRow[]
-  /** The verifikat rows approving it posts (postedLines). Empty when it posts none. */
-  lines: Data[]
-  /** Rows past APPROVAL_PREVIEW_ROWS: counted there, listed in the review. */
-  hidden: number
+  /**
+   * The verifikat approving it posts that the preview has room for, in the
+   * order they are posted: each with every row it posts (its Summa adds up
+   * all of them) and how many of those rows are listed.
+   */
+  verifikat: Array<{ lines: Data[]; listed: number }>
+  /** Verifikat it posts past the room: counted, listed in the review. */
+  hiddenVerifikat: number
+  /** Something it posts is left to the review: rows past the room, or whole verifikat. */
+  truncated: boolean
 }
 
 /**
  * What the preview beside a row's Godkänn states before the click, where the
  * click is the approval for low and medium risk. Read from the staged preview
- * alone: nothing is fetched, and the rows are the ones it posts as staged,
- * never worked out a second time.
+ * alone: nothing is fetched, and the rows are the ones it posts as staged
+ * (postedVerifikat), never worked out a second time.
  */
 export function approvalPreviewOf(op: Pick<PendingOperation, 'operation_type' | 'preview_data'>): ApprovalPreview {
   const [first = [], ...rest] = proposalFacts(op.operation_type, op.preview_data) ?? []
-  const lines = postedLines(op.preview_data)
+  const verifikat: ApprovalPreview['verifikat'] = []
+  let room = APPROVAL_PREVIEW_ROWS
+  let hiddenVerifikat = 0
+  let truncated = false
+  for (const lines of postedVerifikat(op.preview_data)) {
+    if (room === 0) {
+      hiddenVerifikat += 1
+      truncated = true
+      continue
+    }
+    const listed = Math.min(lines.length, room)
+    if (listed < lines.length) truncated = true
+    verifikat.push({ lines, listed })
+    room -= listed
+  }
   return {
     facts: [...first, ...rest.flat().filter((fact) => fact.strong)],
-    lines,
-    hidden: Math.max(0, lines.length - APPROVAL_PREVIEW_ROWS),
+    verifikat,
+    hiddenVerifikat,
+    truncated,
   }
 }
 

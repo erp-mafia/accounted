@@ -1944,6 +1944,7 @@ export default function PendingOperationsPage() {
                   : rowMissing.length > 0
                     ? t('review_missing_named', { fields: rowMissing.join(', ') })
                     : undefined)
+              const approveDisabled = !canWrite || periodLocked || rowMissing.length > 0 || isBulkCommitting
               const rowTitle = splitRowTitle(op.title)
               const fixCopy = FIXABLE_REFUSAL_COPY[fixNotes[op.id]]
               // A locked or closed period disables Godkänn on the row, so the
@@ -2073,11 +2074,16 @@ export default function PendingOperationsPage() {
                         keyboard focus, led by the reason a locked button is
                         locked. A daily batch's button opens its own review
                         dialog: no card, and its reason stays its title. */}
-                    <ApprovalHoverPreview op={op} lockedReason={approveLockedReason} off={batchType !== null}>
+                    <ApprovalHoverPreview
+                      op={op}
+                      lockedReason={approveLockedReason}
+                      disabled={approveDisabled}
+                      off={batchType !== null}
+                    >
                       <Button
                         variant="row-primary"
                         title={batchType ? approveLockedReason : undefined}
-                        disabled={!canWrite || periodLocked || rowMissing.length > 0 || isBulkCommitting}
+                        disabled={approveDisabled}
                         onClick={(e) => {
                           e.stopPropagation()
                           if (periodLocked || rowMissing.length > 0) return

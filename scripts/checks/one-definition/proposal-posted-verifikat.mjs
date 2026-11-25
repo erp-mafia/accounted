@@ -1,0 +1,17 @@
+export default {
+  rule: 'proposal-posted-verifikat',
+  says: 'Which verifikat a staged proposal posts on approval, and in what order, is read off its preview in one place: never the verifikat a rättelse or a storno replaces, one already booked, or a categorisation\'s moms rows a second time.',
+  home: 'src/components/pending-operations/review-model.ts: postedVerifikat',
+  why: 'The first card beside Godkänn took the first rows a preview carries: a rättelse showed the verifikat it replaces, and a payment matched after its sale showed the sale alone, since preview_data is jsonb and "first" is the shortest key.',
+  match: [
+    // data.sale_entry, preview.expected_lines, preview_data.storno: a posted verifikat read by name.
+    /\b(?:data|preview|previewData|preview_data)\??\.(?:sale_entry|storno|corrected|correction|reversal|expected_lines|journal_entry_preview|journal_entries)\b/,
+  ],
+  sanctioned: ['components/pending-operations/review-model.ts'],
+  allowed: {
+    'components/pending-operations/OperationPreview.tsx':
+      'the review of a rättelse draws the verifikat it replaces beside its correction, each by name.',
+  },
+  // Where a staged preview is read for the person who approves it.
+  scan: ['components/pending-operations/', 'app/(dashboard)/pending/'],
+}
