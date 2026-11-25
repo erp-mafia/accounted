@@ -73,6 +73,9 @@ const BodySchema = z
     // sidebar draws one only when it is a row of the menu, so nothing stored
     // here is ever followed as a link.
     nav_favorites: z.array(z.string().max(200).startsWith('/')).max(NAV_FAVORITES_CAP).optional(),
+    // Verifikat list row density (components/bookkeeping/JournalEntryList).
+    // Plain top-level value, replaced by the spread.
+    journal_density: z.enum(['compact', 'comfortable']).optional(),
   })
   .strict()
 

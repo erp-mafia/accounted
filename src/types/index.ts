@@ -280,6 +280,10 @@ export interface UserUiState {
   // person pinned, in the order they were added. Per person, not per company:
   // the sidebar draws only the ones the open company's menu shows.
   nav_favorites?: string[]
+  // Row density of the verifikat list (components/bookkeeping/
+  // JournalEntryList). Per person, for every company and device: a sign-out
+  // empties the browser's storage, so it is kept here.
+  journal_density?: 'compact' | 'comfortable'
 }
 
 export type AgentPanelMode = 'docked' | 'floating'

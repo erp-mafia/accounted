@@ -35,9 +35,13 @@ describe('JournalEntryList compact rows', () => {
     expect(button).not.toContain('size="icon-sm"')
   })
 
-  it('persists the choice per company', () => {
-    expect(SRC).toContain("DENSITY_STORAGE_KEY_PREFIX = 'Accounted:journal-density:'")
-    expect(SRC).toContain("DENSITY_STORAGE_KEY_PREFIX + (company?.id ?? 'default')")
+  it('keeps the choice on the person, so a sign-out does not drop it', () => {
+    // A key in localStorage named after the company was emptied by every
+    // sign-out (lib/auth/clear-browser-storage.ts) and held for one company
+    // and one browser only. The choice is the person's: ui_state.
+    expect(SRC).toContain("uiState?.journal_density === 'compact'")
+    expect(SRC).toContain("journal_density: next ? 'compact' : 'comfortable'")
+    expect(SRC).not.toContain('journal-density')
   })
 
   it('has the label in both locales', () => {
