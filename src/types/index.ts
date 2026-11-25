@@ -268,6 +268,9 @@ export interface UserUiState {
   // Kom igång steps this user chose to skip, keyed per company
   // (companyId -> step ids, lib/onboarding/checklist SKIPPABLE_SETUP_STEPS).
   setup_skipped?: Record<string, string[]>
+  // Hem's first-thing block closed by this user, keyed per company
+  // (companyId -> ISO timestamp of the close, lib/onboarding/first-thing).
+  first_thing_closed?: Record<string, string>
   // One-time Discord invite card (components/community/DiscordInviteCard):
   // ISO timestamp of when the user closed it or clicked through. Per user,
   // not per company: it is one community.
