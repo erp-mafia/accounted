@@ -4141,10 +4141,12 @@ export default function ArcimMigrationWorkspace({
 
   const handleDocumentReconnect = useCallback(() => {
     if (!consentId) return
-    // A Bokio integration token is replaced in the credential form, not in a
-    // Fortnox login (B11: a refused Bokio token stops the run too).
-    if (documentImportState.provider === 'bokio') {
-      void handleReconnect('bokio', consentId)
+    // Only Fortnox reconnects in the login that asks for the attachment
+    // scopes. Every other provider reconnects its own way: a Bokio integration
+    // token in the credential form, a Visma connection in Visma's login (B11:
+    // a refused token or login stops the run on either).
+    if (documentImportState.provider && documentImportState.provider !== 'fortnox') {
+      void handleReconnect(documentImportState.provider, consentId)
       return
     }
     const { resume: reconnectAction, returnTo } = arcimDocumentReconnectPlan(documentImportState.phase)
