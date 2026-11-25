@@ -1364,15 +1364,20 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
   // view a period under another granularity than the Skatt setting (a
   // company that switched cadence and still files an older period); it is
   // never persisted (the mount-time seed re-applies the setting), and it
-  // shows its value so it reads as the picker it is.
+  // shows its value so it reads as the picker it is. It only views: the
+  // list marks the saved momsperiod and links to Moms och skatt, the one
+  // place the momsperiod is set.
   const periodPickers = (
     <>
       <ContextPicker
-        items={PERIOD_TYPE_ITEMS}
+        items={PERIOD_TYPE_ITEMS.map((item) =>
+          item.id === settings?.moms_period ? { ...item, annotation: tReports('vat_cadence_saved') } : item,
+        )}
         value={periodType}
         onChange={(value) => handlePeriodTypeChange(value as VatPeriodType)}
         triggerLabel={PERIOD_TYPE_ITEMS.find((item) => item.id === periodType)?.label ?? 'Period'}
         ariaLabel="Periodicitet"
+        footerLink={{ href: '/settings/tax', label: tReports('vat_cadence_change') }}
       />
       {isYearly ? (
         // Annual VAT covers a räkenskapsår: picked here, not a
