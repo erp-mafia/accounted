@@ -15349,7 +15349,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_get_general_ledger',
     keywords: ['huvudbok', 'huvudboken'],
     title: 'General Ledger (Huvudbok)',
-    description: 'General ledger (huvudbok) for a fiscal period: per-account opening, entries, closing balances. Filters: account and date range, dimensions. A large ledger comes in pages of 100 lines (has_more, next_offset). Ad-hoc cross-account/amount/free-text queries: gnubok_query_journal.',
+    description: 'General ledger (huvudbok) for a fiscal period: per-account opening, entries, closing balances. Filters: account and date range, dimensions; narrow a large ledger with them, or page it (100 lines, next_offset). Ad-hoc cross-account/amount/free-text: gnubok_query_journal.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,

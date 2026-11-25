@@ -108,9 +108,9 @@ const pad = (i: number, width: number) => String(i).padStart(width, '0')
 
 /**
  * A ledger of `lineCount` lines over `accountCount` accounts, lines of a
- * production-like size (a verifikat text of about 44 characters), plus the
- * given number of balance-only accounts (a balance carried in, no lines in
- * the range) before the first, between, and after the last account with lines.
+ * realistic size (a verifikat text of a few dozen characters), plus the given
+ * number of balance-only accounts (a balance carried in, no lines in the
+ * range) before the first, between, and after the last account with lines.
  */
 function ledger(lineCount: number, accountCount: number, balanceOnly = 0): GeneralLedgerReport {
   const accounts: GeneralLedgerAccount[] = []
@@ -249,6 +249,19 @@ describe('gnubok_get_general_ledger: limit and offset', () => {
     expect(pages.map((p) => p.has_more)).toEqual([...Array(12).fill(true), false])
     expect(pages.slice(0, -1).map((p) => p.next_offset)).toEqual(Array.from({ length: 12 }, (_, i) => (i + 1) * 100))
 
+    // A balance-only account is on exactly one page; an account with lines
+    // only on the pages that carry some of them.
+    const appearances = new Map<string, number>()
+    for (const page of pages) {
+      for (const account of page.accounts) {
+        appearances.set(account.account_number, (appearances.get(account.account_number) ?? 0) + 1)
+        if (account.line_count! > 0) expect(account.lines.length, account.account_number).toBeGreaterThan(0)
+      }
+    }
+    for (const account of whole.accounts.filter((a) => a.lines.length === 0)) {
+      expect(appearances.get(account.account_number), account.account_number).toBe(1)
+    }
+
     // Reassembled from the pages, the ledger is the whole answer.
     const seen = new Map<string, GeneralLedgerAccount & { line_count?: number }>()
     const order: string[] = []
@@ -282,6 +295,19 @@ describe('gnubok_get_general_ledger: limit and offset', () => {
     expect(second.accounts.map((a) => a.account_number)).toEqual(['2000', '2001', '2010'])
     expect(last.accounts.map((a) => a.account_number)).toEqual(['2010', '9000'])
     expect(second.accounts[1]).toMatchObject({ lines: [], line_count: 0, opening_balance: 1500, closing_balance: 1500 })
+  })
+
+  it('keeps an account that ends exactly at a page end off the next page, and the balance-only account after it on the next', async () => {
+    mocks.report = ledger(200, 2, 1)
+    // Accounts: 1000 (balance only), 2000 (lines 0-99), 2001 (balance only), 2010 (lines 100-199), 9000 (balance only).
+    const first = await callTool({ limit: 100 })
+    const second = await callTool({ limit: 100, offset: 100 })
+
+    expect(first.accounts.map((a) => a.account_number)).toEqual(['1000', '2000'])
+    expect(first).toMatchObject({ count: 100, has_more: true, next_offset: 100 })
+    expect(second.accounts.map((a) => a.account_number)).toEqual(['2001', '2010', '9000'])
+    expect(second).toMatchObject({ count: 100, has_more: false })
+    expect(second).not.toHaveProperty('next_offset')
   })
 
   it('keeps each account whole-range balances and totals on every page', async () => {
@@ -384,6 +410,17 @@ describe('the answer through the MCP route (judge: response bytes against the pl
     expect(result.structuredContent).toMatchObject({ count: 100, total_count: 100_000, has_more: true, next_offset: 100 })
     // What the model reads says it too.
     expect(JSON.parse(result.content[0].text)).toMatchObject({ has_more: true, total_count: 100_000, next_offset: 100 })
+  }, 60_000)
+
+  it('takes limit and offset through the route and answers that page', async () => {
+    mocks.report = ledger(1_000, 4)
+
+    const { result } = await routeAnswer({ limit: 50, offset: 300 })
+
+    expect(result.isError).not.toBe(true)
+    expect(result.structuredContent).toMatchObject({ count: 50, total_count: 1_000, has_more: true, next_offset: 350 })
+    const lines = result.structuredContent.accounts.flatMap((a) => a.lines)
+    expect(lines.map((l) => l.voucher_number)).toEqual(Array.from({ length: 50 }, (_, i) => 301 + i))
   }, 60_000)
 
   it('delivers a ledger that fits whole exactly as before: every line, nothing more to fetch', async () => {
