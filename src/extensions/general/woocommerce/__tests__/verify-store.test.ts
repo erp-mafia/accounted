@@ -127,6 +127,7 @@ describe('POST /api/extensions/ext/woocommerce/verify-store', () => {
 
   it.each([
     ['no body', {}],
+    ['a JSON null body', null],
     ['a short suffix', { connection_id: CONN, key_suffix: '1a2b3c' }],
     ['a whole key', { connection_id: CONN, key_suffix: KEY }],
     ['a connection id that is not a uuid', { connection_id: 'conn-1', key_suffix: '1a2b3c4' }],
@@ -273,5 +274,75 @@ describe('POST /api/extensions/ext/woocommerce/verify-store', () => {
     expect(updates).toHaveLength(3)
     expect(updates[2][0]).toMatchObject({ status: 'error', consumer_key_encrypted: null })
     expect(ctx.emit).not.toHaveBeenCalled()
+  })
+
+  it('parks the attempt when the window closes between the check and the flip', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      // 14 minutes old when read; the flip lands two minutes later, past the TTL.
+      const service = serviceReturning(
+        { data: pendingRow({ created_at: new Date(Date.now() - 14 * 60_000).toISOString() }) },
+        { data: null }, // record the proof
+        { data: null }, // the flip matches nothing: its TTL predicate has passed
+        { data: null }, // park
+      )
+      const from = vi.mocked(service.supabase.from)
+      const read = from.getMockImplementation() as (table: string) => unknown
+      from.mockImplementation((table: string) => {
+        if (from.mock.calls.length === 3) vi.setSystemTime(Date.now() + 2 * 60_000)
+        return read(table)
+      })
+
+      const res = await verifyStore().handler(
+        makeRequest({ connection_id: CONN, key_suffix: '1a2b3c4' }),
+        makeContext(),
+      )
+
+      expect(res.status).toBe(409)
+      expect((await res.json()).code).toBe('expired')
+      const updates = service.findCalls('woocommerce_connections', 'update')
+      expect(updates).toHaveLength(3)
+      expect(updates[2][0]).toMatchObject({ status: 'error', consumer_key_encrypted: null })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('answers 409 and parks nothing when the row left pending before the flip', async () => {
+    const ctx = makeContext()
+    const service = serviceReturning(
+      { data: pendingRow() },
+      { data: null }, // record the proof
+      { data: null }, // the flip matches nothing: a newer attempt superseded the row
+    )
+
+    const res = await verifyStore().handler(
+      makeRequest({ connection_id: CONN, key_suffix: '1a2b3c4' }),
+      ctx,
+    )
+
+    expect(res.status).toBe(409)
+    expect(service.findCalls('woocommerce_connections', 'update')).toHaveLength(2)
+    expect(ctx.emit).not.toHaveBeenCalled()
+  })
+
+  it('logs a park that fails and still tells the user the attempt expired', async () => {
+    const ctx = makeContext()
+    serviceReturning(
+      { data: pendingRow({ created_at: new Date(Date.now() - 16 * 60_000).toISOString() }) },
+      { data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } }, // park
+    )
+
+    const res = await verifyStore().handler(
+      makeRequest({ connection_id: CONN, key_suffix: '1a2b3c4' }),
+      ctx,
+    )
+
+    expect(res.status).toBe(409)
+    expect((await res.json()).code).toBe('expired')
+    expect(ctx.log.error).toHaveBeenCalledWith(
+      '[woocommerce] Failed to park a handshake',
+      expect.objectContaining({ connection_id: CONN, code: '57014' }),
+    )
   })
 })

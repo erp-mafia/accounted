@@ -488,7 +488,8 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
         return NextResponse.json({ error: NOT_CONFIGURED_MESSAGE }, { status: 503 })
       }
 
-      const body = (await request.json().catch(() => ({}))) as {
+      // A JSON null body reads as an empty one: it is a 400, not a crash.
+      const body = ((await request.json().catch(() => ({}))) ?? {}) as {
         connection_id?: unknown
         key_suffix?: unknown
       }
@@ -545,13 +546,29 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
           { status: 403 },
         )
       }
-      if (isHandshakeExpired(row.created_at)) {
-        await parkHandshake(service, row.id, HANDSHAKE_EXPIRED_MESSAGE)
+
+      // Close an attempt that will not complete. A park that fails leaves a
+      // pending row, which never syncs and which the nightly sweep parks.
+      const rowId = row.id
+      const park = async (reason: string) => {
+        const { error: parkError } = await parkHandshake(service, rowId, reason)
+        if (parkError) {
+          log.error('[woocommerce] Failed to park a handshake', {
+            connection_id: rowId,
+            code: parkError.code,
+            message: parkError.message,
+          })
+        }
+      }
+      const expired = async () => {
+        await park(HANDSHAKE_EXPIRED_MESSAGE)
         return NextResponse.json(
           { error: HANDSHAKE_EXPIRED_MESSAGE, error_en: HANDSHAKE_EXPIRED_MESSAGE_EN, code: 'expired' },
           { status: 409 },
         )
       }
+
+      if (isHandshakeExpired(row.created_at)) return expired()
       if (!row.consumer_key_encrypted) {
         return NextResponse.json(
           {
@@ -597,15 +614,21 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
       const activation = await activateIfComplete(service, row.id)
       if (activation.outcome === 'conflict') {
         // 23505: the store is already actively connected, to this or another company.
-        await parkHandshake(service, row.id, ALREADY_CONNECTED.error)
+        await park(ALREADY_CONNECTED.error)
         return NextResponse.json({ ...ALREADY_CONNECTED, code: 'conflict' }, { status: 409 })
       }
-      if (activation.outcome !== 'activated') {
-        // Failed, or the row left pending (or its TTL) since it was read.
+      if (activation.outcome === 'incomplete') {
+        // The window closed between the check above and the flip, or the row
+        // left pending meanwhile (a new attempt, a denial): nothing went live.
+        if (isHandshakeExpired(row.created_at)) return expired()
+        log.warn('[woocommerce] A proven connection left pending before it went live', { connection_id: row.id })
+        return NextResponse.json(NOT_COMPLETED, { status: 409 })
+      }
+      if (activation.outcome === 'failed') {
         log.error('[woocommerce] Failed to activate a proven connection', {
           connection_id: row.id,
-          outcome: activation.outcome,
-          ...(activation.outcome === 'failed' ? activation.error : {}),
+          code: activation.error.code,
+          message: activation.error.message,
         })
         return NextResponse.json(NOT_COMPLETED, { status: 500 })
       }
