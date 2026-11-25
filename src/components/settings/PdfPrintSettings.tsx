@@ -109,6 +109,10 @@ function InvoiceColorRow({
   const shown = normalized ?? value
 
   function commit(next: string) {
+    // The newest choice wins: a picker save still waiting would otherwise
+    // land after a typed code or "Återställ" and put the older colour back.
+    if (pickerTimer.current) clearTimeout(pickerTimer.current)
+    pickerTimer.current = null
     const color = normalizeInvoiceColor(next)
     if (!color) return
     setDraft(color)
