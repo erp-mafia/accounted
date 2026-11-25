@@ -27,7 +27,10 @@ export function parseRobots(text: string, productToken: string = ROBOTS_PRODUCT_
   let current: { agents: string[]; rules: Rule[] } | null = null
   let lastWasAgent = false
   for (const rawLine of text.split(/\r?\n|\r/)) {
-    const line = rawLine.replace(/#.*$/, '').trim()
+    // A comment runs to the end of the line, and RFC 9309 ends a line only at
+    // CR or LF. A . stops at a U+2028: the match then failed, and each #
+    // before it searched the rest of the line again.
+    const line = rawLine.replace(/#[\s\S]*$/, '').trim()
     if (!line) continue
     const colon = line.indexOf(':')
     if (colon < 0) continue
@@ -50,7 +53,8 @@ export function parseRobots(text: string, productToken: string = ROBOTS_PRODUCT_
     }
   }
   const token = productToken.toLowerCase()
-  const own = groups.filter((g) => g.agents.some((a) => a.replace(/\/.*$/, '').trim() === token))
+  // The version after the / runs to the end of the value, as a comment does.
+  const own = groups.filter((g) => g.agents.some((a) => a.replace(/\/[\s\S]*$/, '').trim() === token))
   const chosen = own.length > 0 ? own : groups.filter((g) => g.agents.includes('*'))
   return { rules: chosen.flatMap((g) => g.rules) }
 }

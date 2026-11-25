@@ -28,7 +28,11 @@ export function sniffFormat(bytes: Buffer): SniffedFormat | null {
   if (bytes.length >= 12 && bytes.subarray(0, 4).toString('latin1') === 'RIFF' && bytes.subarray(8, 12).toString('latin1') === 'WEBP') return 'webp'
   if (bytes.length >= 6 && bytes.readUInt16LE(0) === 0 && bytes.readUInt16LE(2) === 1 && bytes.readUInt16LE(4) > 0) return 'ico'
   const head = bytes.subarray(0, 1024).toString('utf8').replace(/^﻿/, '').trimStart()
-  if (/^(?:<\?xml[^>]*>\s*)?(?:<!--[\s\S]*?-->\s*)*(?:<!doctype svg[^>]*>\s*)?<svg[\s>]/i.test(head)) return 'svg'
+  // One run of comments, not a repeated one: its lazy body reaches past a -->
+  // when it has to, so one run reads every head several did (a DOCTYPE between
+  // two comments included), and a head of '--><!--' has no exponentially many
+  // ways to be split into comments.
+  if (/^(?:<\?xml[^>]*>\s*)?(?:<!--[\s\S]*?-->\s*)?(?:<!doctype svg[^>]*>\s*)?<svg[\s>]/i.test(head)) return 'svg'
   return null
 }
 
@@ -40,7 +44,10 @@ export function sniffFormat(bytes: Buffer): SniffedFormat | null {
 export function isSafeSvg(svg: string): boolean {
   if (/<!ENTITY/i.test(svg)) return false
   if (/<foreignObject/i.test(svg) || /@import/i.test(svg)) return false
-  for (const m of svg.matchAll(/(?:xlink:)?href\s*=\s*["']\s*([^"']*)["']/gi)) {
+  // No \s* before the value: [^"']* takes its leading spaces as well and trim()
+  // drops them, while the two side by side split a long unclosed run of
+  // spaces in quadratically many ways.
+  for (const m of svg.matchAll(/(?:xlink:)?href\s*=\s*["']([^"']*)["']/gi)) {
     const ref = m[1]!.trim()
     if (ref === '' || ref.startsWith('#')) continue
     if (/^data:image\/(?:png|jpeg|gif|webp);base64,/i.test(ref)) continue
