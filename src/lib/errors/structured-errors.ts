@@ -8046,12 +8046,12 @@ const SALARY: Record<string, StructuredErrorEntry> = {
   SALARY_RUN_VARIABLE_VACATION_PAY_WITH_SALARY_INVALID: {
     httpStatus: 400,
     message_sv:
-      'En rad med semesterlön för rörliga lönedelar kan inte räknas. Lägg den på samma lönebesked som de rörliga lönedelarna den gäller, och beräkna om.',
+      'En rad med semesterlön för rörliga lönedelar kan inte räknas. Ändra eller ta bort raden som meddelandet för den anställda säger, och beräkna om.',
     message_en:
-      'A line of vacation pay on variable pay cannot be calculated. Put it on the same payslip as the variable pay it is for, then calculate again.',
+      'A line of vacation pay on variable pay cannot be calculated. Change or remove the line as the message for the employee says, then calculate again.',
     remediation: {
       description:
-        'Read details.issues (employee, message_en). Change the amount of the semesterersattning line with settles_variable_vacation_pay (gnubok_update_payslip_line) to at most what the message names, or delete it and add it on the payslip that pays the variable pay. Then gnubok_calculate_salary_run.',
+        'Read details.issues (employee, message_en) and do what each message says to the semesterersattning line with settles_variable_vacation_pay. Employee not on sammalöneregeln: delete the line (gnubok_delete_payslip_line). Amount not above 0 kr: change it (gnubok_update_payslip_line) or delete it. More than the payslip\'s own variable pay earns: change the amount to at most what the message names, or delete it and add it on the payslip that pays the variable pay. Then gnubok_calculate_salary_run.',
       tool: 'gnubok_update_payslip_line',
     },
     retryable: false,
