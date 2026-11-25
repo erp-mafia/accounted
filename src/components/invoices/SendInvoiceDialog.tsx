@@ -29,6 +29,7 @@ import { ToastAction } from '@/components/ui/toast'
 import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
 import { KonteringLinesEditor } from '@/components/bookkeeping/KonteringLinesEditor'
 import { proposeSendLines } from '@/lib/bookkeeping/propose-send-lines'
+import { creditMirrorsIssueOre } from '@/lib/bookkeeping/ledger-carried-sek'
 import { getAmountToPay } from '@/lib/bookkeeping/invoice-rounding'
 import { voucherLineViews } from '@/lib/bookkeeping/voucher-line-view'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
@@ -175,6 +176,9 @@ export default function SendInvoiceDialog({
   // A kontantmetod ROT/RUT original whose Skatteverket share is not booked
   // yet: its credit reverses the customer's share alone.
   const [deductionBookedSek, setDeductionBookedSek] = useState<number | null>(null)
+  // A kreditfaktura mirrors the öresavrundning its original's issue booked
+  // (creditMirrorsIssueOre), as createCreditNoteJournalEntry books it.
+  const [creditMirrorsOre, setCreditMirrorsOre] = useState(false)
   const [catalog, setCatalog] = useState<CatalogAccount[]>([])
   const [editLines, setEditLines] = useState<FormLine[]>([])
   const [hasEdited, setHasEdited] = useState(false)
@@ -295,8 +299,13 @@ export default function SendInvoiceDialog({
           // Preview only: issueCreditNote decides again when it books.
           bookedShare = state.ok ? state.bookedSek : null
         }
+        // Preview only, as above: the credit decides again when it books.
+        const mirrorsOre = bookOnIssue && invoice.credited_invoice_id
+          ? await creditMirrorsIssueOre(supabase, company.id, invoice.credited_invoice_id)
+          : false
         if (cancelled) return
         setDeductionBookedSek(bookedShare)
+        setCreditMirrorsOre(mirrorsOre)
 
         // Line editing needs the BAS catalogue; only the accrual
         // book-at-issue path renders the editor, so skip the load elsewhere.
@@ -332,8 +341,13 @@ export default function SendInvoiceDialog({
 
     // The whole row: the server books from all of it (item accounts and
     // dimensions, delivery_country), so the preview must read the same.
-    return proposeSendLines({ invoice, entityType, deductionBookedSek })
-  }, [isInitialized, shouldBookOnIssue, entityType, invoice, deductionBookedSek])
+    // The öresavrundning as the issue books it (issueOreRoundingOf): never on a
+    // received självfaktura, on a kreditfaktura only as its original booked it.
+    const oreRounding = invoice.is_self_billed || (isCreditNote && !creditMirrorsOre)
+      ? undefined
+      : { company: companySettings ?? null }
+    return proposeSendLines({ invoice, entityType, deductionBookedSek, oreRounding })
+  }, [isInitialized, shouldBookOnIssue, entityType, invoice, deductionBookedSek, isCreditNote, creditMirrorsOre, companySettings])
 
   const additionalCc = useMemo(
     () => parseInvoiceRecipientText(additionalCcText),

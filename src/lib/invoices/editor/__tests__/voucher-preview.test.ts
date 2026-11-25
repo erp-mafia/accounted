@@ -292,3 +292,19 @@ describe('proposeCreditNoteSendLines', () => {
     expect(proposeCreditNoteSendLines(unnumbered, { entityType: 'aktiebolag', today: '2026-10-05' })).toEqual([])
   })
 })
+
+describe('proposeDraftSendLines: the öresavrundning the send books (crm#2283)', () => {
+  it('with the toggle on, 1510 takes the rounded total and 3740 the öre', () => {
+    // 3062,50 rounds to 3063: 0,50 on 3740.
+    expect(amounts(proposeDraftSendLines(input({ oreRounding: true })))).toEqual([
+      ['1510', '3063', ''],
+      ['3001', '', '2450'],
+      ['2611', '', '612.5'],
+      ['3740', '', '0.5'],
+    ])
+  })
+
+  it('with the toggle off, the exact total as before', () => {
+    expect(amounts(proposeDraftSendLines(input({ oreRounding: false })))[0]).toEqual(['1510', '3062.5', ''])
+  })
+})

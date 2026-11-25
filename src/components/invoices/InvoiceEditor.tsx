@@ -3707,6 +3707,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         items: confirmData.items,
         defaultDimensions: defaultDims,
         entityType,
+        oreRounding,
       }
     : null
   let confirmVoucher: ConfirmVoucher | null = null

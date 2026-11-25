@@ -62,6 +62,12 @@ export interface DraftVoucherInput {
   items: DraftVoucherItem[]
   defaultDimensions?: Record<string, string> | null
   entityType: EntityType
+  /**
+   * The form's öresavrundning choice (the editor's toggle, which starts from
+   * the company setting). The send books it on 1510 and 3740 (crm#2283), so
+   * the preview shows that row; absent, no rounding is previewed.
+   */
+  oreRounding?: boolean
 }
 
 /**
@@ -72,7 +78,11 @@ export interface DraftVoucherInput {
 export function proposeDraftSendLines(input: DraftVoucherInput): FormLine[] {
   const invoice = draftInvoice(input)
   if (!invoice) return []
-  return proposeSendLines({ invoice, entityType: input.entityType })
+  return proposeSendLines({
+    invoice,
+    entityType: input.entityType,
+    oreRounding: typeof input.oreRounding === 'boolean' ? { company: null } : undefined,
+  })
 }
 
 /**
@@ -177,6 +187,7 @@ function draftInvoice(input: DraftVoucherInput) {
     vat_treatment: input.vatTreatment,
     items,
     default_dimensions: input.defaultDimensions ?? null,
+    ore_rounding: input.oreRounding ?? null,
   }
 }
 
@@ -191,7 +202,12 @@ function draftInvoice(input: DraftVoucherInput) {
  */
 export function proposeCreditNoteSendLines(
   original: Invoice & { items: InvoiceItem[] },
-  options: { entityType: EntityType; today: string },
+  options: {
+    entityType: EntityType
+    today: string
+    /** The original's issue booked its öresavrundning (creditMirrorsIssueOre): the credit mirrors it. */
+    mirrorsIssueOre?: boolean
+  },
 ): FormLine[] {
   const reference = creditNoteOriginalReference(original)
   if (!reference) return []
@@ -217,8 +233,10 @@ export function proposeCreditNoteSendLines(
         credited_invoice_id: fields.credited_invoice_id,
         items,
         default_dimensions: fields.default_dimensions,
+        ore_rounding: fields.ore_rounding,
       },
       entityType: options.entityType,
+      oreRounding: options.mirrorsIssueOre ? { company: null } : undefined,
     })
   } catch {
     // A missing FX rate on a foreign original: the confirm says how it books instead.

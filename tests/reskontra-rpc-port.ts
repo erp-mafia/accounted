@@ -7,6 +7,7 @@
  *   get_supplier_ledger_invoices  20261023094010_supplier_ledger_invoices_rpc.sql
  *   get_paid_invoice_days         20261023094020_kpi_invoice_reads.sql
  *   get_kpi_supplier_invoices     20261023094020_kpi_invoice_reads.sql
+ *   invoice_issue_receivable_sek  20261125162347_invoice_issue_receivable_sek.sql
  *
  * The ledger ports return the population the SQL documents, but keep the
  * paid invoices the SQL drops as provably settled and keep the rows in table
@@ -22,6 +23,7 @@
  */
 import { vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { roundOre } from '@/lib/money'
 
 type Row = Record<string, unknown>
 
@@ -326,6 +328,47 @@ export function portKpiSupplierInvoices(tables: ReskontraTables, args: Row): Row
     }))
 }
 
+/**
+ * invoice_issue_receivable_sek: what each invoice's issue verifikat put on
+ * 151x (1513 excluded), the verifikat followed through a storno to its one
+ * posted correction (live_journal_entry). Invoices without a live one are left
+ * out.
+ */
+export function portInvoiceIssueReceivableSek(tables: ReskontraTables, args: Row): Row[] {
+  const companyId = args.p_company_id
+  const ids = (args.p_invoice_ids as unknown[] | null) ?? []
+  const entries = rowsOf(tables, 'journal_entries').filter((e) => ofCompany(e, companyId))
+  const lines = rowsOf(tables, 'journal_entry_lines')
+  const live = (entryId: unknown): unknown => {
+    let current = entryId
+    for (let hop = 0; hop <= 10; hop += 1) {
+      const entry = entries.find((e) => e.id === current)
+      if (!entry) return null
+      if (entry.status === 'posted') return entry.id
+      if (entry.status !== 'reversed') return null
+      const corrections = entries.filter((e) => e.correction_of_id === current && postedOrReversed(e))
+      if (corrections.length !== 1) return null
+      current = corrections[0].id
+    }
+    return null
+  }
+  return rowsOf(tables, 'invoices')
+    .filter((i) => ofCompany(i, companyId) && ids.includes(i.id) && i.journal_entry_id != null)
+    .flatMap((i) => {
+      const entryId = live(i.journal_entry_id)
+      if (entryId == null) return []
+      const own = lines.filter(
+        (l) =>
+          l.journal_entry_id === entryId &&
+          String(l.account_number).startsWith('151') &&
+          l.account_number !== '1513',
+      )
+      if (own.length === 0) return []
+      const sek = own.reduce((sum, l) => sum + (Number(l.debit_amount) || 0) - (Number(l.credit_amount) || 0), 0)
+      return [{ invoice_id: i.id, sek: roundOre(sek) }]
+    })
+}
+
 /** The ports by RPC name, for a mock's `rpc(name, args)`. */
 export function reskontraRpcPorts(tables: ReskontraTables): Record<string, (args: Row) => unknown> {
   return {
@@ -334,6 +377,7 @@ export function reskontraRpcPorts(tables: ReskontraTables): Record<string, (args
     get_invoice_register_coverage: (args) => portInvoiceRegisterCoverage(tables, args),
     get_paid_invoice_days: (args) => portPaidInvoiceDays(tables, args),
     get_kpi_supplier_invoices: (args) => portKpiSupplierInvoices(tables, args),
+    invoice_issue_receivable_sek: (args) => portInvoiceIssueReceivableSek(tables, args),
   }
 }
 

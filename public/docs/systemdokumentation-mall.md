@@ -113,7 +113,7 @@ Följande delsystem matar journalen:
 
 | Delsystem | Beskrivning | Automatisk kontering |
 |---|---|---|
-| Kundfakturering | Utgående fakturor med momssats per rad, även e-faktura via Peppol | Debet 1510, kredit 30xx + 26xx |
+| Kundfakturering | Utgående fakturor med momssats per rad, även e-faktura via Peppol | Debet 1510, kredit 30xx + 26xx, och 3740 vid öresavrundning |
 | Kundbetalningar | Inbetalningar mot fakturor | Debet 1930 (eller annat likvidkonto), kredit 1510 |
 | Leverantörsfakturor | Inkommande fakturor, även e-faktura via Peppol, registrering och betalning | Debet kostnadskonto + 2641, kredit 2440 |
 | Leverantörsbetalningar | Utbetalningar mot leverantörsfakturor | Debet 2440, kredit 1930 |
@@ -129,6 +129,8 @@ Följande delsystem matar journalen:
 [STRYK DE DELSYSTEM SOM INTE ANVÄNDS I DITT FÖRETAG]
 
 **Öresavrundning på leverantörsfakturor.** Användaren väljer avrundning när den finns på leverantörens faktura. Avrundningen bokförs som en egen rad på konto 3740 utan moms och ändrar inte momsbeloppet. Vid betalning enligt kontantmetoden bokförs en skillnad under 1 krona mellan fakturabeloppet och det belopp som lämnade banken på 3740; en avvikelse på 1 krona eller mer godtas inte som slutbetalning.
+
+**Öresavrundning på kundfakturor.** När fakturan har öresavrundning (fakturans eget val, annars företagets inställning) bokförs avrundningen när fakturan ställs ut: 1510 debiteras med det avrundade beloppet att betala och skillnaden bokförs på konto 3740 utan moms. Intäkten och momsen ändras inte. En kreditfaktura speglar avrundningen som den krediterade fakturan bokförde. En faktura som bokfördes med det exakta beloppet på 1510 får avrundningen bokförd på 3740 när betalningen bokförs.
 
 De fullständiga behandlingsreglerna finns i den genererade systemdokumentationen (**Rapporter > Export & arkiv > Systemdokumentation**, även som `revision/systemdokumentation.json` i **Komplett arkiv**). Ändringar av behandlingsregler och nya programversioner registreras med datum i behandlingshistoriken (avsnitt 9).
 

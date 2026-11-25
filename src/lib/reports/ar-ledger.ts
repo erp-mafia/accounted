@@ -16,6 +16,7 @@ import {
 } from '@/lib/bookkeeping/skatteverket-share'
 import { creditNoteCreditUsed, outstandingWithCreditUsed } from './credit-note-settlement'
 import { fetchArLedgerInvoices, type ArLedgerInvoice } from './ar-ledger-invoices'
+import { issueOreByInvoice, withIssueOre } from './reskontra-issue-ore'
 import { fetchCreditedInvoiceIds, netCreditedPairs } from './credited-pairs'
 import { daysPastDue, todayIsoStockholm } from '@/lib/dates/iso'
 
@@ -152,6 +153,15 @@ export async function generateARLedger(
   // What Skatteverket has paid out of each ROT/RUT deduction, which no
   // longer sits on 1513 (skatteverket-share.ts).
   const settled = skatteverketSettledByInvoice(invoices, isHistorical ? asOfDate : undefined)
+  // The öresavrundning each invoice's issue verifikat put on 151x
+  // (reskontra-issue-ore.ts). A failed read leaves the figures as the
+  // invoices state them, off from 1510 by those öre only; `strict` throws.
+  let issueOre = new Map<string, number>()
+  try {
+    issueOre = await issueOreByInvoice(supabase, companyId, invoices)
+  } catch (err) {
+    if (options?.strict) throw err
+  }
 
   // Each row's open amount in its own currency, then each credit note set
   // against the invoice it credits (credited-pairs.ts): a fully credited
@@ -161,10 +171,12 @@ export async function generateARLedger(
   for (const inv of invoices) {
     const total = Number(inv.total) || 0
     const liveOutstanding = roundOre(total - (Number(inv.paid_amount) || 0))
+    const outstanding = payments ? outstandingAsOf(inv, total, liveOutstanding, payments, asOfDate!) : liveOutstanding
+    const receivable = payments
+      ? outstandingLessPayouts(outstanding, settled.get(inv.id))
+      : liveReceivableOutstanding(inv, liveOutstanding, settled.get(inv.id))
     ownOutstanding.set(inv.id, outstandingWithCreditUsed(
-      payments
-        ? outstandingLessPayouts(outstandingAsOf(inv, total, liveOutstanding, payments, asOfDate!), settled.get(inv.id))
-        : liveReceivableOutstanding(inv, liveOutstanding, settled.get(inv.id)),
+      withIssueOre(receivable, outstanding, inv, issueOre.get(inv.id)),
       creditUsed.get(inv.id)
     ))
   }

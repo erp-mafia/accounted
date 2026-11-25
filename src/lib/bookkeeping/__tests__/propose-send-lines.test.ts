@@ -399,3 +399,47 @@ describe('proposeSendLines: foreign currency without an exchange rate', () => {
     expect(lines.find((l) => l.account_number === '1510')?.debit_amount).toBe('14375')
   })
 })
+
+describe('proposeSendLines: the öresavrundning the issue books (crm#2283)', () => {
+  const rounded = () =>
+    makeInvoiceInput({
+      total: 999.75,
+      subtotal: 799.8,
+      vat_amount: 199.95,
+      items: [makeItem({ unit_price: 799.8, line_total: 799.8, vat_amount: 199.95 })],
+    })
+
+  it('shows 1510 at the rounded total and the öre on 3740 when the issue rounds', () => {
+    const lines = proposeSendLines({ invoice: { ...rounded(), ore_rounding: true }, entityType: 'aktiebolag', oreRounding: { company: null } })
+
+    expect(lines.find((l) => l.account_number === '1510')?.debit_amount).toBe('1000')
+    expect(lines.find((l) => l.account_number === '3740')).toMatchObject({ debit_amount: '', credit_amount: '0.25' })
+  })
+
+  it('follows the company setting for a row without its own choice', () => {
+    const off = proposeSendLines({ invoice: rounded(), entityType: 'aktiebolag', oreRounding: { company: { ore_rounding: false } } })
+    expect(off.find((l) => l.account_number === '1510')?.debit_amount).toBe('999.75')
+    expect(off.find((l) => l.account_number === '3740')).toBeUndefined()
+  })
+
+  it('shows the exact total when the issue books no rounding (no option)', () => {
+    const lines = proposeSendLines({ invoice: { ...rounded(), ore_rounding: true }, entityType: 'aktiebolag' })
+
+    expect(lines.find((l) => l.account_number === '1510')?.debit_amount).toBe('999.75')
+    expect(lines.find((l) => l.account_number === '3740')).toBeUndefined()
+  })
+
+  it('a mirrored kreditfaktura credits 1510 the rounded amount and debits 3740', () => {
+    const credit = makeInvoiceInput({
+      total: -999.75,
+      subtotal: -799.8,
+      vat_amount: -199.95,
+      credited_invoice_id: 'inv-0',
+      items: [makeItem({ unit_price: -799.8, line_total: -799.8, vat_amount: -199.95 })],
+    })
+    const lines = proposeSendLines({ invoice: { ...credit, ore_rounding: true }, entityType: 'aktiebolag', oreRounding: { company: null } })
+
+    expect(lines.find((l) => l.account_number === '1510')?.credit_amount).toBe('1000')
+    expect(lines.find((l) => l.account_number === '3740')).toMatchObject({ debit_amount: '0.25', credit_amount: '' })
+  })
+})

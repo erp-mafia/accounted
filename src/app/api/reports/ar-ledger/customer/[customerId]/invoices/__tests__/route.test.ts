@@ -377,3 +377,41 @@ describe('GET /api/reports/ar-ledger/customer/[customerId]/invoices: a credited 
     expect(await linesFor([original(1000), note(-400)])).toEqual([['orig', 600]])
   })
 })
+
+describe('GET /api/reports/ar-ledger/customer/[customerId]/invoices: öresavrundning booked at issue (crm#2283)', () => {
+  const row = { currency: 'SEK', exchange_rate: null, notes: null, paid_amount: 0, invoice_date: '2026-11-13', due_date: '2026-12-13' }
+  /** 999,75 kr invoiced as 1 000: the issue verifikat put 1 000 on 1510 (or, issued before, 999,75). */
+  function books(receivable: number): ReskontraTables {
+    return {
+      invoices: [{ ...row, id: 'inv-r', invoice_number: 'F-9', total: 999.75, journal_entry_id: 'je-r' }],
+      journal_entries: [{ id: 'je-r', status: 'posted', source_type: 'invoice_created', source_id: 'inv-r', voucher_number: 9, voucher_series: 'A', description: 'Kundfaktura F-9' }],
+      journal_entry_lines: [{ journal_entry_id: 'je-r', account_number: '1510', debit_amount: receivable, credit_amount: 0 }],
+    }
+  }
+
+  async function outstandingFor(supabase: ReturnType<typeof buildSupabase>) {
+    authWith(supabase)
+    const res = await GET(createMockRequest('/api/reports/ar-ledger/customer/cust-1/invoices'), createMockRouteParams({ customerId: 'cust-1' }))
+    return res
+  }
+
+  it('lists the open claim the issue booked on 1510, like the aggregate', async () => {
+    const res = await outstandingFor(buildSupabase({ id: 'cust-1', name: 'Kunden AB' }, books(1000)))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { data: { lines: Array<{ invoice_id: string; outstanding: number }> } }
+    expect(body.data.lines.map((line) => [line.invoice_id, line.outstanding])).toEqual([['inv-r', 1000]])
+  })
+
+  it('an invoice issued at the exact total reads as before', async () => {
+    const res = await outstandingFor(buildSupabase({ id: 'cust-1', name: 'Kunden AB' }, books(999.75)))
+    const body = (await res.json()) as { data: { lines: Array<{ invoice_id: string; outstanding: number }> } }
+    expect(body.data.lines.map((line) => [line.invoice_id, line.outstanding])).toEqual([['inv-r', 999.75]])
+  })
+
+  it('answers with an error when the issue verifikat cannot be read', async () => {
+    const res = await outstandingFor(
+      buildSupabase({ id: 'cust-1', name: 'Kunden AB' }, books(1000), { invoice_issue_receivable_sek: { message: 'DB error' } }),
+    )
+    expect(res.status).toBe(500)
+  })
+})

@@ -64,6 +64,9 @@ function makeInvoice(overrides: Partial<Invoice> & { items?: InvoiceItem[] }): I
     created_at: '2024-06-15T00:00:00Z',
     updated_at: '2024-06-15T00:00:00Z',
     items: [],
+    // The cases here are about other rules; the issue's öresavrundning
+    // (crm#2283) has its own cases in invoice-issue-rounding.test.ts.
+    ore_rounding: false,
     ...overrides,
   } as Invoice
 }

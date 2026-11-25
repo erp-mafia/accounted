@@ -2,8 +2,9 @@ import { bankBookingContext } from '@/lib/bookkeeping/bank-booking-context'
 import { isKronorCurrency } from '@/lib/bookkeeping/currency-utils'
 import { findFiscalPeriod } from './engine'
 import { coerceDimensionsBag } from './dimension-resolver'
-import { clearedSek, statedSettlement } from './ledger-carried-sek'
+import { clearedSek, creditMirrorsIssueOre, statedSettlement } from './ledger-carried-sek'
 import { fxDifferenceLine } from './ore-rounding'
+import { dbError } from '@/lib/errors/db-error'
 import { createLogger } from '@/lib/logger'
 import { ORE_TOLERANCE, equalOre, roundOre, sumOre } from '@/lib/money'
 import { postingPort } from '@/lib/posting/port'
@@ -17,6 +18,7 @@ import {
 } from './invoice-business-events'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type {
+  CompanySettings,
   CreateJournalEntryInput,
   Transaction,
   CreateJournalEntryLineInput,
@@ -26,6 +28,36 @@ import type {
 } from '@/types'
 
 const log = createLogger('invoice-entries')
+
+/**
+ * How an invoice's own verifikat books its öresavrundning (crm#2283,
+ * IssueOreRounding in ./invoice-lines): a received självfaktura is the
+ * buyer's document and is booked as it states; any other row reads the
+ * company setting only when it has no choice of its own, as getAmountToPay
+ * does for its "Att betala".
+ */
+async function issueOreRoundingOf(
+  supabase: SupabaseClient,
+  companyId: string,
+  invoice: Pick<Invoice, 'currency' | 'ore_rounding' | 'is_self_billed' | 'total'>,
+): Promise<IssueOreRounding | undefined> {
+  if (invoice.is_self_billed) return undefined
+  // Only a SEK total with öre can be rounded (getDisplayTotal); any other row
+  // books the same lines whatever the setting says, so it costs no read.
+  if (invoice.ore_rounding != null || !hasOreToRound(invoice)) return { company: null }
+  const { data, error } = await supabase
+    .from('company_settings')
+    .select('ore_rounding')
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (error) throw dbError(error, 'company öresavrundning')
+  return { company: (data as Pick<CompanySettings, 'ore_rounding'> | null) ?? null }
+}
+
+/** A SEK document whose total has öre: the only kind öresavrundning changes. */
+function hasOreToRound(document: Pick<Invoice, 'currency' | 'total'>): boolean {
+  return isKronorCurrency(document.currency) && !Number.isInteger(roundOre(Number(document.total) || 0))
+}
 
 // INVOICE_FX_RATE_MISSING, InvoiceFxRateMissingError, getRevenueAccount and
 // getOutputVatAccount live in ./invoice-accounts (pure, no engine import):
@@ -47,6 +79,7 @@ import {
   installmentOutputVat,
   invoiceCashBankSek,
   splitDeductionShare,
+  type IssueOreRounding,
 } from './invoice-lines'
 export { buildInvoiceCashLines, buildInvoiceCashPartialLines } from './invoice-lines'
 
@@ -158,7 +191,11 @@ export async function buildInvoiceJournalEntryInput(
   // point). User-edited lines above book as reviewed and get no schedule.
   await assertAccruedIncomeLinesBookable(supabase, companyId, invoice.invoice_date, invoice.items ?? [])
 
-  const lines = buildInvoiceRegistrationLines(invoice, entityType, options?.numberOverride)
+  // The issue books what the invoice asks for: 1510 at the rounded "Att
+  // betala", the öresavrundning on 3740 (crm#2283).
+  const lines = buildInvoiceRegistrationLines(invoice, entityType, options?.numberOverride, {
+    oreRounding: await issueOreRoundingOf(supabase, companyId, invoice),
+  })
 
   const input: CreateJournalEntryInput = {
     fiscal_period_id: fiscalPeriodId,
@@ -398,7 +435,16 @@ export async function createCreditNoteJournalEntry(
     return null
   }
 
-  const lines = buildCreditNoteLines(creditNote, entityType, originalVoucherRef, options)
+  // A kreditfaktura mirrors the öresavrundning its original's issue booked
+  // (crm#2283), so the pair nets to zero on 1510 and 3740; an original issued
+  // at the exact total is credited at the exact total.
+  const mirrorsIssueOre = creditNote.credited_invoice_id && hasOreToRound(creditNote)
+    ? await creditMirrorsIssueOre(supabase, companyId, creditNote.credited_invoice_id)
+    : false
+  const lines = buildCreditNoteLines(creditNote, entityType, originalVoucherRef, {
+    ...options,
+    oreRounding: mirrorsIssueOre ? await issueOreRoundingOf(supabase, companyId, creditNote) : undefined,
+  })
   // A credit of part of the share (the customer's, and what a payout booked)
   // takes back only that moms.
   const partOfShare = creditNoteDeductionSplit(creditNote, options.deductionBookedSek) !== null

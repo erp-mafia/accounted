@@ -5,6 +5,7 @@ import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { fetchArLedgerInvoices, type ArLedgerInvoice } from '@/lib/reports/ar-ledger-invoices'
 import { creditNoteCreditUsed, outstandingWithCreditUsed } from '@/lib/reports/credit-note-settlement'
 import { fetchCreditedInvoiceIds, netCreditedPairs } from '@/lib/reports/credited-pairs'
+import { issueOreByInvoice, withIssueOre } from '@/lib/reports/reskontra-issue-ore'
 import {
   liveReceivableOutstanding,
   skatteverketSettledByInvoice,
@@ -69,18 +70,29 @@ export const GET = withRouteContext<{ params: Promise<{ customerId: string }> }>
   const creditUsed = creditNoteCreditUsed(population)
   // Skatteverket's payouts on ROT/RUT deductions, as in generateARLedger.
   const settled = skatteverketSettledByInvoice(population)
+  // The öre each invoice's issue verifikat booked, as in generateARLedger.
+  let issueOre = new Map<string, number>()
+  try {
+    issueOre = await issueOreByInvoice(supabase, companyId, population)
+  } catch (error) {
+    return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
+  }
   const ownOutstanding = new Map(
-    population.map((inv) => [
-      inv.id,
-      outstandingWithCreditUsed(
-        liveReceivableOutstanding(
-          inv,
-          roundOre((Number(inv.total) || 0) - (Number(inv.paid_amount) || 0)),
-          settled.get(inv.id)
+    population.map((inv) => {
+      const outstanding = roundOre((Number(inv.total) || 0) - (Number(inv.paid_amount) || 0))
+      return [
+        inv.id,
+        outstandingWithCreditUsed(
+          withIssueOre(
+            liveReceivableOutstanding(inv, outstanding, settled.get(inv.id)),
+            outstanding,
+            inv,
+            issueOre.get(inv.id),
+          ),
+          creditUsed.get(inv.id)
         ),
-        creditUsed.get(inv.id)
-      ),
-    ])
+      ]
+    })
   )
   // Each credit note set against the invoice it credits, as in generateARLedger.
   const creditNoteIds = population.filter(isCreditNoteDocument).map((inv) => inv.id)

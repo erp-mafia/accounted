@@ -39,6 +39,7 @@ import { resolveSendLabel } from '@/lib/invoices/editor/primary-action'
 import { DIGITAL_MAILBOX_PROVIDER_NAMES } from '@/lib/digital-mailboxes/sending-status'
 import { resolveEditorStatusLine } from '@/lib/invoices/editor/status-line'
 import { proposeCreditNoteSendLines } from '@/lib/invoices/editor/voucher-preview'
+import { creditMirrorsIssueOre } from '@/lib/bookkeeping/ledger-carried-sek'
 import { persistAndSend } from '@/lib/invoices/editor/send-sequence'
 import { creditedAmount, creditNoteNumber, creditNoteOriginalReference } from '@/lib/invoices/build-credit-note'
 import { buildCreditNoteItem } from '@/lib/invoices/build-credit-note-item'
@@ -162,6 +163,25 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
   // A credit note reverses what was booked: under kontantmetoden an unpaid,
   // unbooked original has nothing to reverse.
   const books = invoice ? creditNoteNeedsJournalEntry(accountingMethod, invoice) : false
+  // The credit mirrors the öresavrundning the original's issue booked
+  // (creditMirrorsIssueOre, crm#2283). Preview only: the credit decides again
+  // when it books.
+  const [mirrorsIssueOre, setMirrorsIssueOre] = useState(false)
+  const originalId = invoice?.id
+  useEffect(() => {
+    if (!originalId || !company?.id || !books) return
+    let cancelled = false
+    creditMirrorsIssueOre(supabase, company.id, originalId)
+      .then((mirrors) => {
+        if (!cancelled) setMirrorsIssueOre(mirrors)
+      })
+      .catch(() => {
+        // The confirm then shows the reversal without the rounding row.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [supabase, originalId, company?.id, books])
   // accounted#45: a deferred original that was never booked is booked first,
   // on its own date, then credited.
   const booksOriginalFirst = invoice ? creditBooksOriginalFirst(companySettings, invoice) : false
@@ -452,7 +472,7 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
       // would show a reversal that is not the one booked.
       const entityType = companySettings?.entity_type ?? company?.entity_type
       const lines = isEntityType(entityType)
-        ? proposeCreditNoteSendLines({ ...invoice, customer: invoice.customer ?? undefined }, { entityType, today })
+        ? proposeCreditNoteSendLines({ ...invoice, customer: invoice.customer ?? undefined }, { entityType, today, mirrorsIssueOre })
         : []
       confirmVoucher =
         lines.length > 0

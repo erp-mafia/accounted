@@ -23,9 +23,11 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { isKronorCurrency, sekOfForeign } from '@/lib/bookkeeping/currency-utils'
+import { invoiceCustomerShare } from '@/lib/bookkeeping/customer-share'
 import { bookedOreRounding } from '@/lib/bookkeeping/ore-rounding'
 import { dbError } from '@/lib/errors/db-error'
 import { ORE_TOLERANCE, equalOre, roundOre } from '@/lib/money'
+import { chunk } from '@/lib/utils'
 
 /** Which ledger carries the document: 1510 or 244x. */
 export type LedgerSide = 'customer' | 'supplier'
@@ -172,4 +174,76 @@ export function statedSettlement(opts: { cleared: number; sekAtRate: number; dif
   const { cleared, sekAtRate, difference } = opts
   const bankSek = roundOre(difference === undefined ? cleared : sekAtRate + difference)
   return { bankSek, gainSek: roundOre(bankSek - cleared) }
+}
+
+/** How many invoice ids one invoice_issue_receivable_sek call carries. */
+const ISSUE_RECEIVABLE_BATCH = 200
+
+/**
+ * What each invoice's own issue verifikat put on 151x (1513, Skatteverket's
+ * ROT/RUT share, excluded), keyed by invoice id: public.invoice_issue_receivable_sek
+ * (crm#2283), the issue followed through a storno to its correction. An
+ * invoice without a live issue verifikat is absent. Throws on a read error.
+ */
+export async function fetchIssueReceivableSek(
+  supabase: Pick<SupabaseClient, 'rpc'>,
+  companyId: string,
+  invoiceIds: readonly string[],
+): Promise<Map<string, number>> {
+  const out = new Map<string, number>()
+  for (const batch of chunk([...new Set(invoiceIds)], ISSUE_RECEIVABLE_BATCH)) {
+    const { data, error } = await supabase.rpc('invoice_issue_receivable_sek', {
+      p_company_id: companyId,
+      p_invoice_ids: batch,
+    })
+    if (error) throw dbError(error, 'issue receivable')
+    for (const row of (data ?? []) as Array<{ invoice_id: string; sek: number | string }>) {
+      out.set(row.invoice_id, roundOre(Number(row.sek)))
+    }
+  }
+  return out
+}
+
+/**
+ * The öresavrundning a SEK invoice's issue verifikat booked (crm#2283): the
+ * customer's share at issue (the total less a ROT/RUT deduction; a later
+ * reclaim is a verifikat of its own) against what that verifikat put on 151x,
+ * by the band of bookedOreRounding. Below zero 151x carries more than the
+ * share (a total rounded up), above less (rounded down), zero when the issue
+ * booked no öre, the invoice is foreign or there is no issue verifikat. A
+ * kreditfaktura's figures are negative, so its sign is the other way round.
+ */
+export function issueBookedOre(
+  invoice: { currency?: string | null; total: number | string | null; deduction_total?: number | string | null },
+  issueReceivableSek: number | null | undefined,
+): number {
+  if (!isKronorCurrency(invoice.currency) || issueReceivableSek == null) return 0
+  const share = invoiceCustomerShare({ total: Number(invoice.total) || 0, deduction_total: Number(invoice.deduction_total) || 0 })
+  return bookedOreRounding(share, issueReceivableSek)
+}
+
+/**
+ * Whether a kreditfaktura of the invoice `originalId` books the
+ * öresavrundning (buildCreditNoteLines' options.oreRounding): when the
+ * original's own issue verifikat booked its öre, the credit mirrors it so the
+ * pair nets to zero on 1510 and 3740. An original issued without one (before
+ * crm#2283, or imported that way) is credited without, as before. Throws on a
+ * read error.
+ */
+export async function creditMirrorsIssueOre(
+  supabase: Pick<SupabaseClient, 'rpc' | 'from'>,
+  companyId: string,
+  originalId: string,
+): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('invoices')
+    .select('id, currency, total, deduction_total')
+    .eq('company_id', companyId)
+    .eq('id', originalId)
+    .maybeSingle()
+  if (error) throw dbError(error, 'credited invoice')
+  const original = data as { id: string; currency: string | null; total: number; deduction_total: number | null } | null
+  if (!original || !isKronorCurrency(original.currency)) return false
+  const issued = await fetchIssueReceivableSek(supabase, companyId, [original.id])
+  return issueBookedOre(original, issued.get(original.id)) !== 0
 }
