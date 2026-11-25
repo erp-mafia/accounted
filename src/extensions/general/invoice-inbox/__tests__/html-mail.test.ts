@@ -5,6 +5,7 @@ import {
   UPLOAD_ALLOWED_MIME_TYPES,
 } from '@/extensions/general/invoice-inbox/lib/upload-and-extract'
 import { htmlToText } from '@/lib/documents/inbox-extraction/extract-invoice-fields'
+import { MAIL_HTML_FIXTURES } from '@/tests/fixtures/mail-html'
 import { validateDocumentMagicBytes } from '@/lib/core/documents/document-service'
 import { INBOX_UPLOAD_ACCEPT, INBOX_UPLOAD_TYPES, declaredDocumentType } from '@/lib/documents/upload-types'
 
@@ -83,5 +84,42 @@ describe('htmlToText', () => {
   it('caps the output length', () => {
     const long = `<p>${'a'.repeat(80_000)}</p>`
     expect(htmlToText(long).length).toBeLessThanOrEqual(50_000)
+  })
+})
+
+describe('htmlToText on mail as senders write it', () => {
+  const READ: Record<string, string> = {
+    'an Outlook invoice mail':
+      'Hej,\nBifogat finns faktura 2025-0042 f&ouml;r november.\nAtt betala: 12 500,00 kr inkl. moms. F&ouml;rfallodag 2025-12-31.\nBankgiro 123-4567, OCR 20250042.\nMed v&auml;nliga h&auml;lsningar\nAnna Exempel\nExempel Leverant&ouml;r AB',
+    'a web shop receipt':
+      'Tack f&ouml;r ditt k&ouml;p!\nOrdernummer: 100-2381\nKontorsstol Ergo & fotst&ouml;d 2\u00a0990,00 kr\nFrakt 49,00 kr\nTotalt 3\u00a0039,00 kr\nVarav moms 25 %: 607,80 kr',
+    'a receipt forwarded from Gmail':
+      '---------- Forwarded message ---------\nFrån: Exempel Hosting <faktura@hosting.example>\nDate: tis 25 nov. 2025 kl 09:14\nSubject: Kvitto för betalning #48213\nTo: <ekonomi@foretaget.example>\nHej!\nVi har tagit emot din betalning på 1 249,00 kr för perioden 2025-11-01 till 2025-11-30.\nWebbhotell Bas: 999,00 kr\nDomän foretaget.example: 250,00 kr\nKortet slutar på 4242.\nDetta mejl kan inte besvaras.',
+    'a page saved from a supplier portal':
+      'Exempel Leverant&ouml;r AB\nFaktura 7781\nFakturadatum: 2025-11-03\nFörfallodag: 2025-12-03\nKonsulttimmar, 10 h 9\u00a0500,00\nMoms 25 % 2 375,00\nSumma att betala: 11 875,00 SEK\nBet.villkor 30 dagar netto. Dr&ouml;jsm&aring;lsr&auml;nta enligt r&auml;ntelagen.\n<!-- generated 2025-11-03T08:00:00Z',
+  }
+
+  it.each(MAIL_HTML_FIXTURES)('reads %s as before', (name, html) => {
+    expect(htmlToText(html)).toBe(READ[name])
+  })
+
+  // Each of these took seconds per 100 KB, searching the rest of the body
+  // again from every opening. The bound is checked after each size, the
+  // smaller first, so a slow step fails here instead of hanging the run.
+  it.each([
+    ['opening script tags without their >', '<script '],
+    ['opening title tags without their >', '<title '],
+    ['comments that never end', '<!--'],
+    ['line breaks without their >', '<br '],
+    ['rules without their >', '<hr '],
+    ['tags without their >', '<'],
+    ['a run of no-break spaces', '\u00a0'],
+    ['a run of carriage returns', '\r'],
+  ])('answers at once for a body made of %s', (_, unit) => {
+    const started = Date.now()
+    for (const kb of [256, 2048]) {
+      htmlToText(unit.repeat(Math.floor((kb * 1024) / unit.length)))
+      expect(Date.now() - started).toBeLessThan(1000)
+    }
   })
 })

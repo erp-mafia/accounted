@@ -23,6 +23,7 @@ import type { AiDocumentInput, AiImageMediaType, ExtractionSkipReason } from '@/
 import { createLogger } from '@/lib/logger'
 import { fitImageForModel, HEIC_MIME_TYPES } from '@/lib/documents/read/image'
 import { DUE_DATE_RULE } from '@/lib/documents/due-date-labels'
+import { replaceBlocks, replaceUpToLastCloser } from '@/lib/documents/html-markup'
 import { classifyExtractionError, type ExtractionFailure } from './extraction-failure'
 import {
   AMBIGUOUS_DATE_RULE,
@@ -565,13 +566,20 @@ const MAX_EXTRACTION_TEXT_LENGTH = 50_000
  * the model budget; the mail-body underlag renders with a larger one.
  */
 export function htmlToText(html: string, maxLength: number = MAX_EXTRACTION_TEXT_LENGTH): string {
-  const withoutBlocks = html
-    .replace(/<(script|style|head|title)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, ' ')
-    .replace(/<!--[\s\S]*?-->/g, ' ')
-  const withBreaks = withoutBlocks
-    .replace(/<\/(p|div|tr|li|h[1-6]|table|thead|tbody|section|article|blockquote|pre)\s*>/gi, '\n')
-    .replace(/<(br|hr)\b[^>]*\/?>/gi, '\n')
-  const stripped = withBreaks.replace(/<[^>]+>/g, ' ')
+  // Markup that is never closed is read in time that grows with the body (html-markup.ts).
+  const withoutBlocks = replaceUpToLastCloser(
+    replaceBlocks(html, ['script', 'style', 'head', 'title'], 'spaces', ' '),
+    /<!--[\s\S]*?-->/g,
+    ' ',
+    '-->',
+  )
+  const withBreaks = replaceUpToLastCloser(
+    withoutBlocks.replace(/<\/(p|div|tr|li|h[1-6]|table|thead|tbody|section|article|blockquote|pre)\s*>/gi, '\n'),
+    /<(br|hr)\b[^>]*\/?>/gi,
+    '\n',
+    '>',
+  )
+  const stripped = replaceUpToLastCloser(withBreaks, /<[^>]+>/g, ' ', '>')
   const decoded = stripped
     .replace(/&nbsp;/gi, ' ')
     .replace(/&lt;/gi, '<')
@@ -591,7 +599,10 @@ export function htmlToText(html: string, maxLength: number = MAX_EXTRACTION_TEXT
     .replace(/&amp;/gi, '&')
   return decoded
     .replace(/[ \t]+/g, ' ')
-    .replace(/\s*\n\s*/g, '\n')
+    // A run of whitespace that holds a line break becomes that one break, as
+    // /\s*\n\s*/g made it; that pattern searched a long run without a break
+    // again from each of its characters.
+    .replace(/\s+/g, (run) => (run.includes('\n') ? '\n' : run))
     .replace(/\n{3,}/g, '\n\n')
     .trim()
     .slice(0, maxLength)
