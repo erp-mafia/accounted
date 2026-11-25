@@ -68,7 +68,8 @@ export function AddMailboxDialog({ open, onOpenChange }: { open: boolean; onOpen
   )
 }
 
-function MailboxList() {
+/** `doors` limits the list to those ways in (the dialog shows them all). */
+export function MailboxList({ doors }: { doors?: readonly MailboxDoor[] } = {}) {
   const t = useTranslations('inkorg')
   const digital = useDigitalMailboxes()
   // Until the answer is in, Kivra and Billo render as rows with a skeleton (or
@@ -80,7 +81,7 @@ function MailboxList() {
     mail: ENABLED_EXTENSION_IDS.has('mail'),
     kivra: receives('kivra'),
     billo: receives('billo'),
-  })
+  }).filter((entry) => !doors || doors.includes(entry.door))
 
   return (
     <ul className="border-t-hairline">
