@@ -32,8 +32,11 @@ import { SETTINGS_SECTION_PARENT, visibleSettingsSections } from '@/lib/navigati
 const SRC = path.resolve(__dirname, '..', '..', '..')
 const CATALOGS = path.join(SRC, 'messages')
 const SEP = String.raw`\s*(?:→|->|›|>|,|:)\s*`
-/** A path's next label starts with a capital; "Settings, then Connectors" is a sentence, not a path. */
-const PATH_HEAD = String.raw`(?<![\p{L}])LABEL${SEP}(?=\p{Lu})`
+/**
+ * A path's next label starts with a capital ("Settings, then Connectors" is a
+ * sentence, not a path) or is not literal text, which cannot be checked.
+ */
+const PATH_HEAD = String.raw`(?<![\p{L}])LABEL${SEP}(?=\p{Lu}|\u0000)`
 /** Files worth parsing: a path may continue in the next literal of a `+` chain. */
 const MENTIONS_SETTINGS = new RegExp(String.raw`(?<![\p{L}])(?:Inställningar|Settings)${SEP}`, 'u')
 /** Stands where an interpolation or a non-literal operand was. */
@@ -84,9 +87,11 @@ function texts(file: string, source: string): string[] {
     return null
   }
   const operands = (node: ts.Expression): ts.Expression[] =>
-    ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken
-      ? [...operands(node.left), ...operands(node.right)]
-      : [node]
+    ts.isParenthesizedExpression(node)
+      ? operands(node.expression)
+      : ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken
+        ? [...operands(node.left), ...operands(node.right)]
+        : [node]
   const visit = (node: ts.Node): void => {
     if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
       const parts = operands(node)
@@ -141,6 +146,7 @@ describe('settings paths written in code name an entry the menu has', () => {
       head: new RegExp(PATH_HEAD.replace('LABEL', labels.nav('settings')), 'gu'),
       spellings: menuSpellings(labels),
     }))
+    const otherProducts = new RegExp(`^(?:${[...OTHER_PRODUCTS_FIRST_LABEL].map(escapeRegExp).join('|')})(?![\\p{L}\\p{N}])`, 'u')
     const dead: string[] = []
     let checked = 0
     for (const file of sourceFiles(SRC)) {
@@ -152,10 +158,10 @@ describe('settings paths written in code name an entry the menu has', () => {
         for (const { head, spellings } of heads) {
           for (const match of text.matchAll(head)) {
             const rest = text.slice(match.index + match[0].length)
-            if ([...OTHER_PRODUCTS_FIRST_LABEL].some((label) => rest.startsWith(label))) continue
+            if (otherProducts.test(rest)) continue
             checked++
             if (!spellings.some((spelling) => spelling.test(rest))) {
-              dead.push(`${relative}: ${(match[0] + rest).slice(0, 70)}`)
+              dead.push(`${relative}: ${(match[0] + rest).slice(0, 70).replaceAll(GAP, '{…}')}`)
             }
           }
         }

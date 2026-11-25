@@ -8616,11 +8616,11 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     message_sv:
       'Verifikationen makulerar en ångrad SIE-import och kan inte raderas: då blir importens verifikationer aktiva igen. Importera filen på nytt under Bokföring > Importera/Exportera, eller börja om med tomma verifikationsserier med Gör om migrering under Inställningar > Företaget > Företagsuppgifter > Riskzon.',
     message_en:
-      'This voucher reverses an undone SIE import and cannot be deleted: the import\'s vouchers would become active again. Import the file again, or start over with empty voucher series via Redo migration under Settings → Company → Company details.',
+      'This voucher reverses an undone SIE import and cannot be deleted: the import\'s vouchers would become active again. Import the file again, or start over with empty voucher series via Redo migration under Settings → Company → Company details → Danger zone.',
     retryable: false,
     remediation: {
       description:
-        'The storno belongs to an undone or replaced SIE import (retain_sie_undo_reversal). To bring the vouchers back, import the file again (gnubok_import_sie). To start the books over, the owner uses Redo migration (Gör om migrering) under Settings → Company → Company details in the app.',
+        'The storno belongs to an undone or replaced SIE import (retain_sie_undo_reversal). To bring the vouchers back, import the file again (gnubok_import_sie). To start the books over, the owner uses Redo migration (Gör om migrering) under Settings → Company → Company details → Danger zone in the app.',
       tool: 'gnubok_import_sie',
       resource: '/settings/company',
     },
