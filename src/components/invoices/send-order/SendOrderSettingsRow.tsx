@@ -6,9 +6,10 @@ import { Button } from '@/components/ui/button'
 import { SettingsGroup, SettingsRow, SettingsRowEnd, SettingsRowNote } from '@/components/settings/SettingsRows'
 import { useCompany, useSendOrderSetupEnabled } from '@/contexts/CompanyContext'
 import { DIGITAL_MAILBOX_PROVIDER_NAMES } from '@/lib/digital-mailboxes/sending-status'
-import { parseSendOrder, type SendOrderWay } from '@/lib/invoices/send-order'
+import { hasOrderToChoose, parseSendOrder, type SendOrderWay } from '@/lib/invoices/send-order'
 import type { CompanySettings } from '@/types'
 import { SendOrderEditor } from './SendOrderEditor'
+import { useSendOrderWays } from './use-send-order'
 
 /**
  * Ordning för utskick: the saved order of the ways invoices go out (or the
@@ -22,7 +23,8 @@ export function SendOrderSettingsRow({ settings }: { settings: CompanySettings }
   const inRollout = useSendOrderSetupEnabled()
   const [editing, setEditing] = useState(false)
   const saved = parseSendOrder(settings.invoice_send_order)
-  if (!inRollout && !saved) return null
+  const ways = useSendOrderWays(inRollout && !saved)
+  if (!saved && !(inRollout && ways && hasOrderToChoose(ways))) return null
   const canEdit = role === 'owner' || role === 'admin'
   const wayName = (way: SendOrderWay) =>
     way === 'peppol' ? t('way_peppol') : way === 'email' ? t('way_email') : DIGITAL_MAILBOX_PROVIDER_NAMES[way]

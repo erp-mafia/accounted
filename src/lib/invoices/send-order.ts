@@ -102,6 +102,11 @@ export function availableSendOrderWays(canSendPeppol: boolean, mailboxProviders:
   })
 }
 
+/** An order is only there to choose when the company can use at least two ways. */
+export function hasOrderToChoose(available: readonly SendOrderWay[]): boolean {
+  return available.length >= 2
+}
+
 /** One line of the order list: a way the company can use, switched on or off. */
 export interface SendOrderRow {
   way: SendOrderWay

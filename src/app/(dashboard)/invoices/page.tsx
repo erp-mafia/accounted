@@ -125,7 +125,8 @@ import {
 import { StartCard } from '@/components/dashboard/StartCard'
 import { useCompany, useSendOrderSetupEnabled } from '@/contexts/CompanyContext'
 import { SendOrderSetup } from '@/components/invoices/send-order/SendOrderSetup'
-import { parseSendOrder } from '@/lib/invoices/send-order'
+import { hasOrderToChoose, parseSendOrder } from '@/lib/invoices/send-order'
+import { useSendOrderWays } from '@/components/invoices/send-order/use-send-order'
 import { useIsInvoicer } from '@/lib/hooks/use-is-invoicer'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import type { FiscalPeriod } from '@/types'
@@ -310,12 +311,19 @@ export default function InvoicesPage() {
   // (and for the rest of the visit once it saved one here).
   const sendOrderRollout = useSendOrderSetupEnabled()
   const [sendOrderSavedHere, setSendOrderSavedHere] = useState(false)
-  const showSendOrderSetup =
+  // The block also needs two or more ways to choose between; the ways are
+  // read only for a user who could see it, and until they are known the
+  // empty list shows nothing instead of the start card, so neither the block
+  // nor the card flashes in and out.
+  const sendOrderCandidate =
     sendOrderRollout &&
     !isQuotesList &&
     (role === 'owner' || role === 'admin') &&
     companySettings !== null &&
     (sendOrderSavedHere || parseSendOrder(companySettings.invoice_send_order) === null)
+  const sendOrderWays = useSendOrderWays(sendOrderCandidate)
+  const sendOrderWaysPending = sendOrderCandidate && sendOrderWays === null
+  const showSendOrderSetup = sendOrderCandidate && sendOrderWays !== null && hasOrderToChoose(sendOrderWays)
   const oreRounding: boolean = companySettings?.ore_rounding ?? true
   // Invoice kinds hidden in Inställningar > Försäljning drop out of the
   // Ny faktura menu and the status views; existing rows stay under Alla.
@@ -1372,7 +1380,7 @@ export default function InvoicesPage() {
       )}
 
       {showSendOrderSetup && (
-        <SendOrderSetup saved={sendOrderSavedHere} onSaved={() => setSendOrderSavedHere(true)} />
+        <SendOrderSetup saved={sendOrderSavedHere} available={sendOrderWays ?? []} onSaved={() => setSendOrderSavedHere(true)} />
       )}
 
       {isLoading ? (
@@ -1410,7 +1418,7 @@ export default function InvoicesPage() {
               {tCommon('clear_search')}
             </Button>
           </div>
-        ) : invoices.length === 0 && !isQuotesList && !registerFacts?.anyRow && showSendOrderSetup ? null : invoices.length === 0 && !isQuotesList && !registerFacts?.anyRow ? (
+        ) : invoices.length === 0 && !isQuotesList && !registerFacts?.anyRow && (showSendOrderSetup || sendOrderWaysPending) ? null : invoices.length === 0 && !isQuotesList && !registerFacts?.anyRow ? (
           <div className="animate-fade-in">
             <StartCard
               card="venice"

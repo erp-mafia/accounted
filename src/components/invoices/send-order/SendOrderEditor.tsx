@@ -27,12 +27,14 @@ const SEGMENT_CLASSES = ['bg-foreground/80', 'bg-foreground/55', 'bg-foreground/
 interface SendOrderListProps {
   rows: readonly SendOrderRow[]
   perWay: Record<SendOrderWay, number> | null
+  /** Whether any customer is here: with none, no count is printed. */
+  hasCustomers: boolean
   onMoveUp: (way: SendOrderWay) => void
   onToggle: (way: SendOrderWay) => void
 }
 
 /** The ways as a list: position, name, what it is, who it reaches first, move up, switch. */
-function SendOrderList({ rows, perWay, onMoveUp, onToggle }: SendOrderListProps) {
+function SendOrderList({ rows, perWay, hasCustomers, onMoveUp, onToggle }: SendOrderListProps) {
   const t = useTranslations('invoice_send_order')
   const wayName = (way: SendOrderWay) =>
     way === 'peppol' ? t('way_peppol') : way === 'email' ? t('way_email') : DIGITAL_MAILBOX_PROVIDER_NAMES[way]
@@ -55,19 +57,22 @@ function SendOrderList({ rows, perWay, onMoveUp, onToggle }: SendOrderListProps)
               <div className={cn('text-[13px] font-medium', row.on ? 'text-strong' : 'text-muted-foreground')}>{name}</div>
               <div className="text-xs text-muted-foreground">{wayLine(row.way)}</div>
             </div>
-            {perWay && row.on ? (
+            {perWay && row.on && hasCustomers ? (
               <span className="shrink-0 text-xs tabular-nums text-foreground/80">{t('reach_count', { count: perWay[row.way] })}</span>
             ) : null}
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              aria-label={t('move_up', { way: name })}
-              disabled={index === 0}
-              onClick={() => onMoveUp(row.way)}
-            >
-              <ArrowUpIcon className="h-4 w-4" />
-            </Button>
+            {index === 0 ? (
+              <span className="h-7 w-7 shrink-0 pointer-coarse:min-w-10" aria-hidden="true" />
+            ) : (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-label={t('move_up', { way: name })}
+                onClick={() => onMoveUp(row.way)}
+              >
+                <ArrowUpIcon className="h-4 w-4" />
+              </Button>
+            )}
             <Switch
               checked={row.on}
               onCheckedChange={() => onToggle(row.way)}
@@ -157,25 +162,31 @@ function SendOrderForm({ available, saved, lead, onSaved, onCancel }: SendOrderF
       <SendOrderList
         rows={rows}
         perWay={perWay}
+        hasCustomers={customersKnown && split.total > 0}
         onMoveUp={(way) => setRows((current) => moveSendOrderRowUp(current, way))}
         onToggle={(way) => setRows((current) => toggleSendOrderRow(current, way))}
       />
       {customersKnown && split.total > 0 ? (
         <SendOrderSplit rows={rows} perWay={split.perWay} none={split.none} total={split.total} />
       ) : null}
-      <div className="flex flex-wrap items-center justify-end gap-3">
-        {order.length === 0 ? <span className="mr-auto text-xs text-muted-foreground">{t('turn_one_on')}</span> : null}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <Button type="button" onClick={handleSave} disabled={order.length === 0} loading={isSaving}>
+          {t('apply')}
+        </Button>
         {onCancel ? (
           <Button type="button" variant="ghost" onClick={onCancel} disabled={isSaving}>
             {t('cancel')}
           </Button>
         ) : null}
-        <Button type="button" onClick={handleSave} disabled={order.length === 0} loading={isSaving}>
-          {t('apply')}
-        </Button>
+        {order.length === 0 ? <span className="text-xs text-muted-foreground">{t('turn_one_on')}</span> : null}
       </div>
     </div>
   )
+}
+
+type SendOrderEditorProps = Omit<SendOrderFormProps, 'available'> & {
+  /** The company's ways when the caller already has them; otherwise they are read here. */
+  available?: readonly SendOrderWay[]
 }
 
 /**
@@ -184,8 +195,9 @@ function SendOrderForm({ available, saved, lead, onSaved, onCancel }: SendOrderF
  * the invoices page and the row in the invoice settings both show it.
  * Renders nothing until the company's ways are known.
  */
-export function SendOrderEditor(props: Omit<SendOrderFormProps, 'available'>) {
-  const available = useSendOrderWays()
+export function SendOrderEditor({ available: given, ...props }: SendOrderEditorProps) {
+  const read = useSendOrderWays(given === undefined)
+  const available = given ?? read
   if (!available) return null
   return <SendOrderForm {...props} available={available} />
 }

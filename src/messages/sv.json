@@ -22363,7 +22363,7 @@
   },
   "invoice_send_order": {
     "heading": "Hur ska fakturorna gå ut?",
-    "intro": "Vi provar uppifrån och ner för varje kund. Flytta det ni vill ha först högst upp.",
+    "intro": "Vi provar uppifrån och ner för varje kund.",
     "customers_here": "{count, plural, one {# kund finns här.} other {# kunder finns här.}}",
     "customers_none": "Inga kunder här än. Det här gäller från er första faktura.",
     "way_peppol": "E-faktura",
