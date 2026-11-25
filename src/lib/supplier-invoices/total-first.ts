@@ -1,8 +1,11 @@
 import { isZeroOre, roundOre } from '@/lib/money'
 import { splitGrossVat } from '@/lib/bookkeeping/gross-split'
 import { getDisplayTotal } from '@/lib/bookkeeping/invoice-rounding'
+import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
+import { isForeignSupplierType } from '@/lib/vat/supplier-invoice-line-checks'
 import { supplierInvoiceEditorAmounts } from './editor-amounts'
 import { statedVatFromInvoiceField } from './form-payload'
+import { limitedDeductionApplies } from './limited-deduction'
 
 /**
  * Total-first entry on the supplier-invoice form: the person types what the
@@ -112,6 +115,11 @@ export function rowsAgainstInvoiceTotals(input: {
  * With begränsat momsavdrag the Moms field may hold either the moms the
  * invoice charges (`totalVat`) or the moms the rows deduct
  * (`deductibleVat`, crm#1954): both match.
+ *
+ * `rowsCarryNoVat`: the invoice states moms and the rows carry none at all,
+ * so the whole moms is the difference. The usual cause is moms typed by hand
+ * on rows at 0 %, where the net and the moms sats on the cost row belong.
+ * Not while the rows' payable is still zero: they are still being filled in.
  */
 export function invoiceTotalsCrosscheck(input: {
   invoiceTotal: number | null
@@ -129,5 +137,43 @@ export function invoiceTotalsCrosscheck(input: {
     totalMatches: totalDiff != null && isZeroOre(totalDiff),
     vatDiff,
     vatMatches: vatDiff == null || isZeroOre(vatDiff) || deductibleMatches,
+    rowsCarryNoVat: input.invoiceVat != null && roundOre(input.invoiceVat) > 0 &&
+      isZeroOre(input.totalVat) && !isZeroOre(input.toPay),
   }
+}
+
+/**
+ * Whether the editor's guidance on the invoice's moms applies (the line for
+ * `rowsCarryNoVat`, the caption for isInputVatAccountRow). It is about
+ * Swedish moms the company deducts from the rows: the invoice's moms is
+ * booked (invoiceVatIsBooked: momsregistrerad, not reverse charge), the
+ * invoice has Begränsat momsavdrag (a self-billing invoice has not), and the
+ * supplier is not foreign. A foreign supplier's moms is never Swedish
+ * ingående moms, and its 0 % rows have a hint of their own.
+ */
+export function vatGuidanceApplies(input: {
+  vatRegistered: boolean
+  reverseCharge: boolean
+  selfBilled: boolean
+  supplierType: string | null | undefined
+}): boolean {
+  return invoiceVatIsBooked(input.vatRegistered, input.reverseCharge) &&
+    limitedDeductionApplies({ reverse_charge: input.reverseCharge, is_self_billed: input.selfBilled }) &&
+    !isForeignSupplierType(input.supplierType)
+}
+
+/** The account a row's moms sats books its ingående moms on. */
+const INPUT_VAT_ACCOUNT = resolveAccountRole(PINNED_JURISDICTION, 'input_vat')
+
+/**
+ * A row booked straight on the ingående moms account, the one a row's moms
+ * sats books on, at 0 %: moms typed by hand as a row of its own. It books on
+ * that account as typed, so it is deducted, but the editor and the stored
+ * invoice take the invoice's moms from the rows' moms sats. The other ruta 48
+ * accounts are left alone: reverse charge books its own, and the moms on the
+ * rest (frivillig skattskyldighet, uthyrning, blandad verksamhet) is not what
+ * a moms sats on the cost row would book.
+ */
+export function isInputVatAccountRow(row: { account_number?: string | null; vat_rate?: number | null }): boolean {
+  return row.account_number === INPUT_VAT_ACCOUNT && !((row.vat_rate ?? 0) > 0)
 }

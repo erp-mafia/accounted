@@ -7,7 +7,7 @@ import { VOUCHER_SHAPES, type ShapeLine } from '@/lib/bookkeeping/__tests__/vouc
 import { readVerifikatQuerySearch, verifikatSearchParams } from '@/lib/bookkeeping/verifikat-search'
 
 /**
- * The verifikat list sorted by Belopp (migration 20261125130000). Pins, on
+ * The verifikat list sorted by Belopp (migration 20261125130100). Pins, on
  * real Postgres:
  *   - verifikat_display_amounts gives every voucher shape the amount the list
  *     shows (voucherDisplayAmount) and the amount display_amount gives it;
