@@ -7,15 +7,22 @@ import type { AiClient } from '@/lib/onboarding/ai-clients'
 import { hasBankFeed } from '@/lib/onboarding/checklist'
 import { isNewCompany, pickFirstThing } from '@/lib/onboarding/first-thing'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { isCompanyQuestionsEnabled } from '@/lib/env/company-questions-switch'
+import { createLogger } from '@/lib/logger'
+import { walkQuestions } from '@/lib/onboarding/question-first'
+import { listAppQuestions } from '@/lib/questions/app-answer'
 import { getWorklistCounts } from '@/lib/worklist'
 import type { UserUiState } from '@/types'
 import { countCompletedSieImports, countTransactions, readActiveBankConnections } from './hem-reads'
 import { getDashboardAuthContext, getDashboardCompanyMemberships } from './request-context'
 
+const log = createLogger('hem-question-first')
+
 /**
  * Hem for a person in the first-thing rollout: a new company opens on one
  * named first thing (components/dashboard/HemFirstThing) under the notice
- * line; every other case, and a person who closed the block, gets `hem`, the
+ * line, after the open questions when the company has the question list
+ * (components/dashboard/HemQuestionFirst); every other case, and a person who closed the block, gets `hem`, the
  * usual Hem the page built. The cheap checks (company age, the closed block)
  * run before the worklist is read.
  */
@@ -48,8 +55,23 @@ export async function HemFirstThingSection({
     | null
     | undefined
   const createdAt = (Array.isArray(embedded) ? embedded[0] : embedded)?.created_at ?? null
-  const closed = Boolean((preferences?.ui_state as UserUiState | null)?.first_thing_closed?.[companyId])
+  const uiState = preferences?.ui_state as UserUiState | null
+  const closed = Boolean(uiState?.first_thing_closed?.[companyId])
   if (closed || !isNewCompany(createdAt, today)) return hem
+
+  if (isCompanyQuestionsEnabled(companyId)) {
+    let questions: ReturnType<typeof walkQuestions> = []
+    try {
+      questions = walkQuestions(await listAppQuestions(supabase, companyId), uiState?.hem_questions_passed?.[companyId])
+    } catch (error) {
+      // A failed read falls through as if there were no questions.
+      log.warn('the open questions could not be read', { companyId, error: error instanceof Error ? error.message : String(error) })
+    }
+    if (questions.length > 0) {
+      const { HemQuestionFirst } = await import('@/components/dashboard/HemQuestionFirst')
+      return <DashboardContent notices={notices} panes={<HemQuestionFirst questions={questions} companyId={companyId} />} />
+    }
+  }
 
   const [worklist, bankConnections, transactions, sieImports, hasAi] = await Promise.all([
     getWorklistCounts(supabase, companyId),
