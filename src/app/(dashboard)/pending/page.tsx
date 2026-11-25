@@ -70,6 +70,7 @@ import {
   useComplianceWarningText,
 } from '@/components/pending-operations/OperationPreview'
 import { useAccountNamesSource } from '@/components/pending-operations/use-account-names'
+import { ApprovalHoverPreview } from '@/components/pending-operations/ApprovalHoverPreview'
 import { SigningStep, signingUrlOf } from '@/components/pending-operations/SigningStep'
 import {
   complianceWarningOf,
@@ -1936,6 +1937,14 @@ export default function PendingOperationsPage() {
               // kicker (type, origin, retrieved instructions) and the consent
               // sentence live in the slide-over the row opens.
               const approveLabel = batchType ? t(DAILY_BATCH_REVIEW_LABEL_KEY[batchType]) : t('approve')
+              const approveLockedReason =
+                lockedTitle ??
+                (periodLocked
+                  ? t('period_locked_short')
+                  : rowMissing.length > 0
+                    ? t('review_missing_named', { fields: rowMissing.join(', ') })
+                    : undefined)
+              const approveDisabled = !canWrite || periodLocked || rowMissing.length > 0 || isBulkCommitting
               const rowTitle = splitRowTitle(op.title)
               const fixCopy = FIXABLE_REFUSAL_COPY[fixNotes[op.id]]
               // A locked or closed period disables Godkänn on the row, so the
@@ -2061,37 +2070,41 @@ export default function PendingOperationsPage() {
                       (HOVER_REVEAL_CLASS), so nothing shifts. On a phone the
                       row opens the review, where both sit in the fixed footer. */}
                   <span className={cn('flex shrink-0 items-center justify-end gap-1 max-sm:hidden', HOVER_REVEAL_CLASS)}>
-                    <Button
-                      variant="row-primary"
-                      title={
-                        lockedTitle ??
-                        (periodLocked
-                          ? t('period_locked_short')
-                          : rowMissing.length > 0
-                            ? t('review_missing_named', { fields: rowMissing.join(', ') })
-                            : undefined)
-                      }
-                      disabled={!canWrite || periodLocked || rowMissing.length > 0 || isBulkCommitting}
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        if (periodLocked || rowMissing.length > 0) return
-                        if (batchType) {
-                          setBatchReview({ id: op.id, type: batchType })
-                        } else if (op.risk_level === 'high' || rowConsent) {
-                          // High risk, and an approval that cannot be undone
-                          // (a registration of an already-booked invoice),
-                          // confirm in the dialog that carries the consent
-                          // sentence: the row no longer shows it.
-                          setSelectedOp(op)
-                          setShowCommitDialog(true)
-                        } else {
-                          // Low/medium: the row's button is the approval.
-                          void queueApproval(op)
-                        }
-                      }}
+                    {/* What the click books, shown before it on hover and
+                        keyboard focus, led by the reason a locked button is
+                        locked. A daily batch's button opens its own review
+                        dialog: no card, and its reason stays its title. */}
+                    <ApprovalHoverPreview
+                      op={op}
+                      lockedReason={approveLockedReason}
+                      disabled={approveDisabled}
+                      off={batchType !== null}
                     >
-                      {approveLabel}
-                    </Button>
+                      <Button
+                        variant="row-primary"
+                        title={batchType ? approveLockedReason : undefined}
+                        disabled={approveDisabled}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          if (periodLocked || rowMissing.length > 0) return
+                          if (batchType) {
+                            setBatchReview({ id: op.id, type: batchType })
+                          } else if (op.risk_level === 'high' || rowConsent) {
+                            // High risk, and an approval that cannot be undone
+                            // (a registration of an already-booked invoice),
+                            // confirm in the dialog that carries the consent
+                            // sentence: the row no longer shows it.
+                            setSelectedOp(op)
+                            setShowCommitDialog(true)
+                          } else {
+                            // Low/medium: the row's button is the approval.
+                            void queueApproval(op)
+                          }
+                        }}
+                      >
+                        {approveLabel}
+                      </Button>
+                    </ApprovalHoverPreview>
                     <Button
                       variant="row"
                       title={lockedTitle}

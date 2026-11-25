@@ -2177,6 +2177,8 @@
     "review_title": "Review",
     "review_one_by_one": "Review one at a time",
     "review_posts_heading": "This will be posted",
+    "approve_preview_rest": "Open the proposal for every row.",
+    "approve_preview_more_verifikat": "+ {count, plural, one {# more voucher} other {# more vouchers}}",
     "review_proposal_heading": "The proposal",
     "review_why": "Why",
     "review_bank_row": "Bank row",
