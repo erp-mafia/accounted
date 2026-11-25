@@ -307,6 +307,7 @@ export const salaryRunsEmployeesRemove = defineOperation({
       'Draft runs only: SALARY_RUN_EMPLOYEES_NOT_DRAFT once the run has advanced; gnubok_revert_salary_run brings a run in review back to draft.',
       'Deletes every line of the employee on this run, manual ones included; adding the employee back retakes the pay snapshot but not those lines.',
       'An employee who is not on the run answers SALARY_RUN_EMPLOYEE_NOT_FOUND.',
+      'Late days from an earlier, already paid period carried to this run (carried_to_run_id) answer SALARY_RUN_EMPLOYEE_HAS_LATE_DAYS: no other run deducts them, so delete those days first.',
       'Recalculate the run afterwards (gnubok_calculate_salary_run) so the totals drop the employee.',
     ],
     example: {
@@ -320,7 +321,12 @@ export const salaryRunsEmployeesRemove = defineOperation({
     employee_id: z.string().uuid(),
     removed: z.literal(true),
   }),
-  errorCodes: ['SALARY_RUN_NOT_FOUND', 'SALARY_RUN_EMPLOYEES_NOT_DRAFT', 'SALARY_RUN_EMPLOYEE_NOT_FOUND'],
+  errorCodes: [
+    'SALARY_RUN_NOT_FOUND',
+    'SALARY_RUN_EMPLOYEES_NOT_DRAFT',
+    'SALARY_RUN_EMPLOYEE_NOT_FOUND',
+    'SALARY_RUN_EMPLOYEE_HAS_LATE_DAYS',
+  ],
   mcp: {
     name: 'gnubok_remove_salary_run_employee',
     title: 'Remove Employee From Salary Run',

@@ -82,7 +82,8 @@ const CASES: Array<{ op: AnyOperation; args: Record<string, unknown>; fixture: F
   {
     op: salaryRunsEmployeesRemove,
     args: { salary_run_id: SOME_UUID, employee_id: SOME_UUID },
-    fixture: {},
+    // No late days carried to the run for the employee.
+    fixture: { empty: ['salary_absence_days', 'salary_worked_days'] },
   },
   {
     op: salaryRunsLinesCreate,

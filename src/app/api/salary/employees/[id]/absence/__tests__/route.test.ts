@@ -38,8 +38,35 @@ vi.mock('@/lib/salary/invalidate-calculation', async (original) => ({
 
 const params = { params: Promise.resolve({ id: 'emp-1' }) } as never
 
-/** The register-lock lookup every write makes right after the employee check. */
-const enqueueNoLockingRuns = () => enqueue({ data: [] })
+/** The register-lock lookups every write makes right after the employee check: runs, then the registered day. */
+const enqueueNoLockingRuns = () => {
+  enqueue({ data: [] })
+  enqueue({ data: [] })
+}
+
+/** October 2026, booked: its days are paid out. */
+const BOOKED_RUN_OCTOBER = {
+  id: 'run-oct',
+  status: 'booked',
+  period_year: 2026,
+  period_month: 10,
+  deviation_period_start: '2026-10-01',
+  deviation_period_end: '2026-10-31',
+  agi_submitted_at: null,
+  corrects_run_id: null,
+}
+
+/** November 2026, the draft the payslip calendar works in. */
+const DRAFT_RUN_NOVEMBER = {
+  id: 'run-nov',
+  status: 'draft',
+  period_year: 2026,
+  period_month: 11,
+  deviation_period_start: '2026-11-01',
+  deviation_period_end: '2026-11-30',
+  agi_submitted_at: null,
+  corrects_run_id: null,
+}
 
 /** July 2026 pay month, calculated, legacy NULL window: locks 2026-07-01..31. */
 const REVIEW_RUN_JULY = {
@@ -163,6 +190,7 @@ describe('POST /api/salary/employees/[id]/absence', () => {
   it('returns 409 with the Swedish message and the run when a calculated run already read the date', async () => {
     enqueue({ data: { id: 'emp-1' } }) // loadEmployee
     enqueue({ data: [REVIEW_RUN_JULY] }) // register lock lookup
+    enqueue({ data: [] }) // nothing registered on the day
 
     const response = await POST(post({ absence_date: '2026-07-01', absence_type: 'sick', hours: 8 }), params)
     const { status, body } = await parseJsonResponse<{
@@ -173,10 +201,50 @@ describe('POST /api/salary/employees/[id]/absence', () => {
 
     expect(status).toBe(409)
     expect(body.code).toBe('SALARY_REGISTER_DATES_LOCKED_BY_RUN')
-    expect(body.error).toContain('avvikelseperioden')
+    expect(body.error).toContain('lönekörning 2026-07 (beräknad)')
+    expect(body.error).toContain('Återställ den till utkast')
     expect(body.details).toMatchObject({ salary_run_id: 'run-jul', locked_dates: ['2026-07-01'] })
     // Nothing was written.
     const fromCalls = (supabase.from as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0])
-    expect(fromCalls).toEqual(['employees', 'salary_runs'])
+    expect(fromCalls).toEqual(['employees', 'salary_runs', 'salary_absence_days'])
+    expect(findCall('salary_absence_days', 'upsert')).toBeUndefined()
+  })
+
+  it('refuses a late day outside a payslip and says where it is registered', async () => {
+    enqueue({ data: { id: 'emp-1' } }) // loadEmployee
+    enqueue({ data: [BOOKED_RUN_OCTOBER, DRAFT_RUN_NOVEMBER] }) // runs
+    enqueue({ data: [] }) // nothing registered on the day
+
+    const response = await POST(post({ absence_date: '2026-10-19', absence_type: 'parental', hours: 8 }), params)
+    const { status, body } = await parseJsonResponse<{ error: string; code: string; details: Record<string, unknown> }>(response)
+
+    expect(status).toBe(409)
+    expect(body.code).toBe('SALARY_REGISTER_DATES_LOCKED_BY_RUN')
+    expect(body.error).toContain('2026-11 (utkast)')
+    expect(body.error).toContain('kalendern på lönebeskedet')
+    expect(body.details).toMatchObject({ reason: 'late_day_needs_later_run' })
+    expect(findCall('salary_absence_days', 'upsert')).toBeUndefined()
+  })
+
+  it("carries a late day registered from a draft payslip's calendar to that payslip's run", async () => {
+    enqueue({ data: { salary_run_id: 'run-nov' } }) // the payslip's run
+    enqueue({ data: { id: 'emp-1' } }) // loadEmployee
+    enqueue({ data: [BOOKED_RUN_OCTOBER, DRAFT_RUN_NOVEMBER] }) // runs
+    enqueue({ data: [] }) // nothing registered on the day
+    enqueue({ data: { id: 'sre-nov' } }) // the employee is on November
+    enqueue({ data: [{ salary_run_id: 'run-oct', salary_type: 'monthly' }] }) // October paid the employee monthly
+    enqueue({ data: { salary_calculation_policy: {} } })
+    enqueue({ data: { id: 'abs-1', absence_date: '2026-10-19', absence_type: 'parental', hours: 8, carried_to_run_id: 'run-nov' } })
+
+    const response = await POST(
+      post({ absence_date: '2026-10-19', absence_type: 'parental', hours: 8, salary_run_employee_id: '11111111-1111-4111-8111-111111111111' }),
+      params,
+    )
+
+    expect(response.status).toBe(201)
+    expect(findCall('salary_absence_days', 'upsert')?.[0]).toMatchObject({
+      absence_date: '2026-10-19',
+      carried_to_run_id: 'run-nov',
+    })
   })
 })

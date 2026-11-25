@@ -29,7 +29,7 @@ import {
   UpdateEmployeeBenefitSchema,
   UpdateEmployeeRecurringLineSchema,
 } from '@/lib/api/schemas'
-import { getErrorEntry } from '@/lib/errors/structured-errors'
+import { registerRefusalMessageSv } from '@/lib/salary/register-locks'
 import {
   EmployeeBenefitResourceSchema,
   createEmployeeBenefit,
@@ -54,6 +54,7 @@ import {
   WORKED_DAYS_RANGE_MAX_DAYS,
   deleteWorkedDaysRange,
   listWorkedDays,
+  toWorkedDayResource,
   upsertWorkedDays,
   workedDaysRangeSpan,
   type WorkedDayPreview,
@@ -99,20 +100,12 @@ function failed(result: { code: string; details?: Record<string, unknown> }, cod
 
 function failureMessage(code: string, details: Record<string, unknown> | undefined): string | undefined {
   if (!details) return undefined
-  if (code === 'SALARY_REGISTER_DATES_LOCKED_BY_RUN') return registerLockMessage(details)
+  const refusal = registerRefusalMessageSv(code, details, 'api')
+  if (refusal) return refusal
   if (code !== 'VALIDATION_ERROR') return undefined
   const issue = (Array.isArray(details.issues) ? details.issues[0] : details) as Record<string, unknown> | undefined
   if (typeof issue?.field === 'string' && typeof issue.message === 'string') return `${issue.field}: ${issue.message}`
   return undefined
-}
-
-function registerLockMessage(details: Record<string, unknown>): string | undefined {
-  if (typeof details.salary_run_id !== 'string') return undefined
-  const dates = Array.isArray(details.locked_dates) ? (details.locked_dates as string[]) : []
-  const span = dates.length > 1 ? `${dates[0]} till ${dates[dates.length - 1]}` : (dates[0] ?? '')
-  const period = `${details.period_year}-${String(details.period_month).padStart(2, '0')}`
-  const base = getErrorEntry('SALARY_REGISTER_DATES_LOCKED_BY_RUN')?.message_sv ?? ''
-  return `${base} Lönekörning ${details.salary_run_id} (${period}, ${String(details.status)}) läser ${dates.length} av datumen: ${span}.`
 }
 
 // ---------------------------------------------------------------------------
@@ -143,22 +136,16 @@ const WorkedDay = z.object({
   start_time: z.string().nullable().describe('Shift start (HH:MM:SS); null prices the day as 08:00-17:00.'),
   end_time: z.string().nullable(),
   notes: z.string().nullable(),
+  carried_to_run_id: z
+    .string()
+    .nullable()
+    .describe('The later salary run that pays these hours (a late day), or null: the run whose deviation window holds the date.'),
   created_at: z.string(),
   updated_at: z.string(),
 })
 
 function toWorkedDay(row: WorkedDayRow): z.infer<typeof WorkedDay> {
-  return {
-    salary_worked_day_id: row.id,
-    work_date: row.work_date,
-    // numeric columns can arrive as strings from PostgREST
-    hours: Number(row.hours),
-    start_time: row.start_time,
-    end_time: row.end_time,
-    notes: row.notes,
-    created_at: row.created_at,
-    updated_at: row.updated_at,
-  }
+  return toWorkedDayResource(row)
 }
 
 const WORKED_DAY_EXAMPLE = {
@@ -168,12 +155,16 @@ const WORKED_DAY_EXAMPLE = {
   start_time: '22:00:00',
   end_time: '06:00:00',
   notes: null,
+  carried_to_run_id: null,
   created_at: '2026-03-05T08:00:00Z',
   updated_at: '2026-03-05T08:00:00Z',
 }
 
 const LOCKED_BY_RUN_PITFALL =
-  'Dates inside the deviation window of a salary run that is calculated (review), approved, paid or booked are locked: SALARY_REGISTER_DATES_LOCKED_BY_RUN names the run and nothing is written, dry runs included. Revert that run to draft first (gnubok_unapprove_salary_run for an approved run, then gnubok_revert_salary_run); a paid or booked run needs a correction run. Draft runs never lock.'
+  'Days a salary run that is calculated (review), approved, paid or booked has read are locked: SALARY_REGISTER_DATES_LOCKED_BY_RUN names the run (details.reason) and nothing is written, dry runs included. Draft runs never lock. A run in review or approved, neither paid nor declared: revert it to draft first (gnubok_unapprove_salary_run for an approved run, then gnubok_revert_salary_run).'
+
+const LATE_DAY_PITFALL =
+  'Hours on a date a paid, booked or declared run already read, not registered yet, are a late day (details.reason late_day_needs_later_run): pass carried_to_run_id = the next run that is neither paid nor declared (details.later_salary_run), a draft with the employee on it. That run pays them on top of its own hours and names the dates on the payslip. Never correct the paid run for this: a correction run is for errors found before payout and AGI. A wrong carried_to_run_id answers SALARY_REGISTER_LATE_DAY_REFUSED with details.reason.'
 
 function dateSpan(from: string, to: string): string {
   return from === to ? from : `${from} till ${to}`
@@ -264,6 +255,7 @@ export const employeesWorkedDaysUpsert = defineOperation({
       'start_time/end_time feed the OB (shift premium) rules: a row without them is priced as an assumed 08:00-17:00 day, so a night or weekend shift earns no premium. Times are HH:MM or HH:MM:SS; end_time before start_time means the shift crosses midnight.',
       'Worked hours plus absence hours on one date may not exceed 24 (a database rule shared with absence): the whole call is refused with ABSENCE_HOURS_CONFLICT and nothing is written.',
       LOCKED_BY_RUN_PITFALL,
+      LATE_DAY_PITFALL,
       'Registering hours does not recalculate a draft salary run: call gnubok_calculate_salary_run afterwards.',
     ],
     example: {
@@ -291,12 +283,13 @@ export const employeesWorkedDaysUpsert = defineOperation({
     'VALIDATION_ERROR',
     'ABSENCE_HOURS_CONFLICT',
     'SALARY_REGISTER_DATES_LOCKED_BY_RUN',
+    'SALARY_REGISTER_LATE_DAY_REFUSED',
   ],
   mcp: {
     name: 'gnubok_set_worked_days',
     title: 'Set Worked Days',
     description:
-      'Stage registering worked hours per date for an hourly employee (1-92 days, optional shift start and end for OB). A date already registered is overwritten. Dates a calculated, approved, paid or booked salary run has read are refused. Recalculate the draft run afterwards.',
+      'Stage registering worked hours per date for an hourly employee (1-92 days, optional shift window for OB). A date already registered is overwritten. Hours on a date a paid run already read go to the next draft run via carried_to_run_id. Recalculate the draft run afterwards.',
     keywords: ['registrera timmar', 'arbetade timmar', 'tidrapport', 'timanställd', 'timlön', 'ob-tillägg', 'skift', 'arbetstid'],
     stage: {
       pendingType: 'set_worked_days',
@@ -307,7 +300,7 @@ export const employeesWorkedDaysUpsert = defineOperation({
       },
     },
   },
-  run: async (ctx, { employee_id, days }, { dryRun }) => {
+  run: async (ctx, { employee_id, days, carried_to_run_id }, { dryRun }) => {
     const result = await upsertWorkedDays(ctx.supabase, {
       companyId: ctx.companyId,
       employeeId: employee_id,
@@ -318,6 +311,7 @@ export const employeesWorkedDaysUpsert = defineOperation({
         end_time: day.end_time ?? null,
         notes: day.notes ?? null,
       })),
+      carriedToRunId: carried_to_run_id ?? null,
       dryRun,
     })
     if (!result.ok) return workedDaysFailed(result)
@@ -361,7 +355,7 @@ export const employeesWorkedDaysDelete = defineOperation({
     useWhen:
       'Hours were pushed for the wrong employee or the wrong dates, or a time-tracking re-sync needs a clean period before the days are registered again.',
     doNotUseFor:
-      'Correcting the hours of a day: register the day again with gnubok_set_worked_days, which overwrites it. Rows a calculated, approved, paid or booked run has already read: the delete is refused.',
+      'Correcting the hours of a day: register the day again with gnubok_set_worked_days, which overwrites it. Rows a calculated, approved, paid or booked run reads (through its window, or a late day carried to it): the delete is refused.',
     pitfalls: [
       'deleted_count 0 means nothing matched: not an error.',
       LOCKED_BY_RUN_PITFALL,
@@ -387,7 +381,7 @@ export const employeesWorkedDaysDelete = defineOperation({
     name: 'gnubok_delete_worked_days',
     title: 'Delete Worked Days',
     description:
-      'Stage removing the worked hours registered for an employee in a date range (from = to for one day). Dates a calculated, approved, paid or booked salary run has read are refused. The preview counts the rows that would go.',
+      'Stage removing the worked hours registered for an employee in a date range (from = to for one day). Rows a calculated, approved, paid or booked salary run reads are refused; a late day carried to a draft run can go. The preview counts the rows that would go.',
     keywords: ['ta bort timmar', 'radera tidrapport', 'arbetade timmar', 'tidrapport', 'timanställd'],
     stage: {
       pendingType: 'delete_worked_days',

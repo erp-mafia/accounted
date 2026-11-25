@@ -20,17 +20,19 @@
  * month, so hours must be registered on the dates they were worked.
  *
  * Every write first checks the register lock (lib/salary/register-locks.ts):
- * dates a run in review, approved, paid or booked has already read through
- * its deviation window are refused with SALARY_REGISTER_DATES_LOCKED_BY_RUN,
- * dry runs included. Draft runs and corrected originals never lock. A write
- * inside a draft run's window clears its calculation
- * (invalidate-calculation.ts).
+ * days a run in review, approved, paid or booked has already read are refused
+ * with SALARY_REGISTER_DATES_LOCKED_BY_RUN, dry runs included. Draft runs and
+ * corrected originals never lock. Hours on a date a paid or declared run read
+ * are late days: they are written only with carriedToRunId, the next run that
+ * is neither paid nor declared, which pays them (lib/salary/late-days.ts). A
+ * write a draft run reads clears its calculation (invalidate-calculation.ts).
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { z } from 'zod'
 import { invalidateRunCalculation } from './invalidate-calculation'
-import { assertRegisterDatesUnlocked, assertRegisterRangeUnlocked } from './register-locks'
+import { CarriedToRunIdSchema } from './late-days'
+import { checkRegisterRangeDelete, planRegisterUpsert } from './register-locks'
 import { defaultDayHours } from './work-schedule'
 
 export type WorkedDaysResult<T> =
@@ -45,6 +47,8 @@ export interface WorkedDayRow {
   end_time: string | null
   notes: string | null
   salary_run_employee_id: string | null
+  /** The later run that pays these hours (a late day), or null: the run whose window holds the date. */
+  carried_to_run_id: string | null
   created_at: string
   updated_at: string
 }
@@ -58,6 +62,25 @@ export interface WorkedDayInput {
   salary_run_employee_id?: string | null
 }
 
+/**
+ * A stored row as the API doors answer it (v1 and MCP): a qualified id, hours
+ * as a number (numeric columns can arrive as strings from PostgREST), no run
+ * link of the dashboard's.
+ */
+export function toWorkedDayResource(row: WorkedDayRow) {
+  return {
+    salary_worked_day_id: row.id,
+    work_date: row.work_date,
+    hours: Number(row.hours),
+    start_time: row.start_time,
+    end_time: row.end_time,
+    notes: row.notes,
+    carried_to_run_id: row.carried_to_run_id ?? null,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  }
+}
+
 /** The would-be row a dry-run echoes: the input shape, no ids or timestamps. */
 export interface WorkedDayPreview {
   work_date: string
@@ -65,6 +88,7 @@ export interface WorkedDayPreview {
   start_time: string | null
   end_time: string | null
   notes: string | null
+  carried_to_run_id: string | null
 }
 
 /**
@@ -135,6 +159,7 @@ export const ApiWorkedDaySchema = z
 /** The API upsert body: 1..92 explicit days. */
 export const ApiWorkedDaysUpsertSchema = z.object({
   days: z.array(ApiWorkedDaySchema).min(1).max(WORKED_DAYS_RANGE_MAX_DAYS),
+  carried_to_run_id: CarriedToRunIdSchema.optional(),
 })
 
 /**
@@ -199,7 +224,7 @@ export function mapWorkedDaysWriteError(error: { code?: string; message?: string
   return { code: 'INTERNAL_ERROR', details }
 }
 
-function toRow(input: WorkedDayInput, companyId: string, employeeId: string) {
+function toRow(input: WorkedDayInput, companyId: string, employeeId: string, carriedToRunId: string | null) {
   return {
     company_id: companyId,
     employee_id: employeeId,
@@ -213,6 +238,7 @@ function toRow(input: WorkedDayInput, companyId: string, employeeId: string) {
     // paid as office hours and OB-tillägg would never trigger.
     start_time: input.start_time ?? null,
     end_time: input.end_time ?? null,
+    carried_to_run_id: carriedToRunId,
   }
 }
 
@@ -230,7 +256,7 @@ export async function listWorkedDays(
 
   const { data, error } = await supabase
     .from('salary_worked_days')
-    .select('id, work_date, hours, start_time, end_time, notes, salary_run_employee_id, created_at, updated_at')
+    .select('id, work_date, hours, start_time, end_time, notes, salary_run_employee_id, carried_to_run_id, created_at, updated_at')
     .eq('company_id', args.companyId)
     .eq('employee_id', args.employeeId)
     .gte('work_date', args.from)
@@ -247,7 +273,8 @@ export async function listWorkedDays(
  * Replace one day: the dashboard's single-day form. Delete + insert on the
  * natural key rather than the native upsert: the form describes every field
  * of the day, so an omitted field means "not set" and the row is rewritten
- * from scratch (new id, new created_at). Returns the full stored row.
+ * from scratch (new id, new created_at). Returns the full stored row. A day
+ * carried to a later run keeps its carry.
  *
  * Not atomic: if the insert is rejected (24h cap) the old row is already
  * gone. API callers use upsertWorkedDays, which is. A day without hours is
@@ -259,18 +286,31 @@ export async function replaceWorkedDay(
     companyId: string
     employeeId: string
     day: Omit<WorkedDayInput, 'hours'> & { hours?: number }
+    /** The later run (a draft) that takes the day if a paid or declared run already read its date. */
+    carriedToRunId?: string | null
   },
 ): Promise<WorkedDaysResult<WorkedDayRow & Record<string, unknown>>> {
   const emp = await assertWorkedDaysEmployee(supabase, args.companyId, args.employeeId)
   if (!emp.ok) return emp
 
-  const locked = await assertRegisterDatesUnlocked(supabase, args.companyId, [args.day.work_date])
-  if (locked) return locked
-
-  const invalidated = await invalidateRunCalculation(supabase, args.companyId, {
+  const planned = await planRegisterUpsert(supabase, args.companyId, {
+    kind: 'worked',
     employeeId: args.employeeId,
-    workedDays: { from: args.day.work_date, to: args.day.work_date },
+    dates: [args.day.work_date],
+    carriedToRunId: args.carriedToRunId,
   })
+  if (!planned.ok) return planned
+  const { plan } = planned
+
+  const invalidated =
+    (await invalidateRunCalculation(supabase, args.companyId, {
+      employeeId: args.employeeId,
+      workedDays: { from: args.day.work_date, to: args.day.work_date },
+    })) ??
+    (await invalidateRunCalculation(supabase, args.companyId, {
+      employeeId: args.employeeId,
+      salaryRunIds: plan.carriedReaderRunIds,
+    }))
   if (invalidated) return invalidated
 
   const { error: deleteError } = await supabase
@@ -295,6 +335,7 @@ export async function replaceWorkedDay(
       salary_run_employee_id: args.day.salary_run_employee_id ?? null,
       start_time: args.day.start_time ?? null,
       end_time: args.day.end_time ?? null,
+      carried_to_run_id: plan.carriedTo.get(args.day.work_date) ?? null,
     })
     .select()
     .single()
@@ -310,7 +351,8 @@ export async function replaceWorkedDay(
  * retry converges on the same end state, and a rejected write (e.g. the 24h
  * cap on one day) rolls back every day in the call without dropping the
  * previously stored rows. Every field of each day is written: an omitted
- * optional field clears the stored value, it does not carry it forward.
+ * optional field clears the stored value, it does not carry it forward. A
+ * day carried to a later run keeps its carry.
  */
 export async function upsertWorkedDays(
   supabase: SupabaseClient,
@@ -318,6 +360,8 @@ export async function upsertWorkedDays(
     companyId: string
     employeeId: string
     days: WorkedDayInput[]
+    /** The later run (a draft) that takes the days a paid or declared run already read. */
+    carriedToRunId?: string | null
     /** Validate only; return the would-be rows without writing. */
     dryRun?: boolean
   },
@@ -356,14 +400,18 @@ export async function upsertWorkedDays(
 
   // Checked before the dry-run branch on purpose: a preview must report the
   // lock, that is what the preview is for. An empty list never queries.
-  const locked = await assertRegisterDatesUnlocked(
-    supabase,
-    args.companyId,
-    args.days.map((day) => day.work_date),
-  )
-  if (locked) return locked
+  const planned = await planRegisterUpsert(supabase, args.companyId, {
+    kind: 'worked',
+    employeeId: args.employeeId,
+    dates: args.days.map((day) => day.work_date),
+    carriedToRunId: args.carriedToRunId,
+  })
+  if (!planned.ok) return planned
+  const { plan } = planned
 
-  const rows = args.days.map((day) => toRow(day, args.companyId, args.employeeId))
+  const rows = args.days.map((day) =>
+    toRow(day, args.companyId, args.employeeId, plan.carriedTo.get(day.work_date) ?? null),
+  )
 
   if (args.dryRun) {
     return {
@@ -376,6 +424,7 @@ export async function upsertWorkedDays(
           start_time: r.start_time,
           end_time: r.end_time,
           notes: r.notes,
+          carried_to_run_id: r.carried_to_run_id,
         })),
       },
     }
@@ -386,16 +435,21 @@ export async function upsertWorkedDays(
   }
 
   const dates = args.days.map((day) => day.work_date).sort()
-  const invalidated = await invalidateRunCalculation(supabase, args.companyId, {
-    employeeId: args.employeeId,
-    workedDays: { from: dates[0], to: dates[dates.length - 1] },
-  })
+  const invalidated =
+    (await invalidateRunCalculation(supabase, args.companyId, {
+      employeeId: args.employeeId,
+      workedDays: { from: dates[0], to: dates[dates.length - 1] },
+    })) ??
+    (await invalidateRunCalculation(supabase, args.companyId, {
+      employeeId: args.employeeId,
+      salaryRunIds: plan.carriedReaderRunIds,
+    }))
   if (invalidated) return invalidated
 
   const { data, error } = await supabase
     .from('salary_worked_days')
     .upsert(rows, { onConflict: 'employee_id,work_date' })
-    .select('id, work_date, hours, start_time, end_time, notes, salary_run_employee_id, created_at, updated_at')
+    .select('id, work_date, hours, start_time, end_time, notes, salary_run_employee_id, carried_to_run_id, created_at, updated_at')
 
   if (error) {
     return { ok: false, ...mapWorkedDaysWriteError(error) }
@@ -419,10 +473,16 @@ export async function deleteWorkedDaysRange(
   const emp = await assertWorkedDaysEmployee(supabase, args.companyId, args.employeeId)
   if (!emp.ok) return emp
 
-  // Computed from the range, not from the rows it would delete: one query,
-  // and the dry run reports the lock too.
-  const locked = await assertRegisterRangeUnlocked(supabase, args.companyId, args.from, args.to)
-  if (locked) return locked
+  // Judged by the rows the range reaches, the dry run included: a row a
+  // calculated, approved, paid or booked run reads (through its window or a
+  // carry) is not deleted.
+  const checked = await checkRegisterRangeDelete(supabase, args.companyId, {
+    kind: 'worked',
+    employeeId: args.employeeId,
+    from: args.from,
+    to: args.to,
+  })
+  if (!checked.ok) return checked
 
   if (args.dryRun) {
     // Count what WOULD be deleted so the preview is informative.
@@ -439,10 +499,15 @@ export async function deleteWorkedDaysRange(
     return { ok: true, data: { deleted_count: count ?? 0 } }
   }
 
-  const invalidated = await invalidateRunCalculation(supabase, args.companyId, {
-    employeeId: args.employeeId,
-    workedDays: { from: args.from, to: args.to },
-  })
+  const invalidated =
+    (await invalidateRunCalculation(supabase, args.companyId, {
+      employeeId: args.employeeId,
+      workedDays: { from: args.from, to: args.to },
+    })) ??
+    (await invalidateRunCalculation(supabase, args.companyId, {
+      employeeId: args.employeeId,
+      salaryRunIds: checked.carriedReaderRunIds,
+    }))
   if (invalidated) return invalidated
 
   const { count, error } = await supabase

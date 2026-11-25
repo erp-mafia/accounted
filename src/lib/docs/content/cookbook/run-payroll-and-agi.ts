@@ -211,7 +211,7 @@ Most Swedish payrolls pay the fixed salary for the current month and take the de
 }
 \`\`\`
 
-Register the absence on the dates it happened (\`PUT /employees/{id}/absence\` with the real August dates); the September run picks them up. The window is snapshotted on the run, so changing the setting later never moves an already-calculated run. A window that overlaps another live run of the company is refused with \`409 SALARY_RUN_DEVIATION_PERIOD_OVERLAP\` (the same sick day would otherwise be deducted twice), and one date without the other, or an inverted or over-long window, with \`400 SALARY_RUN_DEVIATION_PERIOD_INVALID\`.
+Register the absence on the dates it happened (\`PUT /employees/{id}/absence\` with the real August dates); the September run picks them up. A day that becomes known only after its run was paid or its AGI filed is a late day: register it on its real date with \`carried_to_run_id\` = the next run that is neither paid nor declared. That run deducts it and its AGI carries the frånvarouppgift; the paid run is not corrected for it. The window is snapshotted on the run, so changing the setting later never moves an already-calculated run. A window that overlaps another live run of the company is refused with \`409 SALARY_RUN_DEVIATION_PERIOD_OVERLAP\` (the same sick day would otherwise be deducted twice), and one date without the other, or an inverted or over-long window, with \`400 SALARY_RUN_DEVIATION_PERIOD_INVALID\`.
 
 ## State machine summary
 
