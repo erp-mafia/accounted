@@ -60,6 +60,7 @@ import {
   companyAttestsSupplierInvoices,
 } from '@/lib/supplier-invoices/lifecycle'
 import { isAttestedInList, isAwaitingAttestInList, isToPayInList } from '@/lib/supplier-invoices/list-tabs'
+import { supplierInvoiceMatchesSearch } from '@/lib/supplier-invoices/list-search'
 import {
   sortSupplierInvoiceList,
   type SupplierInvoiceListSort,
@@ -376,13 +377,9 @@ export default function SupplierInvoicesPage() {
         default: return true
       }
     })()
-    const query = searchTerm.trim().toLowerCase()
-    const matchesSearch =
-      !query ||
-      (inv.supplier?.name ?? '').toLowerCase().includes(query) ||
-      (inv.supplier_invoice_number ?? '').toLowerCase().includes(query) ||
-      (inv.fortnox_number ?? '').toLowerCase().includes(query) ||
-      String(inv.arrival_number ?? '').includes(query)
+    // The OCR too (lib/supplier-invoices/list-search.ts): a bank row or a
+    // payment advice may carry nothing else.
+    const matchesSearch = supplierInvoiceMatchesSearch(inv, searchTerm) !== null
     const matchesFy =
       !fyPeriod ||
       (inv.invoice_date >= fyPeriod.period_start && inv.invoice_date <= fyPeriod.period_end)
@@ -871,6 +868,13 @@ export default function SupplierInvoicesPage() {
                   !inv.auto_debit &&
                   canMarkSupplierInvoiceBankEntered(inv, companySettings?.accounting_method, attestPolicyOn) &&
                   (bankEntered || (canWrite && !hasOpenBankPaymentOrder(openPayment)))
+                // Found by its OCR alone: the list has no column for it, so
+                // the row shows it (under the number, under the supplier on
+                // a phone) or nothing on the row would say why it is here.
+                const referenceHit =
+                  inv.payment_reference && supplierInvoiceMatchesSearch(inv, searchTerm) === 'reference'
+                    ? t('search_hit_reference', { reference: inv.payment_reference })
+                    : null
                 // Same shape as the customer list: the section header is a
                 // sibling row decided from the previous row's key.
                 const groupKey = rowGroupKeys.get(inv.id) ?? null
@@ -934,6 +938,11 @@ export default function SupplierInvoicesPage() {
                           </Badge>
                         )}
                       </span>
+                      {referenceHit && (
+                        <span className="block break-all text-xs text-muted-foreground tabular-nums sm:hidden">
+                          {referenceHit}
+                        </span>
+                      )}
                     </td>
                     <td className={cn(TD_CLASS, 'hidden whitespace-nowrap tabular-nums sm:table-cell')}>
                       <IntentLink
@@ -953,6 +962,9 @@ export default function SupplierInvoicesPage() {
                         <Badge variant="outline" className="ml-2 font-normal">
                           {t('badge_self_billed')}
                         </Badge>
+                      )}
+                      {referenceHit && (
+                        <span className="block text-xs text-muted-foreground">{referenceHit}</span>
                       )}
                     </td>
                     <td className={cn(TD_CLASS, 'whitespace-nowrap text-right date-figures text-muted-foreground')}>
