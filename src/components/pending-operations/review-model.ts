@@ -287,6 +287,17 @@ export function stagedPostingLines(previewData: unknown): Data[] {
   return []
 }
 
+/**
+ * The verifikat rows approving a proposal posts, as its preview states them.
+ * A rättelse or a storno carries the verifikat it replaces beside the one it
+ * posts: only the one it posts. Empty when the preview states no rows.
+ */
+export function postedLines(previewData: unknown): Data[] {
+  const data = record(previewData)
+  const posted = [record(data.correction), record(data.reversal)].find((entry) => isPostingLines(entry.lines))
+  return posted ? (posted.lines as Data[]) : stagedPostingLines(data)
+}
+
 // The preview's own statement of what the proposal is worth, in the order a
 // reader means it: the total of a document, the amount of a bank row or a
 // payment, the sum of a batch.
@@ -306,13 +317,44 @@ export function headlineAmount(op: Pick<PendingOperation, 'preview_data'>): { va
   }
   const stated = finite(data.total_debit)
   if (stated !== null) return { value: stated, currency: 'SEK' }
-  // A rättelse or a storno carries the verifikat it replaces beside the one
-  // it posts: the headline is the one it posts.
-  const posted = [record(data.correction), record(data.reversal)].find((entry) => isPostingLines(entry.lines))
-  const lines = posted ? (posted.lines as Data[]) : stagedPostingLines(data)
+  const lines = postedLines(data)
   if (lines.length === 0) return null
   const debit = lines.reduce((sum, line) => sum + (Number(line.debit_amount ?? line.debit) || 0), 0)
   return debit > 0 ? { value: roundOre(debit), currency: 'SEK' } : null
+}
+
+/* ------------------------------------------------------- approval preview */
+
+/** The most verifikat rows the preview beside a row's Godkänn lists; the rest are counted and left to the review. */
+export const APPROVAL_PREVIEW_ROWS = 8
+
+export interface ApprovalPreview {
+  /**
+   * What the proposal concerns: its first group of typed fields (a bank
+   * row's date, an invoice's party, number and dates), and the total a later
+   * group adds up to (an invoice's Totalt).
+   */
+  facts: FactRow[]
+  /** The verifikat rows approving it posts (postedLines). Empty when it posts none. */
+  lines: Data[]
+  /** Rows past APPROVAL_PREVIEW_ROWS: counted there, listed in the review. */
+  hidden: number
+}
+
+/**
+ * What the preview beside a row's Godkänn states before the click, where the
+ * click is the approval for low and medium risk. Read from the staged preview
+ * alone: nothing is fetched, and the rows are the ones it posts as staged,
+ * never worked out a second time.
+ */
+export function approvalPreviewOf(op: Pick<PendingOperation, 'operation_type' | 'preview_data'>): ApprovalPreview {
+  const [first = [], ...rest] = proposalFacts(op.operation_type, op.preview_data) ?? []
+  const lines = postedLines(op.preview_data)
+  return {
+    facts: [...first, ...rest.flat().filter((fact) => fact.strong)],
+    lines,
+    hidden: Math.max(0, lines.length - APPROVAL_PREVIEW_ROWS),
+  }
 }
 
 /* ---------------------------------------------------------------- underlag */

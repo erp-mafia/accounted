@@ -529,14 +529,17 @@ function UpdateInvoicePreview({ data }: { data: Record<string, unknown> }) {
 const LEDGER_NARROW_CLASS =
   '@max-[460px]:[&_td:nth-child(2):nth-last-child(3)]:invisible @max-[460px]:[&_td:nth-child(2):nth-last-child(3)]:max-w-0 @max-[460px]:[&_td:nth-child(2):nth-last-child(3)]:overflow-hidden @max-[460px]:[&_td:nth-child(2):nth-last-child(3)]:whitespace-nowrap @max-[460px]:[&_td:nth-child(2):nth-last-child(3)]:px-0 @max-[460px]:[&_th:nth-child(2):nth-last-child(3)]:invisible @max-[460px]:[&_th:nth-child(2):nth-last-child(3)]:max-w-0 @max-[460px]:[&_th:nth-child(2):nth-last-child(3)]:overflow-hidden @max-[460px]:[&_th:nth-child(2):nth-last-child(3)]:whitespace-nowrap @max-[460px]:[&_th:nth-child(2):nth-last-child(3)]:px-0'
 
-function StagedLinesTable({
+export function StagedLinesTable({
   lines,
   showTotals = false,
   label,
+  maxRows,
 }: {
   lines: readonly PostingLineLike[]
   showTotals?: boolean
   label?: string
+  /** Lists at most this many rows, then counts the rest; the Summa row still adds up every row. */
+  maxRows?: number
 }) {
   const accountNames = useContext(AccountNamesContext)
   // The review of one proposal reads the lines as a ledger: plain amounts
@@ -563,6 +566,7 @@ function StagedLinesTable({
       // out of view. The cell is the second of four; the Summa row has three.
       className={template ? LEDGER_NARROW_CLASS : undefined}
       lines={views}
+      maxRows={maxRows}
     />
   )
 }
