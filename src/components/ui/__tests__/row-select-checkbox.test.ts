@@ -96,4 +96,20 @@ describe('row checkbox call sites', () => {
     }
     expect(offenders).toEqual([])
   })
+
+  // A list scroller (overflow-x-auto) clips at its own edge, and it pads only
+  // 8px (16px from md) past the table. A box hung 16px (24px) left of the
+  // table lost half its width there, at every window width. The box takes a
+  // column of its own instead (TransactionInboxCard).
+  it('no row checkbox hangs left of its table inside a list scroller', () => {
+    const offenders: string[] = []
+    for (const file of sourceFiles(SRC)) {
+      const text = readFileSync(file, 'utf8')
+      if (!text.includes('overflow-x-auto') || !text.includes('<RowSelectCheckbox')) continue
+      for (const block of text.match(/<RowSelectCheckbox\b[\s\S]*?\/>/g) ?? []) {
+        if (/\babsolute\b/.test(block) && /(^|[\s"'`:])-left-/.test(block)) offenders.push(file.slice(SRC.length + 1))
+      }
+    }
+    expect(offenders).toEqual([])
+  })
 })
