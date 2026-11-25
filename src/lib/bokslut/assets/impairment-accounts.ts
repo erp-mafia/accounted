@@ -3,6 +3,7 @@
  * beside the asset's accumulated-depreciation account and the 77xx by
  * category. Server side: it reads the BAS reference.
  */
+import { computeSRUCode } from '@/lib/bookkeeping/bas-data/sru-mapping'
 import { isStandardBASAccount } from '@/lib/bookkeeping/bas-reference'
 import type { Asset, AssetCategory } from '@/types'
 
@@ -49,7 +50,11 @@ const CATEGORY_IMPAIRMENT_ACCOUNT: Record<AssetCategory, string> = {
 /**
  * The accounts a write-down of this asset books on: the BAS sibling of its
  * accumulated-depreciation account (12x9 -> 12x8: 1119 -> 1118, 1229 ->
- * 1228, 1019 -> 1018), else the category's 12x8; the 77xx by category.
+ * 1228, 1019 -> 1018), else the category's 12x8 when it sits in the same
+ * balance-sheet post, else the sibling as a company account
+ * (ensureCompanyImpairmentAccount): BAS 2026 has no 1128 beside 1129, and
+ * 1118 is Byggnader och mark, not Förbättringsutgifter på annans fastighet.
+ * The 77xx by category.
  */
 export function impairmentAccountsFor(
   asset: Pick<Asset, 'category' | 'bas_accumulated_account'>,
@@ -61,7 +66,7 @@ export function impairmentAccountsFor(
     accumulated = own
   } else if (own.endsWith('9')) {
     const sibling = `${own.slice(0, -1)}8`
-    if (isStandardBASAccount(sibling)) accumulated = sibling
+    if (isStandardBASAccount(sibling) || computeSRUCode(accumulated) !== computeSRUCode(own)) accumulated = sibling
   }
   return { accumulated, expense: result.expense, reversal: result.reversal }
 }
