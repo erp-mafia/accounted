@@ -164,7 +164,7 @@ const LOCKED_BY_RUN_PITFALL =
   'Days a salary run that is calculated (review), approved, paid or booked has read are locked: SALARY_REGISTER_DATES_LOCKED_BY_RUN names the run (details.reason) and nothing is written, dry runs included. Draft runs never lock. A run in review or approved, neither paid nor declared: revert it to draft first (gnubok_unapprove_salary_run for an approved run, then gnubok_revert_salary_run).'
 
 const LATE_DAY_PITFALL =
-  'Hours on a date a paid, booked or declared run already read, not registered yet, are a late day (details.reason late_day_needs_later_run): pass carried_to_run_id = the next run that is neither paid nor declared (details.later_salary_run), a draft with the employee on it. That run pays them on top of its own hours and names the dates on the payslip. Never correct the paid run for this: a correction run is for errors found before payout and AGI. A wrong carried_to_run_id answers SALARY_REGISTER_LATE_DAY_REFUSED with details.reason.'
+  'Hours on a date a paid, booked or declared run already read, not registered yet, are a late day (details.reason late_day_needs_later_run): pass carried_to_run_id = the next ordinary run that is neither paid nor declared (details.later_salary_run), a draft with the employee on it, paid the way their own period was. That run pays them on top of its own hours and names the dates on the payslip. Never correct the paid run for this: a correction run never takes late hours. A wrong carried_to_run_id answers SALARY_REGISTER_LATE_DAY_REFUSED with details.reason.'
 
 function dateSpan(from: string, to: string): string {
   return from === to ? from : `${from} till ${to}`

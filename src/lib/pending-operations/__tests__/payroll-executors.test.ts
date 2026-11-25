@@ -558,8 +558,7 @@ describe('commitPendingOperation: register_absence', () => {
       ],
     }) // register lock lookup: October is booked
     enqueue({ data: [] }) // register lock: nothing registered on the days
-    enqueue({ data: { id: 'sre-nov' } }) // the employee is on November
-    enqueue({ data: [{ salary_run_id: 'run-oct', salary_type: 'monthly' }] }) // October paid the employee monthly
+    enqueue({ data: [{ salary_run_id: 'run-nov', salary_type: 'monthly' }, { salary_run_id: 'run-oct', salary_type: 'monthly' }] }) // on November; October paid the employee monthly
     enqueue({ data: { salary_calculation_policy: {} } }) // the calculation conventions
     enqueue({ data: [{ id: 'a1', absence_date: '2026-10-19', absence_type: 'parental', hours: 8 }] }) // bulk upsert
     enqueue({ data: null, error: null }) // finalize

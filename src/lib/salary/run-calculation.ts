@@ -60,7 +60,7 @@ import { fetchAllTaxTableRatesForRun, TaxTableUnavailableError } from './tax-tab
 import { REGIONAL_SUPPORT_PARAM } from './regional-support'
 import { AbsenceInputError, deriveEmployeeAbsence, loadRunAbsence, type DerivedLineItem } from './derive-absence-line-items'
 import { monthWindow, runDeviationWindow } from './deviation-period'
-import { lateDayReaderRunIds, lateDaysSuffix, registerRowReadByRun } from './late-days'
+import { isHandDeductionLine, lateDayReaderRunIds, lateDaysSuffix, registerRowReadByRun } from './late-days'
 import type { MoneyLineItemType } from './account-mapping'
 import { RECURRING_TEXT_SORT_ORDER, isTextRow } from './text-rows'
 import { computePremiumLines, premiumPayBasis } from './shift-premium-engine'
@@ -671,6 +671,9 @@ export async function runSalaryCalculation(
   const lakarintygEmployees: string[] = []
   // Employees with late days (lib/salary/late-days.ts): priced with this run's pay.
   const lateDayEmployees: string[] = []
+  // On a correction: late absence next to a hand-typed deduction copied from
+  // the paid run, which would deduct the same days twice.
+  const handLinesBesideLateDays: string[] = []
   const fkReportingEmployees: string[] = []
   const hourlyKarensEmployees: string[] = []
   const doubleBenefitAdjustments: string[] = []
@@ -862,6 +865,11 @@ export async function runSalaryCalculation(
     const employeeName = `${emp.first_name} ${emp.last_name}`
     if ((absenceByEmployee.get(emp.id)?.lateDays.length ?? 0) > 0 || employeeWorkedDays.some((d) => d.carried_to_run_id)) {
       lateDayEmployees.push(employeeName)
+    }
+    if ((run as { corrects_run_id?: string | null }).corrects_run_id && (absenceByEmployee.get(emp.id)?.lateDays.length ?? 0) > 0) {
+      for (const li of (sre.line_items || []) as Array<Record<string, unknown>>) {
+        if (isHandDeductionLine(li)) handLinesBesideLateDays.push(`${employeeName} ("${String(li.description ?? '')}")`)
+      }
     }
     if (absenceResult.flagLakarintyg) lakarintygEmployees.push(employeeName)
     if (absenceResult.flagFkReporting) fkReportingEmployees.push(employeeName)
@@ -1625,6 +1633,12 @@ export async function runSalaryCalculation(
           'i den utbetalda körningen och den raden tas bort här; annars ska dagarna dras i nästa ordinarie lönekörning.',
       )
     }
+  }
+  if (handLinesBesideLateDays.length > 0) {
+    warnings.push(
+      `Den handskrivna avdragsraden från den utbetalda körningen finns kvar bredvid dagarna från en tidigare period: ${handLinesBesideLateDays.join(', ')}. ` +
+        'Gäller raden samma dagar, ta bort den och beräkna om, annars dras dagarna två gånger.',
+    )
   }
   if (hourlyKarensEmployees.length > 0) {
     warnings.push(

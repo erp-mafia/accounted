@@ -400,7 +400,7 @@ describe('POST /api/salary/employees/[id]/worked-hours/batch: late hours', () =>
       ],
     }) // runs
     enqueue({ data: [] }) // nothing registered on the days
-    enqueue({ data: { id: 'sre-aug' } }) // the employee is on August
+    enqueue({ data: [{ salary_run_id: 'run-aug', salary_type: 'hourly' }] }) // the employee is on August
     enqueue({ data: [] }) // prefetch
     enqueue({ data: null }) // upsert date 1
     enqueue({ data: null }) // upsert date 2

@@ -730,7 +730,7 @@ describe('late hours (worked days known after their run was paid)', () => {
     mock.enqueue({ data: { id: EMPLOYEE_ID } })
     mock.enqueue({ data: [BOOKED_RUN_MARCH, DRAFT_RUN_APRIL] })
     mock.enqueue({ data: [] }) // nothing registered on the day yet
-    mock.enqueue({ data: { id: 'sre-apr' } }) // the employee is on April
+    mock.enqueue({ data: [{ salary_run_id: 'run-apr-draft', salary_type: 'hourly' }] }) // the employee is on April
     mock.enqueue({ data: [{ ...ROW, work_date: '2026-03-30', carried_to_run_id: 'run-apr-draft' }] })
 
     const result = await upsertWorkedDays(supabase, {

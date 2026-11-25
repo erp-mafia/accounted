@@ -231,8 +231,7 @@ describe('POST /api/salary/employees/[id]/absence', () => {
     enqueue({ data: { id: 'emp-1' } }) // loadEmployee
     enqueue({ data: [BOOKED_RUN_OCTOBER, DRAFT_RUN_NOVEMBER] }) // runs
     enqueue({ data: [] }) // nothing registered on the day
-    enqueue({ data: { id: 'sre-nov' } }) // the employee is on November
-    enqueue({ data: [{ salary_run_id: 'run-oct', salary_type: 'monthly' }] }) // October paid the employee monthly
+    enqueue({ data: [{ salary_run_id: 'run-nov', salary_type: 'monthly' }, { salary_run_id: 'run-oct', salary_type: 'monthly' }] }) // the employee's payslips: on November, and October paid them monthly
     enqueue({ data: { salary_calculation_policy: {} } })
     enqueue({ data: { id: 'abs-1', absence_date: '2026-10-19', absence_type: 'parental', hours: 8, carried_to_run_id: 'run-nov' } })
 

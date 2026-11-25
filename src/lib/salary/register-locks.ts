@@ -38,12 +38,15 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { SalaryCalculationPolicySchema } from './calculation-policy'
 import { runDeviationWindow, type DateWindow } from './deviation-period'
 import {
   CALENDAR_PRICED_ABSENCE_TYPES,
   FRANVARO_ABSENCE_TYPES,
   correctionPeriodFiled,
+  describeLateDates,
+  paidRunHasHandDeduction,
   runIsSettled,
 } from './late-days'
 
@@ -117,6 +120,12 @@ export type LateDayRefusalReason =
    * frånvarouppgift. later_salary_run takes the days.
    */
   | 'correction_period_filed'
+  /**
+   * The named run is a correction, and the paid run it replaces carried no
+   * deduction typed by hand for the employee: there is nothing for the days
+   * to replace, so they go to later_salary_run.
+   */
+  | 'correction_without_hand_deduction'
   /** The employee is not on the run. */
   | 'employee_not_on_run'
   /**
@@ -184,8 +193,7 @@ function runLabelSv(run: Record<string, unknown> | RegisterRunRef, door: 'dashbo
 
 function datesSv(dates: unknown): string {
   const list = Array.isArray(dates) ? (dates as string[]) : []
-  if (list.length === 0) return ''
-  return list.length > 1 ? `${list[0]} till ${list[list.length - 1]}` : list[0]
+  return describeLateDates(list)
 }
 
 /**
@@ -239,14 +247,15 @@ export function registerRefusalMessageSv(
       case 'not_next': {
         const later = details.later_salary_run as RegisterRunRef | null | undefined
         return later
-          ? `Dagarna ${dates} dras i lönekörning ${runLabelSv(later, door)}, den första senare körningen som varken är utbetald eller deklarerad. Knyt dem till den.`
-          : `Dagarna ${dates} dras i nästa lönekörning som varken är utbetald eller deklarerad.`
+          ? `Dagarna ${dates} dras i lönekörning ${runLabelSv(later, door)}, den första senare körningen med den anställde som varken är utbetald eller deklarerad. ` +
+              'Knyt dem till den, eller lägg först till den anställde på en tidigare körning som ska dra dem.'
+          : `Dagarna ${dates} dras i nästa lönekörning med den anställde som varken är utbetald eller deklarerad.`
       }
       case 'employee_not_on_run':
         return `Den anställde finns inte på ${run}. Lägg till den anställde på körningen först.`
       case 'calendar_long_leave':
         return (
-          'Företaget drar lång frånvaro per kalenderdag. Föräldraledighet, tjänstledighet och sjukdagar från en tidigare period ' +
+          `Företaget drar lång frånvaro per kalenderdag. Föräldraledighet, tjänstledighet och sjukdagar från en tidigare period (${dates}) ` +
           'kan då inte räknas i en senare körning: lägg in avdraget som en egen rad på lönebeskedet.'
         )
       case 'hourly_pay':
@@ -259,6 +268,16 @@ export function registerRefusalMessageSv(
         return (
           `${run.charAt(0).toUpperCase()}${run.slice(1)} rättar en period vars arbetsgivardeklaration redan finns hos Skatteverket, ` +
           'och en rättelse kan inte ta emot nya frånvarouppgifter. ' +
+          (later
+            ? `Dagarna ${dates} dras i lönekörning ${runLabelSv(later, door)}.`
+            : `Dagarna ${dates} dras i nästa ordinarie lönekörning, som inte är skapad än.`)
+        )
+      }
+      case 'correction_without_hand_deduction': {
+        const later = details.later_salary_run as RegisterRunRef | null | undefined
+        return (
+          `${run.charAt(0).toUpperCase()}${run.slice(1)} är en rättelse. En rättelse tar bara emot sen frånvaro, och bara för att ersätta ` +
+          'ett avdrag för den som skrevs in för hand på den anställdes lönebesked i den utbetalda körningen. ' +
           (later
             ? `Dagarna ${dates} dras i lönekörning ${runLabelSv(later, door)}.`
             : `Dagarna ${dates} dras i nästa ordinarie lönekörning, som inte är skapad än.`)
@@ -386,15 +405,24 @@ function byWindowStart(a: CompanyRun, b: CompanyRun): number {
 }
 
 /**
- * The first later ordinary run that is neither paid nor declared: where a
- * late day on `date` goes. A correction run is never the default: its
- * original's pay went out in full (late-days.ts).
+ * Where a late day on `date` goes: the first later ordinary run that is
+ * neither paid nor declared, a draft with the employee on it (`onRoster`:
+ * the runs with the employee's payslip). Failing that, the first such run
+ * with the employee (to revert to draft), then the first draft (to add the
+ * employee to), so a refusal still names a way. A correction run is never
+ * the default: its original's pay went out in full (late-days.ts).
  */
-function nextUnsettledRun(runs: CompanyRun[], date: string): CompanyRun | null {
+function nextUnsettledRun(runs: CompanyRun[], date: string, onRoster: ReadonlySet<string>): CompanyRun | null {
   const later = runs
     .filter((run) => !run.corrects_run_id && !runIsSettled(run) && windowOf(run).start > date)
     .sort(byWindowStart)
-  return later[0] ?? null
+  return (
+    later.find((run) => run.status === 'draft' && onRoster.has(run.id)) ??
+    later.find((run) => onRoster.has(run.id)) ??
+    later.find((run) => run.status === 'draft') ??
+    later[0] ??
+    null
+  )
 }
 
 /** The corrected runs whose window holds `date`: the paid versions of its period. */
@@ -429,7 +457,9 @@ function chainDepth(runs: CompanyRun[], run: CompanyRun): number {
  */
 function newDayWindowRun(runs: CompanyRun[], date: string, paidByCorrected: ReadonlySet<string>): CompanyRun | null {
   const live = windowLockingRun(runs, date)
-  if (live && runIsSettled(live)) return live
+  // An ordinary run that reads the window decides it; only a correction
+  // defers to the version it replaces.
+  if (live && (runIsSettled(live) || !live.corrects_run_id)) return live
   const paid = correctedWindowRuns(runs, date).filter((run) => paidByCorrected.has(run.id))
   if (paid.length === 0) return live
   return paid.reduce((latest, run) => (chainDepth(runs, run) > chainDepth(runs, latest) ? run : latest))
@@ -445,7 +475,7 @@ interface Refusal {
  * The lock to report for a set of refusals: the earliest run by period, with
  * every date it holds for the first reason found for it.
  */
-function lockFailure(refusals: Refusal[], runs: CompanyRun[]): RegisterLockFailure | null {
+function lockFailure(refusals: Refusal[], runs: CompanyRun[], onRoster: ReadonlySet<string>): RegisterLockFailure | null {
   if (refusals.length === 0) return null
   const first = refusals.slice().sort((a, b) => byPeriod(a.run, b.run) || (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))[0]
   const same = refusals.filter((r) => r.run.id === first.run.id && r.reason === first.reason)
@@ -463,7 +493,7 @@ function lockFailure(refusals: Refusal[], runs: CompanyRun[]): RegisterLockFailu
     reason: first.reason,
   }
   if (first.reason === 'late_day_needs_later_run') {
-    const next = nextUnsettledRun(runs, lockedDates[lockedDates.length - 1])
+    const next = nextUnsettledRun(runs, lockedDates[lockedDates.length - 1], onRoster)
     lock.later_salary_run = next ? refOf(next) : null
   }
   return { ok: false, code: SALARY_REGISTER_DATES_LOCKED_BY_RUN, details: lock }
@@ -522,37 +552,77 @@ async function loadRangeRows(
   companyId: string,
   args: { kind: RegisterKind; employeeId: string; from: string; to: string; absenceType?: string },
 ): Promise<{ rows: RegisterRow[] } | { error: string }> {
-  if (args.kind === 'absence') {
-    let query = supabase
-      .from('salary_absence_days')
-      .select('absence_date, carried_to_run_id')
-      .eq('company_id', companyId)
-      .eq('employee_id', args.employeeId)
-      .gte('absence_date', args.from)
-      .lte('absence_date', args.to)
-    if (args.absenceType) query = query.eq('absence_type', args.absenceType)
-    const { data, error } = await query
-    if (error) return { error: error.message }
-    return { rows: toRegisterRows('absence', data) }
+  // Every row of the range, past PostgREST's 1 000-row page: a row left
+  // unread would be deleted without its lock being judged.
+  try {
+    if (args.kind === 'absence') {
+      const data = await fetchAllRows<{ absence_date: string; carried_to_run_id: string | null }>(({ from, to }) => {
+        let query = supabase
+          .from('salary_absence_days')
+          .select('absence_date, carried_to_run_id')
+          .eq('company_id', companyId)
+          .eq('employee_id', args.employeeId)
+          .gte('absence_date', args.from)
+          .lte('absence_date', args.to)
+        if (args.absenceType) query = query.eq('absence_type', args.absenceType)
+        // (employee_id, absence_date, absence_type) is unique: a total order for paging.
+        return query.order('absence_date').order('absence_type').range(from, to)
+      })
+      return { rows: toRegisterRows('absence', data) }
+    }
+    const data = await fetchAllRows<{ work_date: string; carried_to_run_id: string | null }>(({ from, to }) =>
+      supabase
+        .from('salary_worked_days')
+        .select('work_date, carried_to_run_id')
+        .eq('company_id', companyId)
+        .eq('employee_id', args.employeeId)
+        .gte('work_date', args.from)
+        .lte('work_date', args.to)
+        // (employee_id, work_date) is unique.
+        .order('work_date')
+        .range(from, to),
+    )
+    return { rows: toRegisterRows('worked', data) }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) }
   }
+}
+
+/** The employee's payslip on a run, with the pay type the calculation prices. */
+type RunPayslip = {
+  salary_run_id: string
+  salary_type?: string | null
+  employee?: { salary_type?: string | null } | null
+}
+
+/** The employee's payslips on the given runs, by run id. */
+async function loadPayslips(
+  supabase: SupabaseClient,
+  companyId: string,
+  employeeId: string,
+  runIds: string[],
+): Promise<{ slips: Map<string, RunPayslip> } | { error: string }> {
+  if (runIds.length === 0) return { slips: new Map() }
   const { data, error } = await supabase
-    .from('salary_worked_days')
-    .select('work_date, carried_to_run_id')
+    .from('salary_run_employees')
+    .select('salary_run_id, salary_type, employee:employees(salary_type)')
     .eq('company_id', companyId)
-    .eq('employee_id', args.employeeId)
-    .gte('work_date', args.from)
-    .lte('work_date', args.to)
+    .eq('employee_id', employeeId)
+    .in('salary_run_id', runIds)
   if (error) return { error: error.message }
-  return { rows: toRegisterRows('worked', data) }
+  const rows = (Array.isArray(data) ? data : []) as RunPayslip[]
+  return { slips: new Map(rows.map((row) => [row.salary_run_id, row])) }
 }
 
 /**
  * Whether the run named for the late days can take them: a draft of the
  * company, later than every late day, with the employee on it, paying the
  * employee the same way as the period each day belongs to. An ordinary run
- * must be the first later ordinary run that is neither paid nor declared; a
- * correction draft is taken when named, while its period's AGI is not at
- * Skatteverket. `periodRuns`: per late day, the run that read it.
+ * must be the run nextUnsettledRun names. A correction draft is taken for
+ * absence when named, while its period's AGI is not at Skatteverket and the
+ * paid run it replaces carried a deduction typed by hand for the employee.
+ * `periodRuns`: per late day, the run that read it. `payslips`: the
+ * employee's payslips on the runs that could take the days and on those.
  */
 async function checkLaterRun(
   supabase: SupabaseClient,
@@ -564,11 +634,13 @@ async function checkLaterRun(
     carriedToRunId: string
     lateDates: string[]
     periodRuns: Map<string, CompanyRun>
+    payslips: Map<string, RunPayslip>
     absenceType?: string
   },
 ): Promise<RegisterLockFailure | null> {
   const target = runs.find((run) => run.id === args.carriedToRunId)
   const lastDate = args.lateDates[args.lateDates.length - 1]
+  const onRoster = new Set(args.payslips.keys())
   const invalid = (
     reason: LateDayRefusalReason,
     extra: { laterRun?: CompanyRun | null; periodRun?: CompanyRun } = {},
@@ -588,33 +660,30 @@ async function checkLaterRun(
   if (target.status !== 'draft') {
     // A paid, declared or corrected run takes no late day at all, and cannot
     // go back to draft: name the run that takes them.
-    if (runIsSettled(target)) return invalid('not_next', { laterRun: nextUnsettledRun(runs, lastDate) })
+    if (runIsSettled(target)) return invalid('not_next', { laterRun: nextUnsettledRun(runs, lastDate, onRoster) })
     return invalid('not_draft')
   }
   if (windowOf(target).start <= lastDate) return invalid('not_later')
   if (target.corrects_run_id) {
     // The opt-in for a deduction already typed by hand into the paid run
-    // (late-days.ts): never into a rättelse.
+    // (late-days.ts): absence only, never into a rättelse.
+    const laterRun = () => nextUnsettledRun(runs, lastDate, onRoster)
+    if (args.kind !== 'absence') return invalid('correction_without_hand_deduction', { laterRun: laterRun() })
     const filed = await correctionPeriodFiled(supabase, companyId, target, runs)
     if (!filed.ok) return internal(filed.message)
-    if (filed.filed) return invalid('correction_period_filed', { laterRun: nextUnsettledRun(runs, lastDate) })
+    if (filed.filed) return invalid('correction_period_filed', { laterRun: laterRun() })
+    const hand = await paidRunHasHandDeduction(supabase, companyId, target.corrects_run_id, args.employeeId)
+    if (!hand.ok) return internal(hand.message)
+    if (!hand.found) return invalid('correction_without_hand_deduction', { laterRun: laterRun() })
   } else {
     for (const date of args.lateDates) {
-      const next = nextUnsettledRun(runs, date)
+      const next = nextUnsettledRun(runs, date, onRoster)
       if (next?.id !== target.id) return invalid('not_next', { laterRun: next })
     }
   }
-  const { data, error } = await supabase
-    .from('salary_run_employees')
-    .select('id, salary_type, employee:employees(salary_type)')
-    .eq('company_id', companyId)
-    .eq('salary_run_id', target.id)
-    .eq('employee_id', args.employeeId)
-    .maybeSingle()
-  if (error) return internal(error.message)
-  if (!data) return invalid('employee_not_on_run')
+  const payslip = args.payslips.get(target.id)
+  if (!payslip) return invalid('employee_not_on_run')
   // The employee's own pay type, as the calculation prices it, else the payslip's.
-  const payslip = data as { salary_type?: string | null; employee?: { salary_type?: string | null } | null }
   const payType = payslip.employee?.salary_type ?? payslip.salary_type ?? null
 
   // What a late day settles is what its own period paid: a full monthly
@@ -622,17 +691,9 @@ async function checkLaterRun(
   // read the day says which. Priced under the other pay type, a late sick day
   // would pay sjuklön on top of a full salary, or deduct from one never paid.
   const periodRunIds = Array.from(new Set(Array.from(args.periodRuns.values()).map((run) => run.id)))
-  const { data: periodSlips, error: periodError } = await supabase
-    .from('salary_run_employees')
-    .select('salary_run_id, salary_type')
-    .eq('company_id', companyId)
-    .eq('employee_id', args.employeeId)
-    .in('salary_run_id', periodRunIds)
-  if (periodError) return internal(periodError.message)
-  const slips = (Array.isArray(periodSlips) ? periodSlips : []) as Array<{ salary_run_id: string; salary_type: string | null }>
   for (const runId of periodRunIds) {
     const periodRun = runs.find((run) => run.id === runId)
-    const slip = slips.find((row) => row.salary_run_id === runId)
+    const slip = args.payslips.get(runId)
     if (!slip) {
       // Hours nobody paid are owed; absence from pay nobody paid settles nothing.
       if (args.kind === 'absence') return invalid('not_paid_then', { periodRun })
@@ -759,7 +820,19 @@ export async function planRegisterUpsert(
     periodRuns.set(date, run)
   }
 
-  const locked = lockFailure(refusals, runs)
+  // Where late days go depends on whose payslips the runs hold: read the
+  // employee's on every run that could take them and on those that read them.
+  let payslips = new Map<string, RunPayslip>()
+  if (lateDates.length > 0 || refusals.some((refusal) => refusal.reason === 'late_day_needs_later_run')) {
+    const ids = new Set<string>()
+    for (const run of runs) if (!runIsSettled(run)) ids.add(run.id)
+    for (const run of periodRuns.values()) ids.add(run.id)
+    const loadedSlips = await loadPayslips(supabase, companyId, args.employeeId, Array.from(ids))
+    if ('error' in loadedSlips) return internal(loadedSlips.error)
+    payslips = loadedSlips.slips
+  }
+
+  const locked = lockFailure(refusals, runs, new Set(payslips.keys()))
   if (locked) return locked
 
   if (lateDates.length > 0 && args.carriedToRunId) {
@@ -769,6 +842,7 @@ export async function planRegisterUpsert(
       carriedToRunId: args.carriedToRunId,
       lateDates,
       periodRuns,
+      payslips,
       absenceType: args.kind === 'absence' ? args.absenceType : undefined,
     })
     if (invalid) return invalid
@@ -810,7 +884,7 @@ export async function checkRegisterRangeDelete(
     const reader = row.carried_to_run_id ? liveCarriedReader(runs, row.carried_to_run_id) : null
     if (reader) readers.add(reader.id)
   }
-  const locked = lockFailure(refusals, runs)
+  const locked = lockFailure(refusals, runs, new Set())
   if (locked) return locked
   return { ok: true, carriedReaderRunIds: Array.from(readers) }
 }

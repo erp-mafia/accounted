@@ -30,10 +30,11 @@
  * pay went out in full, so a deduction there would declare less than was paid
  * and recover nothing (Skatteverket allows kvittning on a later payout, or an
  * återkrav that leaves the skatteavdrag as it was). It takes late days only
- * when named, and only while its period's AGI is not at Skatteverket
- * (correctionPeriodFiled): the case of a deduction already typed by hand into
- * the paid run, which the correction replaces with the registered days so
- * their frånvarouppgifter reach that period's first declaration.
+ * when named, only for absence, only while its period's AGI is not at
+ * Skatteverket (correctionPeriodFiled), and only when the paid run carried a
+ * deduction typed by hand for the employee (paidRunHasHandDeduction): the
+ * correction replaces that line with the registered days, so the pay stays
+ * as paid and their frånvarouppgifter reach that period's first declaration.
  *
  * The frånvarouppgift follows a deduction. Hourly pay has none to make: the
  * hours not worked were never paid, so the absence affected the pay of its
@@ -135,6 +136,60 @@ export async function correctionPeriodFiled(
     (row) => row.is_completed === true,
   )
   return { ok: true, filed: (status != null && AGI_AT_SKATTEVERKET_STATUSES.includes(status)) || deadlineDone }
+}
+
+/**
+ * Manual line types that lower the gross pay: the ways a deduction for
+ * missed days is typed by hand on a payslip (manual-payslip-lines.ts).
+ */
+const HAND_DEDUCTION_ITEM_TYPES: readonly string[] = ['gross_deduction_other', 'correction']
+
+/**
+ * A payslip line that is a deduction typed by hand: a negative Bruttolöneavdrag
+ * or Korrigering that no förmån or recurring line wrote. The correction a late
+ * day is carried to copies it from the paid run, so the calculation names it:
+ * left in place, it deducts the same days a second time.
+ */
+export function isHandDeductionLine(line: {
+  item_type?: unknown
+  amount?: unknown
+  source_benefit_id?: unknown
+  source_recurring_line_id?: unknown
+}): boolean {
+  return (
+    typeof line.item_type === 'string' &&
+    HAND_DEDUCTION_ITEM_TYPES.includes(line.item_type) &&
+    Number(line.amount) < 0 &&
+    !line.source_benefit_id &&
+    !line.source_recurring_line_id
+  )
+}
+
+/**
+ * Whether the paid run a correction replaces carried a deduction typed by
+ * hand on the employee's payslip: a negative Bruttolöneavdrag or Korrigering
+ * that no förmån or recurring line wrote. That is the one case a correction
+ * takes late days for: it replaces the hand line with the registered days, so
+ * the pay stays as paid and their frånvarouppgifter reach the period's first
+ * declaration. Without one the days belong to the next ordinary run.
+ */
+export async function paidRunHasHandDeduction(
+  supabase: SupabaseClient,
+  companyId: string,
+  paidRunId: string,
+  employeeId: string,
+): Promise<{ ok: true; found: boolean } | { ok: false; message: string }> {
+  const { data, error } = await supabase
+    .from('salary_run_employees')
+    .select('id, line_items:salary_line_items(item_type, amount, source_benefit_id, source_recurring_line_id)')
+    .eq('company_id', companyId)
+    .eq('salary_run_id', paidRunId)
+    .eq('employee_id', employeeId)
+    .maybeSingle()
+  if (error) return { ok: false, message: error.message }
+  const lines = (data as { line_items?: unknown } | null)?.line_items
+  const found = (Array.isArray(lines) ? (lines as Array<Record<string, unknown>>) : []).some(isHandDeductionLine)
+  return { ok: true, found }
 }
 
 /**

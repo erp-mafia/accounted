@@ -261,6 +261,53 @@ describe('runSalaryCalculation: late days carried to the run', () => {
     expect((ordinary.result as { warnings: string[] }).warnings.join(' ')).not.toContain('rättelse')
   })
 
+  it('names the hand-typed deduction a correction copied from the paid run while late days sit beside it', async () => {
+    const correctionRuns = [
+      draftRun(C, NOVEMBER, {
+        status: 'corrected',
+        period_year: 2026,
+        period_month: 11,
+        payment_date: '2026-11-25',
+        deviation_period_start: '2026-11-01',
+        deviation_period_end: '2026-11-30',
+      }),
+      draftRun(C, 'run-2026-11-correction', {
+        period_year: 2026,
+        period_month: 11,
+        payment_date: '2026-11-25',
+        deviation_period_start: '2026-11-01',
+        deviation_period_end: '2026-11-30',
+        is_correction: true,
+        corrects_run_id: NOVEMBER,
+      }),
+    ]
+    const s = scenario({
+      calculate: 'run-2026-11-correction',
+      absences: carried(absence(C, 'emp-anna', LATE_PARENTAL), 'run-2026-11-correction'),
+      runs: correctionRuns,
+    })
+    const sreId = s.sreId
+    s.seed.salary_line_items.push(
+      line(C, sreId, 'li-hand', { item_type: 'gross_deduction_other', description: 'Löneavdrag föräldraledighet oktober', amount: -30000 }),
+    )
+    const { result, lines } = await calculate(s)
+    expect(result.ok).toBe(true)
+    expect((result as { warnings: string[] }).warnings).toContainEqual(
+      expect.stringContaining('Anna Testsson ("Löneavdrag föräldraledighet oktober")'),
+    )
+    // Both still deduct: the warning is what stops the double deduction.
+    expect(lines.filter((li) => li.amount === -30000).map((li) => li.item_type).sort()).toEqual(['gross_deduction_other', 'parental_leave'])
+
+    // Removed, the warning goes.
+    const without = scenario({
+      calculate: 'run-2026-11-correction',
+      absences: carried(absence(C, 'emp-anna', LATE_PARENTAL), 'run-2026-11-correction'),
+      runs: correctionRuns,
+    })
+    const clean = await calculate(without)
+    expect((clean.result as { warnings: string[] }).warnings.join(' ')).not.toContain('handskrivna avdragsraden')
+  })
+
   it('a correction of November still deducts the days carried to the run it corrects', async () => {
     const s = scenario({
       calculate: 'run-2026-11-correction',

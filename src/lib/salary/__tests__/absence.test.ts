@@ -567,8 +567,7 @@ describe('late days (absence known after its run was paid)', () => {
     mock.enqueue({ data: { id: EMPLOYEE_ID } })
     mock.enqueue({ data: [BOOKED_RUN_OCTOBER, DRAFT_RUN_NOVEMBER] })
     mock.enqueue({ data: [] }) // nothing registered on the days yet
-    mock.enqueue({ data: { id: 'sre-nov' } }) // the employee is on November
-    mock.enqueue({ data: [{ salary_run_id: 'run-oct', salary_type: 'monthly' }] }) // October paid the employee monthly
+    mock.enqueue({ data: [{ salary_run_id: 'run-nov', salary_type: 'monthly' }, { salary_run_id: 'run-oct', salary_type: 'monthly' }] }) // on November; October paid the employee monthly
     mock.enqueue({ data: { salary_calculation_policy: {} } })
     mock.enqueue({
       data: [
@@ -597,8 +596,7 @@ describe('late days (absence known after its run was paid)', () => {
     mock.enqueue({ data: { id: EMPLOYEE_ID } })
     mock.enqueue({ data: [BOOKED_RUN_OCTOBER, DRAFT_RUN_NOVEMBER] })
     mock.enqueue({ data: [] })
-    mock.enqueue({ data: { id: 'sre-nov' } })
-    mock.enqueue({ data: [{ salary_run_id: 'run-oct', salary_type: 'monthly' }] })
+    mock.enqueue({ data: [{ salary_run_id: 'run-nov', salary_type: 'monthly' }, { salary_run_id: 'run-oct', salary_type: 'monthly' }] })
     mock.enqueue({ data: { salary_calculation_policy: {} } })
 
     const result = await upsertAbsenceRange(supabase, {

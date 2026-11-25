@@ -488,8 +488,7 @@ describe('gnubok_register_absence', () => {
     enqueue({ data: { id: 'emp-1' } }) // service assertEmployee
     enqueue({ data: [booked, draft] }) // runs
     enqueue({ data: [] }) // nothing registered on the days
-    enqueue({ data: { id: 'sre-nov' } }) // the employee is on November
-    enqueue({ data: [{ salary_run_id: booked.id, salary_type: 'monthly' }] }) // the period paid the employee monthly
+    enqueue({ data: [{ salary_run_id: draft.id, salary_type: 'monthly' }, { salary_run_id: booked.id, salary_type: 'monthly' }] }) // on November; the period paid the employee monthly
     enqueue({ data: { salary_calculation_policy: {} } })
     enqueue({ data: { first_name: 'Anna', last_name: 'Andersson' } }) // name for title/preview
     enqueue({ data: null }) // resolvePeriodStatusForDate: company_settings

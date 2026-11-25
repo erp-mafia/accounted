@@ -7998,12 +7998,12 @@ const SALARY: Record<string, StructuredErrorEntry> = {
   SALARY_RUN_EMPLOYEE_HAS_LATE_DAYS: {
     httpStatus: 409,
     message_sv:
-      'Den anställde har sent kända dagar från en tidigare, redan utbetald period som ska dras i den här lönekörningen. Ta bort de dagarna först, eller låt den anställde vara kvar på körningen.',
+      'Den anställde har sent kända dagar från en tidigare, redan utbetald eller deklarerad period som ska dras i den här lönekörningen. Ta bort de dagarna först, eller låt den anställde vara kvar på körningen.',
     message_en:
-      'The employee has late days from an earlier, already paid period that are carried to this payroll run. Remove those days first, or keep the employee on the run.',
+      'The employee has late days from an earlier, already paid or declared period that are carried to this payroll run. Remove those days first, or keep the employee on the run.',
     remediation: {
       description:
-        'Absence or worked days from an earlier, already paid or declared period are carried to this draft run (carried_to_run_id; details.late_dates) and would be deducted by no run without the employee on it. Delete those days first (gnubok_delete_absence, gnubok_delete_worked_days), then remove the employee, or keep them on the run.',
+        'Absence or worked days from an earlier, already paid or declared period are carried to this draft run (carried_to_run_id; details.late_dates) and would be settled by no run without the employee on it. Delete those days first (gnubok_delete_absence for absence, gnubok_delete_worked_days for hours), then remove the employee, or keep them on the run.',
       tool: 'gnubok_delete_absence',
     },
   },
@@ -8296,7 +8296,7 @@ const SALARY: Record<string, StructuredErrorEntry> = {
       'A salary run that is already calculated, approved, paid or declared has read these dates. If it is paid or declared, a day that became known late is registered on its real date and deducted in the next salary run, which also reports the absence in its own AGI. Otherwise revert that run to draft and register the day there.',
     remediation: {
       description:
-        'details.salary_run_id names the run, details.locked_dates the dates and details.reason why. late_day_needs_later_run: register the days again with carried_to_run_id = details.later_salary_run.salary_run_id (the next ordinary run that is neither paid nor declared; it must be a draft with the employee on it). A new day in the window of a corrected run is a late day too. run_not_settled: revert the run to draft (gnubok_unapprove_salary_run for an approved run, then gnubok_revert_salary_run; POST /salary-runs/{id}/unapprove and /revert). read_by_settled_run: the day is part of what was paid and is not rewritten; settle a difference with a payslip line on the next run. Never correct a paid run for a late day: a correction run is for errors found before payout and AGI.',
+        'details.salary_run_id names the run, details.locked_dates the dates and details.reason why. late_day_needs_later_run: register the days again with carried_to_run_id = details.later_salary_run.salary_run_id (the next ordinary run that is neither paid nor declared; it must be a draft with the employee on it). A new day in the window of a corrected run is a late day too. run_not_settled: revert the run to draft (gnubok_unapprove_salary_run for an approved run, then gnubok_revert_salary_run; POST /salary-runs/{id}/unapprove and /revert). read_by_settled_run: the day is part of what was paid and is not rewritten; settle a difference with a payslip line on the next run. Never correct a paid run for a late day; a correction run stays for other errors in a booked run.',
     },
   },
   SALARY_REGISTER_LATE_DAY_REFUSED: {
@@ -8307,7 +8307,7 @@ const SALARY: Record<string, StructuredErrorEntry> = {
       'The late days cannot be carried to that salary run. A late day is deducted in the next salary run that is neither paid nor declared, and that run must be a draft with the employee on it.',
     remediation: {
       description:
-        'details.reason says why: not_found, not_draft (revert the run to draft first), not_later (the run does not come after the days), not_next (carry them to details.later_salary_run instead), employee_not_on_run (add the employee to the run first), calendar_long_leave (the company prices long leave per calendar day; a late parental, unpaid or sick day cannot be priced in a later run: deduct it with a payslip line), hourly_pay (an hourly employee\'s late VAB or parental day reduces no later pay, so its frånvarouppgift has no later period: do not register it as a late day), pay_type_changed (the employee was paid monthly in the period the days belong to and hourly on the named run, or the other way round: settle the difference with a payslip line), not_paid_then (the employee had no payslip on details.period_salary_run, so no paid pay is reduced), correction_period_filed (the named correction run declares a period whose AGI awaits signature, is filed or has its deadline marked done: carry the days to details.later_salary_run). not_next also answers a named run that is paid, declared or corrected. A correction draft takes late days only when named, while its period\'s AGI is not at Skatteverket: it is for replacing a deduction already typed by hand into the paid run.',
+        'details.reason says why: not_found, not_draft (revert the run to draft first), not_later (the run does not come after the days), not_next (carry them to details.later_salary_run instead), employee_not_on_run (add the employee to the run first), calendar_long_leave (the company prices long leave per calendar day; a late parental, unpaid or sick day cannot be priced in a later run: deduct it with a payslip line), hourly_pay (an hourly employee\'s late VAB or parental day reduces no later pay, so its frånvarouppgift has no later period: do not register it as a late day), pay_type_changed (the employee was paid monthly in the period the days belong to and hourly on the named run, or the other way round: settle the difference with a payslip line), not_paid_then (the employee had no payslip on details.period_salary_run, so no paid pay is reduced), correction_period_filed (the named correction run declares a period whose AGI awaits signature, is filed or has its deadline marked done: carry the days to details.later_salary_run), correction_without_hand_deduction (the paid run the correction replaces carried no deduction typed by hand for the employee, or the days are hours: carry them to details.later_salary_run). not_next also answers a named run that is paid, declared or corrected. A correction draft takes late absence only when named, while its period\'s AGI is not at Skatteverket and the paid run carried a deduction typed by hand for the employee: the days replace that line.',
     },
   },
   SALARY_RUN_DEVIATION_PERIOD_INVALID: {
@@ -8663,12 +8663,12 @@ const SALARY: Record<string, StructuredErrorEntry> = {
   SALARY_RUN_DELETE_BLOCKED_BY_LATE_DAYS: {
     httpStatus: 409,
     message_sv:
-      'Lönekörningen kan inte raderas eftersom sent kända dagar från en tidigare, redan utbetald period ska dras i den. Ta bort de dagarna först, eller låt körningen vara kvar.',
+      'Lönekörningen kan inte raderas eftersom sent kända dagar från en tidigare, redan utbetald eller deklarerad period ska dras i den. Ta bort de dagarna först, eller låt körningen vara kvar.',
     message_en:
-      'This payroll run cannot be deleted because late days from an earlier, already paid period are carried to it. Remove those days first, or keep the run.',
+      'This payroll run cannot be deleted because late days from an earlier, already paid or declared period are carried to it. Remove those days first, or keep the run.',
     remediation: {
       description:
-        'Absence or worked days from an earlier, already paid or declared period are carried to this draft run (carried_to_run_id) and would be deducted by no run without it. Delete those days first (gnubok_delete_absence, gnubok_delete_worked_days; list them with gnubok_list_absence), then delete the run, or keep it.',
+        'Absence or worked days from an earlier, already paid or declared period are carried to this draft run (carried_to_run_id) and would be deducted by no run without it. Delete those days first (gnubok_delete_absence for absence, gnubok_delete_worked_days for hours; list them with gnubok_list_absence and gnubok_list_worked_days), then delete the run, or keep it.',
       tool: 'gnubok_delete_absence',
     },
   },
