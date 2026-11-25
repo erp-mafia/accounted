@@ -497,8 +497,8 @@ export function BankIdSigningFlow({
   }
 
   // The refusal's way out follows the state (lib/payments/orders/readiness
-  // verificationStep): a form already out is opened again (or waits for the
-  // firmatecknare), a lapsed one is renewed, a dead link is replaced.
+  // verificationStep): a form already out is opened again (or replaced when
+  // its link is not at hand), a lapsed one is renewed, a dead link is replaced.
   // Without a state the first verification is offered.
   const verificationAction = (() => {
     switch (verificationNext) {
