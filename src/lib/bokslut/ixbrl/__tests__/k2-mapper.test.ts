@@ -305,6 +305,24 @@ describe('mapTrialBalancesToK2', () => {
     expect(res.rr['HandelsvarorKostnader'].current).toBe(3_000)
   })
 
+  it('splits class 4 purchases by the BAS 2026 group tags (40-42 and 498x handelsvaror, 43-48 råvaror och förnödenheter)', () => {
+    const rows = [
+      row('3010', 'Försäljning', 0, 100_000),
+      row('4010', 'Inköp av handelsvaror i Sverige', 10_000, 0),
+      row('4075', 'Inköp av handelsvaror från annat EU-land, 25 % moms', 2_000, 0),
+      row('4211', 'Sålda handelsvaror positiv VMB 25 %', 400, 0),
+      row('4981', 'Sålda värdepappers anskaffningsvärde', 300, 0),
+      row('4310', 'Inköp av råvaror och material i Sverige', 1_000, 0),
+      row('4545', 'Import av råvaror och material, 25 % moms', 200, 0),
+      row('4610', 'Inköp av tjänster och underentreprenader', 3_000, 0),
+      row('4731', 'Erhållna kassarabatter (Råvaror och förnödenheter)', 0, 100),
+      row('4890', 'Övriga produktionskostnader', 50, 0),
+    ]
+    const res = mapTrialBalancesToK2({ full: rows, preClosing: rows }, null)
+    expect(res.rr['HandelsvarorKostnader'].current).toBe(12_700)
+    expect(res.rr['RavarorFornodenheterKostnader'].current).toBe(4_150)
+  })
+
   it('routes 77xx nedskrivningar per K2 split (7710-7733 → anläggningstillgångar, 7740/7790 → omsättningstillgångar)', () => {
     const rows = [
       row('7710', 'Nedskrivningar av immateriella anläggningstillgångar', 10_000, 0),

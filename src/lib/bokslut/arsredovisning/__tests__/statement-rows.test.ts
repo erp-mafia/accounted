@@ -59,7 +59,7 @@ function currentPair(): TrialBalancePair {
   const preClosing = [
     ...full.filter((r) => r.account_number !== '2099'),
     tbRow('3001', 'Försäljning varor 25%', { credit: 520_600 }),
-    tbRow('4010', 'Inköp material', { debit: 200_000 }),
+    tbRow('4310', 'Inköp av råvaror och material', { debit: 200_000 }),
     tbRow('8910', 'Skatt på årets resultat', { debit: 20_600 }),
   ]
   return { full, preClosing }
@@ -75,7 +75,7 @@ function previousPair(): TrialBalancePair {
   const preClosing = [
     ...full.filter((r) => r.account_number !== '2099'),
     tbRow('3001', 'Försäljning varor 25%', { credit: 250_000 }),
-    tbRow('4010', 'Inköp material', { debit: 100_000 }),
+    tbRow('4310', 'Inköp av råvaror och material', { debit: 100_000 }),
   ]
   return { full, preClosing }
 }
