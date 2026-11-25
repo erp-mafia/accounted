@@ -581,7 +581,7 @@ describe('buildArsredovisningData: K3', () => {
     expect(uppskjuten!.body).toMatch(/Ingående saldo \(1370\): 10\s000 kr/)
     expect(uppskjuten!.body).toMatch(/Årets förändring: 30\s900 kr/)
     expect(uppskjuten!.body).toMatch(/Utgående saldo \(1370\): 40\s900 kr/)
-    expect(uppskjuten!.body).toMatch(/\(8940\): -30\s900 kr/)
+    expect(uppskjuten!.body).toMatch(/\(8940\): \u221230\s900 kr/)
     expect(uppskjuten!.body).not.toContain('2240')
     const principles = data.noter.find((n) => n.title.startsWith('Redovisnings'))!
     expect(principles.body).toContain('Uppskjuten skattefordran redovisas på konto 1370.')
@@ -932,10 +932,10 @@ describe('buildArsredovisningData: write-downs in the anläggningar note (ÅRL 5
       // names (k2-fixed-asset-note.ts); K3 per register category.
       const k2 = framework === 'k2'
       expect(note?.body).toContain(k2 ? 'Byggnader och mark' : 'Mark')
-      expect(note?.body).toMatch(k2 ? /Ingående nedskrivningar: -100\s000 kr/ : /Ingående ackumulerade nedskrivningar: -100\s000 kr/)
-      expect(note?.body).toMatch(/Årets nedskrivningar: -50\s000 kr/)
+      expect(note?.body).toMatch(k2 ? /Ingående nedskrivningar: \u2212100\s000 kr/ : /Ingående ackumulerade nedskrivningar: \u2212100\s000 kr/)
+      expect(note?.body).toMatch(/Årets nedskrivningar: \u221250\s000 kr/)
       expect(note?.body).toMatch(k2 ? /Återförda nedskrivningar: 20\s000 kr/ : /Årets återförda nedskrivningar: 20\s000 kr/)
-      expect(note?.body).toMatch(k2 ? /Utgående nedskrivningar: -130\s000 kr/ : /Utgående ackumulerade nedskrivningar: -130\s000 kr/)
+      expect(note?.body).toMatch(k2 ? /Utgående nedskrivningar: \u2212130\s000 kr/ : /Utgående ackumulerade nedskrivningar: \u2212130\s000 kr/)
       expect(note?.body).toMatch(k2 ? /Redovisat värde: 770\s000 kr/ : /Utgående redovisat värde: 770\s000 kr/)
       expect(data.errors).toBeUndefined()
       expect(data.warnings.find((w) => w.startsWith('Anläggningsnoten'))).toBeUndefined()
@@ -1077,7 +1077,7 @@ describe('buildArsredovisningData: write-downs in the anläggningar note (ÅRL 5
     const unbooked = await buildWith([ledgerRow('1130', 900_000)])
     expect(unbooked.errors).toEqual([
       expect.stringMatching(/^Anläggningsnoten för Byggnader och mark: omräkningsdifferensen i anskaffningsvärdena är angiven till 20\s000 kr, men postens anskaffningskonton har under året ändrats med 0 kr/),
-      expect.stringMatching(/^Anläggningsnoten för Byggnader och mark: omräkningsdifferensen i avskrivningarna är angiven till -20\s000 kr/),
+      expect.stringMatching(/^Anläggningsnoten för Byggnader och mark: omräkningsdifferensen i avskrivningarna är angiven till \u221220\s000 kr/),
     ])
     // Booked on the anskaffningskonto and on an account of accumulated avskrivningar, the same rows stand.
     const booked = await buildWith([
@@ -1088,7 +1088,7 @@ describe('buildArsredovisningData: write-downs in the anläggningar note (ÅRL 5
     expect(booked.warnings.find((w) => w.startsWith('Anläggningsnoten'))).toBeUndefined()
     const body = booked.noter.find((n) => n.title === 'Anläggningstillgångar')?.body ?? ''
     expect(body).toMatch(/Utgående anskaffningsvärden: 920\s000 kr/)
-    expect(body).toMatch(/Utgående avskrivningar: -20\s000 kr/)
+    expect(body).toMatch(/Utgående avskrivningar: \u221220\s000 kr/)
     expect(body).toMatch(/Redovisat värde: 900\s000 kr/)
   })
 
@@ -1354,7 +1354,7 @@ describe('buildArsredovisningData: one source per nedskrivning', () => {
     it(`${framework.toUpperCase()}: a write-down posted through the register is shown once, in the roll-forward`, async () => {
       plant(REGISTER, { opening: 100_000, written: 50_000, released: 20_000 })
       const { data, rollforward, ledger } = await build(framework)
-      expect(rollforward).toMatch(/Årets nedskrivningar: -50\s000 kr/)
+      expect(rollforward).toMatch(/Årets nedskrivningar: \u221250\s000 kr/)
       expect(rollforward).toMatch(framework === 'k2' ? /Redovisat värde: 770\s000 kr/ : /Utgående redovisat värde: 770\s000 kr/)
       expect(ledger).toBeUndefined()
       tiesOut(data)
@@ -1366,13 +1366,13 @@ describe('buildArsredovisningData: one source per nedskrivning', () => {
       plant([], { opening: 0, written: 40_000, released: 0 })
       const { data, rollforward, ledger } = await build(framework)
       if (framework === 'k2') {
-        expect(rollforward).toMatch(/Årets nedskrivningar: -40\s000 kr/)
+        expect(rollforward).toMatch(/Årets nedskrivningar: \u221240\s000 kr/)
         expect(rollforward).toMatch(/Redovisat värde: 860\s000 kr/)
         expect(ledger).toBeUndefined()
       } else {
         expect(rollforward).not.toContain('nedskrivningar')
         expect(ledger).toContain(IMPAIRMENT_ACCOUNT)
-        expect(ledger).toMatch(/Årets nedskrivningar: -40\s000 kr/)
+        expect(ledger).toMatch(/Årets nedskrivningar: \u221240\s000 kr/)
         expect(ledger).not.toContain('utanför anläggningsregistret')
       }
       tiesOut(data)
@@ -1383,16 +1383,16 @@ describe('buildArsredovisningData: one source per nedskrivning', () => {
       plant(REGISTER, { opening: 100_000, written: 80_000, released: 20_000 })
       const { data, rollforward, ledger } = await build(framework)
       if (framework === 'k2') {
-        expect(rollforward).toMatch(/Årets nedskrivningar: -80\s000 kr/)
-        expect(rollforward).toMatch(/Utgående nedskrivningar: -160\s000 kr/)
+        expect(rollforward).toMatch(/Årets nedskrivningar: \u221280\s000 kr/)
+        expect(rollforward).toMatch(/Utgående nedskrivningar: \u2212160\s000 kr/)
         expect(ledger).toBeUndefined()
       } else {
-        expect(rollforward).toMatch(/Årets nedskrivningar: -50\s000 kr/)
-        expect(rollforward).toMatch(/Utgående ackumulerade nedskrivningar: -130\s000 kr/)
+        expect(rollforward).toMatch(/Årets nedskrivningar: \u221250\s000 kr/)
+        expect(rollforward).toMatch(/Utgående ackumulerade nedskrivningar: \u2212130\s000 kr/)
         expect(ledger).toContain('utanför anläggningsregistret')
         expect(ledger).toMatch(/Ingående nedskrivningar: 0 kr/)
-        expect(ledger).toMatch(/Årets nedskrivningar: -30\s000 kr/)
-        expect(ledger).toMatch(/Utgående nedskrivningar: -30\s000 kr/)
+        expect(ledger).toMatch(/Årets nedskrivningar: \u221230\s000 kr/)
+        expect(ledger).toMatch(/Utgående nedskrivningar: \u221230\s000 kr/)
       }
       tiesOut(data)
     })
@@ -1416,8 +1416,8 @@ describe('buildArsredovisningData: one source per nedskrivning', () => {
     // The register's 50 000 and 11 000 from the fusion were booked on 1118 in 2025.
     plant(REGISTER, { opening: 100_000, written: 61_000, released: 20_000 })
     const { data, rollforward, ledger } = await buildStated({ 'impairment.fusion': 11_000 })
-    expect(rollforward).toMatch(/Fusion: -11\s000 kr/)
-    expect(rollforward).toMatch(/Utgående nedskrivningar: -141\s000 kr/)
+    expect(rollforward).toMatch(/Fusion: \u221211\s000 kr/)
+    expect(rollforward).toMatch(/Utgående nedskrivningar: \u2212141\s000 kr/)
     expect(rollforward).toMatch(/Redovisat värde: 759\s000 kr/)
     expect(ledger).toBeUndefined()
     tiesOut(data)
@@ -1427,9 +1427,9 @@ describe('buildArsredovisningData: one source per nedskrivning', () => {
     // 11 000 from the fusion and 30 000 more by hand, beside the register's 50 000.
     plant(REGISTER, { opening: 100_000, written: 91_000, released: 20_000 })
     const { data, rollforward, ledger } = await buildStated({ 'impairment.fusion': 11_000 })
-    expect(rollforward).toMatch(/Fusion: -11\s000 kr/)
-    expect(rollforward).toMatch(/Årets nedskrivningar: -80\s000 kr/)
-    expect(rollforward).toMatch(/Utgående nedskrivningar: -171\s000 kr/)
+    expect(rollforward).toMatch(/Fusion: \u221211\s000 kr/)
+    expect(rollforward).toMatch(/Årets nedskrivningar: \u221280\s000 kr/)
+    expect(rollforward).toMatch(/Utgående nedskrivningar: \u2212171\s000 kr/)
     expect(ledger).toBeUndefined()
     tiesOut(data)
   })
@@ -1438,8 +1438,8 @@ describe('buildArsredovisningData: one source per nedskrivning', () => {
     // Last year's fusion nedskrivning is on 1118 beyond the register's 130 000.
     plant(REGISTER_BEFORE_2025, { opening: 141_000, written: 0, released: 0 })
     const { data, rollforward, ledger } = await build('k2')
-    expect(rollforward).toMatch(/Ingående nedskrivningar: -141\s000 kr/)
-    expect(rollforward).toMatch(/Utgående nedskrivningar: -141\s000 kr/)
+    expect(rollforward).toMatch(/Ingående nedskrivningar: \u2212141\s000 kr/)
+    expect(rollforward).toMatch(/Utgående nedskrivningar: \u2212141\s000 kr/)
     expect(ledger).toBeUndefined()
     tiesOut(data)
   })
@@ -1448,7 +1448,7 @@ describe('buildArsredovisningData: one source per nedskrivning', () => {
     // 11 000 booked by hand before the year; debited in the year by the omklassificering.
     plant([], { opening: 11_000, written: 0, released: 11_000 })
     const { data, rollforward, ledger } = await buildStated({ 'impairment.omklassificeringar': 11_000 })
-    expect(rollforward).toMatch(/Ingående nedskrivningar: -11\s000 kr/)
+    expect(rollforward).toMatch(/Ingående nedskrivningar: \u221211\s000 kr/)
     expect(rollforward).toMatch(/Omklassificeringar: 11\s000 kr/)
     expect(rollforward).toMatch(/Utgående nedskrivningar: 0 kr/)
     expect(rollforward).toMatch(/Redovisat värde: 900\s000 kr/)
@@ -1479,7 +1479,7 @@ describe('buildArsredovisningData: one source per nedskrivning', () => {
     // fusion of 20 000 and a försäljning of 10 000 close at the same 60 000.
     plant([], { opening: 50_000, written: 10_000, released: 0 })
     const { data, rollforward } = await buildStated({ 'impairment.fusion': 20_000, 'impairment.forsaljningar': 10_000 })
-    expect(rollforward).toMatch(/Utgående nedskrivningar: -60\s000 kr/)
+    expect(rollforward).toMatch(/Utgående nedskrivningar: \u221260\s000 kr/)
     expect(data.errors).toEqual([
       expect.stringMatching(/ökar nedskrivningarna med 20\s000 kr, men postens nedskrivningskonton har krediterats 10\s000 kr/),
       expect.stringMatching(/minskar nedskrivningarna med 10\s000 kr, men postens nedskrivningskonton har debiterats 0 kr/),
@@ -1569,8 +1569,8 @@ describe('buildArsredovisningData: one source per nedskrivning', () => {
     ])('is shown once, in the table, and ties (%s)', async (_name, rows) => {
       plantMoved(rows)
       const { data, rollforward, ledger } = await build('k2')
-      expect(rollforward).toMatch(/Ingående nedskrivningar: -130\s000 kr/)
-      expect(rollforward).toMatch(/Utgående nedskrivningar: -130\s000 kr/)
+      expect(rollforward).toMatch(/Ingående nedskrivningar: \u2212130\s000 kr/)
+      expect(rollforward).toMatch(/Utgående nedskrivningar: \u2212130\s000 kr/)
       expect(rollforward).toMatch(/Redovisat värde: 770\s000 kr/)
       expect(ledger).toBeUndefined()
       tiesOut(data)
@@ -1631,10 +1631,10 @@ describe('buildArsredovisningData: one source per nedskrivning', () => {
       expect.objectContaining({ p_accounts: expect.arrayContaining(['1118', '1158']) }),
     )
     const body = data.noter.find((n) => n.title === 'Anläggningstillgångar')?.body ?? ''
-    expect(body).toMatch(/Ingående nedskrivningar: -30\s000 kr/)
+    expect(body).toMatch(/Ingående nedskrivningar: \u221230\s000 kr/)
     expect(body).not.toMatch(/Årets nedskrivningar/)
     expect(body).not.toMatch(/Återförda nedskrivningar/)
-    expect(body).toMatch(/Utgående nedskrivningar: -30\s000 kr/)
+    expect(body).toMatch(/Utgående nedskrivningar: \u221230\s000 kr/)
     expect(body).toMatch(/Redovisat värde: 870\s000 kr/)
     expect(data.errors).toBeUndefined()
     expect(data.warnings.find((w) => w.startsWith('Anläggningsnoten'))).toBeUndefined()

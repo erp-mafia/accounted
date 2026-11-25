@@ -241,7 +241,7 @@ describe('buildUppskjutenSkattNot', () => {
     expect(note.body).toContain('konto 1370')
     expect(note.body).toMatch(/Uppskjuten skattefordran\nIngående saldo \(1370\): 0 kr\nÅrets förändring: 30\s900 kr\nUtgående saldo \(1370\): 30\s900 kr/)
     expect(note.body).toMatch(/Uppskjuten skatteskuld\nIngående saldo \(2240\): 50\s000 kr\nÅrets förändring: 10\s000 kr\nUtgående saldo \(2240\): 60\s000 kr/)
-    expect(note.body).toMatch(/\(8940\): -20\s900 kr/)
+    expect(note.body).toMatch(/\(8940\): \u221220\s900 kr/)
   })
 
   it('shows what moved the posts outside the resultaträkning, such as the K3 transition voucher', () => {
@@ -253,8 +253,8 @@ describe('buildUppskjutenSkattNot', () => {
       asset: { opening: 0, change: 35_900, closing: 35_900 },
       expense: -5_000,
     })
-    expect(note.body).toMatch(/\(8940\): -5\s000 kr/)
-    expect(note.body).toMatch(/inte redovisats i resultaträkningen \(till exempel mot eget kapital vid övergången till K3\): -30\s900 kr/)
+    expect(note.body).toMatch(/\(8940\): \u22125\s000 kr/)
+    expect(note.body).toMatch(/inte redovisats i resultaträkningen \(till exempel mot eget kapital vid övergången till K3\): \u221230\s900 kr/)
   })
 
   it('names no post when only 8940 moved within the year', () => {

@@ -1,3 +1,5 @@
+import { UNICODE_MINUS } from '@/lib/pdf/number-text'
+
 /**
  * Whole-krona amount formatting for text that react-pdf renders with the
  * built-in Helvetica font (the K2/K3 arsredovisning PDFs and their notes).
@@ -20,4 +22,16 @@ export function formatPdfKronor(amount: number): string {
     .toLocaleString('sv-SE')
     .replace(/\s/g, NBSP)
   return rounded < 0 ? `-${grouped}` : grouped
+}
+
+/**
+ * Whole kronor for the text of a note. A note body is printed twice: in the
+ * PDF, and untagged in the iXBRL document, whose own number writer signs a
+ * negative amount with U+2212 MINUS SIGN. The note writes that sign too, so
+ * the filed document has one; the PDF templates turn it into a hyphen where
+ * they take in the report (pdfTextDeep), as for every other text.
+ */
+export function formatNoteKronor(amount: number): string {
+  const text = formatPdfKronor(amount)
+  return text.startsWith('-') ? `${UNICODE_MINUS}${text.slice(1)}` : text
 }

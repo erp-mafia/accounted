@@ -380,7 +380,7 @@ describe('the PDF text and the tagged table round alike', () => {
         writeDowns: undefined,
       },
     ])
-    expect(fixedAssetNoteBody(tables)).toMatch(/Omklassificeringar: -5\s001 kr/)
+    expect(fixedAssetNoteBody(tables)).toMatch(/Omklassificeringar: \u22125\s001 kr/)
     const { xhtml } = generate(tables)
     expect(facts(xhtml, 'InventarierVerktygInstallationerForandringAvskrivningarOmklassificeringar')).toEqual([
       { minus: true, context: 'period0', negative: true, value: 5_001 },

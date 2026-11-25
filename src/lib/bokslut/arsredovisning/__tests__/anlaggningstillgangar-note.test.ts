@@ -55,8 +55,8 @@ describe('buildAnlaggningstillgangarNote: roll-forward', () => {
       periodEnd: PERIOD_END,
     })
     expect(note?.body).toContain('Ingående ackumulerade avskrivningar: 0 kr')
-    expect(note?.body).toContain('Årets avskrivningar: -7 000 kr')
-    expect(note?.body).not.toContain('-0 kr')
+    expect(note?.body).toContain('Årets avskrivningar: \u22127 000 kr')
+    expect(note?.body).not.toMatch(/[-\u2212]0 kr/)
   })
 
   // F3: the ÅRL 5:8 roll-forward headed a row with the raw category "land".
@@ -221,7 +221,7 @@ describe('buildAnlaggningstillgangarNote: roll-forward', () => {
     // sv-SE formatting uses a non-breaking thousands separator: build the
     // expected strings with the same formatter instead of literal spaces.
     const sv = (n: number) => n.toLocaleString('sv-SE')
-    expect(note!.body).toContain(`Årets avskrivningar: -${sv(12_000)} kr`)
+    expect(note!.body).toContain(`Årets avskrivningar: \u2212${sv(12_000)} kr`)
     expect(note!.body).toContain(`Utgående redovisat värde: ${sv(36_000)} kr`)
   })
 
@@ -390,10 +390,10 @@ describe('buildAnlaggningstillgangarNote: write-downs (ÅRL 5:8 § p. 5)', () =>
       }),
     ]
     const note = buildAnlaggningstillgangarNote({ noteNumber: 4, assets, periodStart: PERIOD_START, periodEnd: PERIOD_END })
-    expect(note?.body).toMatch(/Ingående ackumulerade nedskrivningar: -10\s000 kr/)
-    expect(note?.body).toMatch(/Årets nedskrivningar: -30\s000 kr/)
+    expect(note?.body).toMatch(/Ingående ackumulerade nedskrivningar: \u221210\s000 kr/)
+    expect(note?.body).toMatch(/Årets nedskrivningar: \u221230\s000 kr/)
     expect(note?.body).toMatch(/Årets återförda nedskrivningar: 5\s000 kr/)
-    expect(note?.body).toMatch(/Utgående ackumulerade nedskrivningar: -35\s000 kr/)
+    expect(note?.body).toMatch(/Utgående ackumulerade nedskrivningar: \u221235\s000 kr/)
     // 200 000 - 60 000 - 35 000
     expect(note?.body).toMatch(/Utgående redovisat värde: 105\s000 kr/)
     expect(computeRollforwardTotals(assets, PERIOD_START, PERIOD_END)).toMatchObject({ ubRedovisat: 105_000, ubNed: 35_000 })
