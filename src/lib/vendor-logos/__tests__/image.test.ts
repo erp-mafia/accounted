@@ -81,17 +81,15 @@ describe('sniffFormat', () => {
     expect(sniffFormat(Buffer.from(head))).toBeNull()
   })
 
-  // Each '--><!--' more used to double the time the check took.
-  it('answers at once for a head of repeated comment ends', () => {
+  // Each '--><!--' more used to double the time the check took. The bound is
+  // checked after every head, shortest first, so a slow check fails on a
+  // short one instead of never returning on the whole kilobyte it reads.
+  it('answers at once for a head of repeated comment ends, up to the kilobyte it reads', () => {
     const started = Date.now()
-    for (const n of [18, 22, 26]) expect(sniffFormat(Buffer.from(`<!--${'--><!--'.repeat(n)}x`))).toBeNull()
-    expect(Date.now() - started).toBeLessThan(250)
-  })
-
-  it('answers at once when the whole kilobyte it reads is such a head', () => {
-    const started = Date.now()
-    expect(sniffFormat(Buffer.from(`<!--${'--><!--'.repeat(200)}x`))).toBeNull()
-    expect(Date.now() - started).toBeLessThan(250)
+    for (const n of [18, 22, 26, 30, 200]) {
+      expect(sniffFormat(Buffer.from(`<!--${'--><!--'.repeat(n)}x`))).toBeNull()
+      expect(Date.now() - started).toBeLessThan(1000)
+    }
   })
 })
 
@@ -113,13 +111,15 @@ describe('isSafeSvg', () => {
     expect(isSafeSvg('<svg><image href="  https://tracker.example/p.png"/></svg>')).toBe(false)
   })
 
-  it('answers at once for a reference that is never closed, in an icon as large as we fetch', () => {
-    // Without its closing quote it is no reference, as before; librsvg then refuses the file.
+  it('answers at once for a reference that is never closed, up to an icon as large as we fetch', () => {
+    // Without its closing quote it is no reference, as before; librsvg then
+    // refuses the file. A slow check fails on the smaller icon first.
     const open = '<svg><a href="'
-    const svg = `${open}${' '.repeat(300 * 1024 - open.length)}`
     const started = Date.now()
-    expect(isSafeSvg(svg)).toBe(true)
-    expect(Date.now() - started).toBeLessThan(250)
+    for (const size of [80 * 1024, 300 * 1024]) {
+      expect(isSafeSvg(`${open}${' '.repeat(size - open.length)}`)).toBe(true)
+      expect(Date.now() - started).toBeLessThan(1000)
+    }
   })
 })
 

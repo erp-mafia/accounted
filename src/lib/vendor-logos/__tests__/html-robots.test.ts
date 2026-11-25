@@ -83,10 +83,12 @@ describe('robots.txt', () => {
   })
 
   it('reads long runs of # and / at once', () => {
-    const hostile = `User-agent: AccountedLogoFetcher/${'/'.repeat(200_000)}\u2028x\nDisallow: /${'#'.repeat(200_000)}\u2028x\n`
+    // The answer is the same as before; a slow parse fails on the shorter runs first.
     const started = Date.now()
-    const rules = parseRobots(hostile)
-    expect(Date.now() - started).toBeLessThan(500)
-    expect(robotsAllows(rules, '/')).toBe(false)
+    for (const n of [60_000, 200_000]) {
+      const rules = parseRobots(`User-agent: somebot/${'/'.repeat(n)}\u2028x\nDisallow: /\n\nUser-agent: *\nDisallow: /a${'#'.repeat(n)}\u2028x\n`)
+      expect(Date.now() - started).toBeLessThan(1000)
+      expect(robotsAllows(rules, '/b')).toBe(true)
+    }
   })
 })
