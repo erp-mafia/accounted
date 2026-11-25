@@ -57,6 +57,40 @@ describe('sniffFormat', () => {
     expect(sniffFormat(ico([{ size: 32, bytes: await png(32) }]))).toBe('ico')
     expect(sniffFormat(Buffer.from('<html><body>not an icon</body></html>'))).toBeNull()
   })
+
+  it.each([
+    ['an Illustrator head', `<?xml version="1.0" encoding="utf-8"?>\n<!-- Generator: Adobe Illustrator 24.0.0, SVG Export Plug-In . SVG Version: 6.00 Build 0)  -->\n${SVG}`],
+    [
+      'an Illustrator head with a DOCTYPE',
+      `<?xml version="1.0" encoding="utf-8"?>\n<!-- Generator: Adobe Illustrator 15.0.0, SVG Export Plug-In  -->\n<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">\n${SVG}`,
+    ],
+    ['an Inkscape head', `<?xml version="1.0" encoding="UTF-8" standalone="no"?>\n<!-- Created with Inkscape (http://www.inkscape.org/) -->\n\n${SVG}`],
+    ['two comments', `<!-- one -->\n<!-- two -->\n${SVG}`],
+    ['a DOCTYPE between two comments', `<!-- one --><!DOCTYPE svg><!-- two -->${SVG}`],
+    ['a hundred empty comments', `${'<!---->'.repeat(100)}${SVG}`],
+    ['a byte order mark and upper case', '\uFEFF\n<SVG xmlns="http://www.w3.org/2000/svg"></SVG>'],
+  ])('reads %s as SVG, as before', (_, head) => {
+    expect(sniffFormat(Buffer.from(head))).toBe('svg')
+  })
+
+  it.each([
+    ['a comment that never ends', `<!-- ${SVG}`],
+    ['text before the svg element', `<p>logo</p>${SVG}`],
+    ['an element that is not svg', '<svgx/>'],
+  ])('does not read %s as SVG, as before', (_, head) => {
+    expect(sniffFormat(Buffer.from(head))).toBeNull()
+  })
+
+  // Each '--><!--' more used to double the time the check took. The bound is
+  // checked after every head, shortest first, so a slow check fails on a
+  // short one instead of never returning on the whole kilobyte it reads.
+  it('answers at once for a head of repeated comment ends, up to the kilobyte it reads', () => {
+    const started = Date.now()
+    for (const n of [18, 22, 26, 30, 200]) {
+      expect(sniffFormat(Buffer.from(`<!--${'--><!--'.repeat(n)}x`))).toBeNull()
+      expect(Date.now() - started).toBeLessThan(1000)
+    }
+  })
 })
 
 describe('isSafeSvg', () => {
@@ -69,6 +103,23 @@ describe('isSafeSvg', () => {
     expect(isSafeSvg('<svg><foreignObject/></svg>')).toBe(false)
     expect(isSafeSvg('<svg><style>@import "x.css";</style></svg>')).toBe(false)
     expect(isSafeSvg('<svg><rect style="fill:url(https://x.example/a)"/></svg>')).toBe(false)
+  })
+
+  it('reads a reference with spaces around it as before', () => {
+    expect(isSafeSvg('<svg><use href=" #a "/></svg>')).toBe(true)
+    expect(isSafeSvg("<svg><image xlink:href = ' data:image/png;base64,iVBORw0KGgo='/></svg>")).toBe(true)
+    expect(isSafeSvg('<svg><image href="  https://tracker.example/p.png"/></svg>')).toBe(false)
+  })
+
+  it('answers at once for a reference that is never closed, up to an icon as large as we fetch', () => {
+    // Without its closing quote it is no reference, as before; librsvg then
+    // refuses the file. A slow check fails on the smaller icon first.
+    const open = '<svg><a href="'
+    const started = Date.now()
+    for (const size of [80 * 1024, 300 * 1024]) {
+      expect(isSafeSvg(`${open}${' '.repeat(size - open.length)}`)).toBe(true)
+      expect(Date.now() - started).toBeLessThan(1000)
+    }
   })
 })
 

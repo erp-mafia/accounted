@@ -73,4 +73,22 @@ describe('robots.txt', () => {
     expect(patternMatches('/a*b$', '/axxb')).toBe(true)
     expect(patternMatches('/a*b$', '/axxbc')).toBe(false)
   })
+
+  it('reads a comment and a version to the end of the line, past a U+2028 (RFC 9309 ends lines at CR and LF only)', () => {
+    const commented = parseRobots('User-agent: *\nDisallow: /private # note\u2028more\n')
+    expect(robotsAllows(commented, '/private/x')).toBe(false)
+    expect(robotsAllows(commented, '/')).toBe(true)
+    const own = parseRobots('User-agent: *\nDisallow: /\n\nUser-agent: AccountedLogoFetcher/1.0\u2028x\nAllow: /\n')
+    expect(robotsAllows(own, '/apple-touch-icon.png')).toBe(true)
+  })
+
+  it('reads long runs of # and / at once', () => {
+    // The answer is the same as before; a slow parse fails on the shorter runs first.
+    const started = Date.now()
+    for (const n of [60_000, 200_000]) {
+      const rules = parseRobots(`User-agent: somebot/${'/'.repeat(n)}\u2028x\nDisallow: /\n\nUser-agent: *\nDisallow: /a${'#'.repeat(n)}\u2028x\n`)
+      expect(Date.now() - started).toBeLessThan(1000)
+      expect(robotsAllows(rules, '/b')).toBe(true)
+    }
+  })
 })
