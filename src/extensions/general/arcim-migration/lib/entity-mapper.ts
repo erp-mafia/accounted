@@ -893,8 +893,7 @@ function negate(n: number): number {
  * classify the rate at all: it divides VAT by subtotal, which only yields a
  * statutory rate when both are positive.
  *
- * The header figures are single values, so their magnitude is their absolute
- * value. The ROWS are not: a credit note can credit one thing and charge
+ * The ROWS need not share a sign: a credit note can credit one thing and charge
  * another on the same document (goods returned, a return fee charged), and
  * its rows then carry both signs. 65 of the Fortnox credit notes in
  * production on 2026-09-20 do, and for every one of them the rows as sent sum
@@ -905,6 +904,19 @@ function negate(n: number): number {
  * share a sign that is the absolute value, as before. The unit price stays a
  * magnitude and the quantity carries the row's sign, which is how an in-app
  * credit note is written (lib/invoices/build-credit-note-item.ts).
+ *
+ * The header flips as one unit too, by the sign of its total, and not figure
+ * by figure: its VAT need not share the total's sign. Every provider mapper
+ * states the header so that net plus VAT is the total, and the VAT sums rows
+ * that may carry different rates. A document that credits an amount at 6 %
+ * and charges fees at 25 % on it can owe the customer money (total and net
+ * negative) while the 25 % VAT on the fees outweighs the 6 % VAT on the
+ * credit (VAT positive). The absolute value of that VAT stood against the
+ * rows by twice its amount, and the import refused the document as rows that
+ * contradict their header. Flipped with the total, the VAT keeps the sign the
+ * rows and the source's own voucher give it, and net plus VAT is still the
+ * total. For a header whose figures share a sign this is the absolute value,
+ * as before.
  *
  * ONE normaliser for both registers (#2838). The two DTOs share the fields
  * read here, and the question is the same on both sides: what would this
@@ -930,6 +942,8 @@ function withAbsoluteAmounts<T extends SalesInvoiceDto | SupplierInvoiceDto>(dto
   const statedNegative = rowNet !== 0 ? rowNet < 0 : dto.legalMonetaryTotal.payableAmount.value < 0
   const factor = statedNegative ? -1 : 1
   const oriented = (amount: AmountType): AmountType => ({ ...amount, value: amount.value === 0 ? 0 : amount.value * factor })
+  const headerFactor = dto.legalMonetaryTotal.payableAmount.value < 0 ? -1 : 1
+  const headerOriented = (amount: AmountType): AmountType => ({ ...amount, value: amount.value === 0 ? 0 : amount.value * headerFactor })
   return {
     ...dto,
     lines: dto.lines.map((line) => {
@@ -944,11 +958,11 @@ function withAbsoluteAmounts<T extends SalesInvoiceDto | SupplierInvoiceDto>(dto
         taxAmount: line.taxAmount ? oriented(line.taxAmount) : undefined,
       }
     }),
-    taxTotal: dto.taxTotal ? { ...dto.taxTotal, taxAmount: abs(dto.taxTotal.taxAmount) } : undefined,
+    taxTotal: dto.taxTotal ? { ...dto.taxTotal, taxAmount: headerOriented(dto.taxTotal.taxAmount) } : undefined,
     legalMonetaryTotal: {
       ...dto.legalMonetaryTotal,
       lineExtensionAmount: dto.legalMonetaryTotal.lineExtensionAmount
-        ? abs(dto.legalMonetaryTotal.lineExtensionAmount)
+        ? headerOriented(dto.legalMonetaryTotal.lineExtensionAmount)
         : undefined,
       payableAmount: abs(dto.legalMonetaryTotal.payableAmount),
     },
