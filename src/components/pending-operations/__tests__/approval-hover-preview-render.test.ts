@@ -7,21 +7,28 @@
 import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderInLocale, visibleText } from '@/tests/i18n-render'
-import { ApprovalPreviewCard } from '../ApprovalHoverPreview'
+import { ApprovalPreviewCard, type BuiltRows } from '../ApprovalHoverPreview'
 import { AccountNamesContext } from '../OperationPreview'
 
-const NAMES = { '6110': 'Kontorsmateriel', '2641': 'Debiterad ingående moms', '1930': 'Företagskonto' }
+const NAMES = {
+  '6110': 'Kontorsmateriel',
+  '2641': 'Debiterad ingående moms',
+  '1930': 'Företagskonto',
+  '6212': 'Mobiltelefon',
+  '2440': 'Leverantörsskulder',
+}
 
 type Op = Parameters<typeof ApprovalPreviewCard>[0]['op']
 
-const render = (op: Op, locale: 'sv' | 'en', lockedReason?: string) =>
+const render = (op: Op, locale: 'sv' | 'en', lockedReason?: string, built?: BuiltRows) =>
   renderInLocale(
-    createElement(AccountNamesContext.Provider, { value: NAMES }, createElement(ApprovalPreviewCard, { op, lockedReason })),
+    createElement(AccountNamesContext.Provider, { value: NAMES }, createElement(ApprovalPreviewCard, { op, lockedReason, built })),
     locale,
   )
 
 /** The card as one line of text: its text nodes joined, spaces normalised. */
-const read = (op: Op, locale: 'sv' | 'en', lockedReason?: string) => visibleText(render(op, locale, lockedReason)).join(' ')
+const read = (op: Op, locale: 'sv' | 'en', lockedReason?: string, built?: BuiltRows) =>
+  visibleText(render(op, locale, lockedReason, built)).join(' ')
 
 const categorised: Op = {
   operation_type: 'categorize_transaction',
@@ -71,13 +78,85 @@ describe('the card beside Godkänn', () => {
     )
   })
 
-  it('a supplier invoice: the supplier, the number and the total; no verifikat its proposal does not state', () => {
-    const sv = read(supplierInvoice, 'sv')
+  it('a supplier invoice from the inbox, before the server answers: the supplier, the number and the total, then its rows being asked for', () => {
+    const html = render(supplierInvoice, 'sv')
+    const sv = visibleText(html).join(' ')
     expect(sv).toContain('Simulerad Telekom AB')
     expect(sv).toContain('4411')
-    expect(sv).toMatch(/Totalt 4 411 kr$/)
+    expect(sv).toMatch(/Totalt 4 411 kr Det här bokförs$/)
+    expect(html).toContain('aria-busy="true"')
+    expect(read(supplierInvoice, 'en')).toMatch(/Total 4 411 kr This will be posted$/)
+  })
+
+  it('a supplier invoice from the inbox, answered: the rows its approval posts, with names, debit, credit and a Summa', () => {
+    const built: BuiltRows = {
+      state: 'answered',
+      answer: {
+        posts: 'verifikat',
+        verifikat: [
+          {
+            entry_date: '2026-11-04',
+            lines: [
+              { account_number: '6212', debit_amount: 3528.8, credit_amount: 0 },
+              { account_number: '2641', debit_amount: 882.2, credit_amount: 0 },
+              { account_number: '2440', debit_amount: 0, credit_amount: 4411 },
+            ],
+            total_debit: 4411,
+            total_credit: 4411,
+          },
+        ],
+      },
+    }
+    expect(read(supplierInvoice, 'sv', undefined, built)).toMatch(
+      /Totalt 4 411 kr Det här bokförs Konto Beskrivning Debet Kredit 6212 Mobiltelefon 3 528,80 kr 2641 Debiterad ingående moms 882,20 kr 2440 Leverantörsskulder 4 411 kr Summa 4 411 kr 4 411 kr$/,
+    )
+    expect(read(supplierInvoice, 'en', undefined, built)).toMatch(/This will be posted .* Total 4 411 kr 4 411 kr$/)
+  })
+
+  it('a supplier invoice from the inbox, past the room: the rest of its rows are counted, and the review is not offered for them', () => {
+    const lines = [
+      ...Array.from({ length: 9 }, () => ({ account_number: '6110', debit_amount: 100, credit_amount: 0 })),
+      { account_number: '2440', debit_amount: 0, credit_amount: 900 },
+    ]
+    const built: BuiltRows = {
+      state: 'answered',
+      answer: { posts: 'verifikat', verifikat: [{ entry_date: '2026-11-04', lines, total_debit: 900, total_credit: 900 }] },
+    }
+    const sv = read(supplierInvoice, 'sv', undefined, built)
+    expect(sv).toMatch(/\+ 2 rader till Summa 900 kr 900 kr$/)
+    expect(sv).not.toContain('Öppna förslaget')
+  })
+
+  it('a supplier invoice from the inbox that books nothing now, one the approval refuses, and an answer that never came', () => {
+    const nothing: BuiltRows = { state: 'answered', answer: { posts: 'nothing' } }
+    expect(read(supplierInvoice, 'sv', undefined, nothing)).toMatch(/Totalt 4 411 kr Inget verifikat bokförs nu: fakturan bokförs senare\.$/)
+    expect(read(supplierInvoice, 'en', undefined, nothing)).toMatch(/No voucher is posted now: the invoice is booked later\.$/)
+
+    const refused: BuiltRows = {
+      state: 'answered',
+      answer: { posts: 'refused', code: 'SI_CREATE_NO_FISCAL_PERIOD', message_sv: 'Inget räkenskapsår täcker datumet.', message_en: 'No fiscal year covers the date.' },
+    }
+    expect(read(supplierInvoice, 'sv', undefined, refused)).toMatch(/Totalt 4 411 kr Inget räkenskapsår täcker datumet\.$/)
+    expect(read(supplierInvoice, 'en', undefined, refused)).toMatch(/No fiscal year covers the date\.$/)
+    expect(read(supplierInvoice, 'sv', undefined, refused)).not.toContain('Det här bokförs')
+    // A locked button's reason stays the one attention line; the refusal follows it as text.
+    expect(read(supplierInvoice, 'sv', 'Perioden är låst', refused)).toMatch(/^Perioden är låst .* Inget räkenskapsår täcker datumet\.$/)
+
+    expect(read(supplierInvoice, 'sv', undefined, { state: 'failed' })).toMatch(/Verifikatets rader kunde inte hämtas\.$/)
+    expect(read(supplierInvoice, 'en', undefined, { state: 'failed' })).toMatch(/The voucher's lines could not be loaded\.$/)
+
+    const atApproval: BuiltRows = { state: 'answered', answer: { posts: 'at_approval' } }
+    expect(read(supplierInvoice, 'sv', undefined, atApproval)).toMatch(
+      /Totalt 4 411 kr Raderna räknas fram vid godkännandet, när växelkursen hämtas från Riksbanken\.$/,
+    )
+    expect(read(supplierInvoice, 'en', undefined, atApproval)).toMatch(/The rows are worked out on approval, when the exchange rate is fetched from Riksbanken\.$/)
+  })
+
+  it('a registration of an already-booked supplier invoice asks for no rows: it posts none', () => {
+    const registerBooked: Op = { ...supplierInvoice, params: { mode: 'register_booked' } }
+    const sv = read(registerBooked, 'sv')
     expect(sv).not.toContain('Det här bokförs')
-    expect(read(supplierInvoice, 'en')).toMatch(/Total 4 411 kr$/)
+    expect(render(registerBooked, 'sv')).not.toContain('aria-busy')
   })
 
   it('a proposal that books nothing: what the click does and what it concerns, no verifikat', () => {

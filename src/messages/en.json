@@ -2181,6 +2181,8 @@
     "review_posts_heading": "This will be posted",
     "approve_preview_rest": "Open the proposal for every row.",
     "approve_preview_more_verifikat": "+ {count, plural, one {# more voucher} other {# more vouchers}}",
+    "approve_preview_books_nothing": "No voucher is posted now: the invoice is booked later.",
+    "approve_preview_rate_at_approval": "The rows are worked out on approval, when the exchange rate is fetched from Riksbanken.",
     "review_proposal_heading": "The proposal",
     "review_why": "Why",
     "review_bank_row": "Bank row",

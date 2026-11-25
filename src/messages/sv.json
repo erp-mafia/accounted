@@ -2181,6 +2181,8 @@
     "review_posts_heading": "Det här bokförs",
     "approve_preview_rest": "Öppna förslaget för alla rader.",
     "approve_preview_more_verifikat": "+ {count, plural, one {# verifikat till} other {# verifikat till}}",
+    "approve_preview_books_nothing": "Inget verifikat bokförs nu: fakturan bokförs senare.",
+    "approve_preview_rate_at_approval": "Raderna räknas fram vid godkännandet, när växelkursen hämtas från Riksbanken.",
     "review_proposal_heading": "Förslaget",
     "review_why": "Varför",
     "review_bank_row": "Bankrad",

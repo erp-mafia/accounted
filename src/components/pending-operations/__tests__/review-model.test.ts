@@ -714,6 +714,24 @@ describe('approvalPreviewOf: what the row\'s Godkänn shows before the click', (
     expect(preview.verifikat).toEqual([])
   })
 
+  it('rows the approval builds at the click: the ones the server built, in the same room, never a staged row in their place', () => {
+    const registration = [
+      { account_number: '6212', debit_amount: 3528.8, credit_amount: 0 },
+      { account_number: '2641', debit_amount: 882.2, credit_amount: 0 },
+      { account_number: '2440', debit_amount: 0, credit_amount: 4411 },
+    ]
+    const staged = { supplier_name: 'Simulerad Telekom AB', total: 4411, lines: [{ account_number: '1930', debit_amount: 1, credit_amount: 0 }] }
+    const supplierInvoice = op({ operation_type: 'create_supplier_invoice_from_inbox', preview_data: staged })
+    expect(approvalPreviewOf(supplierInvoice, [registration]).verifikat).toEqual([{ lines: registration, listed: 3 }])
+    // Not answered yet: none, and not the staged rows.
+    expect(approvalPreviewOf(supplierInvoice, []).verifikat).toEqual([])
+
+    const many = Array.from({ length: APPROVAL_PREVIEW_ROWS + 2 }, () => ({ account_number: '6110', debit_amount: 1, credit_amount: 0 }))
+    const roomy = approvalPreviewOf(supplierInvoice, [many])
+    expect(roomy.verifikat).toEqual([{ lines: many, listed: APPROVAL_PREVIEW_ROWS }])
+    expect(roomy.truncated).toBe(true)
+  })
+
   it('a proposal that books nothing: its facts only', () => {
     const preview = approvalPreviewOf(op({ operation_type: 'create_customer', preview_data: { name: 'Provkund Äng AB', customer_type: 'swedish_business' } }))
     expect(preview.facts.map((fact) => fact.id)).toEqual(['name', 'customer_type'])
