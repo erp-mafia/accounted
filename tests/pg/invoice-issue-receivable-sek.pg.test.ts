@@ -92,6 +92,19 @@ describe('invoice_issue_receivable_sek (pg)', () => {
     expect(out.get(exact)).toBe(999.75)
   })
 
+  it('answers the invoice’s currency, total and deduction beside the figure', async () => {
+    const id = await invoice(await issue(1000))
+
+    const { rows } = await getPool().query<{ currency: string; total: string; deduction_total: string | null }>(
+      'SELECT currency, total, deduction_total FROM public.invoice_issue_receivable_sek($1, $2)',
+      [company.companyId, [id]],
+    )
+
+    expect(rows).toHaveLength(1)
+    expect(rows[0].currency).toBe('SEK')
+    expect(Number(rows[0].total)).toBe(999.75)
+  })
+
   it('leaves out 1513, Skatteverket’s ROT/RUT share', async () => {
     const id = await invoice(
       await issue(1000, [

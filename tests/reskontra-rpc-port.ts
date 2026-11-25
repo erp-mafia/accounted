@@ -332,7 +332,7 @@ export function portKpiSupplierInvoices(tables: ReskontraTables, args: Row): Row
  * invoice_issue_receivable_sek: what each invoice's issue verifikat put on
  * 151x (1513 excluded), the verifikat followed through a storno to its one
  * posted correction (live_journal_entry). Invoices without a live one are left
- * out.
+ * out. Each row carries the invoice's currency, total and deduction.
  */
 export function portInvoiceIssueReceivableSek(tables: ReskontraTables, args: Row): Row[] {
   const companyId = args.p_company_id
@@ -365,7 +365,13 @@ export function portInvoiceIssueReceivableSek(tables: ReskontraTables, args: Row
       )
       if (own.length === 0) return []
       const sek = own.reduce((sum, l) => sum + (Number(l.debit_amount) || 0) - (Number(l.credit_amount) || 0), 0)
-      return [{ invoice_id: i.id, sek: roundOre(sek) }]
+      return [{
+        invoice_id: i.id,
+        sek: roundOre(sek),
+        currency: i.currency ?? null,
+        total: i.total ?? null,
+        deduction_total: i.deduction_total ?? null,
+      }]
     })
 }
 

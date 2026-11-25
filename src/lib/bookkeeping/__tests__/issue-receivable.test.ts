@@ -67,30 +67,30 @@ describe('fetchIssueReceivableSek', () => {
 })
 
 describe('creditMirrorsIssueOre', () => {
+  /** The function's one row for the original: its figure and its own facts. */
   function client(original: Record<string, unknown> | null, issueSek: number | null) {
-    const chain = {
-      select: () => chain,
-      eq: () => chain,
-      maybeSingle: async () => ({ data: original, error: null }),
-    }
-    const rpc = vi.fn(async () => ({ data: issueSek == null ? [] : [{ invoice_id: 'inv-1', sek: issueSek }], error: null }))
-    return { supabase: { from: vi.fn(() => chain), rpc } as never, rpc }
+    const rpc = vi.fn(async () => ({
+      data: original && issueSek != null ? [{ invoice_id: 'inv-1', sek: issueSek, ...original }] : [],
+      error: null,
+    }))
+    return { supabase: { rpc } as never, rpc }
   }
-  const original = { id: 'inv-1', currency: 'SEK', total: 999.75, deduction_total: 0 }
+  const original = { currency: 'SEK', total: 999.75, deduction_total: 0 }
 
-  it('mirrors when the original issue booked its öre', async () => {
-    expect(await creditMirrorsIssueOre(client(original, 1000).supabase, 'company-1', 'inv-1')).toBe(true)
+  it('mirrors when the original issue booked its öre, in one read', async () => {
+    const { supabase, rpc } = client(original, 1000)
+    expect(await creditMirrorsIssueOre(supabase, 'company-1', 'inv-1')).toBe(true)
+    expect(rpc).toHaveBeenCalledTimes(1)
+    expect(rpc).toHaveBeenCalledWith('invoice_issue_receivable_sek', { p_company_id: 'company-1', p_invoice_ids: ['inv-1'] })
   })
 
   it('does not mirror an exact issue, a missing issue verifikat or a foreign original', async () => {
     expect(await creditMirrorsIssueOre(client(original, 999.75).supabase, 'company-1', 'inv-1')).toBe(false)
     expect(await creditMirrorsIssueOre(client(original, null).supabase, 'company-1', 'inv-1')).toBe(false)
-    const foreign = client({ ...original, currency: 'EUR' }, 1000)
-    expect(await creditMirrorsIssueOre(foreign.supabase, 'company-1', 'inv-1')).toBe(false)
-    expect(foreign.rpc).not.toHaveBeenCalled()
+    expect(await creditMirrorsIssueOre(client({ ...original, currency: 'EUR' }, 1000).supabase, 'company-1', 'inv-1')).toBe(false)
   })
 
-  it('does not mirror an original it cannot find', async () => {
-    expect(await creditMirrorsIssueOre(client(null, 1000).supabase, 'company-1', 'inv-1')).toBe(false)
+  it('reads the deduction from the row: a ROT original issued at its rounded customer share', async () => {
+    expect(await creditMirrorsIssueOre(client({ currency: 'SEK', total: 837.5, deduction_total: 418 }, 420).supabase, 'company-1', 'inv-1')).toBe(true)
   })
 })

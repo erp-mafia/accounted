@@ -179,6 +179,33 @@ export function statedSettlement(opts: { cleared: number; sekAtRate: number; dif
 /** How many invoice ids one invoice_issue_receivable_sek call carries. */
 const ISSUE_RECEIVABLE_BATCH = 200
 
+/** One row of invoice_issue_receivable_sek: the figure and the invoice facts it is compared with. */
+interface IssueReceivableRow {
+  invoice_id: string
+  sek: number | string
+  currency: string | null
+  total: number | string | null
+  deduction_total: number | string | null
+}
+
+/** invoice_issue_receivable_sek over the ids, in batches. Throws on a read error. */
+async function readIssueReceivables(
+  supabase: Pick<SupabaseClient, 'rpc'>,
+  companyId: string,
+  invoiceIds: readonly string[],
+): Promise<IssueReceivableRow[]> {
+  const rows: IssueReceivableRow[] = []
+  for (const batch of chunk([...new Set(invoiceIds)], ISSUE_RECEIVABLE_BATCH)) {
+    const { data, error } = await supabase.rpc('invoice_issue_receivable_sek', {
+      p_company_id: companyId,
+      p_invoice_ids: batch,
+    })
+    if (error) throw dbError(error, 'issue receivable')
+    rows.push(...((data ?? []) as IssueReceivableRow[]))
+  }
+  return rows
+}
+
 /**
  * What each invoice's own issue verifikat put on 151x (1513, Skatteverket's
  * ROT/RUT share, excluded), keyed by invoice id: public.invoice_issue_receivable_sek
@@ -190,18 +217,8 @@ export async function fetchIssueReceivableSek(
   companyId: string,
   invoiceIds: readonly string[],
 ): Promise<Map<string, number>> {
-  const out = new Map<string, number>()
-  for (const batch of chunk([...new Set(invoiceIds)], ISSUE_RECEIVABLE_BATCH)) {
-    const { data, error } = await supabase.rpc('invoice_issue_receivable_sek', {
-      p_company_id: companyId,
-      p_invoice_ids: batch,
-    })
-    if (error) throw dbError(error, 'issue receivable')
-    for (const row of (data ?? []) as Array<{ invoice_id: string; sek: number | string }>) {
-      out.set(row.invoice_id, roundOre(Number(row.sek)))
-    }
-  }
-  return out
+  const rows = await readIssueReceivables(supabase, companyId, invoiceIds)
+  return new Map(rows.map((row) => [row.invoice_id, roundOre(Number(row.sek))]))
 }
 
 /**
@@ -227,23 +244,15 @@ export function issueBookedOre(
  * öresavrundning (buildCreditNoteLines' options.oreRounding): when the
  * original's own issue verifikat booked its öre, the credit mirrors it so the
  * pair nets to zero on 1510 and 3740. An original issued without one (before
- * crm#2283, or imported that way) is credited without, as before. Throws on a
+ * crm#2283, or imported that way) is credited without, as before. One read:
+ * the function answers the original's facts beside its figure. Throws on a
  * read error.
  */
 export async function creditMirrorsIssueOre(
-  supabase: Pick<SupabaseClient, 'rpc' | 'from'>,
+  supabase: Pick<SupabaseClient, 'rpc'>,
   companyId: string,
   originalId: string,
 ): Promise<boolean> {
-  const { data, error } = await supabase
-    .from('invoices')
-    .select('id, currency, total, deduction_total')
-    .eq('company_id', companyId)
-    .eq('id', originalId)
-    .maybeSingle()
-  if (error) throw dbError(error, 'credited invoice')
-  const original = data as { id: string; currency: string | null; total: number; deduction_total: number | null } | null
-  if (!original || !isKronorCurrency(original.currency)) return false
-  const issued = await fetchIssueReceivableSek(supabase, companyId, [original.id])
-  return issueBookedOre(original, issued.get(original.id)) !== 0
+  const [original] = await readIssueReceivables(supabase, companyId, [originalId])
+  return original ? issueBookedOre(original, roundOre(Number(original.sek))) !== 0 : false
 }

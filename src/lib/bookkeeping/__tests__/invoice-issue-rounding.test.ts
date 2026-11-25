@@ -84,7 +84,7 @@ function expectBalanced(lines: CreateJournalEntryLineInput[]) {
   }
 }
 
-/** A client that answers the company setting read and, for a credit, the original and its issue verifikat. */
+/** A client that answers the company setting read and, for a credit, its original's issue verifikat and facts. */
 function client(opts: {
   companyOreRounding?: boolean | null
   original?: Record<string, unknown> | null
@@ -99,9 +99,7 @@ function client(opts: {
           ? opts.companyOreRounding === undefined
             ? null
             : { ore_rounding: opts.companyOreRounding }
-          : table === 'invoices'
-            ? (opts.original ?? null)
-            : null
+          : null
       const chain = {
         select: () => chain,
         eq: () => chain,
@@ -113,7 +111,9 @@ function client(opts: {
       reads.push(name)
       return {
         data:
-          opts.issueReceivableSek == null ? [] : args.p_invoice_ids.map((id) => ({ invoice_id: id, sek: opts.issueReceivableSek })),
+          opts.issueReceivableSek == null || !opts.original
+            ? []
+            : args.p_invoice_ids.map((id) => ({ ...opts.original, invoice_id: id, sek: opts.issueReceivableSek })),
         error: null,
       }
     }),
@@ -254,7 +254,7 @@ describe('the kreditfaktura mirrors what the original issue booked (crm#2283)', 
       total: -999.75,
       items: [makeItem({ invoice_id: 'credit-1', unit_price: -799.8, line_total: -799.8, vat_amount: -199.95 })],
     })
-  const original = { id: 'inv-1', currency: 'SEK', total: 999.75, deduction_total: 0 }
+  const original = { currency: 'SEK', total: 999.75, deduction_total: 0 }
 
   async function credited(supabase: never) {
     mockedCreateEntry.mockClear()

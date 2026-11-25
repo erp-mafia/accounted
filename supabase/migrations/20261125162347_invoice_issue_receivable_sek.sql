@@ -18,7 +18,9 @@
 -- The kundreskontra and the kreditfaktura read this to count, and to mirror,
 -- the öre the issue booked: compared with the invoice's customer share by
 -- bookedOreRounding, a gap under one krona is that öre, anything else is no
--- öresavrundning. Invoices without a live issue verifikat are not returned.
+-- öresavrundning. Each row carries the invoice's currency, total and
+-- deduction beside the figure, so that comparison needs no second read.
+-- Invoices without a live issue verifikat are not returned.
 --
 -- SECURITY INVOKER: RLS scopes invoices and the ledger to the caller.
 
@@ -26,12 +28,12 @@ CREATE OR REPLACE FUNCTION public.invoice_issue_receivable_sek(
   p_company_id uuid,
   p_invoice_ids uuid[]
 )
-RETURNS TABLE (invoice_id uuid, sek numeric)
+RETURNS TABLE (invoice_id uuid, sek numeric, currency text, total numeric, deduction_total numeric)
 LANGUAGE sql
 STABLE
 SET search_path = public
 AS $function$
-  SELECT i.id, ROUND(COALESCE(SUM(l.debit_amount - l.credit_amount), 0), 2)
+  SELECT i.id, ROUND(COALESCE(SUM(l.debit_amount - l.credit_amount), 0), 2), i.currency::text, i.total::numeric, i.deduction_total::numeric
     FROM public.invoices i
     CROSS JOIN LATERAL public.live_journal_entry(p_company_id, i.journal_entry_id) le
     JOIN public.journal_entry_lines l ON l.journal_entry_id = le.entry_id
@@ -48,4 +50,4 @@ REVOKE ALL ON FUNCTION public.invoice_issue_receivable_sek(uuid, uuid[]) FROM PU
 GRANT EXECUTE ON FUNCTION public.invoice_issue_receivable_sek(uuid, uuid[]) TO authenticated, service_role;
 
 COMMENT ON FUNCTION public.invoice_issue_receivable_sek(uuid, uuid[]) IS
-  'What each invoice''s live issue verifikat put on 151x (1513 excluded), for the öresavrundning its issue booked (crm#2283). Read by the kundreskontra and the kreditfaktura through fetchIssueReceivableSek (lib/bookkeeping/ledger-carried-sek.ts). SECURITY INVOKER.';
+  'What each invoice''s live issue verifikat put on 151x (1513 excluded), with its currency, total and deduction, for the öresavrundning its issue booked (crm#2283). Read by the kundreskontra and the kreditfaktura through fetchIssueReceivableSek (lib/bookkeeping/ledger-carried-sek.ts). SECURITY INVOKER.';
