@@ -37,8 +37,8 @@ const SEP = String.raw`\s*(?:→|->|›|>|,|:)\s*`
  * sentence, not a path) or is not literal text, which cannot be checked.
  */
 const PATH_HEAD = String.raw`(?<![\p{L}])LABEL${SEP}(?=\p{Lu}|\u0000)`
-/** Files worth parsing: a path may continue in the next literal of a `+` chain. */
-const MENTIONS_SETTINGS = new RegExp(String.raw`(?<![\p{L}])(?:Inställningar|Settings)${SEP}`, 'u')
+/** Files worth parsing: they name the settings page at all, since a path may go on in the next literal of a `+` chain. */
+const MENTIONS_SETTINGS = /(?<![\p{L}])(?:Inställningar|Settings)(?![\p{L}])/u
 /** Stands where an interpolation or a non-literal operand was. */
 const GAP = '\u0000'
 

@@ -10219,10 +10219,10 @@ const SKATTEVERKET: Record<string, StructuredErrorEntry> = {
     message_sv:
       'Anslutningen till Skatteverket saknas eller har gått ut. Om företaget varit anslutet tidigare är detta normalt: Skatteverkets personliga inloggning räcker i ungefär tio timmar. Be användaren ansluta (igen) med BankID under Inställningar → Kopplingar → Skatteverket.',
     message_en:
-      'The Skatteverket connection is missing or has expired. If the company was connected before this is expected: Skatteverket personal sessions last about ten hours. Tell the user to connect (or reconnect) with BankID under Inställningar → Kopplingar → Skatteverket in Accounted. Only a person can do this; do not retry until they confirm they have reconnected.',
+      'The Skatteverket connection is missing or has expired. If the company was connected before this is expected: Skatteverket personal sessions last about ten hours. Tell the user to connect (or reconnect) with BankID under Settings → Connections → Skatteverket in Accounted. Only a person can do this; do not retry until they confirm they have reconnected.',
     remediation: {
       description:
-        'A person must connect (or reconnect) to Skatteverket with BankID: call gnubok_connect_skatteverket for the connect_url and give it to the user, or they open Inställningar → Kopplingar → Skatteverket. Personal Skatteverket sessions expire after about ten hours by SKV design, so an expired session is normal, not a fault. Do not retry until the user confirms they have reconnected.',
+        'A person must connect (or reconnect) to Skatteverket with BankID: call gnubok_connect_skatteverket for the connect_url and give it to the user, or they open Settings → Connections → Skatteverket. Personal Skatteverket sessions expire after about ten hours by SKV design, so an expired session is normal, not a fault. Do not retry until the user confirms they have reconnected.',
       tool: 'gnubok_connect_skatteverket',
     },
   },
