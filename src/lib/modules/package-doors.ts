@@ -699,6 +699,7 @@ const POS_AND_WEBSHOP: PackageDoors = {
     'POST /api/extensions/ext/shopify/connect',
     'POST /api/extensions/ext/woocommerce/connect',
     'POST /api/extensions/ext/woocommerce/manual-connect',
+    'POST /api/extensions/ext/woocommerce/verify-store',
     'POST /api/extensions/ext/zettle/connect',
     'POST /api/pos-sales/connections',
     'op:pos-sales.connect',

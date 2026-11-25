@@ -7,6 +7,11 @@ import { guardSandbox, sandboxBlockedResponse } from '@/lib/sandbox/guard'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { resolveRequestAppOrigin } from '@/lib/domains/trusted-app-origin'
 import {
+  FLOW_INITIATOR_MISMATCH_MESSAGE,
+  FLOW_INITIATOR_MISMATCH_MESSAGE_EN,
+} from '@/lib/auth/oauth-flow-binding'
+import { UUID_RE } from '@/lib/invariants/uuid'
+import {
   feedBackfillRoute,
   feedDisconnectRoute,
   feedSyncRoute,
@@ -16,14 +21,24 @@ import {
   type FeedConnectorSpec,
 } from '@/lib/feed-sync/connector-routes'
 import { DEFAULT_PAYMENT_ACCOUNT } from '@/lib/webshop-orders/booking-lines'
-import { isWooCommerceConfigured, encryptCredential } from './lib/credentials'
+import { isWooCommerceConfigured, encryptCredential, decryptCredential } from './lib/credentials'
 import { normalizeStoreUrl, testConnectionAndFetchStoreInfo } from './lib/api-client'
 import {
   classifyProbeFailure,
   probeFailureLogFields,
   probeFailureMessage,
 } from './lib/probe-failure'
-import { buildAuthorizeUrl } from './lib/connect'
+import {
+  activateIfComplete,
+  buildAuthorizeUrl,
+  HANDSHAKE_EXPIRED_MESSAGE,
+  HANDSHAKE_EXPIRED_MESSAGE_EN,
+  HANDSHAKE_TTL_MS,
+  isHandshakeExpired,
+  keySuffixMatches,
+  normalizeKeySuffix,
+  parkHandshake,
+} from './lib/connect'
 import { syncWooCommerceOrders, wooStoreScope, type WooCommerceSyncSummary } from './lib/order-sync'
 import {
   WOO_EXTENSION_ID,
@@ -31,7 +46,7 @@ import {
   skippedOrdersKey,
   skippedOrdersStatus,
 } from './lib/skipped-orders'
-import { MAX_BACKFILL_YEARS } from './types'
+import { KEY_SUFFIX_LENGTH, MAX_BACKFILL_YEARS } from './types'
 import type {
   WooCommerceConnection,
   WooCommerceConnectionStatus,
@@ -41,6 +56,21 @@ import type {
 
 // Per-user limit: connect starts an outward-facing handshake.
 const RATE_LIMIT_CONNECT = { maxRequests: 10, windowMs: 60_000 }
+
+// Per-user limit on proofs of store control, over a whole handshake's
+// lifetime: the key suffix is short, and a bound on tries is what keeps
+// typing it a proof rather than a guess.
+const RATE_LIMIT_VERIFY_STORE = { maxRequests: 10, windowMs: HANDSHAKE_TTL_MS }
+
+const ALREADY_CONNECTED = {
+  error: 'Butiken är redan ansluten till ett företag.',
+  error_en: 'The store is already connected to a company.',
+}
+
+const NOT_COMPLETED = {
+  error: 'Kunde inte slutföra anslutningen. Försök igen.',
+  error_en: 'Could not complete the connection. Please try again.',
+}
 
 // A pending row younger than this blocks a second connect attempt so a
 // double-click cannot start two handshake round-trips (only one state would
@@ -433,6 +463,168 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
       }
 
       return NextResponse.json({ success: true, connection_id: created.id })
+    },
+  },
+  {
+    // The last step of the wc-auth connect. wc-auth never says who approved
+    // in the store, so the initiator proves control of it: the last
+    // characters of the key WooCommerce just minted, which only the store's
+    // own admin shows (lib/connect). Only then does the row go live.
+    method: 'POST',
+    path: '/verify-store',
+    handler: async (request: Request, ctx: ExtensionContext) => {
+      const log = ctx.log
+      const blocked = await guardConnectPreconditions(ctx)
+      if (blocked) return blocked
+
+      const rl = await checkRateLimit({
+        prefix: 'woocommerce:verify-store',
+        identifier: ctx.userId,
+        ...RATE_LIMIT_VERIFY_STORE,
+      })
+      if (!rl.ok) return rl.response!
+
+      if (!isWooCommerceConfigured()) {
+        return NextResponse.json({ error: NOT_CONFIGURED_MESSAGE }, { status: 503 })
+      }
+
+      const body = (await request.json().catch(() => ({}))) as {
+        connection_id?: unknown
+        key_suffix?: unknown
+      }
+      const connectionId =
+        typeof body.connection_id === 'string' && UUID_RE.test(body.connection_id)
+          ? body.connection_id
+          : null
+      const suffix = typeof body.key_suffix === 'string' ? normalizeKeySuffix(body.key_suffix) : null
+      if (!connectionId || !suffix) {
+        return NextResponse.json(
+          {
+            error: `Ange de sista ${KEY_SUFFIX_LENGTH} tecknen i konsumentnyckeln.`,
+            error_en: `Enter the last ${KEY_SUFFIX_LENGTH} characters of the consumer key.`,
+          },
+          { status: 400 },
+        )
+      }
+
+      // The staged key is withheld from end-user sessions (20260929173432):
+      // read it on the service client, scoped to the caller's company.
+      const service = createServiceClientNoCookies()
+      const { data: row, error: findError } = await service
+        .from('woocommerce_connections')
+        .select('id, user_id, created_at, consumer_key_encrypted')
+        .eq('id', connectionId)
+        .eq('company_id', ctx.companyId)
+        .eq('status', 'pending')
+        .maybeSingle()
+      if (findError) {
+        log.error('[woocommerce] Could not read the connection to verify', {
+          code: findError.code,
+          message: findError.message,
+          companyId: ctx.companyId,
+        })
+        return NextResponse.json(
+          { error: 'Kunde inte läsa anslutningen. Försök igen.', error_en: 'Could not read the connection. Please try again.' },
+          { status: 500 },
+        )
+      }
+      if (!row) {
+        return NextResponse.json(
+          {
+            error: 'Ingen anslutning väntar på bekräftelse.',
+            error_en: 'No connection is waiting for confirmation.',
+          },
+          { status: 404 },
+        )
+      }
+      // Activation happens under the session that started the handshake,
+      // never a colleague's.
+      if (row.user_id !== ctx.userId) {
+        return NextResponse.json(
+          { error: FLOW_INITIATOR_MISMATCH_MESSAGE, error_en: FLOW_INITIATOR_MISMATCH_MESSAGE_EN },
+          { status: 403 },
+        )
+      }
+      if (isHandshakeExpired(row.created_at)) {
+        await parkHandshake(service, row.id, HANDSHAKE_EXPIRED_MESSAGE)
+        return NextResponse.json(
+          { error: HANDSHAKE_EXPIRED_MESSAGE, error_en: HANDSHAKE_EXPIRED_MESSAGE_EN, code: 'expired' },
+          { status: 409 },
+        )
+      }
+      if (!row.consumer_key_encrypted) {
+        return NextResponse.json(
+          {
+            error: 'Butiken har inte skickat någon nyckel än. Godkänn anslutningen i butiken och försök igen.',
+            error_en: 'The store has not sent a key yet. Approve the connection in the store and try again.',
+            code: 'not_approved',
+          },
+          { status: 409 },
+        )
+      }
+      if (!keySuffixMatches(decryptCredential(row.consumer_key_encrypted), suffix)) {
+        log.warn('[woocommerce] Store control proof did not match', {
+          connection_id: row.id,
+          companyId: ctx.companyId,
+        })
+        return NextResponse.json(
+          {
+            error: 'Tecknen stämmer inte med nyckeln. Jämför med nyckeln i butikens WooCommerce-inställningar och försök igen.',
+            error_en: "The characters do not match the key. Compare them with the key in the store's WooCommerce settings and try again.",
+            code: 'suffix_mismatch',
+          },
+          { status: 400 },
+        )
+      }
+
+      // Proven. This is the session-bound confirmation the activation CHECK
+      // requires; browser_confirmed_at is server-only (20260907150000), so
+      // the write runs on the service client.
+      const { error: confirmError } = await service
+        .from('woocommerce_connections')
+        .update({ browser_confirmed_at: new Date().toISOString() })
+        .eq('id', row.id)
+        .eq('status', 'pending')
+      if (confirmError) {
+        log.error('[woocommerce] Failed to record the store control proof', {
+          connection_id: row.id,
+          code: confirmError.code,
+          message: confirmError.message,
+        })
+        return NextResponse.json(NOT_COMPLETED, { status: 500 })
+      }
+
+      const activation = await activateIfComplete(service, row.id)
+      if (activation.outcome === 'conflict') {
+        // 23505: the store is already actively connected, to this or another company.
+        await parkHandshake(service, row.id, ALREADY_CONNECTED.error)
+        return NextResponse.json({ ...ALREADY_CONNECTED, code: 'conflict' }, { status: 409 })
+      }
+      if (activation.outcome !== 'activated') {
+        // Failed, or the row left pending (or its TTL) since it was read.
+        log.error('[woocommerce] Failed to activate a proven connection', {
+          connection_id: row.id,
+          outcome: activation.outcome,
+          ...(activation.outcome === 'failed' ? activation.error : {}),
+        })
+        return NextResponse.json(NOT_COMPLETED, { status: 500 })
+      }
+
+      try {
+        await ctx.emit({
+          type: 'woocommerce.connected',
+          payload: {
+            connectionId: activation.connection.id,
+            storeUrl: activation.connection.store_url,
+            userId: activation.connection.user_id,
+            companyId: activation.connection.company_id,
+          },
+        })
+      } catch {
+        // Audit event failure must not block the connect itself: the row is active.
+      }
+
+      return NextResponse.json({ success: true, connection_id: row.id })
     },
   },
   feedSyncRoute(woocommerceFeed),
