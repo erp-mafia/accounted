@@ -16,6 +16,16 @@ const log = createLogger('documents/read/image')
 // The 5 MB limit is on the base64 the API receives, which is 4/3 of the file: a
 // 4.13 MB photo was refused as "5506368 bytes > 5242880". 3.5 MB leaves room.
 export const IMAGE_DOWNSCALE_THRESHOLD_BYTES = Math.floor(3.5 * 1024 * 1024)
+/**
+ * The model also refuses an image with a side over 8000 px, however small the
+ * file ("At least one of the image dimensions exceed max allowed size: 8000
+ * pixels"). A long receipt strip or a full-page screenshot passes the byte
+ * threshold, so it was sent as it was and the reading was lost. Such an image
+ * gets the same fit as a large file. The model shrinks every image to its own
+ * long-edge limit before reading it, so a strip that long loses detail
+ * whatever is sent: it is shrunk, not split.
+ */
+export const IMAGE_DOWNSCALE_THRESHOLD_PX = 8000
 export const IMAGE_MAX_DIMENSION = 2000
 
 export const HEIC_MIME_TYPES = ['image/heic', 'image/heif'] as const
@@ -32,11 +42,30 @@ export async function decodeHeicToJpeg(bytes: Buffer): Promise<Buffer> {
   return Buffer.from(out)
 }
 
+/**
+ * Whether a side of the image is over the model's limit. Read from the header,
+ * so nothing is decoded; a header sharp cannot read counts as no, and the
+ * image goes out as it was, as before.
+ */
+async function hasSideOverModelLimit(bytes: Buffer): Promise<boolean> {
+  try {
+    const sharp = (await import('sharp')).default
+    const { width = 0, height = 0 } = await sharp(bytes).metadata()
+    return Math.max(width, height) > IMAGE_DOWNSCALE_THRESHOLD_PX
+  } catch {
+    // Safe to ignore: the image goes out as it was, as before, and a refusal by
+    // the model is stamped on the document as its read error.
+    return false
+  }
+}
+
 export async function fitImageForModel(bytes: Buffer, mimeType: string): Promise<{ bytes: Buffer; mediaType: AiImageMediaType } | null> {
   const isHeic = (HEIC_MIME_TYPES as readonly string[]).includes(mimeType)
-  if (!isHeic && bytes.length <= IMAGE_DOWNSCALE_THRESHOLD_BYTES) return { bytes, mediaType: mimeType as AiImageMediaType }
+  if (!isHeic && bytes.length <= IMAGE_DOWNSCALE_THRESHOLD_BYTES && !(await hasSideOverModelLimit(bytes))) {
+    return { bytes, mediaType: mimeType as AiImageMediaType }
+  }
   try {
-    // Lazy: sharp is a native module and only oversized photos need it.
+    // Lazy: sharp is a native module that only images need.
     const sharp = (await import('sharp')).default
     const fit = (input: Buffer) =>
       sharp(input)

@@ -24,6 +24,39 @@ describe('fitImageForModel', () => {
     expect(out!.bytes.length).toBeLessThan(5 * 1024 * 1024 * 0.75)
   }, 30_000)
 
+  // The model API refuses an image with a side over 8000 px, whatever its size in bytes
+  // ("At least one of the image dimensions exceed max allowed size: 8000 pixels").
+  const MODEL_MAX_SIDE_PX = 8000
+
+  /** A receipt-like PNG: white with a dark line every 24 rows, so it compresses to a small file. */
+  async function stripedPng(width: number, height: number): Promise<Buffer> {
+    const raw = Buffer.alloc(width * height, 255)
+    for (let y = 0; y < height; y += 24) raw.fill(30, y * width, (y + 1) * width)
+    return sharp(raw, { raw: { width, height, channels: 1 } }).png().toBuffer()
+  }
+
+  it('shrinks a long receipt strip that is a small file but taller than the model takes', async () => {
+    const strip = await stripedPng(600, 9000)
+    expect(strip.length).toBeLessThan(IMAGE_DOWNSCALE_THRESHOLD_BYTES)
+    const out = await fitImageForModel(strip, 'image/png')
+    expect(out?.mediaType).toBe('image/jpeg')
+    const meta = await sharp(out!.bytes).metadata()
+    expect(Math.max(meta.width ?? 0, meta.height ?? 0)).toBeLessThanOrEqual(MODEL_MAX_SIDE_PX)
+    // Fitted like every other photo, the aspect ratio kept: 600 x 9000 becomes 133 x 2000.
+    expect(meta.height).toBe(IMAGE_MAX_DIMENSION)
+    expect(meta.width).toBe(Math.round((600 * IMAGE_MAX_DIMENSION) / 9000))
+  }, 30_000)
+
+  it('shrinks an image wider than the model takes the same way', async () => {
+    const out = await fitImageForModel(await stripedPng(9000, 600), 'image/png')
+    expect(await sharp(out!.bytes).metadata()).toMatchObject({ format: 'jpeg', width: IMAGE_MAX_DIMENSION, height: Math.round((600 * IMAGE_MAX_DIMENSION) / 9000) })
+  }, 30_000)
+
+  it('leaves a small image exactly at the model limit as it is', async () => {
+    const tall = await stripedPng(100, MODEL_MAX_SIDE_PX)
+    expect(await fitImageForModel(tall, 'image/png')).toEqual({ bytes: tall, mediaType: 'image/png' })
+  }, 30_000)
+
   it('decodes a HEIC phone photo to JPEG when sharp cannot', async () => {
     const heic = Buffer.from(receiptImage('heic'))
     const jpeg = await decodeHeicToJpeg(heic)

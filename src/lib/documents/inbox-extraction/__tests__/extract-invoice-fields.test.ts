@@ -989,14 +989,36 @@ describe('extractInvoiceFields', () => {
     expect(data.supplier.name).toBe('Anthropic, PBC')
   })
 
-  it('does not invoke sharp for normal-sized supported images', async () => {
+  it('sends a normal-sized image as it is: sharp reads only its header', async () => {
+    const header = { metadata: vi.fn().mockResolvedValue({ width: 3024, height: 4032 }), resize: vi.fn() }
+    sharpMock.mockImplementationOnce(() => header)
     mockCreate.mockReturnValueOnce(aiResponse(VALID_RESULT))
     await extractInvoiceFields({
       buffer: Buffer.from('JPEG'),
       mimeType: 'image/jpeg',
       fileName: 'photo.jpg',
     })
-    expect(sharpMock).not.toHaveBeenCalled()
+    expect(sharpMock).toHaveBeenCalledOnce()
+    expect(header.resize).not.toHaveBeenCalled()
+    const content = mockCreate.mock.calls[0][0].messages[0].content
+    expect(content[0].source.data).toBe(Buffer.from('JPEG').toString('base64'))
+  })
+
+  it('fits a small image with a side over the model limit, such as a long receipt strip', async () => {
+    // The model refuses a side over 8000 px however small the file.
+    const fitted = Buffer.from('fitted-strip')
+    sharpMock
+      .mockImplementationOnce(() => ({ metadata: vi.fn().mockResolvedValue({ width: 1170, height: 9000 }) }))
+      .mockImplementationOnce(() => workingSharpChain(fitted))
+    mockCreate.mockReturnValueOnce(aiResponse(VALID_RESULT))
+    await extractInvoiceFields({
+      buffer: Buffer.from('PNG'),
+      mimeType: 'image/png',
+      fileName: 'kvitto.png',
+    })
+    const content = mockCreate.mock.calls[0][0].messages[0].content
+    expect(content[0].source.data).toBe(fitted.toString('base64'))
+    expect(content[0].source.media_type).toBe('image/jpeg')
   })
 
   // Restore env vars so other test files aren't affected.
