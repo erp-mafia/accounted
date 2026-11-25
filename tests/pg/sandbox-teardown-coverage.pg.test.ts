@@ -36,6 +36,9 @@ const CAPITAL_REGISTERS =
 const OWNER_LOANS =
   'the owner loan register (never deleted; the ABL 21:10 special list is kept ten years) keeps the party it names; it goes in the same companies cascade, where the NO ACTION check runs after the cascade removed the referrer'
 
+const LATE_DAYS =
+  'a late register day names the later salary run that deducts it (carried_to_run_id, 20261125183000), so that run is not deleted on its own; both go in the same companies cascade, where the NO ACTION check runs after the cascade removed the referrer'
+
 const REFUSED_ON_PURPOSE: Record<string, string> = {
   'arsredovisning_submissions.annual_report_version_id':
     'a filing sent to Bolagsverket; its WORM trail outranks a demo teardown',
@@ -72,6 +75,8 @@ const REFUSED_ON_PURPOSE: Record<string, string> = {
   'shareholder_contributions.party_id': CAPITAL_REGISTERS,
   'owner_loans.party_id': OWNER_LOANS,
   'owner_loans.related_to_party_id': OWNER_LOANS,
+  'salary_absence_days.carried_to_run_id': LATE_DAYS,
+  'salary_worked_days.carried_to_run_id': LATE_DAYS,
   'share_register_events.counterparty_party_id': BOLAGET_REGISTERS,
   'share_register_events.from_party_id': BOLAGET_REGISTERS,
   'share_register_events.share_class_id': BOLAGET_REGISTERS,
