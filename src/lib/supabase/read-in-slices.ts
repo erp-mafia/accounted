@@ -6,7 +6,7 @@ import { chunk } from '@/lib/utils'
  * PostgREST sees it: a self-hosted Kong with the stock 8 KB header buffer
  * answers 414 (#2395), and hosted Supabase stops at about 16 KB. 100 uuids are
  * about 3.9 KB, under half of the stricter limit with room for the rest of the
- * URL. The one slice size (scripts/checks/one-definition/id-read-chunk.mjs).
+ * URL. The one slice size for id reads.
  */
 export const ID_READ_CHUNK = 100
 
