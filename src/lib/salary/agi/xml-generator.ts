@@ -464,6 +464,26 @@ const UNDERLAG_FIELDS: Record<AGIUnderlag, AGIUnderlagFields> = {
 }
 
 /**
+ * The first redovisningsperiod that takes Frånvarouppgift: "Frånvarouppgifter
+ * får endast ha RedovisningsPeriod, FK006, 202501 eller senare" (Bilaga
+ * Kontroller 1.1.18.1, ba_820).
+ */
+export const FRANVARO_FIRST_PERIOD = 202501
+
+/**
+ * How many Frånvarouppgift elements the period's first declaration carries
+ * for these IUs: none before FRANVARO_FIRST_PERIOD and none for a removed IU.
+ * generateAGIXml emits exactly these, unless that first declaration is filed.
+ */
+export function franvarouppgiftCount(
+  period: { periodYear: number; periodMonth: number },
+  employees: readonly AGIEmployeeData[],
+): number {
+  if (period.periodYear * 100 + period.periodMonth < FRANVARO_FIRST_PERIOD) return 0
+  return employees.reduce((sum, emp) => sum + (emp.removed ? 0 : (emp.absenceEvents?.length ?? 0)), 0)
+}
+
+/**
  * Generate AGI XML for a period.
  *
  * `firstDeclarationFiled`: the period's first declaration is already filed,
@@ -707,7 +727,7 @@ export function generateAGIXml(
   // Skatteverket only accepts Frånvarouppgift from period 202501 onward
   // (ba_820), and only with the period's first declaration (ba_824).
   const periodAsNumber = company.periodYear * 100 + company.periodMonth
-  if (periodAsNumber >= 202501 && !firstDeclarationFiled) {
+  if (periodAsNumber >= FRANVARO_FIRST_PERIOD && !firstDeclarationFiled) {
     for (const emp of employees) {
       if (!emp.absenceEvents || emp.absenceEvents.length === 0) continue
       // Tombstoned IU: skip absence records too. A removed individuppgift

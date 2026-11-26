@@ -28,6 +28,7 @@ import { z } from 'zod'
 import {
   generateAGIXml,
   buildIndividuppgifterSnapshot,
+  franvarouppgiftCount,
   AGIIncompleteDataError,
   AGIPayloadTooLargeError,
   findMissingCompanyData,
@@ -1115,11 +1116,8 @@ export async function generateAgiDeclaration(
 
   // A month whose first declaration is filed takes no frånvarouppgift: this
   // declaration is a rättelse (agiPeriodFiled, Kontroller ba_824). Read only
-  // when the XML would carry one: a removed IU carries none.
-  const franvarouppgifter = employeeData.reduce(
-    (sum, e) => sum + (e.removed ? 0 : (e.absenceEvents?.length ?? 0)),
-    0,
-  )
+  // when the XML would carry one: none before 202501 or for a removed IU.
+  const franvarouppgifter = franvarouppgiftCount(agiPeriod, employeeData)
   let periodFiled = false
   if (franvarouppgifter > 0) {
     const filing = await agiPeriodFiled(supabase, companyId, agiPeriod, target.row)

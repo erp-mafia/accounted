@@ -2534,4 +2534,30 @@ describe("generateAgiDeclaration: a filed month's rättelse carries no frånvaro
     expect(result.xml).toContain('<gem:Borttag faltkod="205">1</gem:Borttag>')
     expect(findCall('agi_kvittenser', 'select')).toBeUndefined()
   })
+
+  it('reads no filing for a period before 202501, which takes no frånvarouppgift at all (Kontroller ba_820)', async () => {
+    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: { ...RUN, period_year: 2024, period_month: 12, payment_date: '2024-12-20' } },
+      { data: COMPANY },
+      { data: SETTINGS },
+      { data: PROFILE },
+      { data: [REGULAR_ROW] },
+      { data: [{ ...VAB_DAY, absence_date: '2024-12-02' }] }, // salary_absence_days: the window
+      { data: [] }, // salary_absence_days: late days carried to the run
+      { data: null }, // agi_declarations maybeSingle (first generation)
+      { data: [] }, // salary_runs: no other live run paid out in the month
+      { data: { id: 'agi-1' } }, // agi_declarations insert
+      { data: null }, // salary_runs update (agi_generated_at stamp)
+    ])
+
+    const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+
+    expect(result).toMatchObject({ ok: true, periodYear: 2024, periodMonth: 12 })
+    if (!result.ok) return
+    expect(franvarouppgifter(result.xml)).toBe(0)
+    // No lookup, so none can fail and refuse the declaration.
+    expect(findCall('agi_kvittenser', 'select')).toBeUndefined()
+    expect(findCall('agi_declarations', 'insert')).toEqual([expect.objectContaining({ xml_content: result.xml })])
+  })
 })
