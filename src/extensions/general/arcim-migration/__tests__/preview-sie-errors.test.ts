@@ -133,12 +133,12 @@ describe('GET /preview: a failed SIE fetch says why (crm#1118)', () => {
     ['a rate limit', fortnoxError(429), { code: 'PROVIDER_RATE_LIMITED' }],
     ['an outage', fortnoxError(503), { code: 'PROVIDER_UPSTREAM_ERROR' }],
     ['an unreachable provider', new TypeError('fetch failed'), { code: 'PROVIDER_UNREACHABLE' }],
-    // classifyProviderError has no class for a timeout: it lands where
-    // /sie-data's fallback does, which the wizard reads as "try again".
+    // A timeout has a class of its own (#3137). The wizard still reads it as
+    // "try again" with the SIE file on offer (sieErrorRemedy).
     [
       'a timeout',
       new DOMException('The operation was aborted due to timeout', 'TimeoutError'),
-      { code: 'PROVIDER_SIE_FETCH_FAILED' },
+      { code: 'PROVIDER_TIMEOUT' },
     ],
   ])('names %s in sieError and still answers the preview', async (_cause, error, expected) => {
     ;(fetchCompanyInfoDirect as Mock).mockResolvedValue({ companyName: 'Bolaget AB' })

@@ -45,9 +45,9 @@ const log = createLogger('extensions/arcim-migration/sie-fetcher')
  */
 export interface SieFetchFailure {
   /**
-   * The classified provider code, or PROVIDER_SIE_FETCH_FAILED (the code
-   * /sie-data falls back to) when nothing in the failure is provider-shaped:
-   * an empty export, a timeout, an unknown error.
+   * The classified provider code (a timeout is PROVIDER_TIMEOUT), or
+   * PROVIDER_SIE_FETCH_FAILED (the code /sie-data falls back to) when nothing
+   * in the failure is provider-shaped: an empty export, an unknown error.
    */
   code: ProviderCallErrorCode | 'PROVIDER_SIE_FETCH_FAILED'
   /** PROVIDER_RESOURCE_FORBIDDEN only: a missing licence and a missing permission are fixed differently. */
