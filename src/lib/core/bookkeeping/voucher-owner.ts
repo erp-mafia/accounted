@@ -149,8 +149,8 @@ const ACTION_HINTS: Readonly<Record<VoucherOwnerAction, { sv: string; en: string
     en: 'Credit the invoice instead, so the invoice, the payables ledger and its accruals follow.',
   },
   open_supplier_invoice: {
-    sv: 'Ändra den på fakturan i stället (Ångra kreditering), så följer reskontran med.',
-    en: 'Change it on the invoice instead (Undo credit), so the ledger follows.',
+    sv: 'Ändra den på fakturan i stället, så följer reskontran med.',
+    en: 'Change it on the invoice instead, so the ledger follows.',
   },
   open_accrual: {
     sv: 'Ändra periodiseringen i stället, annars räknar den månaden som bokförd.',
@@ -166,6 +166,25 @@ const ACTION_HINTS: Readonly<Record<VoucherOwnerAction, { sv: string; en: string
   },
 }
 
+/**
+ * What an open_supplier_invoice hint says when the invoice's page offers
+ * something particular: Ångra kreditering is there only on a credited
+ * invoice (and is where a supplier credit note is undone), and a paid or
+ * part-paid invoice's page changes nothing of its verifikat. The paid hint
+ * names no tool: it also reaches a storno or correction in the chain and a
+ * verifikat in a locked period, where correct_entry_lines_inline refuses.
+ */
+const SUPPLIER_INVOICE_HINTS = {
+  uncredit: {
+    sv: 'Ändra den på fakturan i stället (Ångra kreditering), så följer reskontran med.',
+    en: 'Change it on the invoice instead (Undo credit), so the ledger follows.',
+  },
+  paid: {
+    sv: 'Fakturan är betald eller delbetald: dess sida ändrar inte verifikationen, och fakturan följer inte med en rättelse.',
+    en: 'The invoice is paid or part-paid: its page does not change the voucher, and the invoice does not follow a correction.',
+  },
+} as const
+
 type OwnerFound = {
   kind: VoucherOwnerKind
   owner_id: string
@@ -173,12 +192,14 @@ type OwnerFound = {
   action: VoucherOwnerAction
   href: string
   action_href: string
+  /** A hint in place of the action's own (SUPPLIER_INVOICE_HINTS). */
+  hint?: keyof typeof SUPPLIER_INVOICE_HINTS
 }
 
-function withHint(owner: OwnerFound): VoucherOwner {
+function withHint({ hint, ...owner }: OwnerFound): VoucherOwner {
   const name = OWNER_NAMES[owner.kind]
   const label = owner.label ? ` ${owner.label}` : ''
-  const action = ACTION_HINTS[owner.action]
+  const action = hint ? SUPPLIER_INVOICE_HINTS[hint] : ACTION_HINTS[owner.action]
   return {
     ...owner,
     tool: ACTION_TOOLS[owner.action],
@@ -258,9 +279,14 @@ async function findOwner(
             action: 'open_supplier_invoice',
             href: `/supplier-invoices/${target}`,
             action_href: `/supplier-invoices/${target}`,
+            hint: 'uncredit',
           }
         }
         const credit = isCreditableSupplierInvoiceStatus(row.status)
+        // The page offers Ångra kreditering on a credited invoice only.
+        let hint: OwnerFound['hint']
+        if (row.status === 'credited') hint = 'uncredit'
+        else if (row.status === 'paid' || row.status === 'partially_paid') hint = 'paid'
         return {
           kind: 'supplier_invoice',
           owner_id: row.id,
@@ -268,6 +294,7 @@ async function findOwner(
           action: credit ? 'credit_supplier_invoice' : 'open_supplier_invoice',
           href: `/supplier-invoices/${row.id}`,
           action_href: credit ? `/supplier-invoices/${row.id}?action=credit` : `/supplier-invoices/${row.id}`,
+          ...(hint ? { hint } : {}),
         }
       }
       case 'accrual_schedule': {
