@@ -913,13 +913,14 @@ interface NormaliseContext {
 }
 
 /**
- * A period decision (unlock, klarmarkera, undoing klarmarkera) leaves two
- * audit_log rows: the trigger's row, with the whole period row before and
- * after and the credential that changed it, and the decision's own row
- * (period-service recordPeriodDecision), written right after it, which names
- * what was decided. They describe one event, so the report shows the decision
- * row, with the trigger row's actor, and leaves the trigger row out. Both rows
- * stay in audit_log; only the report reads them as one.
+ * A period decision (unlock, klarmarkera, undoing klarmarkera, the owner's
+ * reopen of a year closed with a bokslut) leaves two audit_log rows: the
+ * trigger's row, with the whole period row before and after and the
+ * credential that changed it, and the decision's own row (period-service
+ * recordPeriodDecision, or reopen_closed_fiscal_year in the same transaction),
+ * which names what was decided. They describe one event, so the report shows
+ * the decision row, with the trigger row's actor, and leaves the trigger row
+ * out. Both rows stay in audit_log; only the report reads them as one.
  */
 interface PeriodDecisionTwins {
   /** Decision row id → the trigger row of the same change. */
@@ -931,65 +932,84 @@ interface PeriodDecisionTwins {
 /** How far apart the two rows of one decision may lie; in production they are under a second apart. */
 const PERIOD_DECISION_TWIN_WINDOW_MS = 30_000
 
-type PeriodDecisionKind = 'unlocked' | 'closed_externally' | 'reopened_externally'
+type PeriodDecisionKind = 'unlocked' | 'closed_externally' | 'reopened_externally' | 'reopened_by_owner'
 
 /**
- * How recordPeriodDecision (period-service.ts) opens each decision row's
- * description. Only a row that opens this way is a decision row: the owner's
- * reopen and the support scripts write rows of their own about the same
- * changes, and those stay events of their own.
+ * How each decision row opens its description: recordPeriodDecision
+ * (period-service.ts) writes the first three, reopen_closed_fiscal_year (the
+ * owner's reopen of a year closed with a bokslut) the last. Only a row that
+ * opens this way is a decision row; a support script's row about the same
+ * change stays an event of its own.
  */
 const PERIOD_DECISION_PREFIX: Record<PeriodDecisionKind, string> = {
   unlocked: 'Period unlocked: ',
   closed_externally: 'Period marked as closed in previous system: ',
   reopened_externally: 'Period reopened, previous-system close undone: ',
+  reopened_by_owner: 'Fiscal year reopened by the owner: ',
 }
 
-/** The decision a fiscal_periods row records, read from its states. Both rows of one decision agree on it. */
-function periodDecisionKind(row: AuditLogEntry): PeriodDecisionKind | null {
-  const before = row.old_state
-  const after = row.new_state
-  if (!before || !after) return null
-  if (after.closed_externally === true && before.closed_externally !== true) return 'closed_externally'
-  if (before.closed_externally === true && after.closed_externally !== true) return 'reopened_externally'
-  if (before.locked_at && !after.locked_at && !before.is_closed) return 'unlocked'
+/** The decision a decision row records, read from how its description opens; null for any other row. */
+function periodDecisionRowKind(row: AuditLogEntry): PeriodDecisionKind | null {
+  // The trigger's row holds the whole period row; a decision row only the fields it decided.
+  if (row.table_name !== 'fiscal_periods' || row.action !== 'UPDATE' || typeof row.new_state?.id === 'string') return null
+  const description = row.description ?? ''
+  for (const [kind, prefix] of Object.entries(PERIOD_DECISION_PREFIX) as Array<[PeriodDecisionKind, string]>) {
+    if (description.startsWith(prefix)) return kind
+  }
   return null
+}
+
+/** Whether a trigger row's change (the whole period row before and after) is the change a decision of this kind makes. */
+function triggerMakesDecision(trigger: AuditLogEntry, kind: PeriodDecisionKind): boolean {
+  const before = trigger.old_state
+  const after = trigger.new_state
+  if (!before || !after) return false
+  switch (kind) {
+    case 'closed_externally':
+      return after.closed_externally === true && before.closed_externally !== true
+    case 'reopened_externally':
+      return before.closed_externally === true && after.closed_externally !== true
+    case 'unlocked':
+      return !!before.locked_at && !after.locked_at && !before.is_closed
+    case 'reopened_by_owner':
+      // A year closed with a bokslut opened, or a reopen that stopped halfway resumed (its lock lifted).
+      return before.closed_externally !== true &&
+        ((before.is_closed === true && after.is_closed !== true) || (!!before.locked_at && !after.locked_at))
+  }
 }
 
 /**
  * Pair each decision row with the trigger row of the same change: the same
- * period and decision, written just before it, with the values it repeats.
- * The values keep two quick unlocks of one year apart (each repeats the lock
- * it lifted), so a decision row written late cannot take the other's twin.
+ * period, a change of the decision's kind, written at most a short while
+ * before it, with the values it repeats. The values keep two quick unlocks of
+ * one year apart (each repeats the lock it lifted), so a decision row written
+ * late cannot take the other's twin.
  */
 function pairPeriodDecisionRows(rows: AuditLogEntry[]): PeriodDecisionTwins {
   const twins: PeriodDecisionTwins = { triggerOf: new Map(), folded: new Set() }
-  const triggersByKey = new Map<string, AuditLogEntry[]>()
-  const decisions: Array<{ row: AuditLogEntry; key: string }> = []
+  const triggersByPeriod = new Map<string, AuditLogEntry[]>()
+  const decisions: Array<{ row: AuditLogEntry; kind: PeriodDecisionKind; periodId: string }> = []
   for (const row of rows) {
     if (row.table_name !== 'fiscal_periods' || !row.record_id) continue
-    const kind = periodDecisionKind(row)
-    if (!kind) continue
-    const key = `${row.record_id}:${kind}`
-    // The trigger's row holds the whole period row; a decision row only the fields it decided.
     if (typeof row.new_state?.id === 'string') {
-      const list = triggersByKey.get(key) ?? []
+      const list = triggersByPeriod.get(row.record_id) ?? []
       list.push(row)
-      triggersByKey.set(key, list)
-    } else if (row.action === 'UPDATE' && row.description?.startsWith(PERIOD_DECISION_PREFIX[kind])) {
-      decisions.push({ row, key })
+      triggersByPeriod.set(row.record_id, list)
+      continue
     }
+    const kind = periodDecisionRowKind(row)
+    if (kind) decisions.push({ row, kind, periodId: row.record_id })
   }
   // Oldest first, so the pairs do not depend on the order the rows arrive in.
   decisions.sort((a, b) => toMs(a.row.created_at) - toMs(b.row.created_at) || a.row.id.localeCompare(b.row.id))
-  for (const { row, key } of decisions) {
+  for (const { row, kind, periodId } of decisions) {
     const at = toMs(row.created_at)
     let twin: AuditLogEntry | null = null
-    for (const trigger of triggersByKey.get(key) ?? []) {
-      // The decision row is written after the change it records.
+    for (const trigger of triggersByPeriod.get(periodId) ?? []) {
+      // The decision row is written after the change it records, or in the same transaction.
       const lead = at - toMs(trigger.created_at)
       if (!(lead >= 0 && lead <= PERIOD_DECISION_TWIN_WINDOW_MS) || twins.folded.has(trigger.id)) continue
-      if (!sameDecidedValues(row, trigger)) continue
+      if (!triggerMakesDecision(trigger, kind) || !sameDecidedValues(row, trigger)) continue
       if (!twin || toMs(trigger.created_at) > toMs(twin.created_at)) twin = trigger
     }
     if (twin) {
@@ -1000,7 +1020,26 @@ function pairPeriodDecisionRows(rows: AuditLogEntry[]): PeriodDecisionTwins {
   return twins
 }
 
-/** A decision row without its trigger row names the year by its description, less recordPeriodDecision's opening. */
+/**
+ * What reopen_closed_fiscal_year's row records beside the change: the
+ * owner's confirmation, the unsigned årsredovisning versions it replaced and
+ * the pending signatures that can no longer be given.
+ */
+function ownerReopenDetails(after: Record<string, unknown> | null): string[] {
+  const details: string[] = []
+  const confirmation = after?.confirmation as Record<string, unknown> | null | undefined
+  if (confirmation?.annual_report_not_signed_adopted_or_filed === true) {
+    details.push('Ägaren bekräftade att årsredovisningen inte är undertecknad, fastställd på stämma eller inskickad')
+  }
+  if (after?.resumed === true) details.push('En tidigare öppning som stannade halvvägs fortsattes')
+  const replaced = Array.isArray(after?.superseded_annual_report_version_ids) ? after.superseded_annual_report_version_ids.length : 0
+  if (replaced > 0) details.push(`Osignerade årsredovisningsversioner som ersattes: ${replaced}`)
+  const voided = Array.isArray(after?.voided_signature_request_ids) ? after.voided_signature_request_ids.length : 0
+  if (voided > 0) details.push(`Väntande underskrifter som inte längre kan göras: ${voided}`)
+  return details
+}
+
+/** A decision row without its trigger row names the year by its description, less the decision's opening. */
 function periodDecisionObject(row: AuditLogEntry, kind: PeriodDecisionKind): string | null {
   const prefix = PERIOD_DECISION_PREFIX[kind]
   const description = row.description ?? ''
@@ -1416,6 +1455,17 @@ function periodAuditEvent(row: AuditLogEntry, ctx: NormaliseContext): RawBehandl
     case 'UPDATE': {
       const oldState = row.old_state
       const newState = row.new_state
+      // Ahead of the unlock: the owner's reopen lifts the lock as well.
+      if (periodDecisionRowKind(row) === 'reopened_by_owner') {
+        return auditEvent(row, {
+          category: 'period',
+          code: 'period.reopened',
+          event: 'Räkenskapsår öppnat igen av ägaren (bokslutet återförs med storno)',
+          object: object ?? periodDecisionObject(row, 'reopened_by_owner'),
+          details: ownerReopenDetails(newState),
+          actor,
+        })
+      }
       // Ahead of the unlock: undoing klarmarkera clears the lock too.
       if (oldState?.closed_externally && !newState?.closed_externally) {
         return auditEvent(row, {

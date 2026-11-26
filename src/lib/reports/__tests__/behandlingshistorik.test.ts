@@ -3246,9 +3246,60 @@ describe('generateBehandlingshistorik: a period decision is one event', () => {
     expect(events.map((e) => e.id)).toEqual(['audit:trig', 'audit:decision'])
   })
 
-  it('the owner\'s reopen writes a row of its own about the same change, and it is not taken for a decision row', async () => {
-    // A locked year with a closing entry (the reopen's resume state): its row
-    // and the trigger's both clear the lock, as an unlock does.
+  // reopen_closed_fiscal_year writes its row in the transaction that opens the
+  // year, so it carries the trigger row's own timestamp.
+  const ownerReopenRow = (over: Partial<AuditLogEntry>) =>
+    decisionRow({
+      id: 'owner-reopen',
+      created_at: '2026-03-10T10:00:00.000Z',
+      description:
+        'Fiscal year reopened by the owner: RÅ 2025 (2025-01-01 to 2025-12-31). The owner confirmed the årsredovisning ' +
+        'was not signed, adopted at a stämma or filed; the year-end closing is reversed by storno, nothing is deleted.',
+      ...over,
+    })
+
+  it('the owner\'s reopen of a year closed with a bokslut shows once, with what the owner confirmed', async () => {
+    const closed = { is_closed: true, closed_at: CLOSED, locked_at: CLOSED, closing_entry_id: 'ce-1' }
+    const events = await eventsFor([
+      triggerRow({
+        id: 'trig',
+        action: 'UPDATE',
+        old_state: periodRow(closed),
+        new_state: periodRow({ closing_entry_id: 'ce-1' }),
+      }),
+      ownerReopenRow({
+        old_state: closed,
+        new_state: {
+          is_closed: false,
+          closed_at: null,
+          locked_at: null,
+          resumed: false,
+          entries_to_reverse: [{ id: 'je-1' }],
+          superseded_annual_report_version_ids: ['arv-1'],
+          voided_signature_request_ids: ['sig-1', 'sig-2'],
+          confirmation: { confirmed_name: 'RÅ 2025', annual_report_not_signed_adopted_or_filed: true },
+          registry: null,
+        },
+      }),
+    ])
+
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({
+      id: 'audit:owner-reopen',
+      code: 'period.reopened',
+      event: 'Räkenskapsår öppnat igen av ägaren (bokslutet återförs med storno)',
+      object: 'RÅ 2025',
+    })
+    expect(events[0].details).toEqual([
+      'Ägaren bekräftade att årsredovisningen inte är undertecknad, fastställd på stämma eller inskickad',
+      'Osignerade årsredovisningsversioner som ersattes: 1',
+      'Väntande underskrifter som inte längre kan göras: 2',
+    ])
+    expect(events[0].actor.label).toBe('Byråns nyckel åt Användare user-1')
+  })
+
+  it('an owner\'s reopen that resumes one stopped halfway shows once too', async () => {
+    // A locked year with a closing entry: the earlier run opened it, then stopped.
     const resumed = { is_closed: false, closed_at: null, locked_at: LOCKED, closing_entry_id: 'ce-1' }
     const events = await eventsFor([
       triggerRow({
@@ -3257,15 +3308,35 @@ describe('generateBehandlingshistorik: a period decision is one event', () => {
         old_state: periodRow(resumed),
         new_state: periodRow({ closing_entry_id: 'ce-1' }),
       }),
-      decisionRow({
-        id: 'owner-reopen',
+      ownerReopenRow({
         old_state: resumed,
-        new_state: { is_closed: false, closed_at: null, locked_at: null, resumed: true },
-        description: 'Fiscal year reopened by the owner: RÅ 2025 (2025-01-01 to 2025-12-31).',
+        new_state: {
+          is_closed: false,
+          closed_at: null,
+          locked_at: null,
+          resumed: true,
+          confirmation: { confirmed_name: 'RÅ 2025', annual_report_not_signed_adopted_or_filed: true },
+        },
       }),
     ])
 
-    expect(events.map((e) => e.id)).toEqual(['audit:trig', 'audit:owner-reopen'])
+    expect(events.map((e) => `${e.id} ${e.code}`)).toEqual(['audit:owner-reopen period.reopened'])
+    expect(events[0].details).toContain('En tidigare öppning som stannade halvvägs fortsattes')
+  })
+
+  it('a support script\'s row about the same change is not taken for a decision row', async () => {
+    const closed = { is_closed: true, closed_at: CLOSED, locked_at: CLOSED, closing_entry_id: 'ce-1' }
+    const events = await eventsFor([
+      triggerRow({ id: 'trig', action: 'UPDATE', old_state: periodRow(closed), new_state: periodRow({ closing_entry_id: 'ce-1' }) }),
+      decisionRow({
+        id: 'script',
+        old_state: closed,
+        new_state: { is_closed: false, closed_at: null, locked_at: null, closing_entry_id: null },
+        description: 'Administrative year-end undo: period reopened (RÅ 2025, 2025-01-01 to 2025-12-31); closing entry A40 reversed.',
+      }),
+    ])
+
+    expect(events.map((e) => e.id)).toEqual(['audit:trig', 'audit:script'])
   })
 
   it('a trigger row that names another person and no credential does not lend its actor', async () => {
