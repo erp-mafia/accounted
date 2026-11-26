@@ -288,19 +288,29 @@ describe('document_backfill_candidates and document_retry_candidates', () => {
  * read jobs, the reset companies, the closed or locked periods) instead of
  * probing it per document: on production the hold was a nested loop over every
  * held job for every document walked (3.5 million comparisons with about
- * 3 000 held jobs, 0.5 s of a 0.55 s call). The answer must not move: the
- * shipped body of 20261112152731 runs next to the new function on the same
- * rows, in one statement so both see the same snapshot and the same now().
+ * 3 000 held jobs, 0.5 s of a 0.55 s call). 20261126000300 walks an index
+ * that holds every column the walk tests, and reads the voucher's period from
+ * (company_id, id) INCLUDE (fiscal_period_id), where one company's vouchers
+ * sit together, instead of from the primary key and the table. The answer
+ * must not move: the shipped bodies of 20261112152731 and 20261123004000 run
+ * next to the function on the same rows, in one statement so all see the same
+ * snapshot and the same now().
  *
  * The documents, their jobs (some due an hour ago), the locks and the reset
  * are seeded inside a transaction that is rolled back: no other suite's
  * backfill or claim_document_jobs call ever sees them.
  */
-describe('document_backfill_candidates reads each check once per call (20261123004000)', () => {
-  const shipped = readFileSync(
-    new URL('../../supabase/migrations/20261112152731_document_read_candidates_skip_open_jobs.sql', import.meta.url), 'utf8',
-  ).split('CREATE OR REPLACE FUNCTION public.document_backfill_candidates')[1]!.split('AS $$')[1]!.split('$$;')[0]!
-    .replaceAll('p_limit', '$1::int')
+describe('document_backfill_candidates reads each check once per call (20261123004000, 20261126000300)', () => {
+  const shippedBodies = Object.fromEntries(
+    ['20261112152731_document_read_candidates_skip_open_jobs.sql', '20261123004000_document_backfill_candidates_checks_once_per_call.sql'].map(
+      (migration) => [
+        migration,
+        readFileSync(new URL(`../../supabase/migrations/${migration}`, import.meta.url), 'utf8')
+          .split('CREATE OR REPLACE FUNCTION public.document_backfill_candidates')[1]!.split('AS $$')[1]!.split('$$;')[0]!
+          .replaceAll('p_limit', '$1::int'),
+      ],
+    ),
+  )
 
   type Company = { userId: string; companyId: string; fiscalPeriodId: string }
   let open: Company, locked: Company, closed: Company, source: Company
@@ -370,6 +380,10 @@ describe('document_backfill_candidates reads each check once per call (202611230
       await job(open.companyId, otherStep, { kind: 'classify', status: 'queued' })
       const heldOnLocked = await doc({ ...locked, entryId: lockedEntry })
       await job(locked.companyId, heldOnLocked, { status: 'queued' })
+      // On another company's voucher: nothing in the schema forbids the link, so the period test still reads it.
+      await doc({ ...open, entryId: lockedEntry })
+      await doc({ ...open, entryId: closedEntry })
+      await doc({ ...locked, entryId: openEntry })
     }
 
     // After the documents: the triggers refuse a document on a locked period or a reset company.
@@ -399,21 +413,23 @@ describe('document_backfill_candidates reads each check once per call (202611230
     }
   }
 
-  it('answers as the shipped body did, row for row and in order, at every limit', async () => {
+  it('answers as the shipped bodies did, row for row and in order, at every limit', async () => {
     const { compared, mine } = await seeded(async (client, mine) => {
-      const compared: Array<{ limit: number | null; before: string[]; after: string[] }> = []
-      for (const limit of [null, -1, 0, 1, 2, 5, 9, 17, 40, 500, 501]) {
-        const { rows } = await client.query<{ before: string[]; after: string[] }>(
-          `SELECT
-             (SELECT coalesce(array_agg(o.id ORDER BY o.created_at DESC), '{}') FROM (${shipped}) o) AS before,
-             (SELECT coalesce(array_agg(f.id ORDER BY f.created_at DESC), '{}') FROM public.document_backfill_candidates($1) f) AS after`,
-          [limit],
-        )
-        compared.push({ limit, before: rows[0]!.before.filter((id) => mine.includes(id)), after: rows[0]!.after.filter((id) => mine.includes(id)) })
+      const compared: Array<{ shipped: string; limit: number | null; before: string[]; after: string[] }> = []
+      for (const [shipped, body] of Object.entries(shippedBodies)) {
+        for (const limit of [null, -1, 0, 1, 2, 5, 9, 17, 40, 500, 501]) {
+          const { rows } = await client.query<{ before: string[]; after: string[] }>(
+            `SELECT
+               (SELECT coalesce(array_agg(o.id ORDER BY o.created_at DESC), '{}') FROM (${body}) o) AS before,
+               (SELECT coalesce(array_agg(f.id ORDER BY f.created_at DESC), '{}') FROM public.document_backfill_candidates($1) f) AS after`,
+            [limit],
+          )
+          compared.push({ shipped, limit, before: rows[0]!.before.filter((id) => mine.includes(id)), after: rows[0]!.after.filter((id) => mine.includes(id)) })
+        }
       }
       return { compared, mine }
     })
-    for (const { limit, before, after } of compared) expect(after, `limit ${limit}`).toEqual(before)
+    for (const { shipped, limit, before, after } of compared) expect(after, `${shipped}, limit ${limit}`).toEqual(before)
     // The seed reaches every branch: some rows come back, and the limit cuts.
     const all = compared.find((c) => c.limit === 500)!.after
     expect(all.length).toBeGreaterThan(17)
@@ -421,7 +437,7 @@ describe('document_backfill_candidates reads each check once per call (202611230
   })
 
   it('reads the held jobs, the reset companies and the closed periods once per call, the voucher once per document it tests', async () => {
-    interface Node { 'Relation Name'?: string; 'Parent Relationship'?: string; 'Actual Loops'?: number; Plans?: Node[] }
+    interface Node { 'Relation Name'?: string; 'Parent Relationship'?: string; 'Actual Loops'?: number; 'Index Cond'?: string; Filter?: string; Plans?: Node[] }
     const notices: string[] = []
     const onNotice = (notice: { message?: string }) => {
       if (notice.message) notices.push(notice.message)
@@ -450,8 +466,18 @@ describe('document_backfill_candidates reads each check once per call (202611230
       expect(loops(relation), relation).toEqual([1])
       expect(scans.find((s) => s['Relation Name'] === relation)!['Parent Relationship'], relation).toBe('SubPlan')
     }
-    // The voucher is read per document that passed the cheaper tests: more than once, never in a join.
-    expect(loops('journal_entries')).toHaveLength(1)
-    expect(loops('journal_entries')[0]).toBeGreaterThan(1)
+    // The voucher is read per document that passed the cheaper tests, never in a join: by company and id for each of
+    // them, and by primary key alone only where that found nothing (no voucher, or another company's).
+    const vouchers = scans.filter((s) => s['Relation Name'] === 'journal_entries')
+    const byCompany = vouchers.filter((s) => /company_id/.test(`${s['Index Cond'] ?? ''} ${s.Filter ?? ''}`))
+    expect(vouchers).toHaveLength(2)
+    expect(byCompany).toHaveLength(1)
+    for (const s of vouchers) expect(s['Parent Relationship']).toBe('SubPlan')
+    const own = byCompany[0]!['Actual Loops']!
+    const other = vouchers.find((s) => s !== byCompany[0])!['Actual Loops']!
+    expect(own).toBeGreaterThan(1)
+    expect(other).toBeLessThan(own)
+    // The walk is one scan, and so is the read of the rows it picked.
+    expect(loops('document_attachments')).toEqual([1, 1])
   })
 })

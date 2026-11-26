@@ -128,7 +128,10 @@ describe('document_attachments: lookups and cron scans', () => {
     )
     expect(rows[0].dropped).toBe(true)
     const indexes = await functionIndexes(`SELECT * FROM public.document_backfill_candidates(200)`)
-    expect(indexes).toContain('idx_document_attachments_backfill_unread')
+    // Two indexes carry the function's predicate. 20261126000300's walk reads only columns that
+    // idx_document_attachments_backfill_walk holds, so the planner takes it once vacuum has marked the table's pages
+    // all-visible; on a table with none marked (as here, at times) the two cost the same.
+    expect(indexes.some((name) => ['idx_document_attachments_backfill_walk', 'idx_document_attachments_backfill_unread'].includes(name))).toBe(true)
   })
 })
 
