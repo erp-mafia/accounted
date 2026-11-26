@@ -1066,6 +1066,26 @@ export function routeRpcCalls(rpc: { mock: { calls: unknown[][] } }): unknown[][
   return rpc.mock.calls.filter(([name]) => name !== IDEMPOTENCY_CLAIM_RPC)
 }
 
+/**
+ * The company_members read keepRowsOfCurrentMembers makes before a
+ * Skatteverket token row may serve a company
+ * (src/extensions/general/skatteverket/lib/resolve-auth.ts), answering that
+ * each of `userIds` is a member of every company the read asks about. For a
+ * hand-rolled stub whose token owners are all still in their company.
+ */
+export function companyMembersChain(userIds: readonly string[]) {
+  let companyIds: string[] = []
+  const chain: Record<string, unknown> = {}
+  for (const method of ['select', 'eq', 'order', 'range']) chain[method] = vi.fn(() => chain)
+  chain.in = vi.fn((_column: string, ids: string[]) => {
+    companyIds = ids
+    return chain
+  })
+  chain.then = (resolve: (value: unknown) => void) =>
+    resolve({ data: companyIds.flatMap((company_id) => userIds.map((user_id) => ({ company_id, user_id }))), error: null })
+  return chain
+}
+
 // ============================================================
 // Paging Supabase mock
 // ============================================================

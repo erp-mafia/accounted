@@ -21,20 +21,27 @@ vi.mock('../lib/skattekonto-sync', async (importOriginal) => {
 
 import { skatteverketExtension } from '../index'
 import type { ExtensionContext } from '@/lib/extensions/types'
+import { companyMembersChain } from '@/tests/helpers'
 
 const A = 'user-a'
 const B = 'user-b'
 const COMPANY = 'company-1'
 type TokenRow = { user_id: string; status: string; created_at: string }
 
-function makeContext(userId: string, tokenRows: TokenRow[]): ExtensionContext {
+function makeContext(
+  userId: string,
+  tokenRows: TokenRow[],
+  members: string[] = tokenRows.map((row) => row.user_id),
+): ExtensionContext {
   const chain: Record<string, unknown> = {}
   for (const m of ['select', 'eq']) chain[m] = vi.fn(() => chain)
   chain.order = vi.fn().mockResolvedValue({ data: tokenRows, error: null })
   chain.maybeSingle = vi.fn(() => {
     throw new Error('maybeSingle() must not be used for the company token lookup')
   })
-  const supabase = { from: vi.fn(() => chain) }
+  const supabase = {
+    from: vi.fn((table: string) => (table === 'company_members' ? companyMembersChain(members) : chain)),
+  }
   return {
     userId,
     companyId: COMPANY,
@@ -145,6 +152,16 @@ describe('POST /skattekonto/sync: syncs on the company token, refresh goes to th
     const res = await route('POST', '/skattekonto/sync').handler(
       req('POST', '/skattekonto/sync'),
       makeContext(B, []),
+    )
+    expect(res.status).toBe(401)
+    expect(await res.json()).toMatchObject({ code: 'NOT_CONNECTED' })
+    expect(mockSyncSkattekonto).not.toHaveBeenCalled()
+  })
+
+  it("the connection of a member who left serves no sync: 401 NOT_CONNECTED, A's row is not used", async () => {
+    const res = await route('POST', '/skattekonto/sync').handler(
+      req('POST', '/skattekonto/sync'),
+      makeContext(B, [A_ROW], [B]),
     )
     expect(res.status).toBe(401)
     expect(await res.json()).toMatchObject({ code: 'NOT_CONNECTED' })

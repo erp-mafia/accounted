@@ -15,14 +15,17 @@ const log = createLogger('skatteverket-token-store')
  *
  * Pattern mirrors lib/auth/oauth-codes.ts but adapted for persistent storage.
  *
- * All DB operations route through a service-role client. The original RLS
- * design (auth.uid() = user_id) is correct, but at least one deployed
- * environment is missing the INSERT/UPDATE/DELETE policies and the
- * UNIQUE(user_id) constraint, so user-session writes get rejected. The
- * service-role client bypasses RLS, and the calling handlers (the OAuth
- * callback in particular) verify the user identity via cookies before
- * passing user_id here, so the access-control invariant is upheld at the
- * application layer.
+ * All DB operations route through a service-role client, whichever client the
+ * caller hands in. Through a session, the INSERT, UPDATE and DELETE policies
+ * let a member write only their own row (user_id = auth.uid(), migration
+ * 20261126131346_skatteverket_tokens_own_row_writes.sql), and a company read
+ * may run on a colleague's connection: its refresh, the needs_reconsent flag
+ * and the clearing of a revoked token go back to that colleague's row, which
+ * no session but theirs may write. The service-role client bypasses RLS, so
+ * the callers keep the rule: the handlers that connect or disconnect (the
+ * OAuth callback in particular) verify the user identity via cookies before
+ * passing user_id here, and a read writes back only to the row of the token
+ * owner it was resolved on (findCompanyTokenUser in resolve-auth.ts).
  */
 
 let _serviceClient: SupabaseClient | null = null

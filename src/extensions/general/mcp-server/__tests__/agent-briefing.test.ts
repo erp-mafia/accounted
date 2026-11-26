@@ -14,7 +14,7 @@ import {
 import { workflowSkills } from '../skills'
 import { isDefaultCatalogTool } from '../tool-reach'
 import { ALL_SCOPES, DEFAULT_OAUTH_SCOPES, TOOL_SCOPE_MAP } from '@/lib/auth/scope-catalog'
-import { createPagedMockSupabase, manyRows } from '@/tests/helpers'
+import { companyMembersChain, createPagedMockSupabase, manyRows } from '@/tests/helpers'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 
 vi.mock('@/lib/supabase/server', () => ({
@@ -231,6 +231,10 @@ function mockSupabase(opts: {
       }
       if (table === 'skatteverket_tokens') {
         return chainResolving(opts.skvTokenRows ?? [])
+      }
+      if (table === 'company_members') {
+        // Every token owner is still a member of the company.
+        return companyMembersChain((opts.skvTokenRows ?? []).map((row) => row.user_id))
       }
       if (table === 'bank_connections') {
         const chain: Record<string, unknown> = {}

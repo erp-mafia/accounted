@@ -1,5 +1,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { findCompanyTokenUser, hasOmbudReadAccess } from '@/extensions/general/skatteverket/lib/resolve-auth'
+import {
+  findCompanyTokenUser,
+  hasOmbudReadAccess,
+  keepRowsOfCurrentMembers,
+} from '@/extensions/general/skatteverket/lib/resolve-auth'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { isSkatteverketEnabled } from '@/lib/skatteverket/enabled'
 import { isSkvSessionRefreshable } from '@/lib/skatteverket/session-lifetime'
@@ -84,6 +88,7 @@ export async function getSkvConnectionHealth(
 
 interface FilingTokenRow {
   user_id: string
+  company_id: string
   status: string | null
   expires_at: string | null
   refresh_count: number | null
@@ -113,8 +118,9 @@ function ownSessionIsLive(row: FilingTokenRow, now: number): boolean {
  * another member's session is named, never used.
  *
  * "Another member's session" is the same pick as `status`: a row not flagged
- * needs_reconsent (findCompanyTokenUser's pool), most recent first, so the
- * message never contradicts the status line beside it.
+ * needs_reconsent whose owner is still in the company (findCompanyTokenUser's
+ * pool, keepRowsOfCurrentMembers), most recent first, so the message never
+ * contradicts the status line beside it and never names someone who left.
  *
  * Read on the service role whichever client the door holds, as MCP reads it,
  * so every door gives the same answer. A session inside its refresh window
@@ -155,6 +161,7 @@ export async function getSkvFilingReadiness(
       typeof row.user_id === 'string'
         ? [{
             user_id: row.user_id,
+            company_id: companyId,
             status: row.status,
             expires_at: row.expires_at,
             refresh_count: row.refresh_count,
@@ -168,7 +175,10 @@ export async function getSkvFilingReadiness(
     if (own && ownSessionIsLive(own, now)) return { ready: true, own_session: 'active' }
 
     const ownSession = own ? 'expired' : 'none'
-    const other = rows.find((row) => row.user_id !== userId && row.status !== 'needs_reconsent')
+    const [other] = await keepRowsOfCurrentMembers(
+      db,
+      rows.filter((row) => row.user_id !== userId && row.status !== 'needs_reconsent'),
+    )
     const holderName = other ? await memberName(db, other.user_id) : null
     return {
       ready: false,

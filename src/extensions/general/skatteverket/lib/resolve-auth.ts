@@ -1,5 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { ID_READ_CHUNK } from '@/lib/supabase/read-in-slices'
+import { chunk } from '@/lib/utils'
 import { getSkatteverketEnvironment, type SkvAuth } from './api-client'
 import { getSystemAuthMode, isSystemAuthConfigured } from './system-auth/config'
 import {
@@ -25,7 +28,9 @@ const log = createLogger('skatteverket-resolve-auth')
  *      exists; otherwise the most recently issued active row for the company
  *      is used. That is what lets member B read data member A connected
  *      (issue #1673): the fetched skattekonto/declaration data belongs to
- *      the company, not to the person who happened to press "Anslut".
+ *      the company, not to the person who happened to press "Anslut". The
+ *      connection itself belongs to the person who made it, so a row serves
+ *      only while its owner is still a member (keepRowsOfCurrentMembers).
  *
  * Who may read: any member of the company. Membership is enforced upstream
  * (the extension dispatcher resolves ctx.companyId from the caller's own
@@ -151,9 +156,46 @@ export interface CompanyTokenUser {
 }
 
 /**
+ * The token rows whose owner is a member of the row's company now, in the
+ * order given.
+ *
+ * A token row is one person's BankID session for one company, and the
+ * connection belongs to the person who made it: it serves the company only
+ * while that person is in it. Removing a member deletes the membership and
+ * leaves their token row in place, so every pick of whose token serves a
+ * company goes through here.
+ *
+ * company_members is readable for the same companies as the token table (both
+ * SELECT policies are user_company_ids()), so a session that sees a company's
+ * token rows also sees which of their owners are still members. Throws when
+ * the membership could not be read: "could not check" is not "nobody".
+ */
+export async function keepRowsOfCurrentMembers<Row extends { company_id: string; user_id: string }>(
+  supabase: SupabaseClient,
+  rows: readonly Row[],
+): Promise<Row[]> {
+  const members = new Set<string>()
+  // (company_id, user_id) is unique, so the order is total and the pages hold.
+  for (const companyIds of chunk([...new Set(rows.map((row) => row.company_id))], ID_READ_CHUNK)) {
+    const memberships = await fetchAllRows<{ company_id: string; user_id: string }>(({ from, to }) =>
+      supabase
+        .from('company_members')
+        .select('company_id, user_id')
+        .in('company_id', companyIds)
+        .order('company_id', { ascending: true })
+        .order('user_id', { ascending: true })
+        .range(from, to),
+    )
+    for (const membership of memberships) members.add(`${membership.company_id}:${membership.user_id}`)
+  }
+  return rows.filter((row) => members.has(`${row.company_id}:${row.user_id}`))
+}
+
+/**
  * Pick the token row that should serve a read for this company.
  *
- * Deterministic order:
+ * Only rows of people who are still members of the company count
+ * (keepRowsOfCurrentMembers). Among those, a deterministic order:
  *   1. active rows before needs_reconsent rows (a dead row must not shadow a
  *      live one connected by another member)
  *   2. within the same status, the preferred user's own row first
@@ -164,9 +206,10 @@ export interface CompanyTokenUser {
  * most) instead of `.maybeSingle()`, which errors on the second row and used
  * to turn "two members connected" into "nobody connected" for everyone.
  *
- * Returns null when the company has no token row at all. The token table's
- * SELECT policy is company-scoped, so a user-session client only ever sees
- * rows for companies the caller belongs to.
+ * Returns null when no member of the company has a token row, and when the
+ * rows or the membership could not be read. The token table's SELECT policy
+ * is company-scoped, so a user-session client only ever sees rows for
+ * companies the caller belongs to.
  */
 export async function findCompanyTokenUser(
   supabase: SupabaseClient,
@@ -184,12 +227,21 @@ export async function findCompanyTokenUser(
     return null
   }
 
-  const rows = (
+  const stored = (
     (data ?? []) as Array<{ user_id: string | null; status: string | null; created_at: string | null }>
-  ).filter(
-    (row): row is { user_id: string; status: string | null; created_at: string | null } =>
-      typeof row.user_id === 'string'
-  )
+  ).flatMap((row) => (typeof row.user_id === 'string' ? [{ ...row, user_id: row.user_id, company_id: companyId }] : []))
+  if (stored.length === 0) return null
+
+  let rows: typeof stored
+  try {
+    rows = await keepRowsOfCurrentMembers(supabase, stored)
+  } catch (err) {
+    log.warn('failed to look up the members behind the company token rows', {
+      companyId,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    return null
+  }
   if (rows.length === 0) return null
 
   const active = rows.filter(row => row.status !== 'needs_reconsent')

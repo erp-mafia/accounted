@@ -7,9 +7,10 @@
  * session row in skatteverket_tokens:
  *
  *   - through a session (RLS applies), B cannot write a row under A's
- *     user_id, change A's row, hand B's own row to A, or delete A's row, and
- *     the owner cannot delete B's row. Each of these went through under the
- *     policies of 20260702093000_rls_role_gate_and_voucher_rpc_guards.sql.
+ *     user_id, change A's row, upsert onto it, take it over, hand B's own row
+ *     to A, or delete A's row, and the owner cannot delete B's row. Each of
+ *     these went through under the policies of
+ *     20260702093000_rls_role_gate_and_voucher_rpc_guards.sql.
  *   - B can still create, refresh and remove B's own row, and a viewer still
  *     cannot write at all.
  *   - every path the application writes the table through still works. The
@@ -18,15 +19,22 @@
  *     connecting, a refresh of a colleague's token that serves a company
  *     read, the needs_reconsent flag, clearing a revoked token, disconnect.
  *     Account deletion runs the SECURITY DEFINER erasure from the person's
- *     own session. A company read still finds a colleague's connection:
+ *     own session. Both pass RLS by design, so these cases pin that routing,
+ *     not the policies. A company read still finds a colleague's connection:
  *     SELECT is unchanged.
+ *   - a member who leaves the company takes their connection out of its
+ *     reads (findCompanyTokenUser in
+ *     src/extensions/general/skatteverket/lib/resolve-auth.ts), in a
+ *     colleague's session and on the service role alike, and their row is
+ *     kept.
  *
  * What is not real: the HTTP hop to PostgREST, replaced by
  * tests/pg/postgrest-over-pg.ts.
  */
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { findCompanyTokenUser } from '@/extensions/general/skatteverket/lib/resolve-auth'
+import { findCompanyTokenUser, resolveUserReadAuth } from '@/extensions/general/skatteverket/lib/resolve-auth'
+import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import {
   deleteTokens,
   getTokenHealth,
@@ -74,6 +82,11 @@ function sessionOf(userId: string): SupabaseClient {
     global: { fetch: rest.fetch },
     realtime: { transport: UnusedRealtimeTransport as never },
   })
+}
+
+/** The service role, as the crons hold it (served by the shim above). */
+function serviceRole(): SupabaseClient {
+  return createServiceRoleClient('http://pg-real.invalid', 'pg-real-service-role')
 }
 
 /** One statement in `userId`'s session (RLS applies), rolled back afterwards. */
@@ -154,6 +167,36 @@ describe('through a session, a member writes only their own Skatteverket connect
     expect(changed.rowCount).toBe(0)
   })
 
+  it("B cannot upsert onto A's connection", async () => {
+    await storeTokens(sessionOf(ownerA), ownerA, tokens('a'), companyId)
+
+    // The SET names no credential column: excluded.access_token would be
+    // refused by the column grants (42501, permission denied) before the
+    // policies are asked.
+    await expect(
+      asMember(
+        adminB,
+        `${INSERT_ROW}
+         ON CONFLICT (user_id, company_id)
+           DO UPDATE SET status = 'needs_reconsent', expires_at = excluded.expires_at`,
+        [ownerA, companyId],
+      ),
+    ).rejects.toMatchObject(RLS_REFUSED)
+    expect(await rowsOf(companyId)).toEqual([expect.objectContaining({ user_id: ownerA, status: 'active' })])
+  })
+
+  it("B cannot take over A's connection: the update reaches no row", async () => {
+    await storeTokens(sessionOf(ownerA), ownerA, tokens('a'), companyId)
+
+    const changed = await asMember(
+      adminB,
+      `UPDATE public.skatteverket_tokens SET user_id = $1 WHERE user_id = $2 AND company_id = $3`,
+      [adminB, ownerA, companyId],
+    )
+    expect(changed.rowCount).toBe(0)
+    expect(await rowsOf(companyId)).toEqual([expect.objectContaining({ user_id: ownerA })])
+  })
+
   it("B cannot hand B's own connection to A", async () => {
     await storeTokens(sessionOf(adminB), adminB, tokens('b'), companyId)
 
@@ -204,7 +247,13 @@ describe('through a session, a member writes only their own Skatteverket connect
   })
 })
 
-describe('every path the application writes the table through still works', () => {
+// These pin the routing, not the policies. The token store writes on its own
+// service-role client (getServiceClient in token-store.ts), whichever client
+// its caller hands it, and the account erasure is a SECURITY DEFINER function
+// that runs as the table owner: RLS applies to neither, so a policy change
+// cannot fail these cases, while a store write moved onto the caller's session
+// would. The policies are pinned in the block above.
+describe('every path the application writes the table through still works, past RLS (routing, not policies)', () => {
   it('connect, a second member connecting, a refresh of a colleague token, the reconsent flag, a revoked token and disconnect', async () => {
     // A connects (the OAuth callback stores the caller's own row).
     const aConnected = await storeTokens(sessionOf(ownerA), ownerA, tokens('a'), companyId)
@@ -265,5 +314,49 @@ describe('every path the application writes the table through still works', () =
     expect(error).toBeNull()
 
     expect(await rowsOf(companyId)).toEqual([{ id: aConnected, user_id: ownerA, status: 'active', refresh_count: 0 }])
+  })
+})
+
+describe("a member who leaves the company takes their connection out of the company's reads", () => {
+  /** What DELETE /api/company/members/[id] does: the membership goes, the token row stays. */
+  async function leaveCompany(userId: string) {
+    await getPool().query(`DELETE FROM public.company_members WHERE company_id = $1 AND user_id = $2`, [
+      companyId,
+      userId,
+    ])
+  }
+
+  it("B connects and leaves: A's session and a cron find no connection, and B's row is kept", async () => {
+    const bConnected = await storeTokens(sessionOf(adminB), adminB, tokens('b'), companyId)
+    expect(await findCompanyTokenUser(sessionOf(ownerA), companyId, { preferUserId: ownerA })).toMatchObject({
+      userId: adminB,
+    })
+
+    await leaveCompany(adminB)
+
+    // A's session reads the company's rows (SELECT is company-wide) and its
+    // members; a cron reads both on the service role.
+    expect(await findCompanyTokenUser(sessionOf(ownerA), companyId, { preferUserId: ownerA })).toBeNull()
+    expect(await findCompanyTokenUser(serviceRole(), companyId)).toBeNull()
+    expect(await resolveUserReadAuth(serviceRole(), companyId)).toEqual({ ok: false, reason: 'no_token' })
+    // Nothing is deleted: the row is B's.
+    expect(await rowsOf(companyId)).toEqual([{ id: bConnected, user_id: adminB, status: 'active', refresh_count: 0 }])
+  })
+
+  it("A and B connected and B leaves: reads run on A's connection, also when B's id is the one passed", async () => {
+    await storeTokens(sessionOf(ownerA), ownerA, tokens('a'), companyId)
+    await storeTokens(sessionOf(adminB), adminB, tokens('b'), companyId)
+    expect(await findCompanyTokenUser(serviceRole(), companyId)).toMatchObject({ userId: adminB })
+
+    await leaveCompany(adminB)
+
+    expect(await findCompanyTokenUser(serviceRole(), companyId)).toMatchObject({ userId: ownerA })
+    expect(await findCompanyTokenUser(serviceRole(), companyId, { preferUserId: adminB })).toMatchObject({
+      userId: ownerA,
+    })
+    expect(await resolveUserReadAuth(serviceRole(), companyId, { userId: adminB })).toMatchObject({
+      ok: true,
+      tokenUserId: ownerA,
+    })
   })
 })

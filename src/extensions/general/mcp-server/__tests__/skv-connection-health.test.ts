@@ -5,7 +5,10 @@ import { createTableMockSupabase } from '@/tests/helpers'
 
 const findCompanyTokenUser = vi.fn()
 const hasOmbudReadAccess = vi.fn()
-vi.mock('@/extensions/general/skatteverket/lib/resolve-auth', () => ({
+vi.mock('@/extensions/general/skatteverket/lib/resolve-auth', async (importOriginal) => ({
+  // The real membership filter, reading company_members from the test's client.
+  keepRowsOfCurrentMembers: (await importOriginal<typeof import('@/extensions/general/skatteverket/lib/resolve-auth')>())
+    .keepRowsOfCurrentMembers,
   findCompanyTokenUser: (...a: unknown[]) => findCompanyTokenUser(...a),
   hasOmbudReadAccess: (...a: unknown[]) => hasOmbudReadAccess(...a),
 }))
@@ -79,9 +82,10 @@ function tokenRow(
   }
 }
 
-function client(rows: unknown[], memberName: string | null = 'Anna Admin') {
+function client(rows: unknown[], memberName: string | null = 'Anna Admin', members: string[] = [CALLER, MEMBER]) {
   const db = createTableMockSupabase({
     skatteverket_tokens: { data: rows },
+    company_members: { data: members.map((user_id) => ({ company_id: COMPANY, user_id })) },
     profiles: { data: memberName === null ? null : { full_name: memberName } },
   })
   serviceDb = db.supabase
@@ -131,6 +135,20 @@ describe('getSkvFilingReadiness', () => {
     expect(filing?.message).toContain('You have not connected your own')
     expect(filing?.message).toContain('belongs to another member of the company')
     expect(filing?.message).toContain('ask that member to file')
+  })
+
+  it('the live session of someone who left the company is never named as the company connection', async () => {
+    const { supabase, findCall } = client(
+      [tokenRow(MEMBER, { expiresInMin: 57 }), tokenRow(CALLER, { status: 'needs_reconsent', expiresInMin: -120 })],
+      'Anna Admin',
+      [CALLER],
+    )
+    const filing = await getSkvFilingReadiness(supabase as never, COMPANY, CALLER, NOW)
+    expect(filing).toMatchObject({ ready: false, own_session: 'expired' })
+    expect(filing?.message).not.toContain('belongs to')
+    expect(filing?.message).not.toContain('Anna Admin')
+    expect(findCall('company_members', 'in')).toEqual(['company_id', [COMPANY]])
+    expect(findCall('profiles', 'select')).toBeUndefined()
   })
 
   it('a member row flagged needs_reconsent is not offered as the live connection', async () => {
