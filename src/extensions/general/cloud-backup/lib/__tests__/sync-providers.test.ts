@@ -2,8 +2,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/reports/full-archive-export', () => ({
-  generateFullArchive: vi.fn().mockResolvedValue(new ArrayBuffer(8)),
-  generateBaseDataArchive: vi.fn().mockResolvedValue(new ArrayBuffer(16)),
+  streamFullArchive: vi.fn(async function* () {
+    yield new Uint8Array(8)
+  }),
+  streamBaseDataArchive: vi.fn(async function* () {
+    yield new Uint8Array(16)
+  }),
   ARCHIVE_OVERHEAD_BYTES: 8 * 1024 * 1024,
 }))
 
@@ -24,7 +28,7 @@ vi.mock('../crypto', () => ({
 }))
 
 import { performSync } from '../sync'
-import { CloudTokenRefreshError, type CloudStorageProvider } from '../cloud-provider'
+import { CloudTokenRefreshError, type CloudStorageProvider, type FileBytes } from '../cloud-provider'
 import type { CloudConnection, CloudLastSync } from '../../types'
 
 const PERIOD = { id: 'p-2024', period_start: '2024-01-01', period_end: '2024-12-31' }
@@ -118,10 +122,17 @@ function makeFakeProvider(
     putFile: vi.fn().mockImplementation(async ({ name, data }: any) => ({
       id: `${id}:${name}`,
       name,
-      size_bytes: (data as ArrayBuffer).byteLength,
+      size_bytes: await readLength(data),
     })),
     ...overrides,
   } as CloudStorageProvider
+}
+
+/** Read a file to its end, as a provider does to send it. */
+async function readLength(data: FileBytes): Promise<number> {
+  let length = 0
+  for await (const part of data()) length += part.length
+  return length
 }
 
 function syncParams(supabase: any, provider: CloudStorageProvider) {

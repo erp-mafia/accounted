@@ -17,6 +17,10 @@ vi.mock('@/lib/bookkeeping/engine', () => ({
   reverseEntry: vi.fn(),
 }))
 vi.mock('@/lib/events/bus', () => ({ eventBus: { emit: vi.fn() } }))
+// The service writer a caller that passes none gets (a bank ingest); the
+// tests that reach it set it.
+const mock = vi.hoisted(() => ({ writer: null as unknown }))
+vi.mock('@/lib/supabase/server', () => ({ createServiceClient: () => mock.writer }))
 
 import { linkOrderToDebit, loadOpenPaymentOrders, PAYMENT_ORDER_MATCH_METHOD } from '../auto-settle'
 import { debitOfTransaction, findLinkableOrderForDebit, findOrderForDebit, isDebitLinkableOrder } from '../debit-match'
@@ -25,6 +29,7 @@ import {
   ARCIM,
   arcimDebit,
   arcimOrder,
+  asSession,
   RCVD_TAX,
   rcvdTaxBatch,
   rcvdTaxDebit,
@@ -47,18 +52,22 @@ function events(): Array<Record<string, unknown>> {
   return db.findCalls('payment_order_events', 'insert').flatMap(([rows]) => rows as Array<Record<string, unknown>>)
 }
 
+/** The answers a link reads, and the compare-and-set when the same client writes it. */
+const linkAnswers = () => ({
+  payment_orders: [
+    { data: rcvdTaxOrder() }, // read again before the link
+    { data: [] }, // no other order is linked to the debit
+    { data: [{ id: RCVD_TAX.orderId }] }, // the compare-and-set
+  ],
+  payment_order_batches: { data: [rcvdTaxBatch()] },
+  transactions: { data: rcvdTaxDebit() },
+  payment_order_events: { data: null },
+})
+
 beforeEach(() => {
   vi.clearAllMocks()
-  db = createTableMockSupabase({
-    payment_orders: [
-      { data: rcvdTaxOrder() }, // read again before the link
-      { data: [] }, // no other order is linked to the debit
-      { data: [{ id: RCVD_TAX.orderId }] }, // the compare-and-set
-    ],
-    payment_order_batches: { data: [rcvdTaxBatch()] },
-    transactions: { data: rcvdTaxDebit() },
-    payment_order_events: { data: null },
-  })
+  mock.writer = null
+  db = createTableMockSupabase(linkAnswers())
 })
 
 describe('findLinkableOrderForDebit', () => {
@@ -116,12 +125,14 @@ describe('findLinkableOrderForDebit', () => {
 })
 
 describe('linkOrderToDebit', () => {
+  // As the status sync links: one service client reads and writes.
   const link = () =>
     linkOrderToDebit(db.supabase as unknown as SupabaseClient, {
       order: { id: RCVD_TAX.orderId, company_id: RCVD_TAX.companyId },
       transaction: { id: RCVD_TAX.transactionId },
       basis: 'payee',
       log,
+      writer: db.supabase as unknown as SupabaseClient,
     })
 
   it('moves the RCVD order of a finished signing to executed on its debit, linked, with a matched event, and books nothing', async () => {
@@ -222,6 +233,9 @@ describe('loadOpenPaymentOrders with orders without an invoice', () => {
 })
 
 describe('the payment-order ingest pass and a debit of an order without an invoice', () => {
+  let service: ReturnType<typeof createTableMockSupabase>
+
+  /** A poll or a file import: the batch's client is the person's session, which only reads payment orders. */
   function ingestBatch(): IngestBatch {
     return {
       supabase: db.supabase as unknown as SupabaseClient,
@@ -237,17 +251,65 @@ describe('the payment-order ingest pass and a debit of an order without an invoi
   }
   const raw = { date: '2026-10-27', amount: -12345, description: '5050-1055 Betalning', currency: 'SEK' } as RawTransaction
 
-  it('links the order and leaves the row to the passes after it: nothing booked, no hint', async () => {
+  beforeEach(() => {
+    db = createTableMockSupabase(asSession(linkAnswers()))
+    service = createTableMockSupabase({ payment_orders: { data: [{ id: RCVD_TAX.orderId }] }, payment_order_events: { data: null } })
+    mock.writer = service.supabase
+  })
+
+  it("links the order with the service writer, filtered to the order and the company it was read from, and leaves the row to the passes after it: nothing booked, no hint", async () => {
     const batch = ingestBatch()
     const outcome = await paymentOrderIngestMatcher.match(batch, { orders: [signedTaxOrder()] }, { tx: rcvdTaxDebit({ journal_entry_id: null }), raw, reread: false })
 
     expect(outcome).toBe('none')
     expect(batch.claims.has('payment_order', RCVD_TAX.orderId)).toBe(true)
-    expect(db.findCall('payment_orders', 'update')?.[0]).toMatchObject({ status: 'executed', matched_transaction_id: RCVD_TAX.transactionId })
-    expect(db.findCalls('transactions', 'update')).toEqual([])
+    // The session writes nothing; the service writer writes the link, compare-and-set as the status sync's, and its event.
+    expect(writes()).toEqual([])
+    expect(service.findCall('payment_orders', 'update')?.[0]).toMatchObject({ status: 'executed', matched_transaction_id: RCVD_TAX.transactionId })
+    expect(service.findCalls('payment_orders', 'eq')).toEqual([['id', RCVD_TAX.orderId], ['company_id', RCVD_TAX.companyId], ['status', 'awaiting_signature']])
+    expect(service.findCalls('payment_orders', 'is')).toEqual([['matched_transaction_id', null], ['supplier_invoice_id', null]])
+    expect(service.findCall('payment_order_events', 'insert')?.[0]).toEqual([
+      expect.objectContaining({ company_id: RCVD_TAX.companyId, payment_order_id: RCVD_TAX.orderId, event_type: 'matched', to_status: 'executed' }),
+    ])
+    expect(service.tables()).toEqual(['payment_orders', 'payment_order_events'])
     expect(batch.logMatch).not.toHaveBeenCalled()
     expect(batch.result.auto_matched_invoices).toBe(0)
     expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('logs a refused link with the order id and leaves the order to the status sync', async () => {
+    service.setTable('payment_orders', { data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } })
+    const batch = ingestBatch()
+
+    const outcome = await paymentOrderIngestMatcher.match(batch, { orders: [signedTaxOrder()] }, { tx: rcvdTaxDebit({ journal_entry_id: null }), raw, reread: false })
+
+    expect(outcome).toBe('none')
+    expect(service.findCalls('payment_order_events', 'insert')).toEqual([])
+    expect(log.error).toHaveBeenCalledWith(
+      'payment order could not be linked to its debit',
+      undefined,
+      expect.objectContaining({ orderId: RCVD_TAX.orderId, transactionId: RCVD_TAX.transactionId, code: '57014' }),
+    )
+    expect(log.info).toHaveBeenCalledWith('payment order left for the status sync', expect.objectContaining({ orderId: RCVD_TAX.orderId, reason: 'link_failed' }))
+  })
+
+  it("never links with the service writer from a bank file the person uploaded: the link is the person's own and refused, as before", async () => {
+    const fromFile = rcvdTaxDebit({ journal_entry_id: null, import_source: 'csv_generic' })
+    db = createTableMockSupabase(asSession({ ...linkAnswers(), transactions: { data: fromFile } }))
+    const batch = ingestBatch()
+
+    const outcome = await paymentOrderIngestMatcher.match(batch, { orders: [signedTaxOrder()] }, { tx: fromFile, raw, reread: false })
+
+    expect(outcome).toBe('none')
+    // The status sync trusts only bank-feed debits to move an order: a file's never reaches the service role.
+    expect(service.tables()).toEqual([])
+    expect(writes().map((w) => `${w.table}.${w.method}`)).toEqual(['payment_orders.update'])
+    expect(events()).toEqual([])
+    expect(log.error).toHaveBeenCalledWith(
+      'payment order could not be linked to its debit',
+      undefined,
+      expect.objectContaining({ orderId: RCVD_TAX.orderId, code: '42501' }),
+    )
   })
 
   it('does nothing for an order whose signing did not finish', async () => {
@@ -256,6 +318,7 @@ describe('the payment-order ingest pass and a debit of an order without an invoi
 
     expect(outcome).toBe('none')
     expect(writes()).toEqual([])
+    expect(service.tables()).toEqual([])
     expect(batch.claims.has('payment_order', RCVD_TAX.orderId)).toBe(false)
   })
 })

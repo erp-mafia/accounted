@@ -332,6 +332,9 @@ export default function SalesOrderDetailPage({ params }: { params: Promise<{ id:
         <DefRow label={t('def_currency')}>{order.currency}</DefRow>
         {order.your_reference && <DefRow label={t('def_your_reference')}>{order.your_reference}</DefRow>}
         {order.our_reference && <DefRow label={t('def_our_reference')}>{order.our_reference}</DefRow>}
+        {order.invoice_marking?.trim() && (
+          <DefRow label={t('def_invoice_marking')}>{order.invoice_marking.trim()}</DefRow>
+        )}
         {order.source_invoice_id && (
           <DefRow label={t('def_source_invoice')}>
             <Link href={`/invoices/${order.source_invoice_id}`} className="hover:underline">

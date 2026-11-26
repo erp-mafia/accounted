@@ -35,12 +35,20 @@ export interface MailboxAvailability {
 /**
  * The rows of the dialog. A built door this deployment does not carry is
  * left out rather than shown as a dead end; the intake address and Peppol
- * are part of the inbox itself. Billo and Kivra without credentials stay
+ * are part of the inbox itself. When Kivra says the company already has a
+ * mailbox there, Kivra is listed directly after the intake address. Billo and Kivra without credentials stay
  * listed as coming soon, the way every deployment showed them before they
  * were built.
  */
-export function mailboxEntries(available: MailboxAvailability): MailboxEntry[] {
-  return MAILBOX_ORDER.filter((door) => {
+export function mailboxEntries(
+  available: MailboxAvailability,
+  kivraCompanyMailbox: 'has' | 'none' | 'unknown' | null = null,
+): MailboxEntry[] {
+  const order =
+    kivraCompanyMailbox === 'has'
+      ? [MAILBOX_ORDER[0]!, 'kivra' as const, ...MAILBOX_ORDER.slice(1).filter((door) => door !== 'kivra')]
+      : MAILBOX_ORDER
+  return order.filter((door) => {
     if (door === 'whatsapp') return available.whatsapp
     if (door === 'mailbox') return available.mail
     return true

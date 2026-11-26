@@ -251,6 +251,7 @@ describe('PUT /api/v1/companies/:companyId/employees/:id/absence', () => {
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         employees: { data: { id: EMPLOYEE_ID }, error: null },
         salary_absence_days: [
+          { data: [], error: null }, // the register lock: nothing registered on the days
           { data: null, error: { code: '23514', message: 'Total tid över 24h' } },
         ],
       }).supabase,
@@ -294,8 +295,10 @@ describe('PUT /api/v1/companies/:companyId/employees/:id/absence', () => {
       deviation_period_start: '2026-03-01',
       deviation_period_end: '2026-03-31',
       locked_dates: ['2026-03-02', '2026-03-03', '2026-03-04', '2026-03-05', '2026-03-06'],
+      reason: 'run_not_settled',
     })
-    expect(supabaseMock.tables()).not.toContain('salary_absence_days')
+    // The register was only read: nothing was written.
+    expect(supabaseMock.findCall('salary_absence_days', 'upsert')).toBeUndefined()
   })
 
   it('returns a dry-run preview without writing', async () => {
@@ -317,7 +320,8 @@ describe('PUT /api/v1/companies/:companyId/employees/:id/absence', () => {
     expect(res.headers.get('X-Dry-Run')).toBe('true')
     const body = await res.json()
     expect(body.data.preview.count).toBe(5)
-    expect(supabaseMock.tables()).not.toContain('salary_absence_days')
+    expect(body.data.preview.days[0]).toMatchObject({ carried_to_run_id: null })
+    expect(supabaseMock.findCall('salary_absence_days', 'upsert')).toBeUndefined()
   })
 
   it('forces TEST KEYS into dry-run on PUT (wrapper REQUIRES_IDEMPOTENCY regression)', async () => {
@@ -348,8 +352,8 @@ describe('PUT /api/v1/companies/:companyId/employees/:id/absence', () => {
     expect(res.status).toBe(200)
     expect(res.headers.get('X-Dry-Run')).toBe('true')
     expect(res.headers.get('X-Gnubok-Mode')).toBe('test')
-    // The write table was never touched.
-    expect(supabaseMock.tables()).not.toContain('salary_absence_days')
+    // The write table was never written: the register lock only read it.
+    expect(supabaseMock.findCall('salary_absence_days', 'upsert')).toBeUndefined()
   })
 
   it('rejects keys without payroll:write scope', async () => {
@@ -394,7 +398,10 @@ describe('DELETE /api/v1/companies/:companyId/employees/:id/absence', () => {
       createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         employees: { data: { id: EMPLOYEE_ID }, error: null },
-        salary_absence_days: { data: null, error: null, count: 3 },
+        salary_absence_days: [
+          { data: [], error: null }, // the register lock: nothing a run reads
+          { data: null, error: null, count: 3 },
+        ],
       }).supabase,
     )
 
@@ -416,6 +423,13 @@ describe('DELETE /api/v1/companies/:companyId/employees/:id/absence', () => {
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       employees: { data: { id: EMPLOYEE_ID }, error: null },
       salary_runs: { data: [REVIEW_RUN_MARCH], error: null },
+      salary_absence_days: {
+        data: [
+          { absence_date: '2026-03-30', carried_to_run_id: null },
+          { absence_date: '2026-03-31', carried_to_run_id: null },
+        ],
+        error: null,
+      },
     })
     mockServiceClient.mockReturnValue(supabaseMock.supabase)
 
@@ -434,7 +448,7 @@ describe('DELETE /api/v1/companies/:companyId/employees/:id/absence', () => {
       salary_run_id: REVIEW_RUN_MARCH.id,
       locked_dates: ['2026-03-30', '2026-03-31'],
     })
-    expect(supabaseMock.tables()).not.toContain('salary_absence_days')
+    expect(supabaseMock.findCall('salary_absence_days', 'delete')).toBeUndefined()
   })
 
   it('requires from and to', async () => {

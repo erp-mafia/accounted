@@ -32,7 +32,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
     }
     return NextResponse.json({ data: result.data })
   },
-  { requireWrite: true },
+  { requireWrite: true, uuidParams: { id: 'SHIFT_PREMIUM_RULE_NOT_FOUND' } },
 )
 
 export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
@@ -45,5 +45,5 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
     }
     return NextResponse.json({ data: result.data })
   },
-  { requireWrite: true },
+  { requireWrite: true, uuidParams: { id: 'SHIFT_PREMIUM_RULE_NOT_FOUND' } },
 )

@@ -386,6 +386,57 @@ describe('mapOrderToWebshopRow', () => {
     expect(rows[0].customer_country).toBe('DK')
   })
 
+  it('captures the billing address for the invoice customer, trimmed, blank as null', () => {
+    const [row] = mapOrderToWebshopRow(
+      connection,
+      's',
+      makeOrder({
+        billing: {
+          first_name: 'A',
+          last_name: 'B',
+          address_1: ' Storgatan 1 ',
+          address_2: '  ',
+          postcode: '111 22',
+          city: 'Stockholm',
+          country: 'SE',
+        },
+      }),
+    )
+    expect(row).toMatchObject({
+      customer_address_line1: 'Storgatan 1',
+      customer_address_line2: null,
+      customer_postal_code: '111 22',
+      customer_city: 'Stockholm',
+    })
+
+    // A store that withholds the address, or a plugin that sends it as
+    // something other than text, leaves the fields empty.
+    const [bare] = mapOrderToWebshopRow(
+      connection,
+      's',
+      makeOrder({
+        billing: { first_name: 'A', postcode: 11122 as unknown as string },
+      }),
+    )
+    expect(bare).toMatchObject({
+      customer_address_line1: null,
+      customer_address_line2: null,
+      customer_postal_code: null,
+      customer_city: null,
+    })
+  })
+
+  it('keeps the billing address off refund rows: a refund never becomes an invoice', () => {
+    const [refundRow] = mapRefundToWebshopRow(
+      connection,
+      's',
+      makeOrder({ billing: { first_name: 'A', address_1: 'Storgatan 1', postcode: '111 22', city: 'Stockholm' } }),
+      { id: 78, amount: '250.00', reason: 'Retur', date_created_gmt: '2026-08-03T10:00:00' },
+    )
+    expect(refundRow.customer_address_line1).toBeUndefined()
+    expect(refundRow.customer_city).toBeUndefined()
+  })
+
   it('snapshots shipping and fee lines so the invoice conversion covers order.total', () => {
     const rows = mapOrderToWebshopRow(
       connection,

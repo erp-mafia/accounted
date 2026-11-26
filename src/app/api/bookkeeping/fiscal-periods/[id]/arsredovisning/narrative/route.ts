@@ -31,6 +31,7 @@ export const GET = withRouteContext(
       return errorResponse(err, log, { requestId })
     }
   },
+  { uuidParams: { id: 'PERIOD_NOT_FOUND' } },
 )
 
 /**
@@ -58,5 +59,5 @@ export const POST = withRouteContext(
     if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
     return NextResponse.json({ data: outcome.data })
   },
-  { requireWrite: true },
+  { requireWrite: true, uuidParams: { id: 'PERIOD_NOT_FOUND' } },
 )

@@ -58,8 +58,9 @@ import {
 } from './payroll-config'
 import { fetchAllTaxTableRatesForRun, TaxTableUnavailableError } from './tax-tables'
 import { REGIONAL_SUPPORT_PARAM } from './regional-support'
-import { AbsenceInputError, deriveEmployeeAbsence, loadRunAbsence } from './derive-absence-line-items'
+import { AbsenceInputError, deriveEmployeeAbsence, loadRunAbsence, type DerivedLineItem } from './derive-absence-line-items'
 import { monthWindow, runDeviationWindow } from './deviation-period'
+import { describeLateDates, isHandDeductionLine, lateDayReaderRunIds, lateDaysSuffix, registerRowReadByRun } from './late-days'
 import type { MoneyLineItemType } from './account-mapping'
 import { RECURRING_TEXT_SORT_ORDER, isTextRow } from './text-rows'
 import { computePremiumLines, premiumPayBasis } from './shift-premium-engine'
@@ -77,8 +78,11 @@ import {
   loadVariablePayRuns,
   payslipVariableVacationPay,
   previousVacationYearStart,
+  paidWithSalaryIssue,
+  paidWithSalaryIssueMessage,
   sammaloneVariablePay,
   vacationYearLabel,
+  variableVacationPaidWithSalary,
   type VariablePayRun,
 } from './variable-vacation-pay'
 import { vaxaStodRefundWarning } from './vaxa-stod'
@@ -114,6 +118,17 @@ interface WorkedDayRow {
   work_date: string
   start_time: string | null
   end_time: string | null
+  carried_to_run_id: string | null
+}
+
+/** The absence type a derived absence line prices. */
+const DERIVED_LINE_ABSENCE_TYPE: Record<DerivedLineItem['item_type'], string> = {
+  sick_karens: 'sick',
+  sick_day2_14: 'sick',
+  sick_day15_plus: 'sick',
+  vab: 'vab',
+  parental_leave: 'parental',
+  unpaid_leave: 'unpaid_leave',
 }
 interface BenefitRow {
   id: string
@@ -141,6 +156,7 @@ function engineLine(
     amount: number
     one_off_tax_percent?: number | null
     benefit_type?: string | null
+    settles_variable_vacation_pay?: boolean | null
   },
 ): CalculationLineItem {
   return {
@@ -153,6 +169,8 @@ function engineLine(
     isNetDeduction: row.is_net_deduction,
     oneOffTaxPercent: row.one_off_tax_percent ?? null,
     benefitType: row.benefit_type ?? null,
+    // Stored, not derived: the operator's word (variable-vacation-pay.ts).
+    ...(row.settles_variable_vacation_pay === true ? { settlesVariableVacationPay: true } : {}),
   }
 }
 
@@ -525,6 +543,16 @@ export async function runSalaryCalculation(
         paidLikeDaysOff(vacationDaysOff((sre.line_items || []) as Array<Record<string, unknown>>)) > 0,
     )
     .map((sre) => sre.employee.id as string)
+  // Late days (lib/salary/late-days.ts): register days from an earlier, already
+  // paid or declared period carried to this run, or to a run it corrects. The
+  // run deducts or pays them like its own days; a day carried elsewhere is
+  // never one of this window's days.
+  let readerRunIds: string[]
+  try {
+    readerRunIds = await lateDayReaderRunIds(supabase, companyId, run as { id: string; corrects_run_id?: string | null })
+  } catch (err) {
+    return { ok: false, code: 'DATABASE_ERROR', details: { reason: err instanceof Error ? err.message : String(err) } }
+  }
   const [absenceLoad, workedLoad, benefitsLoad, recurringLoad, variablePayLoad, procentregelnBasisLoad] = await Promise.allSettled([
     loadRunAbsence(supabase, {
       companyId,
@@ -535,22 +563,40 @@ export async function runSalaryCalculation(
       // The VAB and parental 120-date cap counts within the intjänandeår
       // (Semesterlagen 17 a §), which follows the company's semesterår basis.
       earningYearStart: getVacationYearStart(deviation.start, vacationYearBasis),
+      readerRunIds,
     }),
-    workedDayEmployeeIds.length === 0
-      ? Promise.resolve<WorkedDayRow[]>([])
-      : fetchAllRows<WorkedDayRow>(({ from, to }) =>
-          supabase
-            .from('salary_worked_days')
-            .select('employee_id, hours, work_date, start_time, end_time')
-            .eq('company_id', companyId)
-            .in('employee_id', workedDayEmployeeIds)
-            .gte('work_date', deviation.start)
-            .lte('work_date', deviation.end)
-            // (employee_id, work_date) is unique: a total order for paging.
-            .order('employee_id')
-            .order('work_date')
-            .range(from, to),
-        ),
+    Promise.all([
+      workedDayEmployeeIds.length === 0
+        ? Promise.resolve<WorkedDayRow[]>([])
+        : fetchAllRows<WorkedDayRow>(({ from, to }) =>
+            supabase
+              .from('salary_worked_days')
+              .select('employee_id, hours, work_date, start_time, end_time, carried_to_run_id')
+              .eq('company_id', companyId)
+              .in('employee_id', workedDayEmployeeIds)
+              .gte('work_date', deviation.start)
+              .lte('work_date', deviation.end)
+              // (employee_id, work_date) is unique: a total order for paging.
+              .order('employee_id')
+              .order('work_date')
+              .range(from, to),
+          ),
+      // Every employee's late hours, not only the roster's: hours carried here
+      // for an employee no longer on the run have no other reader.
+      fetchAllRows<WorkedDayRow>(({ from, to }) =>
+        supabase
+          .from('salary_worked_days')
+          .select('employee_id, hours, work_date, start_time, end_time, carried_to_run_id')
+          .eq('company_id', companyId)
+          .in('carried_to_run_id', readerRunIds)
+          .order('employee_id')
+          .order('work_date')
+          .range(from, to),
+      ),
+    ]).then(([windowRows, lateRows]) => [
+      ...windowRows.filter((row) => registerRowReadByRun(row, readerRunIds, true)),
+      ...lateRows.filter((row) => row.work_date < deviation.start || row.work_date > deviation.end),
+    ]),
     employeeIds.length === 0
       ? Promise.resolve<BenefitRow[]>([])
       : fetchAllRows<BenefitRow>(({ from, to }) =>
@@ -614,6 +660,49 @@ export async function runSalaryCalculation(
   if (procentregelnBasisLoad.status === 'rejected') return databaseError(procentregelnBasisLoad.reason)
   const absenceByEmployee = absenceLoad.value
   const workedDaysByEmployee = groupByEmployee(workedLoad.value)
+
+  // Late days carried to this run for an employee no longer on it (removed
+  // while a day was being carried): no other run reads them, so the run is
+  // refused by name until the employee is back or the days are gone.
+  const onRun = new Set(employeeIds)
+  const strandedDates = new Map<string, string[]>()
+  for (const [employeeId, rows] of absenceByEmployee) {
+    if (!onRun.has(employeeId) && rows.lateDays.length > 0) strandedDates.set(employeeId, rows.lateDays.map((d) => d.absence_date))
+  }
+  for (const [employeeId, rows] of workedDaysByEmployee) {
+    if (onRun.has(employeeId)) continue
+    const late = rows.filter((d) => d.carried_to_run_id).map((d) => d.work_date)
+    if (late.length > 0) strandedDates.set(employeeId, [...(strandedDates.get(employeeId) ?? []), ...late])
+  }
+  if (strandedDates.size > 0) {
+    const { data: names } = await supabase
+      .from('employees')
+      .select('id, first_name, last_name')
+      .eq('company_id', companyId)
+      .in('id', Array.from(strandedDates.keys()))
+    const nameOf = new Map(
+      ((names ?? []) as Array<{ id: string; first_name: string | null; last_name: string | null }>).map((e) => [
+        e.id,
+        `${e.first_name ?? ''} ${e.last_name ?? ''}`.trim(),
+      ]),
+    )
+    return {
+      ok: false,
+      code: 'VALIDATION_ERROR',
+      details: {
+        reason: 'late_days_without_payslip',
+        issues: Array.from(strandedDates.entries()).map(
+          ([employeeId, dates]) =>
+            `${nameOf.get(employeeId) || employeeId}: dagar från en tidigare period (${describeLateDates(dates)}) är knutna till lönekörningen, ` +
+            'men den anställde finns inte på den. Lägg till den anställde igen, eller ta bort dagarna.',
+        ),
+      },
+    }
+  }
+  // Only the roster's hourly and premium employees price worked days.
+  for (const employeeId of Array.from(workedDaysByEmployee.keys())) {
+    if (!workedDayEmployeeIds.includes(employeeId)) workedDaysByEmployee.delete(employeeId)
+  }
   const benefitsByEmployee = groupByEmployee(benefitsLoad.value)
   const recurringByEmployee = groupByEmployee(recurringLoad.value)
   const variablePayRunsByEmployee = variablePayLoad.value
@@ -630,6 +719,11 @@ export async function runSalaryCalculation(
   // Surfaced as warnings: UI / agent shows alongside the successful
   // calculation, not an error.
   const lakarintygEmployees: string[] = []
+  // Employees with late days (lib/salary/late-days.ts): priced with this run's pay.
+  const lateDayEmployees: string[] = []
+  // On a correction: late absence next to a hand-typed deduction copied from
+  // the paid run, which would deduct the same days twice.
+  const handLinesBesideLateDays: string[] = []
   const fkReportingEmployees: string[] = []
   const hourlyKarensEmployees: string[] = []
   const doubleBenefitAdjustments: string[] = []
@@ -644,6 +738,9 @@ export async function runSalaryCalculation(
   // collected for the whole roster, then refused together before anything
   // is written.
   const vacationPayIssues: Array<{ employee: string; message: string; message_en: string }> = []
+  // Rows of semesterlön for rörliga lönedelar paid with the salary that the
+  // calculation cannot accept (variable-vacation-pay.ts paidWithSalaryIssue).
+  const variableVacationPayWithSalaryIssues: Array<{ employee: string; message: string; message_en: string }> = []
 
   // What the loop decides to write. Nothing is written until every employee
   // is priced (step 9), so a refusal part-way leaves the run as it was.
@@ -723,9 +820,13 @@ export async function runSalaryCalculation(
     //     For all employees (when premium rules exist), the same rows feed
     //     the shift-premium engine in 8z below.
     let derivedHoursWorked: number | null = null
+    // The hours step 8f prices: the period's own (calendar, or the total set
+    // on the run row) and the late hours carried to the run.
+    let pricedHours = 0
     let workedDayRows: Array<{ work_date: string; hours: number; start_time: string | null; end_time: string | null }> = []
+    const employeeWorkedDays = workedDaysByEmployee.get(emp.id) ?? []
     if (emp.salary_type === 'hourly' || premiumRules.length > 0) {
-      workedDayRows = (workedDaysByEmployee.get(emp.id) ?? []).map((d) => ({
+      workedDayRows = employeeWorkedDays.map((d) => ({
         hours: d.hours,
         work_date: d.work_date,
         start_time: d.start_time,
@@ -735,26 +836,31 @@ export async function runSalaryCalculation(
     // Rows derived for this employee, in the order they are inserted.
     const hourlyLineRows: Array<Record<string, unknown>> = []
     if (emp.salary_type === 'hourly') {
-      derivedHoursWorked = workedDayRows.reduce(
-        (sum, d) => Math.round((sum + Number(d.hours)) * 100) / 100,
-        0,
-      )
+      // Late hours (lib/salary/late-days.ts) are paid on top of the period's
+      // own: they never replace the total set on the run row, and they are
+      // not the period's hours, so the hours_worked snapshot leaves them out.
+      const ownDays = employeeWorkedDays.filter((d) => !d.carried_to_run_id)
+      const lateDays = employeeWorkedDays.filter((d) => d.carried_to_run_id)
+      derivedHoursWorked = ownDays.reduce((sum, d) => roundOre(sum + Number(d.hours)), 0)
+      const lateHours = lateDays.reduce((sum, d) => roundOre(sum + Number(d.hours)), 0)
       opLog.info('Derived hours_worked from calendar', {
         employeeId: emp.id,
         periodStart: deviation.start,
         periodEnd: deviation.end,
-        rowCount: workedDayRows.length,
+        rowCount: ownDays.length,
         derivedHoursWorked,
+        lateRowCount: lateDays.length,
+        lateHours,
       })
 
       // Refresh the hourly_salary line item so the displayed Lönerader table
       // matches what the engine actually calculated: the calendar's hours,
       // or without calendar days the period's total set on the run row
-      // (accounted#1), the same hours step 8f prices. One Timlön line with
-      // the total either way.
+      // (accounted#1), plus the late hours, the same hours step 8f prices.
+      // One Timlön line with the total either way.
       // The rate and an account chosen on the line stay on it: the payslip
       // prints the à-pris, and the booking posts the line on its account.
-      const pricedHours = derivedHoursWorked > 0 ? derivedHoursWorked : Number(sre.hours_worked) || 0
+      pricedHours = roundOre((derivedHoursWorked > 0 ? derivedHoursWorked : Number(sre.hours_worked) || 0) + lateHours)
       if (pricedHours > 0 && (emp.hourly_rate || 0) > 0) {
         const baseAmount =
           Math.round((emp.hourly_rate as number) * pricedHours * 100) / 100
@@ -766,7 +872,12 @@ export async function runSalaryCalculation(
           salary_run_employee_id: sre.id,
           company_id: companyId,
           item_type: 'hourly_salary',
-          description: 'Timlön',
+          description:
+            'Timlön' +
+            lateDaysSuffix(
+              lateDays.map((d) => d.work_date),
+              ownDays.length === 0 && !(Number(sre.hours_worked) > 0),
+            ),
           quantity: pricedHours,
           unit_price: emp.hourly_rate,
           amount: baseAmount,
@@ -805,6 +916,14 @@ export async function runSalaryCalculation(
     }
 
     const employeeName = `${emp.first_name} ${emp.last_name}`
+    if ((absenceByEmployee.get(emp.id)?.lateDays.length ?? 0) > 0 || employeeWorkedDays.some((d) => d.carried_to_run_id)) {
+      lateDayEmployees.push(employeeName)
+    }
+    if ((run as { corrects_run_id?: string | null }).corrects_run_id && (absenceByEmployee.get(emp.id)?.lateDays.length ?? 0) > 0) {
+      for (const li of (sre.line_items || []) as Array<Record<string, unknown>>) {
+        if (isHandDeductionLine(li)) handLinesBesideLateDays.push(`${employeeName} ("${String(li.description ?? '')}")`)
+      }
+    }
     if (absenceResult.flagLakarintyg) lakarintygEmployees.push(employeeName)
     if (absenceResult.flagFkReporting) fkReportingEmployees.push(employeeName)
     // An hourly employee's karensavdrag rests on the weekly hours registered
@@ -867,11 +986,28 @@ export async function runSalaryCalculation(
       }
     })
 
-    // 8c. Derived absence rows.
+    // 8c. Derived absence rows. A line whose days include late days names
+    //     their dates, so the payslip shows why an earlier month's absence is
+    //     deducted here (lib/salary/late-days.ts).
+    const employeeAbsence = absenceByEmployee.get(emp.id)
+    const lateDescription = (itemType: DerivedLineItem['item_type']): string => {
+      // A karensavdrag names the first day of its sjuklöneperiod, which says
+      // which period it belongs to; the late dates may be another period's.
+      if (itemType === 'sick_karens') return ''
+      const absenceType = DERIVED_LINE_ABSENCE_TYPE[itemType]
+      const late = (employeeAbsence?.lateDays ?? []).filter((d) => d.absence_type === absenceType)
+      if (late.length === 0) return ''
+      const all = (employeeAbsence?.periodDays ?? []).filter((d) => d.absence_type === absenceType)
+      return lateDaysSuffix(
+        late.map((d) => d.absence_date),
+        all.length === late.length,
+      )
+    }
     const absenceRows = absenceResult.lineItems.map((li, idx) => ({
       salary_run_employee_id: sre.id,
       company_id: companyId,
       ...li,
+      description: li.description + lateDescription(li.item_type),
       amount: Math.round(li.amount * 100) / 100,
       account_number: null,
       sort_order: 100 + idx,
@@ -962,6 +1098,7 @@ export async function runSalaryCalculation(
         amount: li.amount as number,
         one_off_tax_percent: li.one_off_tax_percent as number | null | undefined,
         benefit_type: li.benefit_type as string | null | undefined,
+        settles_variable_vacation_pay: li.settles_variable_vacation_pay === true,
       })
     })
     const lineItems = [
@@ -1044,13 +1181,33 @@ export async function runSalaryCalculation(
       if (vacationPay.rows.length > 0) vacationDaysPayEmployees.push(employeeName)
     }
 
+    // 8e0b. Semesterlön for rörliga lönedelar paid with the salary under a
+    //       kollektivavtal (variable-vacation-pay.ts): only under
+    //       sammalöneregeln, above 0 kr, and no more than this payslip's own
+    //       variable pay earns, since a larger payment would be paid again
+    //       after the semesterår. Refused by name below.
+    const paidWithSalaryProblem = paidWithSalaryIssue({
+      vacationRule: emp.vacation_rule,
+      lines: lineItems,
+      variablePay: sammaloneVariablePay(lineItems),
+      rate: resolveVacationPayRate(emp.vacation_days_per_year, emp.vacation_pay_rate),
+    })
+    if (paidWithSalaryProblem) {
+      variableVacationPayWithSalaryIssues.push({
+        employee: employeeName,
+        ...paidWithSalaryIssueMessage(paidWithSalaryProblem),
+      })
+      continue
+    }
+
     // 8e1. Semesterlön för rörliga lönedelar (Semesterlagen 16 a § tredje
     //      stycket, 26 § andra stycket, 29 §): under sammalöneregeln the
     //      variable pay that fell due during the semesterår earns the
     //      semesterlön percentage, paid in the first run after the year ends,
     //      or with the final pay when the employment has ended. Derived from
     //      the other payslips every calculation (nothing is stored but the
-    //      row), less what an earlier payslip of the year already paid. The
+    //      row), less what an earlier payslip of the year already paid, by
+    //      this payout or with the salary under a kollektivavtal. The
     //      row carries the engine's provenance, so the next calculation
     //      replaces it like the semesterersättning row (step 9c).
     const variableVacationPayRows: Array<Record<string, unknown>> = []
@@ -1064,6 +1221,7 @@ export async function runSalaryCalculation(
         runs: variablePayRunsByEmployee.get(emp.id) ?? [],
         finalSettlement,
         thisRunVariablePay: sammaloneVariablePay(lineItems),
+        thisRunPaidWithSalary: variableVacationPaidWithSalary(lineItems),
       })
       const amount = variable.owed.unpaid
       if (amount > 0) {
@@ -1134,10 +1292,7 @@ export async function runSalaryCalculation(
         salaryType: emp.salary_type,
         monthlySalary: runMonthlySalary || 0,
         hourlyRate: emp.hourly_rate || undefined,
-        hoursWorked:
-          derivedHoursWorked !== null && derivedHoursWorked > 0
-            ? derivedHoursWorked
-            : sre.hours_worked || undefined,
+        hoursWorked: hourlyPay ? pricedHours || undefined : sre.hours_worked || undefined,
         employmentDegree: emp.employment_degree,
         taxTableNumber: emp.tax_table_number,
         taxColumn: emp.tax_column || 1,
@@ -1339,6 +1494,15 @@ export async function runSalaryCalculation(
       messageEn: vacationPayIssues.map((issue) => `${issue.employee}: ${issue.message_en}`).join(' '),
     }
   }
+  if (variableVacationPayWithSalaryIssues.length > 0) {
+    return {
+      ok: false,
+      code: 'SALARY_RUN_VARIABLE_VACATION_PAY_WITH_SALARY_INVALID',
+      details: { reason: 'variable_vacation_pay_with_salary_invalid', issues: variableVacationPayWithSalaryIssues },
+      messageSv: variableVacationPayWithSalaryIssues.map((issue) => `${issue.employee}: ${issue.message}`).join(' '),
+      messageEn: variableVacationPayWithSalaryIssues.map((issue) => `${issue.employee}: ${issue.message_en}`).join(' '),
+    }
+  }
 
   // 9. Write what the loop derived. Every employee was priced without a
   //    refusal, so from here the writes are the whole calculation: a handful
@@ -1538,6 +1702,26 @@ export async function runSalaryCalculation(
     warnings.push(
       `Försäkringskassan tar över sjuklön från dag 15: ${fkReportingEmployees.join(', ')}. ` +
         `Säkerställ att anmälan till FK är gjord.`,
+    )
+  }
+  if (lateDayEmployees.length > 0) {
+    warnings.push(
+      `Dagar från en tidigare period räknas med den här körningens lön, lönetyp, sysselsättningsgrad och schema: ${lateDayEmployees.join(', ')}. ` +
+        'Har något av det ändrats sedan dagarna inträffade, justera skillnaden med en egen rad på lönebeskedet.',
+    )
+    // A correction takes late days only to replace a deduction typed by hand
+    // into the paid run it corrects (lib/salary/late-days.ts).
+    if ((run as { corrects_run_id?: string | null }).corrects_run_id) {
+      warnings.push(
+        'Dagarna från en tidigare period dras här i en rättelse av en utbetald körning. Det stämmer bara när samma avdrag redan gjordes för hand ' +
+          'i den utbetalda körningen och den raden tas bort här; annars ska dagarna dras i nästa ordinarie lönekörning.',
+      )
+    }
+  }
+  if (handLinesBesideLateDays.length > 0) {
+    warnings.push(
+      `Den handskrivna avdragsraden från den utbetalda körningen finns kvar bredvid dagarna från en tidigare period: ${handLinesBesideLateDays.join(', ')}. ` +
+        'Gäller raden samma dagar, ta bort den och beräkna om, annars dras dagarna två gånger.',
     )
   }
   if (hourlyKarensEmployees.length > 0) {

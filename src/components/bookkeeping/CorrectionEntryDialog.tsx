@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo, useRef } from 'react'
-import { useRouter } from 'next/navigation'
+import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import {
   Dialog,
@@ -64,7 +64,6 @@ interface Props {
 
 export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCorrected }: Props) {
   const { toast } = useToast()
-  const router = useRouter()
   const t = useTranslations('journal_detail')
   // The full chart (deactivated rows included) comes from the session cache
   // (lib/reference-data); only the static BAS catalogue is loaded per open,
@@ -318,8 +317,8 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
         title: 'Ändringsverifikation skapad',
         description: 'Storno och rättelse har bokförts.',
         action: correctedId ? (
-          <Button variant="outline" onClick={() => router.push(`/bookkeeping/${correctedId}`)}>
-            Visa rättelsen
+          <Button variant="outline" asChild>
+            <Link href={`/bookkeeping/${correctedId}`}>Visa rättelsen</Link>
           </Button>
         ) : undefined,
       })

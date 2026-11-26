@@ -102,6 +102,7 @@ export const GENERAL_SETTINGS_FIELDS = [
   'invoice_late_fee_text_en',
   'invoice_credit_terms_text_en',
   'invoice_payment_links_enabled',
+  'invoice_send_order',
   'invoice_email_texts',
   'invoice_email_cc_addresses',
   'invoice_email_bcc_addresses',
@@ -269,7 +270,7 @@ const SettingsResource = z.object({
   ),
   ...Object.fromEntries(
     [
-      'invoice_payment_accounts', 'invoice_email_texts', 'invoice_email_cc_addresses', 'invoice_email_bcc_addresses',
+      'invoice_payment_accounts', 'invoice_send_order', 'invoice_email_texts', 'invoice_email_cc_addresses', 'invoice_email_bcc_addresses',
       'reminder_text_overrides', 'default_voucher_series_per_source_type', 'voucher_series_labels',
     ].map((key) => [key, json]),
   ),

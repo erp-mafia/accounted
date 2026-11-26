@@ -1,7 +1,7 @@
 /**
  * The proposal-posted-verifikat guard catches a posted verifikat read off a
- * staged preview by name, and leaves the reader's own call and other uses of
- * the same words alone.
+ * staged preview by name, or a registration worked out beside the approval,
+ * and leaves the reader's own calls and other uses of the same words alone.
  */
 import { describe, it, expect } from 'vitest'
 import { findRuleLines } from '../one-definition.mjs'
@@ -15,6 +15,7 @@ describe('proposal-posted-verifikat', () => {
     'const rows = preview.expected_lines ?? []',
     'const lines = (op.preview_data?.corrected as Entry).lines',
     'const posted = [record(data.correction), record(data.reversal)].find((entry) => isPostingLines(entry.lines))',
+    'const lines = supplierInvoiceRegistrationLines(header, items, supplierType, \'\', chart)',
   ])('catches %s', (line) => {
     expect(hits(line)).toBe(true)
   })
@@ -23,6 +24,7 @@ describe('proposal-posted-verifikat', () => {
     'const posted = postedVerifikat(op.preview_data)',
     '{preview.verifikat.map(({ lines, listed }, index) => (',
     'row.storno -= net',
+    'const answer = await askBuiltVerifikat(op).answer',
   ])('leaves %s', (line) => {
     expect(hits(line)).toBe(false)
   })

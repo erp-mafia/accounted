@@ -1439,6 +1439,36 @@ describe('PUT /api/settings', () => {
     expect(response.status).toBe(400)
   })
 
+  it.each([[['kivra', 'email']], [null]])('accepts the send order %j', async (value) => {
+    enqueueMany([
+      { data: { onboarding_complete: true } }, // oldSettings
+      { data: { company_id: 'company-1', invoice_send_order: value } }, // update result
+    ])
+
+    const request = createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { invoice_send_order: value },
+    })
+    const response = await PUT(request, { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{ data: { invoice_send_order: string[] | null } }>(response)
+
+    expect(status).toBe(200)
+    expect(findCall('company_settings', 'update')?.[0]).toEqual({ invoice_send_order: value })
+    expect(body.data.invoice_send_order).toEqual(value)
+  })
+
+  it('rejects a send order with an unknown way, a duplicate or no way', async () => {
+    for (const value of [['fax'], ['email', 'email'], []]) {
+      const request = createMockRequest('/api/settings', {
+        method: 'PUT',
+        body: { invoice_send_order: value },
+      })
+      const response = await PUT(request, { params: Promise.resolve({}) })
+
+      expect(response.status).toBe(400)
+    }
+  })
+
   it('rejects an invoice QR mode that is not one of the modes', async () => {
     for (const value of ['all', null, true]) {
       enqueueMany([

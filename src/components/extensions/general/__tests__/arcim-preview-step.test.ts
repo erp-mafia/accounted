@@ -248,6 +248,8 @@ describe('sieErrorRemedy', () => {
     [{ code: 'PROVIDER_UPSTREAM_ERROR' }, { kind: 'unavailable', action: 'retry', file: 'provider' }],
     [{ code: 'PROVIDER_UNREACHABLE' }, { kind: 'unavailable', action: 'retry', file: 'provider' }],
     [{ code: 'PROVIDER_SIE_FETCH_FAILED' }, { kind: 'failed', action: 'retry', file: 'provider' }],
+    // A timed-out export keeps the sentence it had: nothing says the next one passes.
+    [{ code: 'PROVIDER_TIMEOUT' }, { kind: 'failed', action: 'retry', file: 'provider' }],
     [{ code: 'PROVIDER_CONFIGURATION_ERROR' }, { kind: 'failed', action: 'retry', file: 'provider' }],
   ])('%o asks for %o', (sieError, remedy) => {
     expect(sieErrorRemedy(sieError)).toEqual(remedy)

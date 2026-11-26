@@ -10,6 +10,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import { createMockRequest, parseJsonResponse } from '@/tests/helpers'
 
+// Route path ids are uuids: the route answers its 404 to anything else before it reads.
+const TPL_1 = '3c380973-6ccf-51a3-b257-7056cfd8f618'
+
 const requireAuthMock = vi.fn()
 vi.mock('@/lib/auth/require-auth', () => ({
   requireAuth: (...args: unknown[]) => requireAuthMock(...args),
@@ -61,10 +64,10 @@ function createCapturingSupabase(results: { data?: unknown; error?: unknown }[])
   }
 }
 
-const idParams = { params: Promise.resolve({ id: 'tpl-1' }) }
+const idParams = { params: Promise.resolve({ id: TPL_1 }) }
 
 const SYSTEM_TEMPLATE = {
-  data: { id: 'tpl-1', is_system: true, is_active: true },
+  data: { id: TPL_1, is_system: true, is_active: true },
 }
 
 beforeEach(() => {
@@ -77,7 +80,7 @@ function auth(supabase: unknown) {
 }
 
 function req(method: 'POST' | 'DELETE') {
-  return createMockRequest('/api/settings/booking-templates/tpl-1/hide', { method })
+  return createMockRequest(`/api/settings/booking-templates/${TPL_1}/hide`, { method })
 }
 
 describe('POST /api/settings/booking-templates/[id]/hide', () => {
@@ -110,7 +113,7 @@ describe('POST /api/settings/booking-templates/[id]/hide', () => {
 
   it('returns 404 for a retired (inactive) template', async () => {
     const { supabase, calls } = createCapturingSupabase([
-      { data: { id: 'tpl-1', is_system: true, is_active: false } },
+      { data: { id: TPL_1, is_system: true, is_active: false } },
     ])
     auth(supabase)
     const { status } = await parseJsonResponse(await POST(req('POST'), idParams))
@@ -120,7 +123,7 @@ describe('POST /api/settings/booking-templates/[id]/hide', () => {
 
   it('returns 400 for a non-system template', async () => {
     const { supabase, calls } = createCapturingSupabase([
-      { data: { id: 'tpl-1', is_system: false, is_active: true } },
+      { data: { id: TPL_1, is_system: false, is_active: true } },
     ])
     auth(supabase)
     const { status } = await parseJsonResponse(await POST(req('POST'), idParams))
@@ -145,7 +148,7 @@ describe('POST /api/settings/booking-templates/[id]/hide', () => {
     expect(status).toBe(200)
     const upsert = calls.find((c) => c.method === 'upsert')
     expect(upsert?.args[0]).toEqual({
-      template_id: 'tpl-1',
+      template_id: TPL_1,
       company_id: 'company-1',
       hidden_by: 'user-1',
     })
@@ -192,7 +195,7 @@ describe('DELETE /api/settings/booking-templates/[id]/hide', () => {
     const { status } = await parseJsonResponse(await DELETE(req('DELETE'), idParams))
     expect(status).toBe(200)
     const eqCalls = calls.filter((c) => c.method === 'eq').map((c) => c.args)
-    expect(eqCalls).toContainEqual(['template_id', 'tpl-1'])
+    expect(eqCalls).toContainEqual(['template_id', TPL_1])
     expect(eqCalls).toContainEqual(['company_id', 'company-1'])
   })
 })

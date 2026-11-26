@@ -167,6 +167,11 @@
   .bks-host:has(> .theater) > .jny-qstep > :last-child { margin-bottom: 0; }
   .bks-host > .theater { flex: 1 1 auto; display: flex; flex-direction: column; }
   .bks-host > .theater > .th-stage { flex: 1 1 0; height: auto; min-height: 280px; max-height: 490px; }
+  /* The books are in (sources arrangement): the way on stands over the theater, and the settled stage may be lower so the summary under it stays in the window. */
+  .bks-host.is-done > .theater > .th-stage { min-height: 200px; }
+  /* The title and the way on keep their height: the stage is what gives. */
+  .bks-host.is-done > .jny-qstep { flex: none; }
+  .bks-host.is-done > .jny-qstep > .jny-qactions { margin: 18px 0 8px; }
 }
 
 /* ── waiting ──────────────────────────────────────────────────────── */
@@ -196,21 +201,28 @@
 
 /* ── Skatteverket: the button folds, the thread, the handshake ────── */
 .jny-bankid { font-family: inherit; cursor: pointer; }
-.jny-bankid-txt { display: inline-block; max-width: 160px; overflow: hidden; white-space: nowrap; transition: max-width 300ms var(--ease-emphasized), opacity 150ms var(--ease-out); }
+.jny-bankid-txt { display: inline-block; max-width: 320px; overflow: hidden; text-align: left; transition: max-width 300ms var(--ease-emphasized), opacity 150ms var(--ease-out); }
+/* the step's main action in the sources arrangement: the dark primary, the size of a large Button */
+.jny-bankid.is-primary { height: 44px; padding: 0 20px; border: 0; background: hsl(var(--primary) / 0.88); color: hsl(var(--primary-foreground)); font-weight: 500; }
+.jny-bankid.is-primary:hover, .jny-bankid.is-primary:active { background: hsl(var(--primary) / 0.8); }
+.jny-bankid.is-primary:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 2px; }
+.jny-bankid.is-primary.is-fold { height: auto; padding: 6px; }
 .jny-bankid.is-fold { gap: 0; padding: 6px; border-color: transparent; background: transparent; transition: gap 300ms var(--ease-emphasized), padding 300ms var(--ease-emphasized), border-color 150ms var(--ease-out), background-color 150ms var(--ease-out); animation: skv-go 300ms var(--ease-out) 300ms both; pointer-events: none; }
-.jny-bankid.is-fold .jny-bankid-txt { max-width: 0; opacity: 0; }
+.jny-bankid.is-fold .jny-bankid-txt { max-width: 0; opacity: 0; white-space: nowrap; }
 @keyframes skv-go { to { opacity: 0; transform: translateX(150px); } }
 .skv-body .jny-qsub { transition: opacity 300ms var(--ease-out); }
 .skv-body.is-away .jny-qsub { opacity: 0; }
 .jny-qactions .is-away { opacity: 0; transition: opacity 300ms var(--ease-out); pointer-events: none; }
 .skv-stage { display: flex; justify-content: center; margin: 2px auto 0; animation: jnyQIn 300ms var(--ease-emphasized); }
+/* the mark above the title, with no hold line of its own: the room under the chip and over its ring is given back */
+.skv-stage.is-compact .stamp { margin: -14px 0 -50px; }
 /* stämpeln: one mark, a slow waiting ring, then the sage ring drawn around it in one stroke */
 .stamp { overflow: visible; max-width: 100%; margin: 6px 0 2px; }
 .stamp .chip { fill: hsl(var(--background)); stroke: hsl(var(--border)); stroke-width: 1; opacity: 0; transform-origin: 120px 88px; }
-.stamp.is-away .chip, .stamp.is-back .chip { animation: stamp-in 300ms var(--ease-emphasized) both; }
+.stamp.is-idle .chip, .stamp.is-away .chip, .stamp.is-back .chip { animation: stamp-in 300ms var(--ease-emphasized) both; }
 @keyframes stamp-in { from { opacity: 0; transform: scale(0.8); } to { opacity: 1; transform: scale(1); } }
 .stamp .mark { opacity: 0; transform-origin: 120px 88px; }
-.stamp.is-away .mark, .stamp.is-back .mark { animation: stamp-in 300ms var(--ease-emphasized) 80ms both; }
+.stamp.is-idle .mark, .stamp.is-away .mark, .stamp.is-back .mark { animation: stamp-in 300ms var(--ease-emphasized) 80ms both; }
 .stamp .wait { fill: none; stroke: hsl(var(--muted-foreground)); stroke-width: 1; stroke-dasharray: 2 6; stroke-linecap: round; opacity: 0; transform-origin: 120px 88px; }
 .stamp.is-away .wait { animation: stamp-wait-in 300ms var(--ease-out) 300ms both, stamp-turn 14s linear infinite; }
 .stamp.is-back .wait { animation: skv-fade-out 300ms var(--ease-out) both; }
@@ -278,6 +290,12 @@
 .bankgrid .pmark img { width: 22px; height: 22px; }
 .bankgrid .pill span.lbl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bankgrid .pill.is-text { justify-content: center; }
+/* The common banks on the pick step: logo and name, wrapping to the width. */
+.bank-common { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; max-width: 560px; margin: 0 auto; }
+.bank-common .pill { padding: 7px 14px 7px 7px; min-height: 44px; text-align: left; }
+.bank-common .pill .pmark { width: 30px; height: 30px; }
+.bank-common .pmark img { width: 22px; height: 22px; }
+.bank-common .pill span.lbl { min-width: 0; line-height: 1.25; }
 .bank-picker-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin: 0 auto 12px; }
 .bank-list { max-height: 40dvh; overflow-y: auto; overscroll-behavior: contain; padding: 4px; }
 @media (max-width: 560px) { .bankgrid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
@@ -286,7 +304,11 @@
 .imp-tools .jny-qhelp { vertical-align: middle; }
 /* one column of actions: the primary alone, the quiet choice under it */
 .jny-qactions.is-stack { flex-direction: column; gap: 14px; }
+/* the way on standing over the detail under it: air on both sides of the button */
+.jny-qactions.is-first { margin-top: 22px; margin-bottom: 24px; }
 /* Tillbaka for the whole act: the page's top left corner, level with the rail, one place on every step */
+/* Once the books are in, the step has its own way on: the skip is not offered beside it. */
+.bks:has(.bks-host.is-done) .bks-skip { visibility: hidden; }
 .bks-backrow { position: sticky; top: 0; z-index: 3; align-self: stretch; background: hsl(var(--background)); display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .imp-info { max-width: 480px; margin: 10px auto 0; font-size: 12.5px; line-height: 1.55; color: hsl(var(--muted-foreground)); animation: jnyQIn 300ms var(--ease-emphasized); }
 
@@ -361,3 +383,16 @@ body.bks-theater [data-onboarding-backdrop] { opacity: 0.3; }
   .bks *, .bks *::before, .bks *::after { animation-duration: 0.01ms !important; animation-delay: 0ms !important; transition-duration: 0.01ms !important; }
   .stamp.is-away .wait { animation: none; opacity: 0.55; }
 }
+
+/* Six stations on the rail (the arrangement with the AI and receipts steps): a wider band and narrower labels so neighbours never overlap. */
+.bks-six .jny-journey { width: min(760px, 94vw); }
+/* Six stops: each takes at most a sixth of the rail, so the last one stays inside a phone screen. */
+.bks-six .jny-pt { width: min(120px, 15vw); }
+
+/* The bank step's way on without a bank is a whole sentence. On a screen
+   narrower than the sentence (a phone) it wraps onto a second line and
+   never widens the page; on a wider one it is the one line, at the height,
+   it was. */
+.bks .bank-manual { height: auto; min-height: 1.75rem; max-width: 100%; white-space: normal; text-align: center; }
+/* the receipts step lists the mailbox rows inline, left aligned like the other hosted lists */
+.docs-list { text-align: left; max-width: 560px; margin: 0 auto; }

@@ -43,6 +43,20 @@ import type { PaymentOrderRow } from './types'
 export const DEBIT_WINDOW_DAYS_BEFORE = 1
 export const DEBIT_WINDOW_DAYS_AFTER = 3
 
+/**
+ * The bank feeds whose debits may move a payment order without a person: rows
+ * the bank's own API delivered. The status sync's sweep reads only these, and
+ * only for these is an order's link written with the service role
+ * (auto-settle's orderWriter); a bank file a person uploads never moves an
+ * order with privileges the person does not have.
+ */
+export const DEBIT_FEEDS = ['open_payments', 'enable_banking'] as const
+
+/** Whether the debit came from one of DEBIT_FEEDS. */
+export function isBankFeedDebit(debit: Pick<Transaction, 'import_source'>): boolean {
+  return (DEBIT_FEEDS as readonly string[]).includes(debit.import_source ?? '')
+}
+
 /** Orders whose own debit may settle them without a person: signed at the bank, not yet matched. */
 export const DEBIT_SETTLEABLE_ORDER_STATUSES: readonly PaymentOrderStatus[] = [
   'accepted',

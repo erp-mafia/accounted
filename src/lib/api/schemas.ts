@@ -130,6 +130,7 @@ import {
 } from '@/lib/invoices/recurring-placeholders'
 import { stockholmYearMonth, todayIsoStockholm } from '@/lib/dates/iso'
 import { lineQuantityIssue, LINE_QUANTITY_MESSAGES } from '@/lib/invoices/line-quantity'
+import { SEND_ORDER_WAYS } from '@/lib/invoices/send-order'
 
 export const SIECreateAccountsSchema = z.object({
   accounts: z.array(z.object({ number: accountNumberSchema, name: z.string().max(500) })).min(1).max(10_000),
@@ -4235,6 +4236,15 @@ export const UpdateSettingsSchema = z.object({
   // Opt-in for the invoice payment-link feature (editor field + automatic
   // Stripe link on send). Default off at the DB level.
   invoice_payment_links_enabled: z.boolean().optional(),
+  // The ways invoices go out, in the order the editor tries them: a non-empty
+  // list of distinct ways; null clears the order.
+  invoice_send_order: z
+    .array(z.enum(SEND_ORDER_WAYS))
+    .min(1)
+    .refine((ways) => new Set(ways).size === ways.length, { message: 'Each way may appear once.' })
+    .nullable()
+    .optional()
+    .describe('The order invoices are sent in: peppol, kivra, billo, email, each at most once. The invoice editor picks the first way in the list that the invoice can use. Null clears the order.'),
   // Editable invoice email texts: { sv?: {...}, en?: {...} }; null clears
   // all overrides. Without this entry the generic PUT would silently strip
   // the field (the schema is the de-facto column whitelist).
@@ -5948,13 +5958,22 @@ export const CreateSalaryLineItemSchema = z.object({
   // Origin year of the sparade dagar a 'saved' line consumes. Omitted = the
   // oldest saved year first (the one that expires first).
   vacation_saved_year: fiscalYearSchema.nullable().optional(),
+  // Semesterlön for rörliga lönedelar paid with this salary
+  // (lib/salary/variable-vacation-pay.ts): only on a positive
+  // semesterersattning row of an employee on sammalöneregeln. true is the
+  // caller's confirmation that a central kollektivavtal lets it be paid with
+  // the salary (Semesterlagen 2 a § andra stycket), recorded in audit_log.
+  // The calculation then counts the row as already paid.
+  settles_variable_vacation_pay: z.boolean().optional(),
 })
 
 // account_number is an override only (lib/salary/account-mapping.ts): null
 // drops a stored override so the line books on the default the booking
-// resolves from the item type and the employee.
+// resolves from the item type and the employee. settles_variable_vacation_pay
+// is set when the line is added, with its confirmation: a changed mind is a
+// deleted line and a new one.
 export const UpdateSalaryLineItemSchema = CreateSalaryLineItemSchema.partial()
-  .omit({ salary_run_employee_id: true })
+  .omit({ salary_run_employee_id: true, settles_variable_vacation_pay: true })
   .extend({ account_number: accountNumber.nullable().optional() })
 
 // ── Absence (frånvaro) per-day records ──────────────────────────────
@@ -6733,6 +6752,9 @@ export const CreateSalesOrderSchema = z.object({
   currency: CurrencySchema.optional(),
   your_reference: z.string().max(200).nullable().optional(),
   our_reference: z.string().max(200).nullable().optional(),
+  // Märkning for the order's invoices, the same 200 as on the invoice. Null
+  // or blank leaves each invoice to the customer card's.
+  invoice_marking: z.string().max(200).nullable().optional(),
   notes: z.string().max(4000).nullable().optional(),
   default_dimensions: DimensionsBagSchema.optional(),
   items: z.array(SalesOrderItemSchema).min(1, 'Minst en orderrad krävs').max(500),

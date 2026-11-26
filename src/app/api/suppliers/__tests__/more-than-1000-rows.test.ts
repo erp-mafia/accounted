@@ -11,6 +11,9 @@ import {
   parseJsonResponse,
 } from '@/tests/helpers'
 
+// Route path ids are uuids: the route answers its 404 to anything else before it reads.
+const S_1 = 'ef740adb-d54a-5738-9f2f-ad3dafa845ac'
+
 let mock = createPagedMockSupabase()
 vi.mock('@/lib/supabase/server', () => ({
   createClient: () => Promise.resolve(mock.supabase),
@@ -57,11 +60,11 @@ describe('supplier lists past 1,000 rows', () => {
 
   it("GET /api/suppliers/[id] counts and sums every one of the supplier's invoices", async () => {
     withTables({
-      suppliers: [{ id: 's-1', name: 'Alfa AB' }],
+      suppliers: [{ id: S_1, name: 'Alfa AB' }],
       supplier_invoices: manyRows(1001, () => ({ status: 'approved', total: 100, remaining_amount: 100, paid_amount: 0, currency: 'SEK' })),
     })
 
-    const res = await getSupplier(createMockRequest('/api/suppliers/s-1'), { params: Promise.resolve({ id: 's-1' }) })
+    const res = await getSupplier(createMockRequest(`/api/suppliers/${S_1}`), { params: Promise.resolve({ id: S_1 }) })
     const { status, body } = await parseJsonResponse<{ data: { stats: { invoice_count: number; by_currency: Array<{ total_outstanding: number }> } } }>(res)
 
     expect(status).toBe(200)

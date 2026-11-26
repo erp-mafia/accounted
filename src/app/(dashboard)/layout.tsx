@@ -67,6 +67,7 @@ import { parseEntityType } from '@/lib/company/entity-type'
 import { invoicerPageRedirect, isInvoicerRole } from '@/lib/auth/invoicer-role'
 import { isSupportAssistantEnabled } from '@/lib/agent/support/rollout'
 import { isBookingScreenEnabled } from '@/lib/env/booking-screen-switch'
+import { isSendOrderSetupEnabled } from '@/lib/invoices/send-order-rollout'
 import { createCompanyScopedClient } from '@/lib/auth/company-scoped-client'
 import {
   getDashboardAuthContext,
@@ -694,6 +695,8 @@ export default async function DashboardLayout({
       isSupportAssistantEnabled(companyId) && getAiStatus().configured && !isInvoicer && !isSandbox,
     // Manual booking on the booking screen (/bokfor) instead of the dialogs.
     bookingScreen: isBookingScreenEnabled(companyId),
+    // The send-order setup block on the invoices page, for the listed users.
+    sendOrderSetup: isSendOrderSetupEnabled(user.id),
   }
 
   // Signpost gate (WL-01): a company is opened ONLY on its home domain. When
@@ -731,6 +734,11 @@ export default async function DashboardLayout({
       <DashboardRouteShell
         onboarding={
           <div className="relative min-h-dvh bg-background">
+            {/* The books act writes into the active company like any page: it
+                runs inside the same company guard as the shell below. First in
+                the branch, so its fetch guard is installed before the act's
+                own first request. */}
+            <CompanyTabSync />
             <OnboardingBackdrop />
             <main id="main-content" className="relative z-10">
               {showSignpost ? (

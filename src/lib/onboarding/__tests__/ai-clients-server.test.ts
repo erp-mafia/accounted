@@ -8,6 +8,7 @@ vi.mock('@/lib/logger', () => ({ createLogger: () => ({ warn, info: vi.fn(), err
 
 import {
   hasAgentWorked,
+  loadAiClientsBoundTo,
   loadAiConnection,
   loadConnectedAiClients,
   readAiConnection,
@@ -129,5 +130,30 @@ describe('the first task client', () => {
     await expect(readFirstTaskClient(client, 'user-1', { connected: false, clients: [] })).resolves.toBeNull()
     await expect(readFirstTaskClient(client, 'user-1', { connected: true, clients: [] })).resolves.toBeNull()
     expect(supabase.from).not.toHaveBeenCalled()
+  })
+})
+
+describe('connected AI clients of one company', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+  })
+
+  it('names the clients whose key is bound to the company or not bound yet', async () => {
+    enqueue({
+      data: [
+        { client: 'claude', company_id: 'company-2' },
+        { client: 'chatgpt', company_id: 'company-1' },
+        { client: 'grok', company_id: null },
+      ],
+      error: null,
+    })
+    await expect(loadAiClientsBoundTo(client, 'user-1', 'company-1')).resolves.toEqual(['chatgpt', 'grok'])
+  })
+
+  it('answers none, and logs, when the read fails', async () => {
+    enqueue({ data: null, error: { message: 'boom' } })
+    await expect(loadAiClientsBoundTo(client, 'user-1', 'company-1')).resolves.toEqual([])
+    expect(warn).toHaveBeenCalled()
   })
 })

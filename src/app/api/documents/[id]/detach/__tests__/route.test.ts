@@ -14,6 +14,9 @@ import {
   parseJsonResponse,
 } from '@/tests/helpers'
 
+// Route path ids are uuids: the route answers its 404 to anything else before it reads.
+const DOC_1 = '07d97135-5e40-5982-b76e-60a9095f9139'
+
 const { supabase, reset } = createQueuedMockSupabase()
 
 const rpcMock = vi.fn()
@@ -37,10 +40,10 @@ vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 
 import { POST } from '../route'
 
-const params = () => createMockRouteParams({ id: 'doc-1' })
+const params = () => createMockRouteParams({ id: DOC_1 })
 
 function makeRequest() {
-  return createMockRequest('/api/documents/doc-1/detach', { method: 'POST' })
+  return createMockRequest(`/api/documents/${DOC_1}/detach`, { method: 'POST' })
 }
 
 describe('POST /api/documents/[id]/detach', () => {
@@ -101,7 +104,7 @@ describe('POST /api/documents/[id]/detach', () => {
     rpcMock.mockResolvedValue({
       data: {
         detached: true,
-        document_id: 'doc-1',
+        document_id: DOC_1,
         journal_entry_id: 'je-1',
         remaining_documents: 1,
       },
@@ -118,7 +121,7 @@ describe('POST /api/documents/[id]/detach', () => {
     expect(body.data.remaining_documents).toBe(1)
     expect(rpcMock).toHaveBeenCalledWith('detach_underlag_duplicate', {
       p_company_id: 'company-1',
-      p_document_id: 'doc-1',
+      p_document_id: DOC_1,
       p_user_id: 'user-1',
     })
   })

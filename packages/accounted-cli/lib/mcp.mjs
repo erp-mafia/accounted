@@ -108,8 +108,17 @@ function rpcError(error) {
  *   | { kind: 'ok', data: unknown, company: unknown }}
  */
 export function classifyToolResult(result) {
-  if (result.resultType === 'task' && result.task && typeof result.task === 'object') {
-    return { kind: 'task', task: result.task }
+  if (result.resultType === 'task') {
+    // The tasks extension puts the task flat on the result; servers that
+    // followed the 2025-11-25 core shape nest it under `task`.
+    if (typeof result.taskId === 'string') {
+      const flat = { ...result }
+      delete flat.resultType
+      delete flat.task
+      delete flat._meta
+      return { kind: 'task', task: flat }
+    }
+    if (result.task && typeof result.task === 'object') return { kind: 'task', task: result.task }
   }
   const text = firstText(result)
   if (result.isError === true) {

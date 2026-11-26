@@ -375,7 +375,7 @@ export async function precheckFiscalPeriod(
       message:
         `SIE-filens räkenskapsår (${startDate} till ${endDate}) överlappar men matchar inte ett befintligt räkenskapsår i Accounted ` +
         `(${existingPeriod.name}: ${existingPeriod.periodStart} till ${existingPeriod.periodEnd}). ` +
-        `Justera räkenskapsåret i Inställningar → Företag så att det matchar SIE-filen exakt, eller importera en SIE-fil som täcker exakt samma period.`,
+        `Justera räkenskapsåret i Inställningar → Bokföring → Räkenskapsår så att det matchar SIE-filen exakt, eller importera en SIE-fil som täcker exakt samma period.`,
     }
   }
 

@@ -2,6 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { NextResponse } from 'next/server'
 import { createMockRequest, createQueuedMockSupabase, parseJsonResponse } from '@/tests/helpers'
 
+// Route path ids are uuids: the route answers its 404 to anything else before it reads.
+const PERIOD_1 = '967b285e-2dcb-5661-91f6-68a799845858'
+const SIGNATURE_1 = '81428555-f869-5e97-a025-1eada1aef99b'
+
 const requireAuthMock = vi.fn()
 const requireWriteMock = vi.fn()
 const createServiceClientMock = vi.fn()
@@ -23,7 +27,7 @@ import { DELETE, PATCH } from '../route'
 
 const versionId = '123e4567-e89b-12d3-a456-426614174000'
 const params = {
-  params: Promise.resolve({ id: 'period-1', signatureId: 'signature-1' }),
+  params: Promise.resolve({ id: PERIOD_1, signatureId: SIGNATURE_1 }),
 }
 const signedBody = {
   status: 'signed',
@@ -111,7 +115,7 @@ describe('annual report signature transition', () => {
     const { enqueue } = setup()
     enqueue({ data: [] })
     enqueue({ data: { id: versionId, status: 'ready_for_signature', finalized_at: '2026-03-01T08:00:00.000Z' } })
-    enqueue({ data: { id: 'signature-1', annual_report_version_id: versionId, status: 'pending', role: 'Styrelseledamot' } })
+    enqueue({ data: { id: SIGNATURE_1, annual_report_version_id: versionId, status: 'pending', role: 'Styrelseledamot' } })
     enqueue({ data: [{ id: 'signature-2' }] })
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
       await PATCH(createMockRequest('/x', { method: 'PATCH', body: signedBody }), params),
@@ -122,7 +126,7 @@ describe('annual report signature transition', () => {
   })
 
   describe("the revisor's påteckning", () => {
-    const pendingRevisor = { id: 'signature-1', annual_report_version_id: versionId, status: 'pending', role: 'Auktoriserad revisor' }
+    const pendingRevisor = { id: SIGNATURE_1, annual_report_version_id: versionId, status: 'pending', role: 'Auktoriserad revisor' }
     const bankidBoard = [
       { role: 'Styrelseledamot', status: 'signed', signing_method: 'bankid', pateckning_opinion: null, pateckning_firm_name: null },
       { role: 'Verkställande direktör', status: 'signed', signing_method: 'bankid', pateckning_opinion: null, pateckning_firm_name: null },
@@ -144,7 +148,7 @@ describe('annual report signature transition', () => {
       enqueue({ data: bankidBoard })
       enqueue({ data: { auditor_report_required: true, auditor_firm_name: ' Revisionsbyrån AB ', auditor_opinion: 'unmodified' } })
       enqueue({
-        data: { id: 'signature-1', company_id: 'company-1', fiscal_period_id: 'period-1', status: 'signed', signing_method: 'advanced_e_signature' },
+        data: { id: SIGNATURE_1, company_id: 'company-1', fiscal_period_id: PERIOD_1, status: 'signed', signing_method: 'advanced_e_signature' },
       })
       const { status, body } = await parseJsonResponse<{ data: { status: string } }>(
         await PATCH(createMockRequest('/x', { method: 'PATCH', body: electronicBody }), params),
@@ -228,7 +232,7 @@ describe('annual report signature transition', () => {
         ],
       })
       // No profile read: the next result is the recorded slot.
-      enqueue({ data: { id: 'signature-1', status: 'signed', signing_method: 'paper_original' } })
+      enqueue({ data: { id: SIGNATURE_1, status: 'signed', signing_method: 'paper_original' } })
       const { status } = await parseJsonResponse(await PATCH(createMockRequest('/x', { method: 'PATCH', body: signedBody }), params))
       expect(status).toBe(200)
       expect(findCall('arsredovisning_signature_requests', 'update')?.[0]).toMatchObject({
@@ -260,14 +264,14 @@ describe('annual report signature transition', () => {
         finalized_at: '2026-03-01T08:00:00.000Z',
       },
     })
-    enqueue({ data: { id: 'signature-1', annual_report_version_id: versionId, status: 'pending', role: 'Styrelseledamot' } })
+    enqueue({ data: { id: SIGNATURE_1, annual_report_version_id: versionId, status: 'pending', role: 'Styrelseledamot' } })
     // No slot of the version carries a BankID signature.
     enqueue({ data: [] })
     enqueue({
       data: {
-        id: 'signature-1',
+        id: SIGNATURE_1,
         company_id: 'company-1',
-        fiscal_period_id: 'period-1',
+        fiscal_period_id: PERIOD_1,
         status: 'signed',
         signing_method: 'paper_original',
         evidence_reference: 'archive:A-1',
@@ -298,7 +302,7 @@ describe('annual report signature transition', () => {
         finalized_at: '2026-03-02T08:00:00.000Z',
       },
     })
-    enqueue({ data: { id: 'signature-1', annual_report_version_id: versionId, status: 'pending', role: 'Styrelseledamot' } })
+    enqueue({ data: { id: SIGNATURE_1, annual_report_version_id: versionId, status: 'pending', role: 'Styrelseledamot' } })
     // No slot of the version carries a BankID signature.
     enqueue({ data: [] })
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
@@ -323,7 +327,7 @@ describe('annual report signature transition', () => {
         finalized_at: '2026-03-01T08:00:00.000Z',
       },
     })
-    enqueue({ data: { id: 'signature-1', annual_report_version_id: versionId, status: 'pending', role: 'Styrelseledamot' } })
+    enqueue({ data: { id: SIGNATURE_1, annual_report_version_id: versionId, status: 'pending', role: 'Styrelseledamot' } })
     // No slot of the version carries a BankID signature.
     enqueue({ data: [] })
     const response = await PATCH(
@@ -355,7 +359,7 @@ describe('annual report draft signer removal', () => {
 
   it('removes an unbound pending signer', async () => {
     const { enqueue } = setup()
-    enqueue({ data: { id: 'signature-1' }, error: null })
+    enqueue({ data: { id: SIGNATURE_1 }, error: null })
     expect((await DELETE(createMockRequest('/x', { method: 'DELETE' }), params)).status).toBe(204)
   })
 })

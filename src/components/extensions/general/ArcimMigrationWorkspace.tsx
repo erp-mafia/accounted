@@ -2,6 +2,7 @@
 
 import { SIEJobFailedError, waitForSIEJob } from '@/lib/import/sie-job-client'
 import InvoiceCompletionRecovery from './InvoiceCompletionRecovery'
+import { FortnoxTopupSwitch } from './FortnoxTopupSwitch'
 import { describeImportResponseFailure, formatImportFailure } from '@/lib/import/import-failure'
 import { createContext, useState, useCallback, useContext, useEffect, useReducer, useRef } from 'react'
 import { useOAuthPopup } from '@/lib/hooks/use-oauth-popup'
@@ -282,6 +283,7 @@ import type {
 } from '@/extensions/general/arcim-migration/types'
 import type { SieFetchFailure } from '@/extensions/general/arcim-migration/lib/sie-fetcher'
 import type { DocumentImportRunStatus } from '@/extensions/general/arcim-migration/lib/document-import-run'
+import type { FortnoxTopupView } from '@/extensions/general/arcim-migration/lib/fortnox-topup'
 import {
   buildMigrateRequests,
   mergeMigrationResults,
@@ -630,7 +632,7 @@ interface ConnectionStatus {
      * Absent when the server could not tell or predates the field: then the
      * row says nothing about it.
      */
-    keyUse?: 'migration' | 'invoice_rows' | 'supplier_rows' | 'idle'
+    keyUse?: 'migration' | 'invoice_rows' | 'supplier_rows' | 'topup' | 'idle'
   }[]
   /** The 10 newest imports of any status: display only. */
   sieImports: SieImportSummary[]
@@ -658,6 +660,11 @@ interface ConnectionStatus {
    * Optional only for a server that predates the field.
    */
   underlagOnReplacedCopies?: number
+  /**
+   * The nightly top-up from Fortnox: its switch and latest run. Null when it
+   * was never turned on; optional only for a server that predates the field.
+   */
+  fortnoxTopup?: FortnoxTopupView | null
   entityCounts: {
     customers: number
     suppliers: number
@@ -804,6 +811,7 @@ export function ProviderStep({
   onFetchDocuments,
   onReconnectDocuments,
   onDisconnect,
+  onTopupChanged,
   connectionStatus,
   isLoadingStatus,
 }: {
@@ -817,6 +825,8 @@ export function ProviderStep({
    */
   onReconnectDocuments?: (consentId: string, provider: ArcimProvider) => void
   onDisconnect: (consentId: string) => void
+  /** The nightly top-up was switched: read the connections again (the key's line depends on it). */
+  onTopupChanged?: () => void
   connectionStatus: ConnectionStatus | null
   isLoadingStatus: boolean
 }) {
@@ -976,6 +986,15 @@ export function ProviderStep({
                       <p className="mt-0.5 text-xs text-muted-foreground">
                         {t('ext_arcim_key_in_use_rows', { provider: providerInfo?.name ?? consent.provider })}
                       </p>
+                    )}
+                    {/* A company still booking in Fortnox after the move
+                        tops the imported years up every night. */}
+                    {hasSieImport && consent.provider === 'fortnox' && (
+                      <FortnoxTopupSwitch
+                        consentId={consent.id}
+                        initial={connectionStatus?.fortnoxTopup ?? null}
+                        onChanged={onTopupChanged}
+                      />
                     )}
                     {underlagWaitsForLedger && (
                       <p id={`underlag-after-ledger-${consent.id}`} className="mt-0.5 text-xs text-muted-foreground">
@@ -1432,9 +1451,9 @@ export function sieErrorRemedy(sieError: SieFetchFailure): SieErrorRemedy {
     case 'PROVIDER_UNREACHABLE':
       return { kind: 'unavailable', action: 'retry', file: 'provider' }
     default:
-      // PROVIDER_SIE_FETCH_FAILED: a timeout, an empty export, an error the
-      // classifier has no class for. Nothing says it will pass, so the
-      // sentence does not promise that it is temporary.
+      // PROVIDER_TIMEOUT, and PROVIDER_SIE_FETCH_FAILED: an empty export, an
+      // error the classifier has no class for. Nothing says it will pass, so
+      // the sentence does not promise that it is temporary.
       return { kind: 'failed', action: 'retry', file: 'provider' }
   }
 }
@@ -2551,7 +2570,7 @@ export function DocumentImportFollowUp({
     (entry: ArcimUnreachableDocumentSource) => {
       const scope = t(`ext_arcim_documents_scope_${entry.scope}`)
       const answer = entry.providerMessage
-        ? t('ext_arcim_documents_provider_message', { provider: 'Fortnox', message: entry.providerMessage })
+        ? t('ext_arcim_documents_provider_message', { provider, message: entry.providerMessage })
         : null
       return (
         <DocumentNote
@@ -2560,18 +2579,20 @@ export function DocumentImportFollowUp({
           action={entry.scope === reconnectScope ? (
             <Button variant="outline" onClick={onReconnect}>
               <ArrowPathIcon className="h-3.5 w-3.5" />
-              {t('ext_arcim_documents_reconnect_action')}
+              {state.provider === 'fortnox'
+                ? t('ext_arcim_documents_reconnect_action')
+                : t('ext_arcim_documents_reconnect_provider', { provider })}
             </Button>
           ) : undefined}
         >
           <p>
             {entry.source === 'customer_invoice_files'
-              ? t(`ext_arcim_documents_customer_invoice_files_${entry.reason}`, { scope })
+              ? t(`ext_arcim_documents_customer_invoice_files_${entry.reason}`, { scope, provider })
               : t(`ext_arcim_documents_supplier_files_${entry.reason}`, { scope })}
           </p>
           {entry.reason === 'permission' ? (
             <DocumentDisclosure summary={t('ext_arcim_documents_supplier_files_how')}>
-              <p>{t('ext_arcim_documents_supplier_files_remedy', { provider: 'Fortnox', scope })}</p>
+              <p>{t('ext_arcim_documents_supplier_files_remedy', { provider, scope })}</p>
               {answer && <p>{answer}</p>}
             </DocumentDisclosure>
           ) : answer ? (
@@ -2694,7 +2715,7 @@ export function DocumentImportFollowUp({
       // leads, and only the counts above zero follow, each with its own way
       // forward.
       const { linked, skipped, unmatched, failed, customerInvoicePdfs } = state.result
-      // Customer invoice copies (Fortnox) say where they went: a copy on the
+      // Customer invoice copies (Fortnox, Visma) say where they went: a copy on the
       // invoice only is archived but not on a verifikat, so the lead, which
       // counts what is on the verifikat, leaves it out.
       const invoiceOnly = customerInvoicePdfs?.invoiceOnly ?? 0
@@ -2712,7 +2733,7 @@ export function DocumentImportFollowUp({
           : null,
       ].filter((part): part is string => part !== null)
       const customerSummary = customerParts.length > 0
-        ? t('ext_arcim_documents_customer_invoice_pdfs', { items: customerParts.join(', ') })
+        ? t('ext_arcim_documents_customer_invoice_pdfs', { provider, items: customerParts.join(', ') })
         : null
       const skippedLine = skipped > 0 ? t('ext_arcim_documents_result_skipped', { count: skipped }) : null
       body = (
@@ -2987,6 +3008,8 @@ export function ResultStep({
     // the underlag flow is the whole page.
     const documentProvider =
       ARCIM_PROVIDERS.find(p => p.id === documentImportState.provider)?.name ?? documentImportState.provider ?? ''
+    // From Visma the import reads only the customer invoices' own PDFs.
+    const invoicePdfsOnly = documentImportState.provider === 'visma'
     // One title, one short promise (the bookkeeping does not change), the
     // mechanics behind the "?": the page says what it does before the user
     // presses anything.
@@ -3002,11 +3025,17 @@ export function ResultStep({
                 {t('ext_arcim_documents_title_standalone', { provider: documentProvider })}
               </h2>
               <HelpPopover>
-                <p>{t('ext_arcim_documents_standalone_help', { provider: documentProvider })}</p>
+                <p>
+                  {t(invoicePdfsOnly ? 'ext_arcim_documents_standalone_help_invoice_pdfs' : 'ext_arcim_documents_standalone_help', {
+                    provider: documentProvider,
+                  })}
+                </p>
               </HelpPopover>
             </div>
             <p className="mt-1 text-[13px] leading-5 text-muted-foreground">
-              {t('ext_arcim_documents_standalone_lede', { provider: documentProvider })}
+              {t(invoicePdfsOnly ? 'ext_arcim_documents_standalone_lede_invoice_pdfs' : 'ext_arcim_documents_standalone_lede', {
+                provider: documentProvider,
+              })}
             </p>
           </div>
         </div>
@@ -3690,9 +3719,10 @@ export default function ArcimMigrationWorkspace({
 
   // ── Fetch connection status on mount ───────────────────────────
 
-  const fetchStatus = useCallback(async () => {
+  const fetchStatus = useCallback(async (options: { quiet?: boolean } = {}) => {
     try {
-      setIsLoadingStatus(true)
+      // A quiet read keeps the page as it is until the answer is in.
+      if (!options.quiet) setIsLoadingStatus(true)
       const res = await fetch('/api/extensions/ext/arcim-migration/status')
       if (res.ok) {
         const data = await res.json()
@@ -3701,9 +3731,10 @@ export default function ArcimMigrationWorkspace({
     } catch {
       // Non-critical: just means we can't show existing connections
     } finally {
-      setIsLoadingStatus(false)
+      if (!options.quiet) setIsLoadingStatus(false)
     }
   }, [])
+  const refreshStatusQuietly = useCallback(() => { void fetchStatus({ quiet: true }) }, [fetchStatus])
 
   useEffect(() => {
     fetchStatus()
@@ -4131,10 +4162,12 @@ export default function ArcimMigrationWorkspace({
 
   const handleDocumentReconnect = useCallback(() => {
     if (!consentId) return
-    // A Bokio integration token is replaced in the credential form, not in a
-    // Fortnox login (B11: a refused Bokio token stops the run too).
-    if (documentImportState.provider === 'bokio') {
-      void handleReconnect('bokio', consentId)
+    // Only Fortnox reconnects in the login that asks for the attachment
+    // scopes. Every other provider reconnects its own way: a Bokio integration
+    // token in the credential form, a Visma connection in Visma's login (B11:
+    // a refused token or login stops the run on either).
+    if (documentImportState.provider && documentImportState.provider !== 'fortnox') {
+      void handleReconnect(documentImportState.provider, consentId)
       return
     }
     const { resume: reconnectAction, returnTo } = arcimDocumentReconnectPlan(documentImportState.phase)
@@ -4793,6 +4826,7 @@ export default function ArcimMigrationWorkspace({
           onFetchDocuments={handleFetchDocuments}
           onReconnectDocuments={handleReconnectDocuments}
           onDisconnect={handleDisconnect}
+          onTopupChanged={refreshStatusQuietly}
           connectionStatus={connectionStatus}
           isLoadingStatus={isLoadingStatus}
         />

@@ -34,4 +34,16 @@ describe('mailboxEntries', () => {
     const doors = mailboxEntries({ whatsapp: false, mail: false, kivra: false, billo: false }).map((e) => e.door)
     expect(doors).toEqual(['intake_email', 'peppol', 'billo', 'kivra'])
   })
+
+  it('lists Kivra directly after the intake address when the company already has a mailbox there', () => {
+    expect(mailboxEntries(ALL, 'has').map((e) => e.door)).toEqual(['intake_email', 'kivra', 'whatsapp', 'peppol', 'mailbox', 'billo'])
+    expect(mailboxEntries({ ...ALL, whatsapp: false, mail: false }, 'has').map((e) => e.door)).toEqual(['intake_email', 'kivra', 'peppol', 'billo'])
+  })
+
+  it('keeps the usual order for none, unknown and no answer', () => {
+    const usual = mailboxEntries(ALL).map((e) => e.door)
+    expect(mailboxEntries(ALL, 'none').map((e) => e.door)).toEqual(usual)
+    expect(mailboxEntries(ALL, 'unknown').map((e) => e.door)).toEqual(usual)
+    expect(mailboxEntries(ALL, null).map((e) => e.door)).toEqual(usual)
+  })
 })

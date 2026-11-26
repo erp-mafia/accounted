@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import {
-  generateFullArchive,
-  generateBaseDataArchive,
+  streamFullArchive,
+  streamBaseDataArchive,
   ARCHIVE_OVERHEAD_BYTES,
 } from '@/lib/reports/full-archive-export'
 import { buildDriveFolderReadme } from '@/lib/reports/archive-readme'
@@ -13,6 +13,7 @@ import {
   CloudScopeMissingError,
   CloudTokenRefreshError,
   type CloudStorageProvider,
+  type FileBytes,
   type PreparedTarget,
   type PutFileResult,
 } from './cloud-provider'
@@ -34,18 +35,15 @@ export const CONNECTION_KEY = 'google_drive_connection'
 export const LAST_SYNC_KEY = 'google_drive_last_sync'
 /**
  * Per-FILE ceiling, not per-backup: the backup splits into one archive per
- * räkenskapsår plus Grunddata.zip, and uploads are resumable/chunked. The
- * bound left is JSZip building each archive in memory on a serverless
- * function, hence 300 MB rather than "unlimited".
+ * räkenskapsår plus Grunddata.zip, and uploads are resumable/chunked.
  *
- * Memory budget: worst-case transient usage is ~3x this limit (~900 MB):
- * JSZip holds the input blobs while generateAsync accumulates output chunks
- * and then concatenates them into the final ArrayBuffer. The upload path
- * adds no further copies (md5/sha256 hash via zero-copy Buffer views,
- * resumable 8 MB chunk views, no multipart concatenation), and files are
- * generated and uploaded one at a time. That fits the Vercel default
- * function memory (2048 MB) with ~2x headroom; raise this limit only
- * together with an explicit memory bump in vercel.json.
+ * Memory does not grow with it: each archive goes to the provider while it
+ * is written, one 8 MB chunk at a time, with its underlag read a few files
+ * ahead of the writer, and the hashes are worked out on the way. Collected
+ * whole first, an archive was held twice at its end (the parts and their
+ * copy), and a large one ran the function out of memory. What an archive
+ * still costs is the time to build and send it inside one run (the cron's
+ * START_CUTOFF_MS).
  */
 export const SIZE_LIMIT_BYTES = 300 * 1024 * 1024
 /** Bump to force a re-upload of every file when the archive format changes. */
@@ -118,7 +116,7 @@ interface PlannedFile {
   contentType: string
   fingerprint: string
   includeDocuments: boolean
-  generate: () => Promise<ArrayBuffer>
+  generate: FileBytes
 }
 
 interface PeriodRow {
@@ -393,7 +391,7 @@ export async function performSync(params: PerformSyncParams): Promise<PerformSyn
       ].join('|'),
       includeDocuments,
       generate: () =>
-        generateFullArchive(archiveClient, companyId, {
+        streamFullArchive(archiveClient, companyId, {
           scope: 'period',
           period_id: period.id,
           include_documents: includeDocuments,
@@ -426,7 +424,7 @@ export async function performSync(params: PerformSyncParams): Promise<PerformSyn
     ].join('|'),
     includeDocuments: baseDecision.includeDocuments,
     generate: () =>
-      generateBaseDataArchive(archiveClient, companyId, {
+      streamBaseDataArchive(archiveClient, companyId, {
         include_documents: baseDecision.includeDocuments,
       }),
   })
@@ -446,7 +444,9 @@ export async function performSync(params: PerformSyncParams): Promise<PerformSyn
     contentType: 'text/plain',
     fingerprint: `v${ARCHIVE_FORMAT_VERSION}|${sha256Hex(textToArrayBuffer(readmeText)).slice(0, 16)}`,
     includeDocuments: true,
-    generate: async () => textToArrayBuffer(readmeText),
+    generate: async function* () {
+      yield new Uint8Array(textToArrayBuffer(readmeText))
+    },
   })
 
   // ---- Execute: regenerate + upload only what changed. ----
@@ -500,7 +500,8 @@ export async function performSync(params: PerformSyncParams): Promise<PerformSyn
       }
     }
 
-    const bytes = await plan.generate()
+    // The file goes to the provider while it is made, never held whole.
+    const read = hashedWhileRead(plan.generate)
     let uploaded: PutFileResult
     try {
       uploaded = await provider.putFile({
@@ -512,12 +513,16 @@ export async function performSync(params: PerformSyncParams): Promise<PerformSyn
         // overwrite the file the old name points at.
         previousId:
           prev?.file_id && prev.file_name === plan.name ? prev.file_id : undefined,
-        data: bytes,
+        data: read.data,
         contentType: plan.contentType,
       })
     } catch (err) {
       if (err instanceof CloudScopeMissingError) return scopeMissing()
       throw err
+    }
+    const sha256 = read.sha256()
+    if (sha256 === null) {
+      throw new Error(`${provider.label} stored ${plan.name} without reading it to its end`)
     }
 
     stateByKey.set(plan.key, {
@@ -527,7 +532,7 @@ export async function performSync(params: PerformSyncParams): Promise<PerformSyn
       file_name: uploaded.name,
       size_bytes: uploaded.size_bytes,
       fingerprint: plan.fingerprint,
-      sha256: sha256Hex(bytes),
+      sha256,
       included_documents: plan.includeDocuments,
       uploaded_at: new Date().toISOString(),
     })
@@ -570,6 +575,37 @@ export function arkivFileName(period: PeriodRow): string {
 
 function sha256Hex(data: ArrayBuffer): string {
   return createHash('sha256').update(Buffer.from(data)).digest('hex')
+}
+
+/**
+ * A file's bytes with the SHA-256 of what was read of them, for the file
+ * state. A provider reads the file to its end to send it, and again from its
+ * first byte to send it over, so `sha256` is the digest of the latest read:
+ * null while that read has not reached the end.
+ */
+function hashedWhileRead(bytes: FileBytes): { data: FileBytes; sha256: () => string | null } {
+  let digest: string | null = null
+  return {
+    data: () => {
+      digest = null
+      return hashing(bytes(), (hex) => {
+        digest = hex
+      })
+    },
+    sha256: () => digest,
+  }
+}
+
+async function* hashing(
+  source: AsyncIterable<Uint8Array>,
+  done: (hex: string) => void
+): AsyncGenerator<Uint8Array> {
+  const hash = createHash('sha256')
+  for await (const chunk of source) {
+    hash.update(chunk)
+    yield chunk
+  }
+  done(hash.digest('hex'))
 }
 
 function textToArrayBuffer(text: string): ArrayBuffer {

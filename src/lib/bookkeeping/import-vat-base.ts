@@ -147,7 +147,7 @@ export function importVatWithoutBaseMessages(
       'and Skatteverket refuses such a VAT return. For an import of goods from outside the EU, book the ' +
       'taxable amount on 4545, 4546 or 4547 in the same voucher. For goods from another EU country or ' +
       'services from abroad it is reverse charge: book the output VAT on 2614, 2624 or 2634 instead. If ' +
-      'the lines come from a booking template, correct the template under Settings, Booking templates.',
+      'the lines come from a booking template, correct the template under Settings → Bookkeeping → Bookkeeping templates.',
   }
 }
 

@@ -3,6 +3,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { createServiceClient } from '@/lib/supabase/server'
 import { getJournalEntryRattelseLog } from '@/lib/core/bookkeeping/journal-entry-corrections'
 import { sessionFailureResponse } from '@/lib/operations/session'
+import { isUuid } from '@/lib/invariants/uuid'
 
 /**
  * GET /api/bookkeeping/journal-entries/[id]/rattelse-log
@@ -23,6 +24,9 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'bookkeeping.journal_entry.rattelse_log',
   async (_request, { supabase, companyId, user, log, requestId }, { params }) => {
     const { id } = await params
+    // An id that is not a uuid names no verifikat: 404 before the query,
+    // which Postgres refused with a uuid parse error (answered as a 500).
+    if (!isUuid(id)) return sessionFailureResponse({ ok: false, code: 'JOURNAL_ENTRY_NOT_FOUND' }, log, requestId)
 
     // `profiles` RLS is self-only, so the label lookup goes through the
     // service client, scoped to exactly the actor ids that already appear in

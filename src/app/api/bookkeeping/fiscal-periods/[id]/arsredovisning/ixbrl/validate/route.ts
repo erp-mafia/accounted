@@ -30,4 +30,5 @@ export const GET = withRouteContext(
     if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
     return NextResponse.json({ data: outcome.data })
   },
+  { uuidParams: { id: 'PERIOD_NOT_FOUND' } },
 )

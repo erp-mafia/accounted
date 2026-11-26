@@ -990,7 +990,7 @@
       "components/bookkeeping/AddAccountDialog.tsx <-> components/bookkeeping/EditAccountDialog.tsx": 10,
       "components/bookkeeping/AttachDocumentPreview.tsx <-> components/bookkeeping/MatchTransactionInvoicePreview.tsx": 11,
       "components/bookkeeping/CorrectionEntryDialog.tsx <-> components/bookkeeping/RecordateEntryDialog.tsx": 10,
-      "components/bookkeeping/CorrectionEntryDialog.tsx <-> components/bookkeeping/StrikeLinesDialog.tsx": 21,
+      "components/bookkeeping/CorrectionEntryDialog.tsx <-> components/bookkeeping/StrikeLinesDialog.tsx": 22,
       "components/bookkeeping/CorrectMetadataDialog.tsx <-> components/bookkeeping/StrikeLinesDialog.tsx": 12,
       "components/bookkeeping/JournalEntryForm.tsx <-> components/extensions/general/BookDirectlyDialog.tsx": 16,
       "components/common/ContextPicker.tsx <-> components/common/ReportDateRange.tsx": 20,

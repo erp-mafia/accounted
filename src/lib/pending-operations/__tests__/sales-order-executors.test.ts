@@ -60,6 +60,7 @@ function makeOrder(overrides: Partial<SalesOrder> = {}): SalesOrder {
     total: 1250,
     your_reference: null,
     our_reference: null,
+    invoice_marking: null,
     notes: null,
     default_dimensions: {},
     confirmed_at: null,
@@ -127,6 +128,21 @@ describe('commitPendingOperation: create_sales_order', () => {
       userId: 'user-1',
       input: expect.objectContaining({ customer_id: CUSTOMER_ID, items: expect.any(Array) }),
     })
+  })
+
+  it("keeps the staged Märkning through the commit boundary's re-validation", async () => {
+    vi.mocked(createSalesOrder).mockResolvedValue({ ok: true, order: makeOrder({ invoice_marking: 'PO-4711' }) })
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' } }) // CAS claim
+    enqueue({ data: null }) // finalize
+
+    const result = await commitPendingOperation(
+      supabase as never, 'user-1', 'company-1',
+      makePendingOp({ operation_type: 'create_sales_order', params: { ...CREATE_PARAMS, invoice_marking: 'PO-4711' } }),
+    )
+
+    expect(result.status).toBe('committed')
+    expect(vi.mocked(createSalesOrder).mock.calls[0][1].input.invoice_marking).toBe('PO-4711')
   })
 
   it('maps a coded service failure onto the structured error (CUSTOMER_NOT_FOUND -> 404 auto-reject)', async () => {

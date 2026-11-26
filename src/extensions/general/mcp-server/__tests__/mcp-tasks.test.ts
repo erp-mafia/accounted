@@ -195,12 +195,21 @@ describe('MCP Tasks extension', () => {
           _meta: TASK_META,
         })
       )
-      expect(result?.resultType).toBe('task')
-      const task = result?.task as Record<string, unknown>
-      expect(task.taskId).toBe('task-1')
-      expect(task.status).toBe('working')
-      expect(typeof task.pollIntervalMs).toBe('number')
-      expect(typeof task.ttlMs).toBe('number')
+      // CreateTaskResult is the Task flat on the result (Result & Task):
+      // a client reads taskId and status from the top level, and the
+      // extension requires createdAt, lastUpdatedAt and ttlMs beside them.
+      expect(result).toMatchObject({
+        resultType: 'task',
+        taskId: 'task-1',
+        status: 'working',
+        createdAt: '2026-07-29T09:00:00.000Z',
+        lastUpdatedAt: '2026-07-29T09:00:00.000Z',
+        ttlMs: 3600000,
+        pollIntervalMs: 2000,
+      })
+      // The nested copy accounted CLI 0.1.0 reads is the same object.
+      const { resultType: _resultType, task, _meta: _metaField, ...flat } = result as Record<string, unknown>
+      expect(task).toEqual(flat)
       expect(mocks.taskInserts).toHaveLength(1)
 
       await settleBackgroundWork()
@@ -287,7 +296,8 @@ describe('MCP Tasks extension', () => {
       const { result } = await readBody(mcpRequest('tasks/get', { taskId: 'task-1' }))
 
       expect(result?.status).toBe('failed')
-      expect(result?.error).toMatchObject({ code: -32603 })
+      expect(result?.error).toMatchObject({ code: -32603, message: expect.any(String) })
+      expect(Date.parse(result?.lastUpdatedAt as string)).toBeGreaterThan(Date.parse(result?.createdAt as string))
       expect(result?.statusMessage).toEqual(expect.stringContaining('interrupted'))
       expect(mocks.taskUpdates).toEqual([expect.objectContaining({ status: 'failed', result: null, error: expect.objectContaining({ code: -32603 }) })])
       expect(mocks.logError).toHaveBeenCalledTimes(1)
@@ -295,6 +305,18 @@ describe('MCP Tasks extension', () => {
         'MCP task abandoned: still working after the route time limit, answered as failed',
         expect.objectContaining({ taskId: 'task-1', toolName: 'gnubok_audit_package' }),
       )
+    })
+
+    it('answers an abandoned task with the time the database wrote it', async () => {
+      // The mocked read after the write answers this row: its updated_at
+      // stands for the trigger's timestamp of the failed write.
+      mocks.taskRow = { ...staleWorking(), updated_at: '2026-11-25T10:15:00.000Z' }
+      mocks.updateResult = { data: [{ id: 'task-1' }], error: null }
+
+      const { result } = await readBody(mcpRequest('tasks/get', { taskId: 'task-1' }))
+
+      expect(result?.status).toBe('failed')
+      expect(result?.lastUpdatedAt).toBe('2026-11-25T10:15:00.000Z')
     })
 
     it('logs nothing when another poll already moved the stale task, and answers the row as it is', async () => {
@@ -339,10 +361,18 @@ describe('MCP Tasks extension', () => {
         poll_interval_ms: 2000,
         ttl_ms: 3600000,
         created_at: '2026-07-29T09:00:00.000Z',
+        updated_at: '2026-07-29T09:04:12.000Z',
       }
       const { result } = await readBody(mcpRequest('tasks/get', { taskId: 'task-1' }))
       expect(result?.status).toBe('completed')
       expect(result?.result).toEqual(storedResult)
+      expect(result).toMatchObject({
+        resultType: 'complete',
+        taskId: 'task-1',
+        createdAt: '2026-07-29T09:00:00.000Z',
+        lastUpdatedAt: '2026-07-29T09:04:12.000Z',
+        ttlMs: 3600000,
+      })
     })
 
     it('rejects unknown task ids with invalid params', async () => {

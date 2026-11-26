@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { formatCurrency } from '@/lib/utils'
+import { yearsOfBooks } from '@/lib/onboarding/books-years'
 import { useAccounts } from '@/lib/reference-data/hooks'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -102,7 +103,7 @@ export function InsightPanel({ ctx, base = 200, summary = false }: { ctx: BooksC
     if (!findings) return []
     const b = findings.books
     const out: Verdict[] = []
-    out.push({ tone: b.entries > 0 ? 'ok' : 'warn', text: t('v_entries', { count: b.entries, years: b.periods.length }) })
+    out.push({ tone: b.entries > 0 ? 'ok' : 'warn', text: t('v_entries', { count: b.entries, years: yearsOfBooks(b) }) })
     const broken = b.periods.filter((p) => p.continuityVerified === false)
     if (broken.length > 0) out.push({ tone: 'warn', text: t('v_continuity_broken', { name: broken[0].name }), href: '/bookkeeping' })
     else if (b.periods.some((p) => p.continuityVerified === true)) out.push({ tone: 'ok', text: t('v_continuity_ok') })
@@ -174,7 +175,7 @@ export function InsightPanel({ ctx, base = 200, summary = false }: { ctx: BooksC
     const attention = verdicts.filter((v) => v.tone !== 'ok').length
     const headline = b
       ? [
-          t('v_entries', { count: b.entries, years: b.periods.length }),
+          t('v_entries', { count: b.entries, years: yearsOfBooks(b) }),
           b.revenue !== null && b.result !== null && b.periodName
             ? t('v_result', { period: b.periodName, revenue: formatCurrency(b.revenue), result: formatCurrency(b.result) })
             : null,

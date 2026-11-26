@@ -263,6 +263,10 @@ export const OPERATION_DOORS: Readonly<Record<string, DoorSpec>> = Object.freeze
   'dimension-rules.create': BOOK_RECORD,
   'dimension-rules.update': BOOK_RECORD,
   'dimension-rules.delete': BOOK_RECORD,
+  // A learned booking rule, as the session routes /api/rules and
+  // /api/settings/counterparty-templates classify it.
+  'counterparty-templates.rename': BOOK_RECORD,
+  'counterparty-templates.update': BOOK_RECORD,
   // Budgets (accounted#134): planning data beside the books, never a
   // verifikat, so a register write; staged at low risk over MCP. Their reads
   // (budgets.list, budgets.get, reports.budget-vs-actual) keep the

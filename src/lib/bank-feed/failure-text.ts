@@ -99,8 +99,8 @@ export const OPEN_BANKING_FAILURE_TEXTS: Readonly<Record<string, FailureText>> =
     en: 'The bank needs updated customer due diligence. Complete it in the online bank and try again.',
   },
   PSU_ACCOUNT_MISSING: {
-    sv: 'Användaren har inget konto i den valda banken. Välj rätt bankkontor och kontrollera att kontot är aktivt.',
-    en: 'The user has no account at the chosen bank. Pick the right bank office and check that the account is active.',
+    sv: 'Banken hittade inga konton för företaget med den här inloggningen. Välj rätt bank eller bankkontor, och kontrollera att du har tillgång till företagets konton.',
+    en: "The bank found no accounts for the company with this login. Pick the right bank or bank office, and check that you have access to the company's accounts.",
   },
   PSU_ACCOUNT_MULTIPLE_AFFILIATED_BANKS: {
     sv: 'Användaren har konton i flera anslutna banker. Välj vilken sparbank kopplingen gäller.',

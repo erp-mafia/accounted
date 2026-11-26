@@ -93,7 +93,7 @@ describe('document follow-up state', () => {
     expect(
       arcimDocumentImportReducer(INITIAL_ARCIM_DOCUMENT_IMPORT_STATE, {
         type: 'discovery-started',
-        provider: 'visma',
+        provider: 'briox',
         migrationSucceeded: true,
       }),
     ).toEqual(INITIAL_ARCIM_DOCUMENT_IMPORT_STATE)
@@ -118,7 +118,8 @@ describe('document follow-up state', () => {
     expect(resolveArcimDocumentFollowUpProvider('fortnox', 'bokio')).toBe('fortnox')
     expect(resolveArcimDocumentFollowUpProvider(undefined, 'fortnox')).toBe('fortnox')
     expect(resolveArcimDocumentFollowUpProvider('bokio', 'fortnox')).toBe('bokio')
-    expect(resolveArcimDocumentFollowUpProvider('visma', 'fortnox')).toBeNull()
+    expect(resolveArcimDocumentFollowUpProvider('briox', 'fortnox')).toBeNull()
+    expect(resolveArcimDocumentFollowUpProvider('visma', 'fortnox')).toBe('visma')
   })
 
   it('keeps a dry-run failure in a retryable document state, separate from migration success', () => {

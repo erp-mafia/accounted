@@ -22,6 +22,8 @@ import {
   redirectInvoicerOffPage,
 } from './request-context'
 import { HemChecklistSection, HemNoticesSection, HemPanesSection } from './hem-sections'
+import { HemFirstThingSection } from './hem-first-thing-section'
+import { isHemFirstThingEnabled } from '@/lib/onboarding/first-thing-rollout'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { getTranslations } from 'next-intl/server'
@@ -239,7 +241,20 @@ export default async function DashboardPage({
     <>
       <RefreshWhenRestored renderId={randomUUID()} />
       {header}
-      {hem}
+      {vy === 'hem' && isHemFirstThingEnabled(user.id) ? (
+        <Suspense fallback={<PanesSkeleton view={vy} />}>
+          <HemFirstThingSection
+            companyId={companyId}
+            userId={user.id}
+            now={now}
+            notices={notices}
+            hem={hem}
+            clients={aiConnection.clients}
+          />
+        </Suspense>
+      ) : (
+        hem
+      )}
     </>
   )
 }

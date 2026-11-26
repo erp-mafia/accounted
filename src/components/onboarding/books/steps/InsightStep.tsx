@@ -2,6 +2,7 @@
 
 import { useTranslations } from 'next-intl'
 import Question from '@/components/onboarding/journey/Question'
+import { yearsOfBooks } from '@/lib/onboarding/books-years'
 import { InsightPanel } from '../ui/InsightPanel'
 import type { BooksCtx } from '../context'
 import { Button } from '@/components/ui/button'
@@ -18,17 +19,28 @@ export function InsightStep({ ctx }: { ctx: BooksCtx }) {
   const next = flags.hasBanking ? t('to_bank') : flags.hasSkatteverket ? t('to_skv') : t('to_done')
   // A failed read is not "nothing imported": it says so, with the retry.
   const failed = !findings && findingsFailed
+  // With the sources arrangement the way on sits right under the headline,
+  // before the detail panel, so it is in view without scrolling.
+  const nextFirst = flags.sourcesFlow === true && !failed
+  const nextButton = (
+    <div className={nextFirst ? 'jny-qactions is-first' : 'jny-qactions'}>
+      <Button size="lg" onClick={() => dispatch({ type: 'AFTER_BOOKS', flags })}>
+        {next}
+      </Button>
+    </div>
+  )
   return (
     <Question
       title={
         failed
           ? t('insight_title_failed')
           : findings && findings.books.entries > 0
-            ? t('insight_title', { count: findings.books.entries, years: findings.books.periods.length })
+            ? t('insight_title', { count: findings.books.entries, years: yearsOfBooks(findings.books) })
             : t('insight_title_empty')
       }
       sub={failed ? undefined : t('insight_sub')}
     >
+      {nextFirst ? nextButton : null}
       {failed ? (
         <div className="jny-qactions">
           <Button variant="outline" loading={loadingFindings} onClick={() => void loadFindings()}>
@@ -38,11 +50,7 @@ export function InsightStep({ ctx }: { ctx: BooksCtx }) {
       ) : (
         <InsightPanel ctx={ctx} />
       )}
-      <div className="jny-qactions">
-        <Button size="lg" onClick={() => dispatch({ type: 'AFTER_BOOKS', flags })}>
-          {next}
-        </Button>
-      </div>
+      {nextFirst ? null : nextButton}
     </Question>
   )
 }

@@ -8,6 +8,8 @@ import {
 } from '@/lib/api/schemas'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
+import { runOfPayslip } from '@/lib/salary/late-days'
+import { registerRefusalMessageSv } from '@/lib/salary/register-locks'
 import {
   deleteWorkedDaysRange,
   listWorkedDays,
@@ -25,9 +27,10 @@ const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
  * (check_violation) surfaces as a clean 409 with a Swedish message, and any
  * other CHECK violation keeps that status too.
  *
- * The register lock is a 409 of its own regardless of path: a run in review,
- * approved, paid or booked has already read the date. The registry message
- * says how to get out (revert or correct the run) and details name the run.
+ * A register refusal is a 409 of its own regardless of path: a run in review,
+ * approved, paid or booked has already read the date, or the run named for a
+ * late day cannot take it. The message names the run and the way out, and
+ * details name the run.
  */
 function failureResponse(
   failure: { code: string; details?: Record<string, unknown> },
@@ -36,10 +39,17 @@ function failureResponse(
   if (failure.code === 'EMPLOYEE_NOT_FOUND') {
     return NextResponse.json({ error: 'Anställd hittades inte' }, { status: 404 })
   }
-  if (failure.code === 'SALARY_REGISTER_DATES_LOCKED_BY_RUN') {
+  if (failure.code === 'SALARY_REGISTER_DATES_LOCKED_BY_RUN' || failure.code === 'SALARY_REGISTER_LATE_DAY_REFUSED') {
     const entry = getErrorEntry(failure.code)
     return NextResponse.json(
-      { error: entry?.message_sv ?? 'Datumen är låsta av en lönekörning', code: failure.code, details: failure.details },
+      {
+        error:
+          registerRefusalMessageSv(failure.code, failure.details, 'dashboard') ??
+          entry?.message_sv ??
+          'Datumen är låsta av en lönekörning',
+        code: failure.code,
+        details: failure.details,
+      },
       { status: entry?.httpStatus ?? 409 },
     )
   }
@@ -92,6 +102,8 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     // day and the caller can describe every field of it, so an omitted field
     // means "not set". The batch endpoint cannot make that claim (one shared
     // body for N dates), which is why it carries omitted values forward instead.
+    // Hours registered from a payslip's calendar on a date a paid or declared
+    // run already read are a late day: that payslip's run takes them.
     const result = await replaceWorkedDay(supabase, {
       companyId,
       employeeId,
@@ -103,6 +115,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         start_time: body.start_time ?? null,
         end_time: body.end_time ?? null,
       },
+      carriedToRunId: await runOfPayslip(supabase, companyId, body.salary_run_employee_id),
     })
     if (!result.ok) return failureResponse(result, 409)
 

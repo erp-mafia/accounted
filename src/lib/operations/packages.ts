@@ -118,7 +118,7 @@ export function switchOnRefusal(
       code: 'PACKAGE_NOT_FOR_LEGAL_FORM',
       messageSv:
         pkg.id === 'payroll'
-          ? 'Lön är inte påslaget för den här bolagsformen. Ange under Inställningar, Skatt att företaget betalar ut lön, och slå sedan på Lön.'
+          ? 'Lön är inte påslaget för den här bolagsformen. Ange under Inställningar → Bokföring → Löner att företaget betalar ut lön, och slå sedan på Lön.'
           : `${pkg.name_sv} är inte tillgängligt för företagets bolagsform.`,
     }
   }

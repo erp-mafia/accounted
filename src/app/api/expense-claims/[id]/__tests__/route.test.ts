@@ -7,6 +7,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import { createQueuedMockSupabase, createMockRequest, parseJsonResponse } from '@/tests/helpers'
 
+// Route path ids are uuids: the route answers its 404 to anything else before it reads.
+const CLAIM_1 = '4a2cb7a8-2b7a-505f-bcee-f48d10a6bada'
+const MISSING_ID = '5d628215-dc15-5cac-9006-b67b9a4bd32b'
+
 const { supabase, reset } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
@@ -33,7 +37,7 @@ vi.mock('@/lib/expenses/expense-claims-service', () => ({
 
 import { DELETE } from '../route'
 
-function del(id = 'claim-1') {
+function del(id = CLAIM_1) {
   return DELETE(
     createMockRequest(`/api/expense-claims/${id}`, { method: 'DELETE' }),
     { params: Promise.resolve({ id }) } as never,
@@ -62,7 +66,7 @@ describe('DELETE /api/expense-claims/:id', () => {
 
   it('maps NOT_FOUND to 404', async () => {
     deleteMock.mockResolvedValue({ ok: false, code: 'NOT_FOUND' })
-    const response = await del('missing')
+    const response = await del(MISSING_ID)
     expect(response.status).toBe(404)
   })
 
@@ -81,9 +85,9 @@ describe('DELETE /api/expense-claims/:id', () => {
   it('returns the reversal entry id on success', async () => {
     const { status, body } = await parseJsonResponse<{
       data: { id: string; deleted: boolean; reversal_entry_id: string }
-    }>(await del('claim-1'))
+    }>(await del(CLAIM_1))
     expect(status).toBe(200)
-    expect(body.data).toEqual({ id: 'claim-1', deleted: true, reversal_entry_id: 'je-storno' })
-    expect(deleteMock).toHaveBeenCalledWith(supabase, 'company-1', 'user-1', 'claim-1')
+    expect(body.data).toEqual({ id: CLAIM_1, deleted: true, reversal_entry_id: 'je-storno' })
+    expect(deleteMock).toHaveBeenCalledWith(supabase, 'company-1', 'user-1', CLAIM_1)
   })
 })

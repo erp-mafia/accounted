@@ -454,16 +454,24 @@ export class KivraTenantClient implements MailboxSender {
   }
 
   async isReachable(tenantRef: string, recipient: MailboxRecipient): Promise<boolean> {
-    const isPerson = recipient.kind === 'person'
-    const value = isPerson ? recipient.personnummer : swedishVatNumber(recipient.orgNumber)
+    if (recipient.kind === 'person') return this.matches(tenantRef, 'usermatch/ssn', recipient.personnummer, 'user match')
+    return this.hasCompanyMailbox(tenantRef, recipient.orgNumber)
+  }
+
+  /** Whether Kivra lists the organisationsnummer (sent as its Swedish VAT number) as a company with a mailbox. */
+  async hasCompanyMailbox(tenantRef: string, orgNumber: string | null | undefined): Promise<boolean> {
+    return this.matches(tenantRef, 'companymatch/vatnr', swedishVatNumber(orgNumber), 'company match')
+  }
+
+  private async matches(tenantRef: string, path: string, value: string | null | undefined, description: string): Promise<boolean> {
     if (!value) return false
     const res = await withToken(this.tokens, (token) =>
       providerRequest(PROVIDER, {
         method: 'POST',
-        url: `${this.baseUrl}/v2/tenant/${encodeURIComponent(tenantRef)}/${isPerson ? 'usermatch/ssn' : 'companymatch/vatnr'}`,
+        url: `${this.baseUrl}/v2/tenant/${encodeURIComponent(tenantRef)}/${path}`,
         headers: bearer(token),
         json: { list: [value] },
-        description: isPerson ? 'user match' : 'company match',
+        description,
       }),
     )
     const list = (res.json as { list?: unknown } | null)?.list

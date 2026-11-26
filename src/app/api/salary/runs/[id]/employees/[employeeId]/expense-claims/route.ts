@@ -27,5 +27,5 @@ export const POST = withRouteContext<{ params: Promise<{ id: string; employeeId:
 
     return NextResponse.json({ data: outcome.data }, { status: 201 })
   },
-  { requireWrite: true },
+  { requireWrite: true, uuidParams: { id: 'SALARY_RUN_NOT_FOUND', employeeId: 'SALARY_RUN_EMPLOYEE_NOT_FOUND' } },
 )

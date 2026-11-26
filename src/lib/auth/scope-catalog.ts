@@ -506,6 +506,9 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_withdraw_not_momsredovisning: 'bookkeeping:write',
   gnubok_mark_agi_period_filed: 'payroll:write',
   gnubok_complete_deadline: 'bookkeeping:write',
+  // Rename, pause, resume or always review a learned booking rule (lib/operations/counterparty-templates.ts).
+  gnubok_rename_counterparty_template: 'bookkeeping:write',
+  gnubok_update_counterparty_template: 'bookkeeping:write',
   // Operation registry, wave 2: booking, payment files, utlägg, payroll.
   gnubok_send_payslips: 'payroll:write',
   gnubok_revert_salary_run: 'payroll:write',

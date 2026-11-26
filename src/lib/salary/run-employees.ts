@@ -21,6 +21,7 @@ import { HOURS_WORKED_MAX, SALARY_OVERRIDE_MAX } from '@/lib/api/schemas'
 import { refreshRunEmployeeSalaryType, runMonthlySalaryFor } from '@/lib/salary/base-salary-line'
 import { invalidateRunCalculation } from '@/lib/salary/invalidate-calculation'
 import { baseSalaryLineType, payslipLineFlags } from '@/lib/salary/line-item-roles'
+import { lateDayReaderRunIds, lateDaysCarriedTo } from '@/lib/salary/late-days'
 
 export type RunEmployeeResult<T> =
   | { ok: true; data: T }
@@ -48,6 +49,7 @@ interface DraftRunGate {
   period_month: number
   deviation_period_start?: string | null
   deviation_period_end?: string | null
+  corrects_run_id?: string | null
 }
 
 async function assertRunDraftForRoster(
@@ -57,7 +59,7 @@ async function assertRunDraftForRoster(
 ): Promise<RunEmployeeResult<DraftRunGate>> {
   const { data: run, error } = await supabase
     .from('salary_runs')
-    .select('id, status, period_year, period_month, deviation_period_start, deviation_period_end')
+    .select('id, status, period_year, period_month, deviation_period_start, deviation_period_end, corrects_run_id')
     .eq('id', salaryRunId)
     .eq('company_id', companyId)
     .maybeSingle()
@@ -561,6 +563,21 @@ export async function removeEmployeeFromRun(
   }
   if (!sre) {
     return { ok: false, code: 'SALARY_RUN_EMPLOYEE_NOT_FOUND' }
+  }
+
+  // Late days carried to this run, or to a run it corrects, are deducted and
+  // declared by it alone (lib/salary/late-days.ts): without the employee on
+  // it no run would take them, so they go first. Dry runs refuse alike.
+  let readerRunIds: string[]
+  try {
+    readerRunIds = await lateDayReaderRunIds(supabase, args.companyId, gate.data)
+  } catch (err) {
+    return { ok: false, code: 'INTERNAL_ERROR', details: { message: err instanceof Error ? err.message : String(err) } }
+  }
+  const carried = await lateDaysCarriedTo(supabase, args.companyId, args.employeeId, readerRunIds)
+  if (!carried.ok) return { ok: false, code: 'INTERNAL_ERROR', details: { message: carried.message } }
+  if (carried.dates.length > 0) {
+    return { ok: false, code: 'SALARY_RUN_EMPLOYEE_HAS_LATE_DAYS', details: { late_dates: carried.dates } }
   }
 
   if (args.dryRun) {

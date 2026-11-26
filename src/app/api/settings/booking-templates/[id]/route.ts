@@ -101,5 +101,5 @@ export const PUT = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     return NextResponse.json({ data })
   },
-  { requireWrite: true },
+  { requireWrite: true, uuidParams: { id: 'NOT_FOUND' } },
 )

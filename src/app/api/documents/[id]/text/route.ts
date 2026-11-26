@@ -45,4 +45,4 @@ export const GET = withRouteContext('document.text', async (_request, ctx, { par
     pages.push(p)
   }
   return NextResponse.json({ data: { document_id: id, page_count: (doc as { page_count: number | null }).page_count, pages, truncated } satisfies DocumentTextView })
-})
+}, { uuidParams: { id: 'DOC_NOT_FOUND' } })

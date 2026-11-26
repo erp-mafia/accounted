@@ -12,6 +12,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import { createQueuedMockSupabase, createMockRequest, parseJsonResponse } from '@/tests/helpers'
 
+// Route path ids are uuids: the route answers its 404 to anything else before it reads.
+const EMP_1 = 'fcd49043-9489-5813-aacd-a04b3e121e68'
+
 const { supabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
@@ -38,13 +41,13 @@ vi.mock('@/lib/salary/invalidate-calculation', async (original) => ({
 
 import { GET, PUT } from '../route'
 
-const params = { params: Promise.resolve({ id: 'emp-1' }) } as never
+const params = { params: Promise.resolve({ id: EMP_1 }) } as never
 
 const CUTOVER_YEAR = new Date().getFullYear()
 
 const STORED_ROW = {
   id: 'ob-1',
-  employee_id: 'emp-1',
+  employee_id: EMP_1,
   cutover_date: `${CUTOVER_YEAR}-01-01`,
   ytd_gross: 0,
   ytd_tax: 0,
@@ -60,11 +63,11 @@ const STORED_ROW = {
 }
 
 function get() {
-  return createMockRequest('/api/salary/employees/emp-1/opening-balances', { method: 'GET' })
+  return createMockRequest(`/api/salary/employees/${EMP_1}/opening-balances`, { method: 'GET' })
 }
 
 function put(body: unknown) {
-  return createMockRequest('/api/salary/employees/emp-1/opening-balances', { method: 'PUT', body })
+  return createMockRequest(`/api/salary/employees/${EMP_1}/opening-balances`, { method: 'PUT', body })
 }
 
 interface GetBody {
@@ -102,7 +105,7 @@ describe('GET /api/salary/employees/[id]/opening-balances', () => {
   })
 
   it('returns the stored row with its lock state at the top level too (happy path)', async () => {
-    enqueue({ data: { id: 'emp-1' } }) // employee lookup
+    enqueue({ data: { id: EMP_1 } }) // employee lookup
     enqueue({ data: STORED_ROW }) // opening balances row
     enqueue({ data: [] }) // booked-run lock lookup: none
 
@@ -120,9 +123,9 @@ describe('GET /api/salary/employees/[id]/opening-balances', () => {
   // first run here was booked has no row yet, and the form must still know
   // it cannot be saved.
   it('reports the booked-run lock when no balances row exists yet', async () => {
-    enqueue({ data: { id: 'emp-1' } }) // employee lookup
+    enqueue({ data: { id: EMP_1 } }) // employee lookup
     enqueue({ data: null }) // no opening balances row
-    enqueue({ data: [{ employee_id: 'emp-1', salary_run: { id: 'run-1', status: 'booked' } }] })
+    enqueue({ data: [{ employee_id: EMP_1, salary_run: { id: 'run-1', status: 'booked' } }] })
 
     const response = await GET(get(), params)
     const { status, body } = await parseJsonResponse<GetBody>(response)
@@ -141,7 +144,7 @@ describe('GET /api/salary/employees/[id]/opening-balances', () => {
   })
 
   it('reports unlocked when no row exists and no run is booked', async () => {
-    enqueue({ data: { id: 'emp-1' } }) // employee lookup
+    enqueue({ data: { id: EMP_1 } }) // employee lookup
     enqueue({ data: null }) // no opening balances row
     enqueue({ data: [] }) // no booked runs
 
@@ -155,7 +158,7 @@ describe('GET /api/salary/employees/[id]/opening-balances', () => {
   })
 
   it('returns 500 when the lock lookup fails', async () => {
-    enqueue({ data: { id: 'emp-1' } }) // employee lookup
+    enqueue({ data: { id: EMP_1 } }) // employee lookup
     enqueue({ data: null }) // no opening balances row
     enqueue({ data: null, error: { message: 'connection failure' } })
 
@@ -179,8 +182,8 @@ describe('PUT /api/salary/employees/[id]/opening-balances', () => {
 
   // The rule the GET now surfaces up front stays enforced on the write.
   it('keeps answering 409 OPENING_BALANCES_LOCKED when a booked run exists', async () => {
-    enqueue({ data: [{ id: 'emp-1', employment_start: '2024-01-01', is_active: true }] }) // employees
-    enqueue({ data: [{ employee_id: 'emp-1', salary_run: { id: 'run-1', status: 'booked' } }] })
+    enqueue({ data: [{ id: EMP_1, employment_start: '2024-01-01', is_active: true }] }) // employees
+    enqueue({ data: [{ employee_id: EMP_1, salary_run: { id: 'run-1', status: 'booked' } }] })
 
     const response = await PUT(put({ cutover_date: `${CUTOVER_YEAR}-01-01` }), params)
     const { status, body } = await parseJsonResponse<{ code: string }>(response)

@@ -7,12 +7,15 @@ import { partnerSlugOf } from '@/lib/auth/oauth-partner-clients'
  * Who is behind a connection row, as the Settings list labels it. The
  * built-in OAuth clients come from api_keys.client (migration
  * 20260913120000): claude, chatgpt, grok, gemini, copilot, cursor, cursor_deeplink,
- * squidler, celemine and local. `local` is any loopback sign-in (Claude Code,
+ * squidler, celemine, native_app and local. `local` is any loopback sign-in (Claude Code,
  * Codex, ...), so it is named as a local client, never guessed as Claude Code.
+ * `app` is any native app that signed in on its own URI scheme
+ * (native_app in lib/auth/oauth-allowlist.ts), named as an app for the same
+ * reason.
  * `partner` is a key minted through a partner row (client 'partner:<slug>',
  * migration 20261122153300); the list names it by the partner's name.
  */
-export type ConnectionKind = 'claude' | 'chatgpt' | 'grok' | 'gemini' | 'copilot' | 'cursor' | 'squidler' | 'celemine' | 'partner' | 'local' | 'mcp' | 'key'
+export type ConnectionKind = 'claude' | 'chatgpt' | 'grok' | 'gemini' | 'copilot' | 'cursor' | 'squidler' | 'celemine' | 'partner' | 'local' | 'app' | 'mcp' | 'key'
 
 export interface ConnectionRow {
   source?: 'signin' | 'manual'
@@ -38,6 +41,8 @@ export function connectionKind(row: Pick<ConnectionRow, 'source' | 'client'>): C
     case 'cursor':
     case 'cursor_deeplink':
       return 'cursor'
+    case 'native_app':
+      return 'app'
     default:
       // Rows minted before the client column, and registered clients.
       return 'mcp'

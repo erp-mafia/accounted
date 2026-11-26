@@ -420,6 +420,87 @@ describe('Extension Catch-All Route', () => {
     expect(handler).toHaveBeenCalled()
   })
 
+  describe('the company the tab shows', () => {
+    function registerConnect() {
+      const handler = vi.fn().mockResolvedValue(NextResponse.json({ ok: true }))
+      extensionRegistry.register({
+        id: 'test-ext',
+        name: 'Test',
+        version: '1.0.0',
+        apiRoutes: [
+          { method: 'POST', path: '/connect', handler },
+          { method: 'GET', path: '/status', handler },
+        ],
+      })
+      const { supabase } = createQueuedMockSupabase()
+      supabase.auth.getUser.mockResolvedValue({ data: { user: { id: 'user-1' } }, error: null })
+      mockCreateClient.mockResolvedValue(supabase as never)
+      return handler
+    }
+
+    it('refuses a write from a tab that shows another company, before the handler runs', async () => {
+      const handler = registerConnect()
+      const request = createMockRequest('/api/extensions/ext/test-ext/connect', {
+        method: 'POST',
+        body: { foo: 'bar' },
+        headers: { 'x-tab-company-id': 'company-2' },
+      })
+      const response = await POST(request, createPathParams(['test-ext', 'connect']))
+      const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+      expect(status).toBe(409)
+      expect(body.error.code).toBe('ACTIVE_COMPANY_CHANGED')
+      expect(response.headers.get('x-active-company-id')).toBe('company-1')
+      expect(handler).not.toHaveBeenCalled()
+    })
+
+    it('runs a write from a tab that shows the active company, and names that company in the answer', async () => {
+      const handler = registerConnect()
+      const request = createMockRequest('/api/extensions/ext/test-ext/connect', {
+        method: 'POST',
+        body: { foo: 'bar' },
+        headers: { 'x-tab-company-id': 'company-1' },
+      })
+      const response = await POST(request, createPathParams(['test-ext', 'connect']))
+
+      expect(response.status).toBe(200)
+      expect(response.headers.get('x-active-company-id')).toBe('company-1')
+      expect(handler).toHaveBeenCalled()
+    })
+
+    it('names the active company in a refusal of a gate too', async () => {
+      const handler = vi.fn().mockResolvedValue(NextResponse.json({ ok: true }))
+      extensionRegistry.register({
+        id: 'test-ext',
+        name: 'Test',
+        version: '1.0.0',
+        apiRoutes: [{ method: 'GET', path: '/admin', handler, requireAdmin: true }],
+      })
+      const { supabase } = createQueuedMockSupabase()
+      supabase.auth.getUser.mockResolvedValue({ data: { user: { id: 'user-1' } }, error: null })
+      mockCreateClient.mockResolvedValue(supabase as never)
+      mockIsCompanyAdmin.mockResolvedValueOnce(false)
+
+      const response = await GET(createMockRequest('/api/extensions/ext/test-ext/admin'), createPathParams(['test-ext', 'admin']))
+
+      expect(response.status).toBe(403)
+      expect(response.headers.get('x-active-company-id')).toBe('company-1')
+      expect(handler).not.toHaveBeenCalled()
+    })
+
+    it('runs a read from a tab that shows another company, and names the active company in the answer', async () => {
+      const handler = registerConnect()
+      const request = createMockRequest('/api/extensions/ext/test-ext/status', {
+        headers: { 'x-tab-company-id': 'company-2' },
+      })
+      const response = await GET(request, createPathParams(['test-ext', 'status']))
+
+      expect(response.status).toBe(200)
+      expect(response.headers.get('x-active-company-id')).toBe('company-1')
+      expect(handler).toHaveBeenCalled()
+    })
+  })
+
   // Paywall: the dispatcher gates every company-context route of an extension
   // that declares a required capability (invoice-inbox → ai). The resolver is
   // mocked so the test is deterministic in any build; requireCapability is

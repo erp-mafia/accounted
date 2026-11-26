@@ -3,7 +3,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { BuildingLibraryIcon } from '@/components/icons'
+import { useCompany } from '@/contexts/CompanyContext'
 import { useBranding } from '@/lib/branding/brand-context'
+import { usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
 import { useFormat } from '@/lib/hooks/use-format'
 import { useOAuthPopup } from '@/lib/hooks/use-oauth-popup'
 import { isSkvPopupOrigin, type SkvPopupMessage } from '@/lib/skatteverket/popup-origin'
@@ -38,6 +40,9 @@ export function SkvStep({ ctx }: { ctx: BooksCtx }) {
   const tOmbud = useTranslations('skatteverket_ombud')
   const errorLocale = useLocale() as ErrorLocale
   const { appName } = useBranding()
+  const { company } = useCompany()
+  // Where the company's number is the owner's own, the owner is the one who signs.
+  const ownerSigns = company ? usesPersonnummerAsOrgNumber(company.entity_type) : false
   const { state, dispatch, flags, findings, loadFindings, landedError } = ctx
   const phase = state.skvPhase
   const [saldo, setSaldo] = useState<number | null>(null)
@@ -219,31 +224,38 @@ export function SkvStep({ ctx }: { ctx: BooksCtx }) {
 
   const open = phase === 'open' || phase === 'leaving'
   const bodyCls = phase === 'leaving' ? ' is-away' : ''
+  const sourcesFlow = flags.sourcesFlow === true
+  const holdText = ombudMode ? t('skv_ombud_hold') : t('skv_hold')
 
   return (
     <div className="jny-qstep">
+      {/* The sources arrangement: the mark stands over the title from the start, and the same chip carries the ring and the badge. */}
+      {sourcesFlow ? <SkvHandshake phase={phase} holdText="" mark="tax" idle compact /> : null}
       <h1 className="jny-qtitle">
         <InkText text={phase === 'done' ? t('skv_title_done') : t('skv_title')} />
       </h1>
+      {sourcesFlow && phase === 'away' ? <p className="jny-qsub">{holdText}</p> : null}
       {open ? (
         <div className={`skv-body${bodyCls}`}>
           <p className="jny-qsub">
             {ombudWaiting
               ? tOmbud('waiting_hint', { appName })
               : ombudMode
-                ? t('skv_ombud_sub', { appName })
-                : t('skv_sub')}
+                ? t(flags.sourcesFlow ? (ownerSigns ? 'skv_ombud_sub_short_owner' : 'skv_ombud_sub_short') : 'skv_ombud_sub', { appName })
+                : t(flags.sourcesFlow ? 'skv_sub_short' : 'skv_sub')}
           </p>
           {attn ? <p className="jny-attn">{attn}</p> : null}
           {flags.hasSkatteverket ? (
             <button
               type="button"
-              className={`jny-bankid${phase === 'leaving' ? ' is-fold' : ''}`}
+              className={`jny-bankid${flags.sourcesFlow ? ' is-primary' : ''}${phase === 'leaving' ? ' is-fold' : ''}`}
               onClick={ombudMode ? () => void appointOmbud() : connect}
             >
-              <span className="pmark" aria-hidden="true">
-                <BuildingLibraryIcon className="h-4 w-4" />
-              </span>
+              {!flags.sourcesFlow && (
+                <span className="pmark" aria-hidden="true">
+                  <BuildingLibraryIcon className="h-4 w-4" />
+                </span>
+              )}
               <span className="jny-bankid-txt">{ombudMode ? t('skv_ombud_connect', { appName }) : t('skv_connect')}</span>
             </button>
           ) : (
@@ -251,10 +263,10 @@ export function SkvStep({ ctx }: { ctx: BooksCtx }) {
           )}
         </div>
       ) : null}
-      {phase === 'away' || phase === 'back' || phase === 'done' ? (
+      {!sourcesFlow && (phase === 'away' || phase === 'back' || phase === 'done') ? (
         <SkvHandshake
           phase={phase}
-          holdText={ombudMode ? t('skv_ombud_hold') : t('skv_hold')}
+          holdText={holdText}
           leftLabel={appName}
           rightLabel={t('station_skv')}
         />
@@ -274,7 +286,7 @@ export function SkvStep({ ctx }: { ctx: BooksCtx }) {
           </Button>
         ) : open ? (
           <Button variant="ghost" className={`text-muted-foreground${bodyCls}`} onClick={() => dispatch({ type: 'SKV_SKIP' })}>
-            {t('skv_skip')}
+            {t(flags.sourcesFlow ? 'skv_skip_short' : 'skv_skip')}
           </Button>
         ) : null}
       </div>

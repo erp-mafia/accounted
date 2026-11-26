@@ -200,8 +200,8 @@ export function describeMissingInvoicePaymentAccount(
 ): { sv: string; en: string } {
   if (currency === 'SEK') {
     return {
-      sv: 'Fakturan saknar betalningsuppgifter: företaget har inget bankgiro, plusgiro, Swish-nummer eller bankkonto att skriva på fakturan. Lägg till ett under Inställningar → Fakturering och försök igen.',
-      en: 'The invoice has no payment details: the company has no bankgiro, plusgiro, Swish number or bank account to print on the invoice. Add one under Inställningar → Fakturering (Settings → Invoicing) and try again.',
+      sv: 'Fakturan saknar betalningsuppgifter: företaget har inget bankgiro, plusgiro, Swish-nummer eller bankkonto att skriva på fakturan. Lägg till ett under Inställningar → Försäljning → Fakturor och försök igen.',
+      en: 'The invoice has no payment details: the company has no bankgiro, plusgiro, Swish number or bank account to print on the invoice. Add one under Inställningar → Försäljning → Fakturor (Settings → Sales → Invoices) and try again.',
     }
   }
   // The gap is almost always the choice, not a missing account (crm#1273):
@@ -215,8 +215,8 @@ export function describeMissingInvoicePaymentAccount(
     ? ` (or its ${currency === 'USD' ? 'routing number' : 'sort code'}, account number and BIC)`
     : ''
   return {
-    sv: `Fakturan är i ${currency}, men inget bankkonto är valt för ${currency}. Det kan vara företagets vanliga konto i SEK: kunden betalar till kontots IBAN. Gå till Inställningar → Fakturering, Bankkonton för kundfakturor: fyll i kontots IBAN${routingSv} om det saknas, lägg till ${currency} under Lägg till valuta och välj kontot som Standard ${currency}. Försök sedan igen.`,
-    en: `The invoice is in ${currency}, but no bank account is chosen for ${currency}. It can be the company's usual SEK account: the customer pays to its IBAN. Go to Inställningar → Fakturering (Settings → Invoicing), Bank accounts for customer invoices: fill in the account's IBAN${routingEn} if it is missing, add ${currency} under Add currency and choose the account as Default ${currency}. Then try again.`,
+    sv: `Fakturan är i ${currency}, men inget bankkonto är valt för ${currency}. Det kan vara företagets vanliga konto i SEK: kunden betalar till kontots IBAN. Gå till Inställningar → Försäljning → Fakturor, Bankkonton för kundfakturor: fyll i kontots IBAN${routingSv} om det saknas, lägg till ${currency} under Lägg till valuta och välj kontot som Standard ${currency}. Försök sedan igen.`,
+    en: `The invoice is in ${currency}, but no bank account is chosen for ${currency}. It can be the company's usual SEK account: the customer pays to its IBAN. Go to Inställningar → Försäljning → Fakturor (Settings → Sales → Invoices), Bank accounts for customer invoices: fill in the account's IBAN${routingEn} if it is missing, add ${currency} under Add currency and choose the account as Default ${currency}. Then try again.`,
   }
 }
 

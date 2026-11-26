@@ -16,6 +16,20 @@ import { ARCIM, arcimDebit, arcimOrder, order as paymentOrder } from '@/lib/paym
 // Mocks
 // ---------------------------------------------------------------------------
 
+// The pipeline's own log records, for the tests that say a step degraded
+// out loud (the test env prints no warn line). Every other module logs as usual.
+const { ingestLogs } = vi.hoisted(() => ({ ingestLogs: [] as Array<Record<string, unknown>> }))
+vi.mock('@/lib/logger', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/logger')>()
+  return {
+    ...actual,
+    createLogger: (module: string, base = {}) =>
+      module === 'transactions.ingest'
+        ? actual.createTestLogger(module, ingestLogs as never, base)
+        : actual.createLogger(module, base),
+  }
+})
+
 const mockEvaluateMappingRules = vi.fn()
 vi.mock('@/lib/bookkeeping/mapping-engine', () => ({
   evaluateMappingRules: (...args: unknown[]) => mockEvaluateMappingRules(...args),
@@ -1694,6 +1708,32 @@ describe('ingestTransactions', () => {
     expect(result.imported).toBe(1)
   })
 
+  // The same batch when the stored-id read is refused (a gateway refused the
+  // long URL of a large batch). Nothing is reserved then: REF2 would be taken
+  // for REF1's stored twin and dropped, and REF1 turned back by the unique
+  // index, so a real movement would be missing. The batch is refused before
+  // any row is decided instead; a bank sync keeps its window and reads again.
+  it('refuses the batch, inserting nothing, when the stored external_id read fails', async () => {
+    const { supabase, enqueue, inserts } = createQueueMockSupabase()
+    const rows = [
+      makeRaw({ date: '2026-04-07', amount: -100, description: 'ICA', external_id: 'camt053_REF2', import_source: 'camt053' }),
+      makeRaw({ date: '2026-04-07', amount: -100, description: 'ICA', external_id: 'camt053_REF1', import_source: 'camt053' }),
+    ]
+
+    enqueue({
+      data: [{ id: 'tx-ref1', date: '2026-04-07', amount: -100, original_description: 'ICA', import_source: 'camt053', external_id: 'camt053_REF1' }],
+      error: null,
+    }) // booked map: REF1 stored
+    enqueue({ data: [], error: null }) // unbooked map
+    enqueue({ data: [], error: null }) // supplier invoices
+    enqueue({ data: null, error: { message: 'Request-URI Too Large' } }) // external_id dedup: refused
+
+    await expect(ingestTransactions(supabase as never, COMPANY_ID, USER_ID, rows)).rejects.toThrow(
+      'Stored external_id read failed: Request-URI Too Large',
+    )
+    expect(inserts['transactions']).toBeUndefined()
+  })
+
   it('imports a late identical-description twin that an id match already accounted for', async () => {
     const { supabase, enqueue } = createQueueMockSupabase()
     const id = (n: number) => `eb_SE47_2026-09-21_-5000_${n}`
@@ -3184,6 +3224,30 @@ describe('ingestTransactions', () => {
       expect(mockBestInvoiceMatch.mock.calls[0][0]).toMatchObject({ id: 'tx-stored', reference: '1001000000017', amount: 1250 })
       expect(inserts['payment_match_log']).toEqual([expect.objectContaining({ action: 'auto_suggested', invoice_id: 'inv-1001', match_confidence: 0.99 })])
       expect(mockEvaluateMappingRules).not.toHaveBeenCalled()
+    })
+
+    it('still imports the batch when the stored rows of the re-read cannot be read, leaves those rows as stored and logs it', async () => {
+      const { supabase, enqueue, updates, inserts } = createQueueMockSupabase()
+      ingestLogs.length = 0
+      const stored = storedIncome()
+      const fresh = makeRaw({ date: '2026-10-12', amount: -300, description: 'Kortköp', import_source: 'open_payments', bank_connection_id: 'conn-1' })
+      enqueue({ data: [] }, { data: [] }) // booked map, unbooked map
+      enqueue({ data: [] }) // supplier invoices
+      enqueue({ data: [{ id: stored.id, external_id: stored.external_id }] }) // external_id dedup: the re-read is stored
+      enqueue({ data: null, error: { message: 'Request-URI Too Large' } }) // the stored rows of the re-read: refused
+      enqueue({ data: makeTransaction({ id: 'tx-fresh', amount: -300 }) }) // insert of the new row
+      mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
+
+      const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [rereadIncome(), fresh])
+
+      expect(result).toMatchObject({ imported: 1, duplicates: 1, errors: 0, enriched_updated: 0, transaction_ids: ['tx-fresh'] })
+      expect(inserts['transactions']).toHaveLength(1)
+      expect(updates['transactions']).toBeUndefined()
+      expect(ingestLogs).toContainEqual(expect.objectContaining({
+        level: 'warn',
+        msg: 'stored rows of the re-read unreadable: the re-read rows stay as stored',
+        storedIds: 1,
+      }))
     })
 
     it('keeps the hint a row already carries unless the re-read brings a reference match', async () => {

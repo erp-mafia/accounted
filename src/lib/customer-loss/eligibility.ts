@@ -6,6 +6,7 @@ import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
 import { isInvoiceOverdue } from '@/lib/invoices/overdue'
 import { roundOre } from '@/lib/money'
 import { isOwedInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
+import { openClaim, type OpenClaim } from './amounts'
 import type { CustomerLossErrorCode } from './errors'
 import type { CustomerLossInvoice, CustomerLossState, LatestCase } from './state'
 
@@ -55,8 +56,23 @@ export function openClaimRefusal(state: CustomerLossState): CustomerLossErrorCod
     // booked yet (deferred booking) is booked first.
     return state.accountingMethod === 'cash' ? null : 'CUSTOMER_LOSS_INVOICE_NOT_BOOKED'
   }
-  if (roundOre(state.basis - invoice.paid_amount) !== roundOre(invoice.remaining_amount)) {
-    return 'CUSTOMER_LOSS_LEDGER_MISMATCH'
-  }
+  if (openClaimOnLedger(state) === null) return 'CUSTOMER_LOSS_LEDGER_MISMATCH'
   return null
+}
+
+/**
+ * The open part of the claim a decision books (openClaim): what 151x still
+ * carries for the invoice, with its VAT. null when the ledger and the
+ * reskontra disagree. An invoice that never reached the ledger has only the
+ * reskontra's figure and no VAT on the ledger.
+ */
+export function openClaimOnLedger(state: CustomerLossState): OpenClaim | null {
+  if (!state.booked) return { amount: roundOre(state.invoice.remaining_amount), shares: [] }
+  return openClaim({
+    openVat: state.openVat,
+    basis: state.basis,
+    paid: state.invoice.paid_amount,
+    remaining: state.invoice.remaining_amount,
+    ore: state.oreRounding,
+  })
 }

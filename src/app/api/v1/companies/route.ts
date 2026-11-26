@@ -24,6 +24,7 @@ import type { IdempotencyClaim } from '@/lib/api/idempotency'
 import { readV1JsonBody } from '@/lib/api/v1/body'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { createCompanyCore } from '@/lib/company/create-company'
+import { defaultTeamForNewCompany } from '@/lib/company/default-team'
 import { CompanySetupSchema, planCompanySetup } from '@/lib/company/onboarding-input'
 import { EntityTypeSchema } from '@/lib/api/schemas'
 
@@ -165,28 +166,27 @@ export const POST = withApiV1('companies.create', async (request, ctx) => {
     })
   }
 
-  // Team: explicit, else the caller's PERSONAL team only (WL-08: companies
-  // created through the normal flow always attach to the personal team;
-  // cockpit flows pass the byrå team id explicitly). Picking the first
-  // membership regardless of kind attached a consultant's private company to
-  // the byrå team, exposing their books to the whole byrå and suppressing the
-  // trial. Mirrors ensure_user_team: earliest teams row with kind='personal'.
-  // create_company_for_user re-checks membership (and byrå role) in the DB.
-  let teamId: string | null = setup.team_id ?? null
-  if (!teamId) {
-    const { data: membership } = await ctx.supabase
-      .from('team_members')
-      .select('team_id, teams!inner(kind, created_at)')
-      .eq('user_id', ctx.userId)
-      .eq('teams.kind', 'personal')
-      .order('teams(created_at)', { ascending: true })
-      .order('teams(id)', { ascending: true })
-      .limit(1)
-      .maybeSingle()
-    teamId = (membership?.team_id as string | undefined) ?? null
+  // Team: explicit, else the caller's personal team (defaultTeamForNewCompany,
+  // WL-08). create_company_for_user re-checks membership (and byrå role) in
+  // the DB. A failed read refuses the request, the dry run included: a
+  // company created on it would have no team. Read after the Idempotency-Key
+  // claim, as the MCP door does, so a replay never depends on it.
+  const readTeam = async (): Promise<{ teamId: string | null } | { refused: Response }> => {
+    if (setup.team_id) return { teamId: setup.team_id }
+    try {
+      return { teamId: await defaultTeamForNewCompany(ctx.supabase, ctx.userId) }
+    } catch (err) {
+      ctx.log.error('companies.create: personal team lookup failed', err as Error)
+      return {
+        refused: await v1ErrorResponseFromCode('INTERNAL_ERROR', ctx.log, {
+          requestId: ctx.requestId,
+          details: { message: 'The personal team could not be read, so this request created nothing.' },
+        }),
+      }
+    }
   }
 
-  const shape = (id: string) => ({
+  const shape = (id: string, teamId: string | null) => ({
     id,
     name: setup.name,
     entity_type: setup.entity_type,
@@ -203,7 +203,9 @@ export const POST = withApiV1('companies.create', async (request, ctx) => {
   })
 
   if (ctx.dryRun) {
-    return dryRunPreview(shape('00000000-0000-4000-8000-000000000000'), {
+    const previewTeam = await readTeam()
+    if ('refused' in previewTeam) return previewTeam.refused
+    return dryRunPreview(shape('00000000-0000-4000-8000-000000000000', previewTeam.teamId), {
       requestId: ctx.requestId,
       log: ctx.log,
     })
@@ -235,6 +237,13 @@ export const POST = withApiV1('companies.create', async (request, ctx) => {
     claim = claimed.claim
   }
 
+  const team = await readTeam()
+  if ('refused' in team) {
+    // Nothing was created: give the key back, so a retry runs again.
+    await claim?.release()
+    return team.refused
+  }
+
   let result: Awaited<ReturnType<typeof createCompanyCore>>
   try {
     result = await createCompanyCore(ctx.supabase, plan.input, () =>
@@ -242,7 +251,7 @@ export const POST = withApiV1('companies.create', async (request, ctx) => {
         p_user_id: ctx.userId,
         p_name: setup.name,
         p_entity_type: setup.entity_type,
-        p_team_id: teamId,
+        p_team_id: team.teamId,
       }),
     )
   } catch (err) {
@@ -266,7 +275,7 @@ export const POST = withApiV1('companies.create', async (request, ctx) => {
     })
   }
 
-  const response = created(shape(result.companyId), { requestId: ctx.requestId })
+  const response = created(shape(result.companyId, team.teamId), { requestId: ctx.requestId })
   // Best-effort like the wrapper's cache: the company exists either way, and
   // a failed write only weakens a later retry (logged inside).
   await claim?.complete('success', (await response.clone().json()) as Record<string, unknown>, {

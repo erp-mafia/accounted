@@ -10,6 +10,13 @@ vi.mock('@/extensions/general/skatteverket/lib/resolve-auth', () => ({
   hasOmbudReadAccess: (...a: unknown[]) => hasOmbudReadAccess(...a),
 }))
 
+// The filing readiness reads on the service role whichever client the door
+// holds, as MCP does: each test hands its rows to it through this client.
+let serviceDb: unknown = null
+vi.mock('@/lib/auth/api-keys', () => ({
+  createServiceClientNoCookies: () => serviceDb,
+}))
+
 import {
   getSkvConnectionHealth,
   getSkvFilingReadiness,
@@ -73,10 +80,12 @@ function tokenRow(
 }
 
 function client(rows: unknown[], memberName: string | null = 'Anna Admin') {
-  return createTableMockSupabase({
+  const db = createTableMockSupabase({
     skatteverket_tokens: { data: rows },
     profiles: { data: memberName === null ? null : { full_name: memberName } },
   })
+  serviceDb = db.supabase
+  return db
 }
 
 describe('getSkvFilingReadiness', () => {
@@ -139,7 +148,53 @@ describe('getSkvFilingReadiness', () => {
     const { supabase } = createTableMockSupabase({
       skatteverket_tokens: { data: null, error: { message: 'boom' } },
     })
+    serviceDb = supabase
     expect(await getSkvFilingReadiness(supabase as never, COMPANY, CALLER, NOW)).toBeNull()
+  })
+})
+
+// The wiki's context view runs the briefing with the caller's session client.
+// End-user roles have no grant on the token columns and see only their own
+// profile, so the read was refused and the briefing the wiki showed had no
+// filing line, while the agent on MCP got one.
+describe('getSkvFilingReadiness from a session door', () => {
+  // PostgREST's answer to an end-user role that names a withheld column.
+  const sessionClient = () =>
+    createTableMockSupabase({
+      skatteverket_tokens: { data: null, error: { code: '42501', message: 'permission denied for table skatteverket_tokens' } },
+      profiles: { data: null },
+    })
+
+  it("answers as MCP does, and asks the session client for nothing", async () => {
+    const session = sessionClient()
+    const service = client([
+      tokenRow(MEMBER, { expiresInMin: 57 }),
+      tokenRow(CALLER, { status: 'needs_reconsent', expiresInMin: -26 * 24 * 60 }),
+    ])
+    const fromSession = await getSkvFilingReadiness(session.supabase as never, COMPANY, CALLER, NOW)
+    const fromMcp = await getSkvFilingReadiness(service.supabase as never, COMPANY, CALLER, NOW)
+
+    expect(fromSession).toMatchObject({ ready: false, own_session: 'expired' })
+    expect(fromSession?.message).toContain('belongs to Anna Admin, another member of the company')
+    expect(fromSession).toEqual(fromMcp)
+    expect(session.calls).toEqual([])
+    // The rows are the company's own, and only presence leaves the read.
+    expect(service.findCall('skatteverket_tokens', 'eq')).toEqual(['company_id', COMPANY])
+    expect(JSON.stringify(fromSession)).not.toContain('ciphertext')
+  })
+
+  it('inside the refresh window, ready only while a refresh token is stored', async () => {
+    const session = sessionClient()
+    client([tokenRow(CALLER, { expiresInMin: -3 })])
+    expect(await getSkvFilingReadiness(session.supabase as never, COMPANY, CALLER, NOW)).toEqual({
+      ready: true,
+      own_session: 'active',
+    })
+    client([tokenRow(CALLER, { expiresInMin: -3, refreshToken: null })])
+    expect(await getSkvFilingReadiness(session.supabase as never, COMPANY, CALLER, NOW)).toMatchObject({
+      ready: false,
+      own_session: 'expired',
+    })
   })
 })
 

@@ -268,6 +268,12 @@ export interface UserUiState {
   // Kom igång steps this user chose to skip, keyed per company
   // (companyId -> step ids, lib/onboarding/checklist SKIPPABLE_SETUP_STEPS).
   setup_skipped?: Record<string, string[]>
+  // Hem's first-thing block closed by this user, keyed per company
+  // (companyId -> ISO timestamp of the close, lib/onboarding/first-thing).
+  first_thing_closed?: Record<string, string>
+  // When this user last went through Hem's question walk, keyed per company
+  // (companyId -> ISO timestamp); only questions filed later are walked again.
+  hem_questions_passed?: Record<string, string>
   // One-time Discord invite card (components/community/DiscordInviteCard):
   // ISO timestamp of when the user closed it or clicked through. Per user,
   // not per company: it is one community.
@@ -280,6 +286,10 @@ export interface UserUiState {
   // person pinned, in the order they were added. Per person, not per company:
   // the sidebar draws only the ones the open company's menu shows.
   nav_favorites?: string[]
+  // Row density of the verifikat list (components/bookkeeping/
+  // JournalEntryList). Per person, for every company and device: a sign-out
+  // empties the browser's storage, so it is kept here.
+  journal_density?: 'compact' | 'comfortable'
 }
 
 export type AgentPanelMode = 'docked' | 'floating'
@@ -709,6 +719,10 @@ export interface CompanySettings {
   // payment links on send. Enforced server-side in
   // lib/extensions/payment-links.ts, not just in the UI.
   invoice_payment_links_enabled: boolean
+  // The ways invoices go out, in the order the editor tries them
+  // (lib/invoices/send-order.ts); null = no order chosen. Optional in TS: a
+  // row read before the column's migration has it absent.
+  invoice_send_order?: string[] | null
 
   // Invoice branding (per-company colors, font, optional header/footer text).
   // Defaults preserve the legacy hardcoded palette so unbranded companies
@@ -1410,6 +1424,12 @@ export interface SalesOrder {
   total: number
   your_reference: string | null
   our_reference: string | null
+  /**
+   * Märkning for the order's invoices: copied from the offert or proforma it
+   * was converted from, or set on the order. Null leaves each invoice to the
+   * customer card's (lib/customers/invoice-marking.ts).
+   */
+  invoice_marking: string | null
   notes: string | null
   default_dimensions: Record<string, string>
   confirmed_at: string | null
@@ -4901,6 +4921,15 @@ export interface WebshopOrder {
    */
   customer_country: string | null
   /**
+   * The billing address the store sent with the order, on WooCommerce order
+   * rows (null on the other platforms' rows and on refund rows). A customer
+   * that the create-invoice route creates from the order gets it.
+   */
+  customer_address_line1: string | null
+  customer_address_line2: string | null
+  customer_postal_code: string | null
+  customer_city: string | null
+  /**
    * Shopify: true when the store reported that no line of the order needs
    * shipping (digital products, services), on the order row and its refund
    * rows. The country rules then book a sale abroad as services
@@ -5426,6 +5455,10 @@ export interface SalaryLineItem {
   /** The benefit a net_deduction_benefit_payment row pays for (employee_benefits
    *  benefit_type, migration 20261028030447); null = the payslip's only benefit type. */
   benefit_type?: 'bike' | 'car' | 'meals' | 'housing' | 'wellness' | 'other' | null
+  /** A manual semesterersättning row paying semesterlön for rörliga lönedelar
+   *  with the salary under a central kollektivavtal (migration 20261125180000,
+   *  lib/salary/variable-vacation-pay.ts); absent before the migration. */
+  settles_variable_vacation_pay?: boolean
   created_at: string
   updated_at: string
 }

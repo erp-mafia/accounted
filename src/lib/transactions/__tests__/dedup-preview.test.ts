@@ -6,8 +6,8 @@
  * currency guard and both mirrors), because the wizard shows its answer as
  * "these rows will be skipped". Row-by-row agreement with the commit is
  * pinned in ingest-identical-rows.test.ts. The queue order per call is:
- * booked map page(s), unbooked map page(s), then one external_id chunk query
- * per 500 rows.
+ * booked map page(s), unbooked map page(s), then one external_id query per
+ * slice of ids (fetchStoredExternalIds; one slice for every batch here).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { previewDuplicates, type PreviewTransaction } from '../dedup-preview'

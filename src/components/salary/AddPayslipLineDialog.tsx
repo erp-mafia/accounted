@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import {
   Dialog,
@@ -60,6 +61,9 @@ const parseNumber = (s: string): number | undefined => parseDecimalInput(s) ?? u
  * adjusted (crm#1349). Utlandstraktamente takes the country and, on the
  * tax-free row, the country's normalbelopp per day, which caps the à-pris
  * (crm#1468); the row books on 7323 / 7324 unless an account is picked.
+ * Semesterlön rörliga lönedelar is offered only for an employee on
+ * sammalöneregeln, and saved only once the operator confirms the central
+ * kollektivavtal that lets it be paid with the salary.
  */
 export function AddPayslipLineDialog({
   open,
@@ -70,6 +74,7 @@ export function AddPayslipLineDialog({
   mealSchablon,
   employmentType,
   personnelCategory,
+  vacationRule,
   onAdded,
 }: {
   open: boolean
@@ -79,6 +84,8 @@ export function AddPayslipLineDialog({
   /** The employee's employment type and personnel category: they decide the default account shown. */
   employmentType: string
   personnelCategory: string | null | undefined
+  /** The employee's semesterregel: Semesterlön rörliga lönedelar is offered under sammalöneregeln only. */
+  vacationRule?: string | null
   /** Schablon per mil / per day for the run's year; a tax-free line above it is refused. */
   taxFreeCaps?: ManualLineCaps
   /** Kostförmån per meal for the run's year; empty before the first calculation. */
@@ -100,8 +107,14 @@ export function AddPayslipLineDialog({
   const [mealKind, setMealKind] = useState<MealBenefitKind>(DEFAULT_MEAL)
   const [country, setCountry] = useState('')
   const [normalbelopp, setNormalbelopp] = useState('')
+  const [kollektivavtalConfirmed, setKollektivavtalConfirmed] = useState(false)
 
+  const lineTypes = MANUAL_PAYSLIP_LINE_TYPES.filter(
+    (k) => vacationRule === 'sammaloneregeln' || !MANUAL_PAYSLIP_LINE_SPECS[k].settlesVariableVacationPay,
+  )
   const spec = MANUAL_PAYSLIP_LINE_SPECS[type]
+  // Semesterlön rörliga lönedelar paid with the salary under a kollektivavtal.
+  const isVariableVacationPay = spec.settlesVariableVacationPay === true
   // The item type the row is stored as: an utlandstraktamente or a
   // nattraktamente is a traktamente row (manual-payslip-lines.ts).
   const storedType = storedLineItemType(type)
@@ -132,6 +145,7 @@ export function AddPayslipLineDialog({
       meal_kind: isMeal ? mealKind : undefined,
       country: isForeign ? country : undefined,
       normalbelopp: isForeignTaxFree ? parseNumber(normalbelopp) : undefined,
+      kollektivavtal_confirmed: isVariableVacationPay ? kollektivavtalConfirmed : undefined,
     },
     taxFreeCaps,
   )
@@ -141,6 +155,7 @@ export function AddPayslipLineDialog({
   const noDays = !built.ok && built.reason === 'no_days'
   const noCountry = !built.ok && built.reason === 'no_country'
   const noNormalbelopp = !built.ok && built.reason === 'no_normalbelopp'
+  const noKollektivavtal = !built.ok && built.reason === 'no_kollektivavtal'
 
   function reset() {
     setType(DEFAULT_TYPE)
@@ -155,6 +170,7 @@ export function AddPayslipLineDialog({
     setMealKind(DEFAULT_MEAL)
     setCountry('')
     setNormalbelopp('')
+    setKollektivavtalConfirmed(false)
     onOpenChange(false)
   }
 
@@ -240,6 +256,8 @@ export function AddPayslipLineDialog({
                   setType(v as ManualPayslipLineType)
                   if (v === 'benefit_meals') applyMealSchablon(mealKind)
                   setInvalid(false)
+                  // The confirmation is given for the row in front of the operator.
+                  setKollektivavtalConfirmed(false)
                   // An override picked for the old type need not fit the new one.
                   setAccount('')
                   setAccountInvalid(false)
@@ -249,7 +267,7 @@ export function AddPayslipLineDialog({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {MANUAL_PAYSLIP_LINE_TYPES.map((k) => (
+                  {lineTypes.map((k) => (
                     <SelectItem key={k} value={k}>
                       {t(`li_${k}`)}
                     </SelectItem>
@@ -351,6 +369,19 @@ export function AddPayslipLineDialog({
             </div>
           )}
 
+          {isVariableVacationPay && (
+            <label className="flex items-start gap-2 text-sm">
+              <Checkbox
+                id="payslip_line_kollektivavtal"
+                className="mt-0.5"
+                checked={kollektivavtalConfirmed}
+                onCheckedChange={(v) => { setKollektivavtalConfirmed(v === true); setInvalid(false) }}
+                aria-invalid={(invalid && noKollektivavtal) || undefined}
+              />
+              {t('add_line_kollektivavtal_confirm')}
+            </label>
+          )}
+
           {isText ? (
             <div className="space-y-2">
               <Label htmlFor="payslip_line_text">{t('add_line_text')}</Label>
@@ -406,7 +437,7 @@ export function AddPayslipLineDialog({
                   value={product !== undefined ? String(product) : amount}
                   onChange={(e) => { setAmount(e.target.value); setInvalid(false) }}
                   disabled={computed}
-                  aria-invalid={(invalid && !noDays) || !!aboveCap || undefined}
+                  aria-invalid={(invalid && !noDays && !noKollektivavtal) || !!aboveCap || undefined}
                 />
               </div>
             </div>
@@ -432,14 +463,18 @@ export function AddPayslipLineDialog({
                       ? t('add_line_invalid_country')
                       : noNormalbelopp
                         ? t('add_line_invalid_normalbelopp')
-                        : t('add_line_invalid')
+                        : noKollektivavtal
+                          ? t('add_line_invalid_kollektivavtal')
+                          : t('add_line_invalid')
                 : computed && preview && !isText
                   ? `${t('add_line_computed')} = ${formatCurrency(preview.amount)}`
                   : isMeal && mealValue !== undefined && mealSchablon?.year !== undefined
                     ? t('add_line_hint_meal', { year: mealSchablon.year, amount: formatCurrency(mealValue) })
                     : isForeignTaxFree
                       ? t('add_line_hint_foreign')
-                      : t(isVacation ? 'add_line_hint_vacation' : hintKey)}
+                      : isVariableVacationPay
+                        ? t('add_line_hint_variable_vacation_pay')
+                        : t(isVacation ? 'add_line_hint_vacation' : hintKey)}
           </p>
 
           <LineAccountField

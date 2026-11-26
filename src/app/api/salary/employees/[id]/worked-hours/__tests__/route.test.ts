@@ -22,8 +22,11 @@ import type { ShiftPremiumRule } from '@/types'
 
 const { supabase, enqueue, reset, insertedRows, selectedColumns, ops } = createRecordingSupabase()
 
-/** The register-lock lookup every write makes right after the employee check. */
-const enqueueNoLockingRuns = () => enqueue({ data: [] })
+/** The register-lock lookups every write makes right after the employee check: runs, then the registered day. */
+const enqueueNoLockingRuns = () => {
+  enqueue({ data: [] })
+  enqueue({ data: [] })
+}
 
 /** July 2026 pay month, calculated, legacy NULL window: locks 2026-07-01..31. */
 const REVIEW_RUN_JULY = {
@@ -173,6 +176,7 @@ describe('POST /api/salary/employees/[id]/worked-hours', () => {
   it('returns 409 with the Swedish message and the run when a calculated run already read the date', async () => {
     enqueue({ data: { id: 'emp-1', salary_type: 'hourly' } }) // loadEmployee
     enqueue({ data: [REVIEW_RUN_JULY] }) // register lock lookup
+    enqueue({ data: [] }) // nothing registered on the day
 
     const response = await POST(post({ work_date: '2026-07-01', hours: 8 }), params)
     const { status, body } = await parseJsonResponse<{
@@ -183,10 +187,10 @@ describe('POST /api/salary/employees/[id]/worked-hours', () => {
 
     expect(status).toBe(409)
     expect(body.code).toBe('SALARY_REGISTER_DATES_LOCKED_BY_RUN')
-    expect(body.error).toContain('avvikelseperioden')
+    expect(body.error).toContain('Återställ den till utkast')
     expect(body.details).toMatchObject({ salary_run_id: 'run-jul', locked_dates: ['2026-07-01'] })
-    // Neither the delete nor the insert of the replace ran.
-    expect(ops.filter((op) => op.table === 'salary_worked_days')).toHaveLength(0)
+    // Neither the delete nor the insert of the replace ran: the register was only read.
+    expect(ops.filter((op) => op.table === 'salary_worked_days').map((op) => op.verb)).toEqual(['select'])
     expect(insertedRows()).toHaveLength(0)
   })
 

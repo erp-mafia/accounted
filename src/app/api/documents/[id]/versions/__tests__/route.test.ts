@@ -6,6 +6,9 @@ import {
   createQueuedMockSupabase,
 } from '@/tests/helpers'
 
+// Route path ids are uuids: the route answers its 404 to anything else before it reads.
+const DOC_1 = '07d97135-5e40-5982-b76e-60a9095f9139'
+
 const { supabase: mockSupabase, reset } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
@@ -56,7 +59,7 @@ function makeReq(withFile = true) {
   if (withFile) {
     form.append('file', new File(['content'], 'kvitto.pdf', { type: 'application/pdf' }))
   }
-  return new Request('http://localhost/api/documents/doc-1/versions', {
+  return new Request(`http://localhost/api/documents/${DOC_1}/versions`, {
     method: 'POST',
     body: form,
   })
@@ -83,14 +86,14 @@ describe('POST /api/documents/[id]/versions', () => {
     form.append('mime_type', 'application/pdf')
 
     const res = await POST(
-      new Request('http://localhost/api/documents/doc-1/versions', { method: 'POST', body: form }),
-      createMockRouteParams({ id: 'doc-1' }),
+      new Request(`http://localhost/api/documents/${DOC_1}/versions`, { method: 'POST', body: form }),
+      createMockRouteParams({ id: DOC_1 }),
     )
 
     expect(res.status).toBe(200)
     expect(stagedDownload).toHaveBeenCalledWith(`documents/company-1/user-1/pending/${uploadId}_kvitto.pdf`)
     const [, , docId, file] = mockCreateNewVersion.mock.calls[0]
-    expect(docId).toBe('doc-1')
+    expect(docId).toBe(DOC_1)
     expect(file).toEqual(expect.objectContaining({ name: 'kvitto.pdf', type: 'application/pdf' }))
   })
 
@@ -102,8 +105,8 @@ describe('POST /api/documents/[id]/versions', () => {
     form.append('mime_type', 'application/pdf')
 
     const res = await POST(
-      new Request('http://localhost/api/documents/doc-1/versions', { method: 'POST', body: form }),
-      createMockRouteParams({ id: 'doc-1' }),
+      new Request(`http://localhost/api/documents/${DOC_1}/versions`, { method: 'POST', body: form }),
+      createMockRouteParams({ id: DOC_1 }),
     )
     const { status, body } = await parseJsonResponse<{ error: string }>(res)
 
@@ -118,7 +121,7 @@ describe('POST /api/documents/[id]/versions', () => {
       supabase: mockSupabase,
       error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
     })
-    const res = await POST(makeReq(), createMockRouteParams({ id: 'doc-1' }))
+    const res = await POST(makeReq(), createMockRouteParams({ id: DOC_1 }))
     const { status } = await parseJsonResponse(res)
     expect(status).toBe(401)
   })
@@ -131,14 +134,14 @@ describe('POST /api/documents/[id]/versions', () => {
         { status: 403 },
       ),
     })
-    const res = await POST(makeReq(), createMockRouteParams({ id: 'doc-1' }))
+    const res = await POST(makeReq(), createMockRouteParams({ id: DOC_1 }))
     const { status } = await parseJsonResponse(res)
     expect(status).toBe(403)
     expect(mockCreateNewVersion).not.toHaveBeenCalled()
   })
 
   it('returns 400 when no file is provided', async () => {
-    const res = await POST(makeReq(false), createMockRouteParams({ id: 'doc-1' }))
+    const res = await POST(makeReq(false), createMockRouteParams({ id: DOC_1 }))
     const { status, body } = await parseJsonResponse<{ error: string }>(res)
     expect(status).toBe(400)
     expect(body.error).toBe('No file provided')
@@ -146,14 +149,14 @@ describe('POST /api/documents/[id]/versions', () => {
 
   it('creates a new version on the happy path', async () => {
     mockCreateNewVersion.mockResolvedValue({ id: 'doc-2', version: 2 })
-    const res = await POST(makeReq(), createMockRouteParams({ id: 'doc-1' }))
+    const res = await POST(makeReq(), createMockRouteParams({ id: DOC_1 }))
     const { status, body } = await parseJsonResponse<{ data: { id: string; version: number } }>(res)
     expect(status).toBe(200)
     expect(body.data).toEqual({ id: 'doc-2', version: 2 })
     expect(mockCreateNewVersion).toHaveBeenCalledWith(
       mockSupabase,
       'user-1',
-      'doc-1',
+      DOC_1,
       expect.objectContaining({ name: 'kvitto.pdf', type: 'application/pdf' }),
     )
   })
@@ -165,7 +168,7 @@ describe('POST /api/documents/[id]/versions', () => {
     mockCreateNewVersion.mockRejectedValue(
       new Error('Failed to create new version: Cannot attach documents to entries in a locked/closed fiscal period'),
     )
-    const res = await POST(makeReq(), createMockRouteParams({ id: 'doc-1' }))
+    const res = await POST(makeReq(), createMockRouteParams({ id: DOC_1 }))
     const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(res)
     expect(status).toBe(400)
     expect(body.error.code).toBe('DOC_UPLOAD_PERIOD_LOCKED')
@@ -174,7 +177,7 @@ describe('POST /api/documents/[id]/versions', () => {
 
   it('still returns 500 for a version that failed for another reason', async () => {
     mockCreateNewVersion.mockRejectedValue(new Error('Failed to upload new version: socket closed'))
-    const res = await POST(makeReq(), createMockRouteParams({ id: 'doc-1' }))
+    const res = await POST(makeReq(), createMockRouteParams({ id: DOC_1 }))
     expect(res.status).toBe(500)
   })
 })

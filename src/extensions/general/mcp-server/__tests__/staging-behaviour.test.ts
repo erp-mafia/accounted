@@ -1428,6 +1428,17 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
     args: { is_active: false },
     rows: { account_dimension_rules: { rule_type: 'required', value_id: null } },
   },
+  // A learned booking rule: renamed, or paused. Every read of the table
+  // answers the same row, so the rename's name-twin read finds an inactive
+  // one, which never refuses (the active-template read filters in SQL).
+  gnubok_rename_counterparty_template: {
+    args: { counterparty_name: 'Hallon' },
+    rows: { categorization_templates: { counterparty_name: 'hallon ab 4471', counterparty_aliases: [], debit_account: '6211', credit_account: '1930', is_active: false, mode: 'paused', always_review: false } },
+  },
+  gnubok_update_counterparty_template: {
+    args: { mode: 'paused' },
+    rows: { categorization_templates: { counterparty_name: 'hallon ab 4471', counterparty_aliases: [], debit_account: '6211', credit_account: '1930', is_active: true, mode: 'propose', always_review: false } },
+  },
   // Settings are owner/admin only on every door: the preview reads the caller's role.
   gnubok_update_company_settings: { args: { phone: '08-123 45 67' }, rows: { company_members: { role: 'owner' } } },
   gnubok_update_recurring_schedule: { args: { name: 'Hyra' } },
@@ -1653,9 +1664,11 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
   gnubok_register_peppol_participant: { rows: PEPPOL_ROWS, empty: ['peppol_registrations'] },
   gnubok_request_peppol_access: { rows: { ...PEPPOL_ROWS, peppol_access: { status: 'none' } } },
   // Payroll over MCP, run structure: a draft run the employee is not yet on,
-  // a line on a draft run, a booked run to correct, an approved run to mark
-  // paid. The previews read and never write.
+  // an employee with no late days carried to the run, a line on a draft run,
+  // a booked run to correct, an approved run to mark paid. The previews read
+  // and never write.
   gnubok_add_salary_run_employee: { empty: ['salary_run_employees'] },
+  gnubok_remove_salary_run_employee: { empty: ['salary_absence_days', 'salary_worked_days'] },
   gnubok_delete_payslip_line: { rows: { salary_line_items: { salary_run_employee: { salary_run_id: SOME_UUID } } } },
   gnubok_correct_salary_run: {
     rows: { salary_runs: { status: 'booked', period_year: 2026, period_month: 5, payment_date: '2026-05-25', salary_entry_id: SOME_UUID } },

@@ -49,6 +49,7 @@ export const GET = withRouteContext<Params>(
 
     return NextResponse.json({ data: result.eligibility })
   },
+  { uuidParams: { id: 'FISCAL_YEAR_RESET_NOT_FOUND' } },
 )
 
 /**
@@ -99,5 +100,5 @@ export const POST = withRouteContext<Params>(
       },
     })
   },
-  { requireWrite: true },
+  { requireWrite: true, uuidParams: { id: 'FISCAL_YEAR_RESET_NOT_FOUND' } },
 )

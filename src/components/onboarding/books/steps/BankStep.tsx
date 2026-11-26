@@ -28,6 +28,9 @@ import { BankConnectDialog } from '@/components/bank-feed/BankConnectDialog'
 import { useBankConnectFlow } from '@/components/bank-feed/use-bank-connect-flow'
 import { useBankConnectResume } from '@/components/bank-feed/use-bank-connect-resume'
 import { useOpenPaymentsAvailability } from '@/components/bank-feed/use-open-payments-availability'
+import { commonBanks } from '@/components/bank-feed/bank-help'
+import { flowBankFromList, standsForSparbanker } from '@/components/bank-feed/bank-search-results'
+import { bankLogoUrl } from '@/lib/cash-accounts/bank-logos'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 
 const EB = '/api/extensions/ext/enable-banking'
@@ -58,6 +61,7 @@ interface SyncSummary {
  */
 export function BankStep({ ctx }: { ctx: BooksCtx }) {
   const t = useTranslations('books')
+  const tBank = useTranslations('bank_connect')
   const { locale, formatDateLong } = useFormat()
   const { state, dispatch, flags, findings, loadingFindings, loadFindings, landedError } = ctx
   const phase = state.bankPhase
@@ -75,6 +79,9 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
   const bankFlow = useBankConnectFlow('onboarding')
   // Back from a bank that signs on its own page (?station=bank&bank_connect=<id>): reopen the flow, once.
   useBankConnectResume(bankFlow, openPayments.status === 'available')
+  // The most common banks, shown on the step itself in the second arrangement;
+  // empty (the single button) while the list is not there.
+  const quickBanks = useMemo(() => (flags.sourcesFlow === true && openPayments.banks ? commonBanks(openPayments.banks) : []), [flags.sourcesFlow, openPayments.banks])
   const [banks, setBanks] = useState<Bank[] | null>(null)
   // The bank list could not be read: unknown, not "no bank matches". Clearing
   // it re-runs the read.
@@ -417,6 +424,15 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
   const nAcct = tickedList.length
   const gather = phase === 'fetching' || (phase === 'connected' && !pillsGone)
 
+
+  // The way on without a bank, shown in every state the bank is not connected
+  // in. Its text is a whole sentence: books.css (.bank-manual) lets it wrap
+  // where the screen is narrower than the sentence, so it never widens the page.
+  const manualDoor = (
+    <Button variant="ghost" className="bank-manual text-muted-foreground" onClick={() => dispatch({ type: 'BANK_SKIP', flags })}>
+      {t('bank_manual')}
+    </Button>
+  )
   return (
     <div className="bks-host">
       <div className="jny-qstep" style={{ textAlign: 'center' }}>
@@ -433,19 +449,35 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
         !findings ? (
           <div className="jny-qactions is-stack">
             {loadingFindings ? <Wait text={t('bank_loading')} height={96} /> : <Button variant="ghost" className="text-muted-foreground" onClick={() => void loadFindings()}>{t('findings_retry')}</Button>}
-            <Button variant="ghost" className="text-muted-foreground" onClick={() => dispatch({ type: 'BANK_SKIP', flags })}>{t('bank_manual')}</Button>
+            {manualDoor}
           </div>
         ) : openPayments.status === 'loading' ? (
           <Wait text={t('bank_loading')} height={96} />
+        ) : openPayments.status === 'available' && quickBanks.length > 0 ? (
+          <div className="jny-qactions is-stack">
+            <div className="bank-common">
+              {quickBanks.map((b, i) => {
+                const logo = bankLogoUrl(b.name) ?? b.logo_url ?? undefined
+                const label = standsForSparbanker(b) ? tBank('bank_swedbank_and_sparbanker') : b.name
+                return (
+                  <Pill key={b.bic} index={i} logo={logo} mark={logo ? undefined : initials(b.name)} onClick={() => bankFlow.open('new', { bank: flowBankFromList(b) })} ariaLabel={label}>
+                    <span className="lbl">{label}</span>
+                  </Pill>
+                )
+              })}
+            </div>
+            <Button variant="ghost" className="text-muted-foreground" onClick={() => bankFlow.open('new')}>
+              {t('bank_more_banks')}
+            </Button>
+            {manualDoor}
+          </div>
         ) : openPayments.status === 'available' ? (
           <div className="jny-qactions is-stack">
             <Button size="lg" onClick={() => bankFlow.open('new')}>
               {t('bank_open_flow')}
             </Button>
             <p className="jny-qsub" style={{ textAlign: 'center' }}>{t('bank_open_flow_hint')}</p>
-            <Button variant="ghost" className="text-muted-foreground" onClick={() => dispatch({ type: 'BANK_SKIP', flags })}>
-              {t('bank_manual')}
-            </Button>
+            {manualDoor}
           </div>
         ) : !flags.hasBanking ? (
           <p className="jny-qsub" style={{ textAlign: 'center' }}>{t('bank_unavailable')}</p>
@@ -453,9 +485,7 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
           <div className="jny-qactions is-stack">
             <p className="jny-qsub" style={{ textAlign: 'center' }}>{t('bank_list_failed')}</p>
             <Button variant="outline" onClick={() => setBanksFailed(false)}>{t('bank_list_retry')}</Button>
-            <Button variant="ghost" className="text-muted-foreground" onClick={() => dispatch({ type: 'BANK_SKIP', flags })}>
-              {t('bank_manual')}
-            </Button>
+            {manualDoor}
           </div>
         ) : banks === null ? (
           <Wait text={t('bank_loading')} height={96} />
@@ -483,9 +513,7 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
             {aliasHint ? <p className="jny-qsub">{t('bank_alias_hint', { product: aliasHint.product, bank: aliasHint.bank })}</p> : null}
             {/* The way out sits under the banks, quiet: connecting is the point of the step (product direction 2026-09-14). */}
             <div className="bank-exit">
-              <Button variant="ghost" className="text-muted-foreground" onClick={() => dispatch({ type: 'BANK_SKIP', flags })}>
-                {t('bank_manual')}
-              </Button>
+              {manualDoor}
             </div>
           </>
         )
@@ -646,7 +674,8 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
       <div className="jny-qactions is-stack">
         {(phase === 'connected' && landed) || alreadyConnected ? (
           <Button size="lg" onClick={() => dispatch({ type: 'AFTER_BANK', flags })}>
-            {flags.hasSkatteverket ? t('to_skv') : t('to_done')}
+            {/* The sources arrangement goes on to the AI step, not to Skatteverket: the plain word. */}
+            {flags.sourcesFlow ? t('to_done') : flags.hasSkatteverket ? t('to_skv') : t('to_done')}
           </Button>
         ) : null}
         {phase === 'authed' && tickedList.length > 0 ? (

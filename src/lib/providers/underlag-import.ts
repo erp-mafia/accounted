@@ -1,13 +1,15 @@
 /**
  * Providers whose underlag (the files behind each verifikat) Accounted imports
- * from the provider's API: Fortnox archive files and Bokio uploads.
+ * from the provider's API: Fortnox archive files and Bokio uploads, and the
+ * customer invoices' own PDFs from Fortnox and Visma. From Visma only those
+ * PDFs are read.
  *
  * The one definition for both sides: the migration UI offers the import only
  * for these providers, and the import itself is a no-op for any other. Keeping
  * it in core lets the extension and the UI share it (core must not import from
  * @/extensions/, but extensions may import from core).
  */
-export const UNDERLAG_IMPORT_PROVIDERS = ['fortnox', 'bokio'] as const
+export const UNDERLAG_IMPORT_PROVIDERS = ['fortnox', 'bokio', 'visma'] as const
 
 export type UnderlagImportProvider = (typeof UNDERLAG_IMPORT_PROVIDERS)[number]
 

@@ -399,7 +399,7 @@ describe('POST /api/import/sie/parse', () => {
       if (body.preview.fiscalYear?.verdict !== 'conflict') return
       expect(body.preview.fiscalYear.existingPeriod.id).toBe('seeded-2024')
       expect(body.preview.fiscalYear.message).toMatch(/2024-01-01 till 2024-12-31/)
-      expect(body.preview.fiscalYear.message).toMatch(/Inställningar → Företag/)
+      expect(body.preview.fiscalYear.message).toMatch(/Inställningar → Bokföring → Räkenskapsår/)
     })
   })
 

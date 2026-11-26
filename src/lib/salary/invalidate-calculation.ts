@@ -49,6 +49,8 @@ export type CalculationInputWrite =
   /** One employee's days in the absence or worked-hours register. */
   | { employeeId: string; absenceDays: DateRange }
   | { employeeId: string; workedDays: DateRange }
+  /** One employee on the runs their late days are carried to (lib/salary/late-days.ts). */
+  | { employeeId: string; salaryRunIds: string[] }
   /** Every run of the company: a shift premium rule. */
   | { everyRun: true }
 
@@ -73,6 +75,8 @@ type OpenRun = RunDeviationSource & { id: string; calculation_params: Record<str
  * current. Earlier absence reaches a run: sick days decide the sjuklöneperiod
  * and the karensavdrag, VAB and parental days the 120-date cap. So does the
  * month after the window under the convention that measures an episode there.
+ * A late day carried to a run (lib/salary/late-days.ts) reaches it whatever
+ * its date: the register names that run in a salaryRunIds write.
  */
 function runReadsDays(run: OpenRun, write: CalculationInputWrite): boolean {
   const window = runDeviationWindow(run)
@@ -95,12 +99,14 @@ export async function invalidateRunCalculation(
   companyId: string,
   write: CalculationInputWrite,
 ): Promise<InvalidationFailure | null> {
+  if ('salaryRunIds' in write && write.salaryRunIds.length === 0) return null
   let runQuery = supabase
     .from('salary_runs')
     .select('id, period_year, period_month, deviation_period_start, deviation_period_end, calculation_params')
     .eq('company_id', companyId)
     .in('status', [...PRE_APPROVAL_STATUSES])
   if ('salaryRunId' in write) runQuery = runQuery.eq('id', write.salaryRunId)
+  if ('salaryRunIds' in write) runQuery = runQuery.in('id', write.salaryRunIds)
   const { data: runs, error: runError } = await runQuery
   if (runError) return failure(runError)
 

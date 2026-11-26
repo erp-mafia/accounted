@@ -1,6 +1,8 @@
 import { migrationJobRoutes } from './lib/migration-job-routes'
 import { invoiceCompletionRoutes } from './lib/invoice-completion-routes'
 import { deductionBackfillRoutes } from './lib/deduction-backfill-routes'
+import { fortnoxTopupRoutes } from './lib/fortnox-topup-routes'
+import { readFortnoxTopup } from './lib/fortnox-topup'
 import { companyMismatchMessages } from './lib/company-mismatch-message'
 import { archiveSIEIntakeText, readSIEIntakeFile, SIEArchiveUnavailableError } from '@/lib/import/sie-intake'
 import { buildTheaterModel } from '@/lib/import/theater-model'
@@ -392,6 +394,7 @@ export const arcimMigrationExtension: Extension = {
     ...migrationJobRoutes,
     ...invoiceCompletionRoutes,
     ...deductionBackfillRoutes,
+    ...fortnoxTopupRoutes,
     // ── Check existing connections and import history ──────────────
     {
       method: 'GET',
@@ -491,6 +494,18 @@ export const arcimMigrationExtension: Extension = {
             latestCompletedSieImport && consents.some(c => supportsUnderlagImport(c.provider as string))
               ? await countUnderlagOnReplacedCopies(supabase, companyId)
               : 0
+          // The nightly top-up's switch and its latest run, for the Fortnox
+          // row (lib/fortnox-topup.ts). Display only: a failed read leaves
+          // the line out.
+          const fortnoxTopup = ctx.settings && consents.some(c => c.provider === 'fortnox')
+            ? await readFortnoxTopup(ctx.settings, supabase, companyId).catch((error: unknown) => {
+              moduleLog.warn('fortnox top-up state unavailable', {
+                companyId,
+                error: error instanceof Error ? error.message : String(error),
+              })
+              return null
+            })
+            : null
 
           return NextResponse.json({
             consents: consents.map(c => ({
@@ -499,7 +514,9 @@ export const arcimMigrationExtension: Extension = {
               status: c.status,
               companyName: c.companyName,
               createdAt: c.createdAt,
-              ...(keyUseFacts && { keyUse: providerKeyUse(c.id, keyUseFacts) }),
+              ...(keyUseFacts && {
+                keyUse: providerKeyUse(c.id, { ...keyUseFacts, topupConsentId: fortnoxTopup?.enabled ? fortnoxTopup.consentId : null }),
+              }),
             })),
             sieImports: sieImports ?? [],
             hasCompletedSieImport: latestCompletedSieImport != null,
@@ -507,6 +524,7 @@ export const arcimMigrationExtension: Extension = {
             unfinishedConnect,
             latestDocumentImport,
             underlagOnReplacedCopies,
+            fortnoxTopup,
             entityCounts: {
               customers: customerCount ?? 0,
               suppliers: supplierCount ?? 0,

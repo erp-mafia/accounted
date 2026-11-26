@@ -324,6 +324,24 @@ describe('parseAmountInput call sites', () => {
     expect(parseAmountInput('12 345,67')).toBe(12345.67)
   })
 
+  it('"Belopp att betala" on a supplier invoice opens at 174,50 and reads a comma or a dot', () => {
+    // The field opened at String(remaining_amount) in an <input type="number">,
+    // so 174,50 owed showed as "174,5" under "Kvar att betala: 174,50".
+    const src = read('components/supplier-invoices/SupplierPaymentDialog.tsx')
+    expect(src).not.toContain('String(invoice.remaining_amount)')
+    expect(src).toContain('useState(() => formatAmountInput(invoice.remaining_amount))')
+    expect(src).toContain('setPayAmount(formatAmountInput(invoice.remaining_amount))')
+    expect(src).not.toMatch(/(Number|parseFloat)\(payAmount\)/)
+    expect(src).toMatch(/payAmountNum = parseAmountInput\(payAmount\)/)
+    const at = src.indexOf('id="payment-amount"')
+    const field = src.slice(at, src.indexOf('/>', at))
+    expect(field).toContain('inputMode="decimal"')
+    expect(field).not.toContain('type="number"')
+    expect(formatAmountInput(174.5)).toBe('174,50')
+    expect(parseAmountInput('100,25')).toBe(100.25)
+    expect(parseAmountInput('100.25')).toBe(100.25)
+  })
+
   it('the payment Bokföring rows read edited line amounts with parseAmountInput', () => {
     // One module for the bank-match dialog and the supplier payment dialog.
     const src = read('components/bookkeeping/payment-preview-lines.ts')

@@ -119,7 +119,7 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     return NextResponse.json({ success: true })
   },
-  { requireWrite: true },
+  { requireWrite: true, uuidParams: { id: 'NOT_FOUND' } },
 )
 
 /**
@@ -330,5 +330,5 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
       },
     })
   },
-  { requireWrite: true },
+  { requireWrite: true, uuidParams: { id: 'NOT_FOUND' } },
 )

@@ -134,4 +134,4 @@ export const GET = withRouteContext('document.pipeline', async (request, ctx, { 
 
   const view: PipelineView = { document_id: d.id, file_name: d.file_name, title, doc_type: d.doc_type, admission_state: d.admission_state, stage, steps, landed, error }
   return NextResponse.json({ data: view })
-})
+}, { uuidParams: { id: 'DOC_NOT_FOUND' } })

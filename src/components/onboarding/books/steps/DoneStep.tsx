@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { ChevronDownIcon, ChevronRightIcon } from '@/components/icons'
 import useSWR from 'swr'
@@ -9,8 +9,8 @@ import { toBookDoor } from '@/lib/bookkeeping/to-book'
 import { useBranding } from '@/lib/branding/brand-context'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { useFormat } from '@/lib/hooks/use-format'
-import { aiConnectionFromWire, type AiClient, type AiConnection } from '@/lib/onboarding/ai-clients'
-import { createAiStatusPoller, type AiStatusPoller } from '@/lib/onboarding/ai-status-poll'
+import { AI_CLIENTS } from '@/lib/onboarding/ai-clients'
+import { yearsOfBooks } from '@/lib/onboarding/books-years'
 import { AI_TASK_LABEL_KEY, aiTaskHref, foundTasksStartOpen, listAiTasks, type AiTaskCategory } from '@/lib/worklist/ai-task'
 import type { WorklistCounts } from '@/lib/worklist/types'
 import { AiTaskAction } from '@/components/dashboard/AiTaskAction'
@@ -18,6 +18,7 @@ import { InkText } from '@/components/onboarding/journey/ink'
 import { Confetti } from '../ui/Confetti'
 import { AgentChips } from '../ui/AgentChips'
 import { FactsImport } from '../ui/FactsImport'
+import { useAiConnection } from '../ui/use-ai-connection'
 import type { BooksCtx } from '../context'
 import { Button } from '@/components/ui/button'
 
@@ -27,23 +28,15 @@ async function fetchWorklistCounts(): Promise<WorklistCounts> {
   return ((await res.json()) as { data: WorklistCounts }).data
 }
 
-/** Null when the status is unavailable: the chips keep what they last showed. */
-async function fetchAiStatus(signal: AbortSignal): Promise<AiConnection | null> {
-  try {
-    const res = await fetch('/api/onboarding/ai-status', { signal })
-    if (!res.ok) return null
-    const json = (await res.json()) as { data: { connected: AiClient[]; agentConnected?: boolean } }
-    return aiConnectionFromWire(json.data.connected, json.data.agentConnected)
-  } catch {
-    return null
-  }
-}
-
 /**
  * Klart: a few flecks let go, the card of what got connected, the three
  * agent chips, then what the app already found to do (open when bank rows
  * wait to be booked, otherwise folded until asked; each row opens the page
  * in the app or hands the row to a connected agent), and the door to Hem.
+ *
+ * The sources arrangement shows the card and the door only: its AI step has
+ * the chips, and Hem names the first thing to do, so the found rows are not
+ * listed here and the door stays in view under the card.
  */
 export function DoneStep({ ctx, onLeave, leaving }: {
   ctx: BooksCtx
@@ -59,12 +52,12 @@ export function DoneStep({ ctx, onLeave, leaving }: {
   const { findings, state } = ctx
   const hasAi = useCapability(CAPABILITY.ai)
   const bookingScreen = useBookingScreenEnabled()
-  const [preferredClient, setPreferredClient] = useState<AiClient>()
-  const [polled, setPolled] = useState<AiConnection | null>(null)
   // null until the toggle is clicked: the list then follows what it holds (foundTasksStartOpen).
   const [toggled, setToggled] = useState<boolean | null>(null)
+  const sourcesFlow = ctx.flags.sourcesFlow === true
+  // The found rows are the only reader: the sources arrangement does not ask (null key).
   const { data: worklist, isValidating, error, mutate } = useSWR(
-    ['worklist-counts', company?.id ?? null] as const,
+    sourcesFlow ? null : (['worklist-counts', company?.id ?? null] as const),
     fetchWorklistCounts,
   )
   // A bank row task opens where every "book these" link leads (Att bokföra with the booking screen).
@@ -75,8 +68,7 @@ export function DoneStep({ ctx, onLeave, leaving }: {
   const refetch = useCallback(() => {
     void mutate()
   }, [mutate])
-  const connection = polled ?? aiConnectionFromWire(findings?.ai.connected ?? [], findings?.ai.agentConnected)
-  const connected = connection.clients
+  const { connection, connected, preferredClient, onConnect } = useAiConnection(findings)
   const connectionKey = connected.join(',')
   const tasks = worklist && !error ? listAiTasks(worklist.counts, { hasAi }) : []
   const open = toggled ?? foundTasksStartOpen(tasks)
@@ -88,35 +80,12 @@ export function DoneStep({ ctx, onLeave, leaving }: {
     if (connectionKey) refetch()
   }, [connectionKey, refetch])
 
-  // The OAuth sign-in happens in another tab, so the chip turns green by
-  // asking the status route (one api_keys read, never the findings): in a
-  // bounded window after an Anslut click, and once when the user comes back.
-  const pollerRef = useRef<AiStatusPoller | null>(null)
-  useEffect(() => {
-    const poller = createAiStatusPoller({
-      fetchStatus: fetchAiStatus,
-      onStatus: setPolled,
-      isHidden: () => document.visibilityState === 'hidden',
-    })
-    pollerRef.current = poller
-    const onFocus = () => poller.check()
-    window.addEventListener('focus', onFocus)
-    return () => {
-      window.removeEventListener('focus', onFocus)
-      poller.stop()
-      pollerRef.current = null
-    }
-  }, [])
-  const onConnect = (client: AiClient) => {
-    setPreferredClient(client)
-    pollerRef.current?.attempt(client)
-  }
   const b = findings?.books
   const rows: [string, string][] = [
     [
       t('card_books'),
       b && b.entries > 0
-        ? t('card_books_value', { count: b.entries, years: b.periods.length })
+        ? t('card_books_value', { count: b.entries, years: yearsOfBooks(b) })
         : state.path === 'fresh'
           ? t('answer_fresh')
           : t('card_books_none'),
@@ -124,6 +93,10 @@ export function DoneStep({ ctx, onLeave, leaving }: {
     [t('card_bank'), findings?.bank.connected ? (findings.bank.bankName ?? t('answer_connected')) : t('card_not_connected')],
     [t('card_skv'), findings?.skv.connected ? t('answer_connected') : t('card_not_connected')],
   ]
+  if (sourcesFlow) {
+    const names = connected.map((id) => AI_CLIENTS.find((c) => c.id === id)?.name ?? id)
+    rows.splice(2, 0, [t('card_ai'), names.length > 0 ? names.join(', ') : connection.connected ? t('ai_agent') : t('card_not_connected')])
+  }
   const next = findings?.skv.nextDeadlines[0]
   if (next) rows.push([t('card_next'), `${t(`deadline_${next.type}`)} ${formatDateLong(next.dueDate)}`])
 
@@ -143,13 +116,17 @@ export function DoneStep({ ctx, onLeave, leaving }: {
         </dl>
       </div>
 
-      <h2 className="agent-title">{t('ai_title')}</h2>
-      <p className="agent-lead">{t('ai_lead')}</p>
-      <AgentChips connection={connection} onConnect={onConnect} />
-      {/* Once an AI is connected: let it tell Accounted what it already remembers (skill company-facts-import). */}
-      <FactsImport clients={connected} preferredClient={preferredClient} disabled={leaving} />
+      {!sourcesFlow && (
+        <>
+          <h2 className="agent-title">{t('ai_title')}</h2>
+          <p className="agent-lead">{t('ai_lead')}</p>
+          <AgentChips connection={connection} onConnect={onConnect} />
+          {/* Once an AI is connected: let it tell Accounted what it already remembers (skill company-facts-import). */}
+          <FactsImport clients={connected} preferredClient={preferredClient} disabled={leaving} />
+        </>
+      )}
 
-      {error ? (
+      {sourcesFlow ? null : error ? (
         <p className="found-note" role="alert">
           {t('ai_handoff_failed')}{' '}
           <Button variant="ghost" className="text-muted-foreground" onClick={refetch} disabled={isValidating}>
@@ -189,12 +166,18 @@ export function DoneStep({ ctx, onLeave, leaving }: {
         </div>
       )}
 
-      {/* The door is a quiet link, not the primary: the chips and the found rows are what this step is for (product direction 2026-09-14). */}
+      {/* Without the sources arrangement the door is a quiet link: the chips and the found rows are what this step is for. */}
       <div className="done-door">
-        <Button variant="ghost" className="gap-1 text-muted-foreground" disabled={leaving} onClick={() => onLeave('done')}>
-          {t('open_app', { appName })}
-          <ChevronRightIcon className="size-[13px]" aria-hidden="true" />
-        </Button>
+        {sourcesFlow ? (
+          <Button size="lg" disabled={leaving} onClick={() => onLeave('done')}>
+            {t('open_app', { appName })}
+          </Button>
+        ) : (
+          <Button variant="ghost" className="gap-1 text-muted-foreground" disabled={leaving} onClick={() => onLeave('done')}>
+            {t('open_app', { appName })}
+            <ChevronRightIcon className="size-[13px]" aria-hidden="true" />
+          </Button>
+        )}
       </div>
     </div>
   )

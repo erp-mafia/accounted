@@ -8,9 +8,9 @@ import { singleFlight } from '@/lib/onboarding/single-flight'
 import { useOnboardingNavigation } from '@/lib/hooks/use-onboarding-navigation'
 import { useOnboardingStepEvent } from '@/lib/hooks/use-onboarding-step-event'
 import { reconcileBooksDraft } from '@/lib/onboarding-books/resume'
-import { booksSkip } from '@/lib/onboarding-books/skip'
+import { booksSkip, skipShown } from '@/lib/onboarding-books/skip'
 import { useBranding } from '@/lib/branding/brand-context'
-import { booksReducer, hasStepBehind, initialState, stationOf, type BooksEntry, type BooksFlags } from '@/lib/onboarding-books/reducer'
+import { booksReducer, hasStepBehind, initialState, stationCount, stationOf, type BooksEntry, type BooksFlags } from '@/lib/onboarding-books/reducer'
 import JourneyOrb, { type OrbState } from '@/components/onboarding/journey/JourneyOrb'
 import JourneyTrack from '@/components/onboarding/journey/JourneyTrack'
 import '@/components/onboarding/journey/journey.css'
@@ -23,11 +23,15 @@ import { ResumeStep } from './steps/ResumeStep'
 import { InsightStep } from './steps/InsightStep'
 import { BankStep } from './steps/BankStep'
 import { SkvStep } from './steps/SkvStep'
+import { AiStep } from './steps/AiStep'
+import { DocsStep } from './steps/DocsStep'
 import { DoneStep } from './steps/DoneStep'
+import { AI_CLIENTS } from '@/lib/onboarding/ai-clients'
 import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 
 const STATION_FRACS = [0.07, 0.36, 0.64, 0.93]
+const SOURCES_STATION_FRACS = [0.07, 0.242, 0.414, 0.586, 0.758, 0.93]
 
 interface BooksJourneyProps {
   draftScope: string
@@ -49,6 +53,8 @@ interface BooksJourneyProps {
   hasSkatteverket: boolean
   /** See BooksFlags.skvOmbud. */
   skvOmbud?: boolean
+  /** The arrangement with the AI and the receipts as steps of their own (lib/onboarding/sources-rollout). */
+  sourcesFlow?: boolean
 }
 
 /**
@@ -72,8 +78,9 @@ export default function BooksJourney(props: BooksJourneyProps) {
       hasBanking: props.hasBanking,
       hasSkatteverket: props.hasSkatteverket,
       skvOmbud: props.skvOmbud ?? false,
+      sourcesFlow: props.sourcesFlow ?? false,
     }),
-    [props.hasMigration, props.hasBanking, props.hasSkatteverket, props.skvOmbud],
+    [props.hasMigration, props.hasBanking, props.hasSkatteverket, props.skvOmbud, props.sourcesFlow],
   )
   const entry = useMemo<BooksEntry>(
     () => ({
@@ -98,7 +105,9 @@ export default function BooksJourney(props: BooksJourneyProps) {
   const [skipOpen, setSkipOpen] = useState(false)
   // Read by the import loops mid-await, where the leaving state is stale.
   const leavingRef = useRef(false)
-  const station = stationOf(state.step)
+  const sourcesFlow = flags.sourcesFlow === true
+  const station = stationOf(state.step, flags)
+  const lastStation = stationCount(flags) - 1
   const navigation = useOnboardingNavigation({
     scope: props.draftScope,
     step: state.step === 'bank' && state.bankPhase === 'authed' ? 'bank-accounts' : state.step,
@@ -205,13 +214,25 @@ export default function BooksJourney(props: BooksJourneyProps) {
         ? t('answer_skipped')
         : null
     const skv = findings?.skv.connected ? t('answer_connected') : state.skvSkipped ? t('answer_skipped') : null
+    if (sourcesFlow) {
+      const names = (findings?.ai.connected ?? []).map((id) => AI_CLIENTS.find((c) => c.id === id)?.name ?? id)
+      const ai = names.length > 0 ? names.join(', ') : findings?.ai.agentConnected ? t('ai_agent') : t('answer_skipped')
+      return [
+        { label: t('station_books'), answer: station > 0 ? books : null },
+        { label: t('station_bank'), answer: station > 1 ? bank : null },
+        { label: t('station_ai'), answer: station > 2 ? ai : null },
+        { label: t('station_docs') },
+        { label: t('station_skv'), answer: station > 4 ? skv : null },
+        { label: t('station_done') },
+      ]
+    }
     return [
       { label: t('station_books'), answer: station > 0 ? books : null },
       { label: t('station_bank'), answer: station > 1 ? bank : null },
       { label: t('station_skv'), answer: station > 2 ? skv : null },
       { label: t('station_done') },
     ]
-  }, [findings, state.path, state.bankSkipped, state.skvSkipped, station, t])
+  }, [findings, state.path, state.bankSkipped, state.skvSkipped, station, sourcesFlow, t])
 
   const skip = booksSkip(state, (findings?.books.entries ?? 0) > 0)
 
@@ -252,6 +273,10 @@ export default function BooksJourney(props: BooksJourneyProps) {
         return <InsightStep ctx={ctx} />
       case 'bank':
         return <BankStep ctx={ctx} />
+      case 'ai':
+        return <AiStep ctx={ctx} />
+      case 'docs':
+        return <DocsStep ctx={ctx} />
       case 'skv':
         return <SkvStep ctx={ctx} />
       case 'done':
@@ -260,11 +285,11 @@ export default function BooksJourney(props: BooksJourneyProps) {
   }
 
   return (
-    <div className="bks" style={{ ['--jny-dawn' as string]: String(station / 3) }}>
+    <div className={sourcesFlow ? 'bks bks-six' : 'bks'} style={{ ['--jny-dawn' as string]: String(station / lastStation) }}>
       <div className="jny-dawn" aria-hidden="true" />
       <div className="bks-center">
         <JourneyTrack stations={stations} active={station} orbLabel={t(`orb_${orbState}`)}>
-          <JourneyOrb state={orbState} targetX={STATION_FRACS[station]} />
+          <JourneyOrb state={orbState} targetX={(sourcesFlow ? SOURCES_STATION_FRACS : STATION_FRACS)[station]} />
         </JourneyTrack>
         <div className="bks-backrow">
           <Button variant="ghost" className={backShown ? 'text-muted-foreground' : 'invisible'} disabled={!canGoBack || !navigation.ready} onClick={() => navigation.back(() => navigation.stepBack(() => dispatch({ type: 'GO_BACK', flags })))}>
@@ -272,8 +297,8 @@ export default function BooksJourney(props: BooksJourneyProps) {
           </Button>
           {/* Never disabled by running work: an import is the server's job, so
               the act must not hold anyone (lib/onboarding-books/skip). */}
-          {state.step !== 'done' && (
-            <Button variant="ghost" className="text-muted-foreground" disabled={leaving || !navigation.ready} onClick={() => setSkipOpen(true)}>
+          {skipShown(state.step, sourcesFlow) && (
+            <Button variant="ghost" className="bks-skip text-muted-foreground" disabled={leaving || !navigation.ready} onClick={() => setSkipOpen(true)}>
               {t('skip_all')}
             </Button>
           )}

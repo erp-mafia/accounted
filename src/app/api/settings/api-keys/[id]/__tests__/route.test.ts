@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createMockRequest, parseJsonResponse } from '@/tests/helpers'
 
+// Route path ids are uuids: the route answers its 404 to anything else before it reads.
+const KEY_1 = 'c8c83b92-0083-56e2-b168-e761940ba0b6'
+
 const mockSupabase = {
   auth: { getUser: vi.fn(), mfa: { listFactors: async () => ({ data: { all: [], totp: [], phone: [] }, error: null }) } },
   from: vi.fn(),
@@ -41,7 +44,7 @@ vi.mock('@/lib/company/company-picker', async (importOriginal) => {
 import { DELETE, PATCH } from '../route'
 
 const mockUser = { id: 'user-1', email: 'test@test.se' }
-const params = { params: Promise.resolve({ id: 'key-1' }) }
+const params = { params: Promise.resolve({ id: KEY_1 }) }
 
 const ACTIVE = '11111111-1111-4111-8111-111111111111'
 const OTHER = '22222222-2222-4222-8222-222222222222'
@@ -54,7 +57,7 @@ const memberships = [
 ]
 
 // The caller's own live key, homed in the active company.
-const OWN_KEY = { id: 'key-1', user_id: 'user-1', company_id: ACTIVE }
+const OWN_KEY = { id: KEY_1, user_id: 'user-1', company_id: ACTIVE }
 
 /**
  * Chainable proxy over .select().eq().is().maybeSingle() (the key lookup) and
@@ -138,7 +141,7 @@ function writesAroundRpc(calls: Array<{ table: string; method: string }>) {
 }
 
 function patch(body: unknown) {
-  return createMockRequest('/api/settings/api-keys/key-1', { method: 'PATCH', body })
+  return createMockRequest(`/api/settings/api-keys/${KEY_1}`, { method: 'PATCH', body })
 }
 
 /** Named arguments of the replace_api_key_allowlist call. */
@@ -167,7 +170,7 @@ describe('PATCH /api/settings/api-keys/[id]', () => {
 
   it('sets a ceiling and scopes the update to the key\'s company and unrevoked keys', async () => {
     const { updateSpy, filters } = setupFrom({
-      data: { id: 'key-1', user_id: 'user-2', company_id: 'company-1', unattended_commit_limit: 5000 },
+      data: { id: KEY_1, user_id: 'user-2', company_id: 'company-1', unattended_commit_limit: 5000 },
     })
     const res = await PATCH(patch({ unattended_commit_limit: 5000 }), params)
     const { status, body } = await parseJsonResponse<{
@@ -181,7 +184,7 @@ describe('PATCH /api/settings/api-keys/[id]', () => {
     // company_id filter, any authenticated user could raise any key's
     // authority by guessing an id.
     expect(filters).toContainEqual(['company_id', 'company-1'])
-    expect(filters).toContainEqual(['id', 'key-1'])
+    expect(filters).toContainEqual(['id', KEY_1])
     expect(filters).toContainEqual(['revoked_at', null])
     // The limit alone never touches the allowlist.
     expect(serviceSupabase.from).not.toHaveBeenCalled()
@@ -190,7 +193,7 @@ describe('PATCH /api/settings/api-keys/[id]', () => {
 
   it('accepts null to clear the ceiling', async () => {
     const { updateSpy } = setupFrom({
-      data: { id: 'key-1', user_id: 'user-1', company_id: 'company-1', unattended_commit_limit: null },
+      data: { id: KEY_1, user_id: 'user-1', company_id: 'company-1', unattended_commit_limit: null },
     })
     const res = await PATCH(patch({ unattended_commit_limit: null }), params)
     expect(res.status).toBe(200)
@@ -200,14 +203,14 @@ describe('PATCH /api/settings/api-keys/[id]', () => {
   it('returns 404 for a colleague\'s key homed in another company, before any write', async () => {
     // Visible to an admin of that company, but not addressable from here:
     // neither the open company's key nor the caller's own.
-    const { updateSpy } = setupFrom({ data: { id: 'key-1', user_id: 'user-2', company_id: OTHER } })
+    const { updateSpy } = setupFrom({ data: { id: KEY_1, user_id: 'user-2', company_id: OTHER } })
     const res = await PATCH(patch({ unattended_commit_limit: 5000 }), params)
     expect(res.status).toBe(404)
     expect(updateSpy).not.toHaveBeenCalled()
   })
 
   it('rejects zero, negatives and non-numbers with 400', async () => {
-    setupFrom({ data: { id: 'key-1' } })
+    setupFrom({ data: { id: KEY_1 } })
     for (const bad of [0, -1, '5000', {}]) {
       const res = await PATCH(patch({ unattended_commit_limit: bad }), params)
       expect(res.status).toBe(400)
@@ -215,7 +218,7 @@ describe('PATCH /api/settings/api-keys/[id]', () => {
   })
 
   it('requires a field rather than treating an empty body as "clear it"', async () => {
-    setupFrom({ data: { id: 'key-1' } })
+    setupFrom({ data: { id: KEY_1 } })
     const res = await PATCH(patch({}), params)
     expect(res.status).toBe(400)
   })
@@ -290,12 +293,12 @@ describe('PATCH /api/settings/api-keys/[id]', () => {
       const res = await PATCH(patch({ company_ids: [THIRD, ACTIVE] }), params)
       const { status, body } = await parseJsonResponse<{ data: { id: string; company_ids: string[] | null } }>(res)
       expect(status).toBe(200)
-      expect(body.data).toEqual({ id: 'key-1', company_ids: [ACTIVE, THIRD], read_only_company_ids: null })
+      expect(body.data).toEqual({ id: KEY_1, company_ids: [ACTIVE, THIRD], read_only_company_ids: null })
 
       // The key lookup reads the one live key by id (the session client's
       // policies apply), and the route addresses it only as the active
       // company's or the caller's own (see the 404 cases).
-      expect(filters).toContainEqual(['id', 'key-1'])
+      expect(filters).toContainEqual(['id', KEY_1])
       expect(filters).toContainEqual(['revoked_at', null])
 
       // One transaction: delete-outside + insert-missing happen inside the
@@ -303,7 +306,7 @@ describe('PATCH /api/settings/api-keys/[id]', () => {
       // the key at the union of the old and new sets.
       expect(serviceSupabase.rpc).toHaveBeenCalledTimes(1)
       expect(replaceArgs()).toEqual({
-        p_api_key_id: 'key-1',
+        p_api_key_id: KEY_1,
         p_company_ids: [ACTIVE, THIRD],
         p_read_only_company_ids: [],
       })
@@ -321,7 +324,7 @@ describe('PATCH /api/settings/api-keys/[id]', () => {
       const { status, body } = await parseJsonResponse<{ data: { company_ids: string[] | null } }>(res)
       expect(status).toBe(200)
       expect(body.data.company_ids).toBeNull()
-      expect(replaceArgs()).toEqual({ p_api_key_id: 'key-1', p_company_ids: null, p_read_only_company_ids: [] })
+      expect(replaceArgs()).toEqual({ p_api_key_id: KEY_1, p_company_ids: null, p_read_only_company_ids: [] })
       expect(writesAroundRpc(service.calls)).toEqual([])
     })
 
@@ -332,7 +335,7 @@ describe('PATCH /api/settings/api-keys/[id]', () => {
       const { status, body } = await parseJsonResponse<{ data: { company_ids: string[] | null } }>(res)
       expect(status).toBe(200)
       expect(body.data.company_ids).toBeNull()
-      expect(replaceArgs()).toEqual({ p_api_key_id: 'key-1', p_company_ids: null, p_read_only_company_ids: [] })
+      expect(replaceArgs()).toEqual({ p_api_key_id: KEY_1, p_company_ids: null, p_read_only_company_ids: [] })
     })
 
     it('answers 500 when the RPC fails (the old set is untouched by construction)', async () => {
@@ -354,13 +357,13 @@ describe('PATCH /api/settings/api-keys/[id]', () => {
       const { status, body } = await parseJsonResponse<{ data: { id: string; unattended_commit_limit: number; company_ids: string[] | null } }>(res)
       expect(status).toBe(200)
       expect(body.data).toEqual({
-        id: 'key-1',
+        id: KEY_1,
         unattended_commit_limit: 900,
         company_ids: [ACTIVE],
         read_only_company_ids: null,
       })
       expect(updateSpy).toHaveBeenCalledWith({ unattended_commit_limit: 900 })
-      expect(replaceArgs()).toEqual({ p_api_key_id: 'key-1', p_company_ids: [ACTIVE], p_read_only_company_ids: [] })
+      expect(replaceArgs()).toEqual({ p_api_key_id: KEY_1, p_company_ids: [ACTIVE], p_read_only_company_ids: [] })
     })
   })
 
@@ -377,9 +380,9 @@ describe('PATCH /api/settings/api-keys/[id]', () => {
       const res = await PATCH(patch({ company_ids: [OTHER, ACTIVE], read_only_company_ids: [OTHER] }), params)
       const { status, body } = await parseJsonResponse<{ data: Record<string, unknown> }>(res)
       expect(status).toBe(200)
-      expect(body.data).toEqual({ id: 'key-1', company_ids: [ACTIVE, OTHER], read_only_company_ids: [OTHER] })
+      expect(body.data).toEqual({ id: KEY_1, company_ids: [ACTIVE, OTHER], read_only_company_ids: [OTHER] })
       expect(replaceArgs()).toEqual({
-        p_api_key_id: 'key-1',
+        p_api_key_id: KEY_1,
         p_company_ids: [ACTIVE, OTHER],
         p_read_only_company_ids: [OTHER],
       })
@@ -410,7 +413,7 @@ describe('PATCH /api/settings/api-keys/[id]', () => {
       const res = await PATCH(patch({ company_ids: [ACTIVE, OTHER] }), params)
       expect(res.status).toBe(200)
       expect(replaceArgs()).toEqual({
-        p_api_key_id: 'key-1',
+        p_api_key_id: KEY_1,
         p_company_ids: [ACTIVE, OTHER],
         p_read_only_company_ids: [OTHER],
       })
@@ -429,7 +432,7 @@ describe('PATCH /api/settings/api-keys/[id]', () => {
       const res = await PATCH(patch({ company_ids: null }), params)
       expect(res.status).toBe(200)
       expect(replaceArgs()).toEqual({
-        p_api_key_id: 'key-1',
+        p_api_key_id: KEY_1,
         p_company_ids: [ACTIVE, OTHER, THIRD],
         p_read_only_company_ids: [OTHER],
       })
@@ -448,7 +451,7 @@ describe('PATCH /api/settings/api-keys/[id]', () => {
       const res = await PATCH(patch({ read_only_company_ids: [] }), params)
       expect(res.status).toBe(200)
       expect(replaceArgs()).toEqual({
-        p_api_key_id: 'key-1',
+        p_api_key_id: KEY_1,
         p_company_ids: [ACTIVE, OTHER],
         p_read_only_company_ids: [],
       })
@@ -460,7 +463,7 @@ describe('PATCH /api/settings/api-keys/[id]', () => {
       const res = await PATCH(patch({ read_only_company_ids: [OTHER] }), params)
       expect(res.status).toBe(200)
       expect(replaceArgs()).toEqual({
-        p_api_key_id: 'key-1',
+        p_api_key_id: KEY_1,
         p_company_ids: [ACTIVE, OTHER, THIRD],
         p_read_only_company_ids: [OTHER],
       })
@@ -503,7 +506,7 @@ describe('PATCH /api/settings/api-keys/[id]', () => {
 
     // A colleague's key in the same company: the session client can see it
     // (api_keys_select covers every member), but it is not the caller's.
-    const colleaguesKey = { id: 'key-1', user_id: 'user-2', company_id: ACTIVE }
+    const colleaguesKey = { id: KEY_1, user_id: 'user-2', company_id: ACTIVE }
 
     it('refuses to make a colleague\'s restricted key unrestricted', async () => {
       setupFrom({ data: colleaguesKey })
@@ -552,7 +555,7 @@ describe('PATCH /api/settings/api-keys/[id]', () => {
 
     // The cockpit lists a person's own connections across clients, so the
     // key the user edits may be homed in a company other than the open one.
-    const ownKeyElsewhere = { id: 'key-1', user_id: 'user-1', company_id: OTHER }
+    const ownKeyElsewhere = { id: KEY_1, user_id: 'user-1', company_id: OTHER }
 
     it('edits it anchored on its own company, not the active one', async () => {
       setupFrom({ data: ownKeyElsewhere })
@@ -560,7 +563,7 @@ describe('PATCH /api/settings/api-keys/[id]', () => {
       const res = await PATCH(patch({ company_ids: [OTHER, THIRD] }), params)
       expect(res.status).toBe(200)
       expect(replaceArgs()).toEqual({
-        p_api_key_id: 'key-1',
+        p_api_key_id: KEY_1,
         p_company_ids: [OTHER, THIRD],
         p_read_only_company_ids: [],
       })
@@ -583,7 +586,7 @@ describe('PATCH /api/settings/api-keys/[id]', () => {
     })
 
     it('returns 404 for a key homed in a company the caller has left', async () => {
-      setupFrom({ data: { id: 'key-1', user_id: 'user-1', company_id: FOREIGN } })
+      setupFrom({ data: { id: KEY_1, user_id: 'user-1', company_id: FOREIGN } })
       setupServiceFrom()
       const res = await PATCH(patch({ company_ids: null }), params)
       expect(res.status).toBe(404)
@@ -604,7 +607,7 @@ describe('PATCH /api/settings/api-keys/[id]', () => {
 
 describe('DELETE /api/settings/api-keys/[id]', () => {
   const revoke = () =>
-    DELETE(createMockRequest('/api/settings/api-keys/key-1', { method: 'DELETE' }), params)
+    DELETE(createMockRequest(`/api/settings/api-keys/${KEY_1}`, { method: 'DELETE' }), params)
 
   it('returns 401 when not authenticated', async () => {
     mockSupabase.auth.getUser.mockResolvedValue({ data: { user: null } })
@@ -613,19 +616,19 @@ describe('DELETE /api/settings/api-keys/[id]', () => {
   })
 
   it('revokes the open company\'s key, filtered on that company and live keys', async () => {
-    const { updateSpy, filters } = setupFrom({ data: { id: 'key-1', user_id: 'user-2', company_id: 'company-1' } })
+    const { updateSpy, filters } = setupFrom({ data: { id: KEY_1, user_id: 'user-2', company_id: 'company-1' } })
     const res = await revoke()
     const { status, body } = await parseJsonResponse<{ success: boolean }>(res)
     expect(status).toBe(200)
     expect(body.success).toBe(true)
     expect(updateSpy).toHaveBeenCalledWith({ revoked_at: expect.any(String) })
-    expect(filters).toContainEqual(['id', 'key-1'])
+    expect(filters).toContainEqual(['id', KEY_1])
     expect(filters).toContainEqual(['company_id', 'company-1'])
     expect(filters).toContainEqual(['revoked_at', null])
   })
 
   it('revokes the caller\'s own key homed in another company, filtered on that company (byrå cockpit)', async () => {
-    const { updateSpy, filters } = setupFrom({ data: { id: 'key-1', user_id: 'user-1', company_id: OTHER } })
+    const { updateSpy, filters } = setupFrom({ data: { id: KEY_1, user_id: 'user-1', company_id: OTHER } })
     const res = await revoke()
     expect(res.status).toBe(200)
     expect(updateSpy).toHaveBeenCalledWith({ revoked_at: expect.any(String) })
@@ -633,7 +636,7 @@ describe('DELETE /api/settings/api-keys/[id]', () => {
   })
 
   it('leaves a colleague\'s key homed in another company untouched', async () => {
-    const { updateSpy } = setupFrom({ data: { id: 'key-1', user_id: 'user-2', company_id: OTHER } })
+    const { updateSpy } = setupFrom({ data: { id: KEY_1, user_id: 'user-2', company_id: OTHER } })
     const res = await revoke()
     const { status, body } = await parseJsonResponse<{ success: boolean }>(res)
     // The answer a revoke of a missing or already revoked key always gave.
@@ -652,7 +655,7 @@ describe('DELETE /api/settings/api-keys/[id]', () => {
   it('answers 403, not success, when the key company\'s policy changes no row', async () => {
     // The caller's own key homed in a company where they are not owner or
     // admin: the api_keys update policy refuses by updating nothing.
-    const { updateSpy } = setupFrom({ data: { id: 'key-1', user_id: 'user-1', company_id: OTHER } }, { data: null })
+    const { updateSpy } = setupFrom({ data: { id: KEY_1, user_id: 'user-1', company_id: OTHER } }, { data: null })
     const res = await revoke()
     const { status, body } = await parseJsonResponse<{ success?: boolean }>(res)
     expect(updateSpy).toHaveBeenCalledWith({ revoked_at: expect.any(String) })
@@ -661,7 +664,7 @@ describe('DELETE /api/settings/api-keys/[id]', () => {
   })
 
   it('returns 500 when the revoke fails', async () => {
-    setupFrom({ data: { id: 'key-1', user_id: 'user-1', company_id: 'company-1' } }, { error: { message: 'boom' } })
+    setupFrom({ data: { id: KEY_1, user_id: 'user-1', company_id: 'company-1' } }, { error: { message: 'boom' } })
     const res = await revoke()
     expect(res.status).toBe(500)
   })

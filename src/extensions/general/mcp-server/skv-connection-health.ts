@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { findCompanyTokenUser, hasOmbudReadAccess } from '@/extensions/general/skatteverket/lib/resolve-auth'
+import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { isSkatteverketEnabled } from '@/lib/skatteverket/enabled'
 import { isSkvSessionRefreshable } from '@/lib/skatteverket/session-lifetime'
 
@@ -115,16 +116,28 @@ function ownSessionIsLive(row: FilingTokenRow, now: number): boolean {
  * needs_reconsent (findCompanyTokenUser's pool), most recent first, so the
  * message never contradicts the status line beside it.
  *
+ * Read on the service role whichever client the door holds, as MCP reads it,
+ * so every door gives the same answer. A session inside its refresh window
+ * is decided by whether a refresh token is stored, and end-user roles have no
+ * grant on that column (migration 20260929173432); profiles is self-only, so
+ * another member's name is hidden from them too. The session client of the
+ * wiki's context view was refused on the token read, the whole answer came
+ * back null, and the wiki showed a briefing without the filing line the agent
+ * got. Confined to `companyId`, which every caller must have resolved for the
+ * user (membership or key grant): this read does not check it. Only the
+ * presence and the member's name leave this function, never a token.
+ *
  * Best-effort: null when the rows cannot be read.
  */
 export async function getSkvFilingReadiness(
-  supabase: SupabaseClient,
+  _supabase: SupabaseClient,
   companyId: string,
   userId: string,
   now: number = Date.now(),
 ): Promise<SkvFilingReadiness | null> {
   try {
-    const { data, error } = await supabase
+    const db = createServiceClientNoCookies()
+    const { data, error } = await db
       .from('skatteverket_tokens')
       .select('user_id, status, expires_at, refresh_count, refresh_token')
       .eq('company_id', companyId)
@@ -156,7 +169,7 @@ export async function getSkvFilingReadiness(
 
     const ownSession = own ? 'expired' : 'none'
     const other = rows.find((row) => row.user_id !== userId && row.status !== 'needs_reconsent')
-    const holderName = other ? await memberName(supabase, other.user_id) : null
+    const holderName = other ? await memberName(db, other.user_id) : null
     return {
       ready: false,
       own_session: ownSession,

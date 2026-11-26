@@ -23,6 +23,7 @@ import type { AiDocumentInput, AiImageMediaType, ExtractionSkipReason } from '@/
 import { createLogger } from '@/lib/logger'
 import { fitImageForModel, HEIC_MIME_TYPES } from '@/lib/documents/read/image'
 import { DUE_DATE_RULE } from '@/lib/documents/due-date-labels'
+import { replaceBlocks, replaceUpToLastCloser } from '@/lib/documents/html-markup'
 import { classifyExtractionError, type ExtractionFailure } from './extraction-failure'
 import {
   AMBIGUOUS_DATE_RULE,
@@ -535,11 +536,12 @@ export function emptyResult(): InvoiceExtractionResult {
 }
 
 // Photos go through the shared fitter (lib/documents/read/image.ts), the same
-// numbers as every door that reads a photo: over 3.5 MB it rotates by EXIF
-// and fits inside 2000 px as JPEG 80 (the model refuses images above 5 MB of
-// base64), and HEIC/HEIF (the iPhone default) is transcoded to JPEG, with
-// heic-convert when the local sharp cannot decode it. A HEIC nothing could
-// decode stays as it was and is skipped as unsupported below.
+// numbers as every door that reads a photo: over 3.5 MB, or with a side over
+// 8000 px, it rotates by EXIF and fits inside 2000 px as JPEG 80 (the model
+// refuses images above 5 MB of base64 or 8000 px a side), and HEIC/HEIF (the
+// iPhone default) is transcoded to JPEG, with heic-convert when the local
+// sharp cannot decode it. A HEIC nothing could decode stays as it was and is
+// skipped as unsupported below.
 async function fitImageForExtraction(input: ExtractionInput): Promise<ExtractionInput> {
   const isHeic = (HEIC_MIME_TYPES as readonly string[]).includes(input.mimeType)
   const isSupportedImage = input.mimeType.startsWith('image/') && SUPPORTED_MEDIA_TYPES.has(input.mimeType)
@@ -565,13 +567,21 @@ const MAX_EXTRACTION_TEXT_LENGTH = 50_000
  * the model budget; the mail-body underlag renders with a larger one.
  */
 export function htmlToText(html: string, maxLength: number = MAX_EXTRACTION_TEXT_LENGTH): string {
-  const withoutBlocks = html
-    .replace(/<(script|style|head|title)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, ' ')
-    .replace(/<!--[\s\S]*?-->/g, ' ')
-  const withBreaks = withoutBlocks
-    .replace(/<\/(p|div|tr|li|h[1-6]|table|thead|tbody|section|article|blockquote|pre)\s*>/gi, '\n')
-    .replace(/<(br|hr)\b[^>]*\/?>/gi, '\n')
-  const stripped = withBreaks.replace(/<[^>]+>/g, ' ')
+  // Markup that is never closed is read in time that grows with the body
+  // (html-markup.ts). A comment ends at --> or at --!>, as browsers end it.
+  const withoutBlocks = replaceUpToLastCloser(
+    replaceBlocks(html, ['script', 'style', 'head', 'title'], 'spaces', ' '),
+    /<!--[\s\S]*?--!?>/g,
+    ' ',
+    /--!?>/g,
+  )
+  const withBreaks = replaceUpToLastCloser(
+    withoutBlocks.replace(/<\/(p|div|tr|li|h[1-6]|table|thead|tbody|section|article|blockquote|pre)\s*>/gi, '\n'),
+    /<(br|hr)\b[^>]*\/?>/gi,
+    '\n',
+    '>',
+  )
+  const stripped = replaceUpToLastCloser(withBreaks, /<[^>]+>/g, ' ', '>')
   const decoded = stripped
     .replace(/&nbsp;/gi, ' ')
     .replace(/&lt;/gi, '<')
@@ -591,7 +601,10 @@ export function htmlToText(html: string, maxLength: number = MAX_EXTRACTION_TEXT
     .replace(/&amp;/gi, '&')
   return decoded
     .replace(/[ \t]+/g, ' ')
-    .replace(/\s*\n\s*/g, '\n')
+    // A run of whitespace that holds a line break becomes that one break, as
+    // /\s*\n\s*/g made it; that pattern searched a long run without a break
+    // again from each of its characters.
+    .replace(/\s+/g, (run) => (run.includes('\n') ? '\n' : run))
     .replace(/\n{3,}/g, '\n\n')
     .trim()
     .slice(0, maxLength)
