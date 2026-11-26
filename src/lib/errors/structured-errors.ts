@@ -9341,6 +9341,15 @@ const PROVIDER: Record<string, StructuredErrorEntry> = {
     message_sv: 'Leverantörens tjänst är inte tillgänglig just nu. Försök igen om en stund.',
     message_en: 'Provider service is unreachable (network/DNS error).',
   },
+  // The provider took the request and did not answer before its time limit
+  // (classifyProviderError, #3137). A 502 like the other provider failures:
+  // a 504 is what the hosting platform answers when our own function runs
+  // out of time, and the two must stay apart.
+  PROVIDER_TIMEOUT: {
+    httpStatus: 502,
+    message_sv: 'Leverantören svarade inte i tid. Försök igen om en stund.',
+    message_en: 'The provider did not answer in time. Try again in a moment.',
+  },
   PROVIDER_UPSTREAM_ERROR: {
     httpStatus: 502,
     message_sv: 'Leverantören svarade med ett fel. Försök igen om en stund.',

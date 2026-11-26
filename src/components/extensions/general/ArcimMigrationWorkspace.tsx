@@ -1451,9 +1451,9 @@ export function sieErrorRemedy(sieError: SieFetchFailure): SieErrorRemedy {
     case 'PROVIDER_UNREACHABLE':
       return { kind: 'unavailable', action: 'retry', file: 'provider' }
     default:
-      // PROVIDER_SIE_FETCH_FAILED: a timeout, an empty export, an error the
-      // classifier has no class for. Nothing says it will pass, so the
-      // sentence does not promise that it is temporary.
+      // PROVIDER_TIMEOUT, and PROVIDER_SIE_FETCH_FAILED: an empty export, an
+      // error the classifier has no class for. Nothing says it will pass, so
+      // the sentence does not promise that it is temporary.
       return { kind: 'failed', action: 'retry', file: 'provider' }
   }
 }

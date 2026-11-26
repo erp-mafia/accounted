@@ -10075,6 +10075,7 @@
     "ext_arcim_job_error_size": "Fakturan överskrider gränsen för automatisk import och behöver granskas separat.",
     "ext_arcim_job_error_exists": "En post med samma nummer finns redan i Accounted och kunde inte matchas säkert. Den har inte skrivits över och behöver granskas.",
     "ext_arcim_job_error_retry": "Posten kunde inte slutföras. Återuppta importen för att försöka igen.",
+    "ext_arcim_job_error_slow": "{provider} svarade inte i tid, inte heller när importen försökte igen. Tryck på Fortsätt importen för att försöka en gång till.",
     "ext_arcim_job_error_refused_token": "{provider} nekade åtkomst till en del av det som importen läser, fast anslutningen fungerar: integrationstoken saknar läsbehörighet för det. Skapa en integration i {provider} med alla läsbehörigheter och återanslut med dess token, så fortsätter importen.",
     "ext_arcim_job_error_api_module": "Visma lämnar inte ut uppgifterna eftersom API-modulen inte är aktiverad för företaget. Aktivera API:et i Visma under Inställningar, Appar och tillägg (på de mindre abonnemangen är det tillägget Integration, som kostar extra) och kontrollera att inget standardföretag är valt i menyn uppe till höger. Tryck sedan på Fortsätt importen.",
     "ext_arcim_job_error_bokio_plan": "Bokio lämnar inte ut uppgifterna eftersom företagets abonnemang inte omfattar egna integrationer. De ingår i Plus, Premium och Business men inte i Basic, och stängs av när abonnemanget har gått ut. Byt eller förnya abonnemanget i Bokio. Tryck sedan på Fortsätt importen.",

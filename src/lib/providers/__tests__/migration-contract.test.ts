@@ -37,6 +37,10 @@ describe('migrationIssueKind', () => {
     // lacks a permission, so a retry alone gets the same answer.
     expect(migrationIssueKind('PROVIDER_RESOURCE_FORBIDDEN')).toBe('refused')
   })
+
+  it('names a provider that did not answer in time as slow, not as a record to retry (#3137)', () => {
+    expect(migrationIssueKind('PROVIDER_TIMEOUT')).toBe('slow')
+  })
 })
 
 describe('migrationJobErrorMessageKey', () => {
@@ -70,6 +74,23 @@ describe('migrationJobErrorMessageKey', () => {
     }
     expect(sv.extensions.ext_arcim_job_error_api_module).toContain('API-modulen')
     expect(sv.extensions.ext_arcim_job_error_api_license).toContain('{provider}')
+  })
+
+  // The job's code is shown only once the job stopped: after the worker's
+  // own retries, five failed claims in a row. So the sentence names the
+  // provider as slow and the button that goes on, and promises no retry
+  // that is not coming.
+  it('says the provider did not answer in time and points at the button that resumes the job', () => {
+    expect(migrationJobErrorMessageKey({ error_code: 'PROVIDER_TIMEOUT', provider: 'visma' })).toBe('ext_arcim_job_error_slow')
+    for (const messages of [sv, en]) {
+      const { extensions } = messages as { extensions: Record<string, string> }
+      const text = extensions.ext_arcim_job_error_slow
+      expect(text).toContain('{provider}')
+      expect(text).toContain(extensions.ext_arcim_job_retry)
+      expect(text).not.toMatch(/[\u2013\u2014]/)
+    }
+    expect((sv as { extensions: Record<string, string> }).extensions.ext_arcim_job_error_slow).toContain('svarade inte i tid')
+    expect((en as { extensions: Record<string, string> }).extensions.ext_arcim_job_error_slow).toContain('did not answer in time')
   })
 })
 

@@ -10075,6 +10075,7 @@
     "ext_arcim_job_error_size": "This invoice exceeds the automatic import limit and needs a separate review.",
     "ext_arcim_job_error_exists": "A record with the same number already exists in Accounted and could not be matched safely. It was not overwritten and needs review.",
     "ext_arcim_job_error_retry": "This record could not be completed. Resume to try it again.",
+    "ext_arcim_job_error_slow": "{provider} did not answer in time, not even when the import tried again. Press Resume import to try once more.",
     "ext_arcim_job_error_refused_token": "{provider} refused access to part of what the import reads, although the connection works: the integration token lacks read permission for it. Create an integration in {provider} with every read permission and reconnect with its token, and the import continues.",
     "ext_arcim_job_error_api_module": "Visma does not hand out the data because the API module is not activated for the company. Activate the API in Visma under Settings, Apps and extensions (on the smaller plans it is the paid Integration add-on) and make sure no default company is selected in the top-right menu. Then press Resume import.",
     "ext_arcim_job_error_bokio_plan": "Bokio does not hand out the data because the company's plan does not include private integrations. They are included in Plus, Premium and Business but not in Basic, and they stop when the plan has expired. Change or renew the plan in Bokio, then press Resume import.",
