@@ -464,7 +464,7 @@ describe('get_observed_parties ranking nothing (20261123005000)', () => {
 })
 
 /**
- * 20261125233000: a SQL function's statement is planned without the values of
+ * 20261126011500: a SQL function's statement is planned without the values of
  * its arguments, and below money every CTE is estimated at one row, so the
  * planner joined CTE to CTE by nested loop. selected_entries compared each
  * voucher of keyed with each ranked key, and recur ran again for each ranked
@@ -474,7 +474,7 @@ describe('get_observed_parties ranking nothing (20261123005000)', () => {
  * off, so no CTE is read again for each row of another. Its answer must not
  * move: the function it replaces (20261123005000) is the oracle.
  */
-describe('get_observed_parties reads no CTE again per row (20261125233000)', () => {
+describe('get_observed_parties reads no CTE again per row (20261126011500)', () => {
   const shipped = readFileSync(
     new URL('../../supabase/migrations/20261123005000_observed_parties_named_keys_only.sql', import.meta.url), 'utf8',
   ).split('AS $$')[1]!.split('$$;')[0]!.trim().replace(/;$/, '')
