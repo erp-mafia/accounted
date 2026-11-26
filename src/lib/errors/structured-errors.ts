@@ -3285,6 +3285,13 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Återbetalningen är större än det kunden har tillgodo på kreditfakturan.',
     message_en: 'The refund is larger than what the customer is owed on the credit note (details.owed).',
   },
+  CREDIT_NOTE_REFUND_ORE_LEFT: {
+    httpStatus: 400,
+    message_sv:
+      'Kreditfakturans verifikation bokade öresavrundningen, så hela återbetalningen är det belopp 1510 har för den. Registrera det beloppet, eller en del som lämnar något kvar.',
+    message_en:
+      'The credit note\'s verifikat booked its öresavrundning: a refund of the whole credit is what 1510 carries for it (details.owed). Send that amount, or a part refund that leaves something owed.',
+  },
   CREDIT_NOTE_REFUND_LINES_INVALID: {
     httpStatus: 400,
     message_sv: 'En återbetalning debiterar 1510 Kundfordringar och krediterar kontot pengarna gick ut från.',
