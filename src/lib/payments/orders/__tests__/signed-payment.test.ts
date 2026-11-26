@@ -4,6 +4,7 @@ import { describe, expect, it, beforeEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createTableMockSupabase } from '@/tests/helpers'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
+import { ResponseMetaSchema, zodToJsonSchema } from '@/lib/api/v1/registry'
 import { ID_READ_CHUNK } from '@/lib/supabase/read-in-slices'
 import { formatCurrency } from '@/lib/utils'
 import {
@@ -213,6 +214,16 @@ describe('bankHeldPaymentWarning', () => {
     for (const payment of [SIGNED, UNSIGNED]) {
       for (const via of ['bank_row', 'other'] as const) {
         expect(bankHeldPaymentWarning(payment, via)).toMatchObject({ payment_order_id: 'order-1', supplier_invoice_id: 'si-1' })
+      }
+    }
+  })
+
+  it('carries only fields the published warning schema declares, so a client validating against openapi.json accepts it', () => {
+    const meta = zodToJsonSchema(ResponseMetaSchema) as { properties: { warnings: { items: { properties: Record<string, unknown> } } } }
+    const declared = Object.keys(meta.properties.warnings.items.properties)
+    for (const payment of [SIGNED, UNSIGNED]) {
+      for (const via of ['bank_row', 'other'] as const) {
+        for (const field of Object.keys(bankHeldPaymentWarning(payment, via))) expect(declared).toContain(field)
       }
     }
   })
