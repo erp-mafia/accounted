@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { isOnboardingSourcesEnabled } from '../sources-rollout'
+import { SOURCES_FLOW_EXTENSIONS, isOnboardingSourcesEnabled, sourcesFlowAvailable } from '../sources-rollout'
 
 afterEach(() => vi.unstubAllEnvs())
 
@@ -37,5 +37,15 @@ describe('isOnboardingSourcesEnabled', () => {
     vi.stubEnv('ONBOARDING_SOURCES_USER_IDS', '*')
     expect(isOnboardingSourcesEnabled(null)).toBe(false)
     expect(isOnboardingSourcesEnabled(undefined)).toBe(false)
+  })
+})
+
+describe('sourcesFlowAvailable', () => {
+  it('needs every extension its own stops connect through', () => {
+    expect(sourcesFlowAvailable(new Set(SOURCES_FLOW_EXTENSIONS))).toBe(true)
+    expect(sourcesFlowAvailable(new Set([...SOURCES_FLOW_EXTENSIONS, 'enable-banking']))).toBe(true)
+    expect(sourcesFlowAvailable(new Set(['mcp-server']))).toBe(false)
+    expect(sourcesFlowAvailable(new Set(['invoice-inbox']))).toBe(false)
+    expect(sourcesFlowAvailable(new Set())).toBe(false)
   })
 })
