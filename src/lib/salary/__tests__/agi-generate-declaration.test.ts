@@ -2387,15 +2387,17 @@ describe("generateAgiDeclaration: a filed month's rättelse carries no frånvaro
     enqueueMany: (results: { data?: unknown; error?: unknown }[]) => void,
     stored: Record<string, unknown>,
     filingReads: { data?: unknown; error?: unknown }[],
+    run: Record<string, unknown> = CORRECTION,
+    day: Record<string, unknown> = VAB_DAY,
   ) {
     enqueueMany([
-      { data: CORRECTION },
+      { data: run },
       { data: COMPANY },
       { data: SETTINGS },
       { data: PROFILE },
       { data: [REGULAR_ROW] },
-      ...correctedRunRead(CORRECTION),
-      { data: [VAB_DAY] }, // salary_absence_days: the window
+      ...correctedRunRead(run),
+      { data: [day] }, // salary_absence_days: the window
       { data: [] }, // salary_absence_days: late days carried to the run
       { data: stored }, // agi_declarations for the period
       { data: [] }, // salary_runs: no other live run paid out in the month
@@ -2429,23 +2431,28 @@ describe("generateAgiDeclaration: a filed month's rättelse carries no frånvaro
 
   it("leaves it out once the correction holds the row, when Skatteverket's kvittens for the month is on record", async () => {
     const { supabase, enqueueMany, findCalls } = createQueuedMockSupabase()
+    // Lön i efterskott: May's pay, paid out 25 June, is declared in 202606.
     enqueueCorrection(
       enqueueMany,
       { id: 'agi-0', salary_run_id: 'run-1', status: 'generated', submitted_at: null },
       [{ data: [{ id: 'kvittens-1' }] }, { data: [] }],
+      { ...CORRECTION, period_month: 5 },
+      { ...VAB_DAY, absence_date: '2026-05-12' },
     )
 
     const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
 
-    expect(result.ok).toBe(true)
+    expect(result).toMatchObject({ ok: true, periodYear: 2026, periodMonth: 6 })
     if (!result.ok) return
     expect(franvarouppgifter(result.xml)).toBe(0)
-    // The kvittens asked for is the redovisningsperiod's, the payout month.
+    // The filing asked for is the redovisningsperiod's, the payout month, not May.
     expect(findCalls('agi_kvittenser', 'eq')).toEqual([
       ['company_id', 'company-1'],
       ['period_year', 2026],
       ['period_month', 6],
     ])
+    expect(findCalls('salary_runs', 'gte')).toContainEqual(['payment_date', '2026-06-01'])
+    expect(findCalls('salary_runs', 'lte')).toContainEqual(['payment_date', '2026-06-30'])
   })
 
   it('leaves it out when a run of the month carries the filing stamp, even with no kvittens row', async () => {
@@ -2500,6 +2507,31 @@ describe("generateAgiDeclaration: a filed month's rättelse carries no frånvaro
     const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
 
     expect(result.ok).toBe(true)
+    expect(findCall('agi_kvittenser', 'select')).toBeUndefined()
+  })
+
+  it('reads no filing for the day of a removed employee: a borttag IU carries no frånvarouppgift', async () => {
+    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: RUN },
+      { data: COMPANY },
+      { data: SETTINGS },
+      { data: PROFILE },
+      { data: [{ ...REGULAR_ROW, removed_from_agi: true }] },
+      { data: [VAB_DAY] }, // salary_absence_days: the window
+      { data: [] }, // salary_absence_days: late days carried to the run
+      { data: null }, // agi_declarations maybeSingle (first generation)
+      { data: [] }, // salary_runs: no other live run paid out in the month
+      { data: { id: 'agi-1' } }, // agi_declarations insert
+      { data: null }, // salary_runs update (agi_generated_at stamp)
+    ])
+
+    const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(franvarouppgifter(result.xml)).toBe(0)
+    expect(result.xml).toContain('<gem:Borttag faltkod="205">1</gem:Borttag>')
     expect(findCall('agi_kvittenser', 'select')).toBeUndefined()
   })
 })

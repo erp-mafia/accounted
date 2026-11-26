@@ -385,9 +385,8 @@ describe("a corrected month's VAB and parental days stay with its first declarat
    * finnas för RedovisningsPeriod, FK006, där första deklaration redan har
    * skickats in." A Bearbetningskontroll that fails stops the whole file:
    * "Om någon av de här kontrollerna slår ut laddas inte filen upp" (Teknisk
-   * beskrivning 1.1.18.2, 12.5.1); through the API the inlämning ends
-   * DONE_REJECTED, "inga underlag har sparats" (Tjänstebeskrivning
-   * Arbetsgivardeklaration inlämning, dokumentversion 1.23, 4.1.2.1).
+   * beskrivning 1.1.18.2, 12.5.1). Only an upload inside the e-tjänst may have
+   * them removed instead, "inte via API" (Ändringar i version 1.1.18).
    * `filedPeriods`: the periods Skatteverket holds a kvittens for. Answers the
    * FK006 of every frånvarouppgift in the file the check refuses.
    */
@@ -474,6 +473,28 @@ describe("a corrected month's VAB and parental days stay with its first declarat
     expect(franvaroDates(posted)).toEqual(['2026-05-12'])
     // The judge does refuse that file for a month already filed.
     expect(ba824(posted, ['202605'])).toEqual(['202605'])
+  })
+
+  it("reads a filing from the filed run's stamp alone, and never from another month's", async () => {
+    const db = correctedMayWithParentalDay(false)
+    // April is filed; May is not yet.
+    db.tables.salary_runs.push(
+      salaryRun('run-apr', { period_month: 4, payment_date: '2026-04-24', agi_submitted_at: '2026-05-08T09:00:00Z' }),
+    )
+
+    expect(await generate(db, 'run-corr')).toMatchObject({ ok: true })
+    expect(franvaroDates(db.one('agi_declarations', 'agi-1').xml_content as string)).toEqual(['2026-05-12'])
+
+    // May's original is signed: its run carries the stamp, while no kvittens
+    // row was recorded and the row already holds the unfiled correction.
+    db.one('salary_runs', 'run-orig').agi_submitted_at = ORIGINAL_KVITTENS.signeradTid
+    expect(db.tables.agi_kvittenser).toEqual([])
+    expect(db.one('agi_declarations', 'agi-1')).toMatchObject({ salary_run_id: 'run-corr', status: 'generated' })
+
+    expect(await generate(db, 'run-corr')).toMatchObject({ ok: true })
+    const xml = db.one('agi_declarations', 'agi-1').xml_content as string
+    expect(franvaroDates(xml)).toEqual([])
+    expect(ba824(xml, [ORIGINAL_KVITTENS.period])).toEqual([])
   })
 })
 

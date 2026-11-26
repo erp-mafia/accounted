@@ -50,8 +50,8 @@ import { declaredAvgifterForRun, isFSkattStatus } from '../declared-avgifter'
 import { regionalSupportForRun } from '../regional-support'
 import { agiFiledForRun } from '../agi-submission-state'
 import type { Logger } from '@/lib/logger'
-import { addMonthsIso, previousMonthEndIso, stockholmYearMonth } from '@/lib/dates/iso'
-import { AGI_RECEIPT_STATUSES } from '@/lib/deadlines/agi-filed'
+import { stockholmYearMonth } from '@/lib/dates/iso'
+import { agiPeriodFiled } from '@/lib/deadlines/agi-period-filed'
 import { effectiveOrgNumber } from '@/lib/company/org-number'
 import { parseEntityType } from '@/lib/company/entity-type'
 import {
@@ -364,58 +364,6 @@ async function readAgiPeriod(
     .maybeSingle()
   if (holderError) return { ok: false, error: holderError }
   return { ok: true, row, holder: holder as AgiHolderRun | null }
-}
-
-/**
- * Whether the redovisningsperiod's first declaration is filed: Skatteverket's
- * kvittens for the month is on record. The period's row carries it
- * (AGI_RECEIPT_STATUSES) until a correction takes the row over; after that
- * agi_kvittenser keeps every kvittens, and the run whose declaration was
- * signed keeps its agi_submitted_at stamp. A declaration awaiting signature
- * is not filed.
- *
- * A declaration generated after the first is a rättelse, which carries no
- * frånvarouppgift (generateAGIXml, Kontroller ba_824). Only a kvittens counts,
- * never an AGI deadline ticked off by hand: a first declaration left without
- * its frånvarouppgifter can never get them (Teknisk beskrivning 1.1.18.2,
- * 9.3), while a file ba_824 refuses says so at upload.
- */
-async function firstDeclarationFiled(
-  supabase: SupabaseClient,
-  companyId: string,
-  period: { periodYear: number; periodMonth: number },
-  row: Pick<StoredAgiDeclaration, 'status'> | null,
-): Promise<{ ok: true; filed: boolean } | { ok: false; error: unknown }> {
-  if (row && AGI_RECEIPT_STATUSES.includes(row.status)) return { ok: true, filed: true }
-  // payment_date is NOT NULL, so the payout month is exactly this range
-  // (as readOtherRunsPaidInPeriod reads it).
-  const monthStart = `${formatAgiPeriodDashed(period)}-01`
-  const monthEnd = previousMonthEndIso(addMonthsIso(monthStart, 1))
-  const [kvittenser, filedRuns] = await Promise.all([
-    supabase
-      .from('agi_kvittenser')
-      .select('id')
-      .eq('company_id', companyId)
-      .eq('period_year', period.periodYear)
-      .eq('period_month', period.periodMonth)
-      .limit(1),
-    supabase
-      .from('salary_runs')
-      .select('period_year, period_month, payment_date')
-      .eq('company_id', companyId)
-      .gte('payment_date', monthStart)
-      .lte('payment_date', monthEnd)
-      .not('agi_submitted_at', 'is', null),
-  ])
-  const error = kvittenser.error ?? filedRuns.error
-  if (error) return { ok: false, error }
-  const runFiled = ((filedRuns.data ?? []) as Array<{ period_year: number; period_month: number; payment_date: string }>).some(
-    (filedRun) => {
-      const filedPeriod = agiReportingPeriod(filedRun)
-      return filedPeriod.periodYear === period.periodYear && filedPeriod.periodMonth === period.periodMonth
-    },
-  )
-  return { ok: true, filed: ((kvittenser.data ?? []) as unknown[]).length > 0 || runFiled }
 }
 
 /** The declaration columns a generation writes, whichever way it writes them. */
@@ -1166,11 +1114,15 @@ export async function generateAgiDeclaration(
   let isCorrection = target.row !== null
 
   // A month whose first declaration is filed takes no frånvarouppgift: this
-  // declaration is a rättelse (firstDeclarationFiled). Read only when there
-  // is one to leave out.
+  // declaration is a rättelse (agiPeriodFiled, Kontroller ba_824). Read only
+  // when the XML would carry one: a removed IU carries none.
+  const franvarouppgifter = employeeData.reduce(
+    (sum, e) => sum + (e.removed ? 0 : (e.absenceEvents?.length ?? 0)),
+    0,
+  )
   let periodFiled = false
-  if (absenceByEmployee.size > 0) {
-    const filing = await firstDeclarationFiled(supabase, companyId, agiPeriod, target.row)
+  if (franvarouppgifter > 0) {
+    const filing = await agiPeriodFiled(supabase, companyId, agiPeriod, target.row)
     if (!filing.ok) return { ok: false, code: 'DATABASE_ERROR', details: filing.error }
     periodFiled = filing.filed
     if (periodFiled) {
@@ -1178,7 +1130,7 @@ export async function generateAgiDeclaration(
         companyId,
         periodYear: agiPeriod.periodYear,
         periodMonth: agiPeriod.periodMonth,
-        leftOut: employeeData.reduce((sum, e) => sum + (e.removed ? 0 : e.absenceEvents?.length ?? 0), 0),
+        leftOut: franvarouppgifter,
       })
     }
   }
