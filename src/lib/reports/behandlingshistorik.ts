@@ -933,6 +933,18 @@ const PERIOD_DECISION_TWIN_WINDOW_MS = 30_000
 
 type PeriodDecisionKind = 'unlocked' | 'closed_externally' | 'reopened_externally'
 
+/**
+ * How recordPeriodDecision (period-service.ts) opens each decision row's
+ * description. Only a row that opens this way is a decision row: the owner's
+ * reopen and the support scripts write rows of their own about the same
+ * changes, and those stay events of their own.
+ */
+const PERIOD_DECISION_PREFIX: Record<PeriodDecisionKind, string> = {
+  unlocked: 'Period unlocked: ',
+  closed_externally: 'Period marked as closed in previous system: ',
+  reopened_externally: 'Period reopened, previous-system close undone: ',
+}
+
 /** The decision a fiscal_periods row records, read from its states. Both rows of one decision agree on it. */
 function periodDecisionKind(row: AuditLogEntry): PeriodDecisionKind | null {
   const before = row.old_state
@@ -944,7 +956,12 @@ function periodDecisionKind(row: AuditLogEntry): PeriodDecisionKind | null {
   return null
 }
 
-/** Pair each decision row with the nearest trigger row of the same period and decision. */
+/**
+ * Pair each decision row with the trigger row of the same change: the same
+ * period and decision, written just before it, with the values it repeats.
+ * The values keep two quick unlocks of one year apart (each repeats the lock
+ * it lifted), so a decision row written late cannot take the other's twin.
+ */
 function pairPeriodDecisionRows(rows: AuditLogEntry[]): PeriodDecisionTwins {
   const twins: PeriodDecisionTwins = { triggerOf: new Map(), folded: new Set() }
   const triggersByKey = new Map<string, AuditLogEntry[]>()
@@ -959,20 +976,21 @@ function pairPeriodDecisionRows(rows: AuditLogEntry[]): PeriodDecisionTwins {
       const list = triggersByKey.get(key) ?? []
       list.push(row)
       triggersByKey.set(key, list)
-    } else if (row.action === 'UPDATE') {
+    } else if (row.action === 'UPDATE' && row.description?.startsWith(PERIOD_DECISION_PREFIX[kind])) {
       decisions.push({ row, key })
     }
   }
+  // Oldest first, so the pairs do not depend on the order the rows arrive in.
+  decisions.sort((a, b) => toMs(a.row.created_at) - toMs(b.row.created_at) || a.row.id.localeCompare(b.row.id))
   for (const { row, key } of decisions) {
     const at = toMs(row.created_at)
     let twin: AuditLogEntry | null = null
-    let twinGap = PERIOD_DECISION_TWIN_WINDOW_MS
     for (const trigger of triggersByKey.get(key) ?? []) {
-      const gap = Math.abs(at - toMs(trigger.created_at))
-      if (!twins.folded.has(trigger.id) && gap <= twinGap) {
-        twin = trigger
-        twinGap = gap
-      }
+      // The decision row is written after the change it records.
+      const lead = at - toMs(trigger.created_at)
+      if (!(lead >= 0 && lead <= PERIOD_DECISION_TWIN_WINDOW_MS) || twins.folded.has(trigger.id)) continue
+      if (!sameDecidedValues(row, trigger)) continue
+      if (!twin || toMs(trigger.created_at) > toMs(twin.created_at)) twin = trigger
     }
     if (twin) {
       twins.triggerOf.set(row.id, twin)
@@ -980,6 +998,27 @@ function pairPeriodDecisionRows(rows: AuditLogEntry[]): PeriodDecisionTwins {
     }
   }
   return twins
+}
+
+/** A decision row without its trigger row names the year by its description, less recordPeriodDecision's opening. */
+function periodDecisionObject(row: AuditLogEntry, kind: PeriodDecisionKind): string | null {
+  const prefix = PERIOD_DECISION_PREFIX[kind]
+  const description = row.description ?? ''
+  return (description.startsWith(prefix) ? description.slice(prefix.length) : description) || null
+}
+
+/** Every value a decision row records equals the trigger row's for that column; timestamps compare as instants. */
+function sameDecidedValues(decision: AuditLogEntry, trigger: AuditLogEntry): boolean {
+  for (const side of ['old_state', 'new_state'] as const) {
+    const whole = trigger[side] ?? {}
+    for (const [column, value] of Object.entries(decision[side] ?? {})) {
+      if (!(column in whole) || value === whole[column]) continue
+      const decided = typeof value === 'string' ? Date.parse(value) : Number.NaN
+      const stored = typeof whole[column] === 'string' ? Date.parse(whole[column] as string) : Number.NaN
+      if (Number.isNaN(decided) || decided !== stored) return false
+    }
+  }
+  return true
 }
 
 /** A verifikat a skattekonto row was linked to or unlinked from: its label and its origin. */
@@ -1338,10 +1377,16 @@ function settingsAuditEvent(row: AuditLogEntry): RawBehandlingshistorikEvent | n
 function periodAuditEvent(row: AuditLogEntry, ctx: NormaliseContext): RawBehandlingshistorikEvent | null {
   // The trigger's half of a decision its decision row shows.
   if (ctx.periodDecisionTwins?.folded.has(row.id)) return null
-  // A decision row speaks with its trigger row's actor, which names the credential.
+  // A decision row takes from its trigger row the period's name and, when
+  // that row names a credential or the same person, its actor: the decision
+  // row itself records only 'user'.
   const twin = ctx.periodDecisionTwins?.triggerOf.get(row.id)
-  const actor = twin ? baseAuditActor(twin) : undefined
-  const state = row.new_state ?? row.old_state
+  const twinActor = twin ? baseAuditActor(twin) : undefined
+  const actor =
+    twinActor && (twinActor.type !== 'user' || twinActor.user_id === (row.user_id ?? row.actor_id ?? null))
+      ? twinActor
+      : undefined
+  const state = (twin ?? row).new_state ?? (twin ?? row).old_state
   const name = str(state?.name)
   const span =
     str(state?.period_start) && str(state?.period_end)
@@ -1377,7 +1422,7 @@ function periodAuditEvent(row: AuditLogEntry, ctx: NormaliseContext): RawBehandl
           category: 'period',
           code: 'period.reopened_externally',
           event: 'Räkenskapsår öppnat igen (markeringen som stängt i tidigare system ångrad)',
-          object: object ?? (row.description?.replace(/^Period reopened, previous-system close undone: /, '') || null),
+          object: object ?? periodDecisionObject(row, 'reopened_externally'),
           actor,
         })
       }
@@ -1387,7 +1432,7 @@ function periodAuditEvent(row: AuditLogEntry, ctx: NormaliseContext): RawBehandl
           category: 'period',
           code: 'period.unlocked',
           event: 'Räkenskapsår upplåst',
-          object: object ?? (row.description?.replace(/^Period unlocked: /, '') || null),
+          object: object ?? periodDecisionObject(row, 'unlocked'),
           actor,
         })
       }
@@ -1396,7 +1441,7 @@ function periodAuditEvent(row: AuditLogEntry, ctx: NormaliseContext): RawBehandl
           category: 'period',
           code: 'period.closed_externally',
           event: 'Räkenskapsår markerat som stängt i tidigare system',
-          object: object ?? (row.description?.replace(/^Period marked as closed in previous system: /, '') || null),
+          object: object ?? periodDecisionObject(row, 'closed_externally'),
           actor,
         })
       }
