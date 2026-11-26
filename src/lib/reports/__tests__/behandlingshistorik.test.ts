@@ -3094,3 +3094,176 @@ describe('auditRowToEvent: pågående arbeten, method and account (accounted#111
     })
   })
 })
+
+// ============================================================
+// A period decision: the trigger's row and the decision's own row
+// ============================================================
+
+describe('generateBehandlingshistorik: a period decision is one event', () => {
+  // The whole period row, as write_audit_log stores it for an UPDATE.
+  const periodRow = (over: Record<string, unknown> = {}) => ({
+    id: 'fp-2025',
+    company_id: 'company-1',
+    name: 'RÅ 2025',
+    period_start: '2025-01-01',
+    period_end: '2025-12-31',
+    is_closed: false,
+    closed_at: null,
+    closed_externally: false,
+    locked_at: null,
+    closing_entry_id: null,
+    ...over,
+  })
+  const LOCKED = '2026-01-10T08:00:00.000+00:00'
+  const CLOSED = '2026-03-10T10:00:00.000+00:00'
+
+  /**
+   * The report's events for these audit rows (fiscal-year mode, nothing else
+   * in the year). The trigger row comes from an API key here, so the event
+   * shows which actor it takes.
+   */
+  async function eventsFor(audit: AuditLogEntry[]) {
+    rpcResults = { behandlingshistorik_sources: ledger({ audit }) }
+    mockResults = {
+      fiscal_periods: [{ data: period }],
+      company_settings: [{ data: { company_name: 'T', org_number: null } }],
+      company_migration_resets: [{ data: [] }, { data: [] }],
+      app_releases: [{ data: [] }],
+      sie_imports: [{ data: [] }],
+      bank_file_imports: [{ data: [] }],
+    }
+    const report = await generateBehandlingshistorik(makeClient(), 'company-1', { periodId: 'period-1' })
+    return report!.events.filter((e) => e.category === 'period')
+  }
+
+  const triggerRow = (over: Partial<AuditLogEntry>) =>
+    auditRow({
+      table_name: 'fiscal_periods',
+      record_id: 'fp-2025',
+      actor_type: 'api_key',
+      actor_label: 'Byråns nyckel',
+      created_at: '2026-03-10T10:00:00.000Z',
+      ...over,
+    })
+  // recordPeriodDecision's row, written about 40 ms after the trigger's.
+  const decisionRow = (over: Partial<AuditLogEntry>) =>
+    auditRow({ table_name: 'fiscal_periods', record_id: 'fp-2025', action: 'UPDATE', created_at: '2026-03-10T10:00:00.040Z', ...over })
+
+  it('an unlock shows once, with the decision row\'s detail and the trigger row\'s actor', async () => {
+    const events = await eventsFor([
+      triggerRow({ id: 'trig', action: 'UPDATE', old_state: periodRow({ locked_at: LOCKED }), new_state: periodRow() }),
+      decisionRow({
+        id: 'decision',
+        old_state: { locked_at: LOCKED },
+        new_state: { locked_at: null },
+        description: 'Period unlocked: RÅ 2025 (2025-01-01 to 2025-12-31)',
+      }),
+    ])
+
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({
+      id: 'audit:decision',
+      code: 'period.unlocked',
+      event: 'Räkenskapsår upplåst',
+      object: 'RÅ 2025 (2025-01-01 to 2025-12-31)',
+    })
+    // The decision row says only 'user'; the trigger row names the key.
+    expect(events[0].actor).toMatchObject({ type: 'api_key', label: 'Byråns nyckel åt Användare user-1' })
+  })
+
+  it('klarmarkera shows once, as marked closed in the previous system, not as a lock', async () => {
+    const events = await eventsFor([
+      triggerRow({
+        id: 'trig',
+        action: 'LOCK_PERIOD',
+        old_state: periodRow(),
+        new_state: periodRow({ is_closed: true, closed_at: CLOSED, closed_externally: true, locked_at: CLOSED }),
+        description: 'Locked fiscal period "RÅ 2025"',
+      }),
+      decisionRow({
+        id: 'decision',
+        old_state: { is_closed: false, closed_at: null, locked_at: null },
+        new_state: { is_closed: true, closed_at: CLOSED, closed_externally: true, locked_at: CLOSED },
+        description: 'Period marked as closed in previous system: RÅ 2025 (2025-01-01 to 2025-12-31)',
+      }),
+    ])
+
+    expect(events.map((e) => e.code)).toEqual(['period.closed_externally'])
+    expect(events[0]).toMatchObject({ id: 'audit:decision', object: 'RÅ 2025 (2025-01-01 to 2025-12-31)' })
+  })
+
+  it('undoing klarmarkera shows once, as reopened, in Swedish', async () => {
+    const events = await eventsFor([
+      triggerRow({
+        id: 'trig',
+        action: 'UPDATE',
+        old_state: periodRow({ is_closed: true, closed_at: CLOSED, closed_externally: true, locked_at: CLOSED }),
+        new_state: periodRow(),
+      }),
+      decisionRow({
+        id: 'decision',
+        old_state: { is_closed: true, closed_at: CLOSED, closed_externally: true, locked_at: CLOSED },
+        new_state: { is_closed: false, closed_at: null, closed_externally: false, locked_at: null },
+        description: 'Period reopened, previous-system close undone: RÅ 2025 (2025-01-01 to 2025-12-31)',
+      }),
+    ])
+
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({
+      id: 'audit:decision',
+      code: 'period.reopened_externally',
+      object: 'RÅ 2025 (2025-01-01 to 2025-12-31)',
+    })
+    expect(events[0].event).toMatch(/^Räkenskapsår öppnat igen/)
+  })
+
+  it('a trigger row without its decision row still shows', async () => {
+    const events = await eventsFor([
+      triggerRow({ id: 'trig', action: 'UPDATE', old_state: periodRow({ locked_at: LOCKED }), new_state: periodRow() }),
+    ])
+
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({ id: 'audit:trig', code: 'period.unlocked', object: 'RÅ 2025' })
+  })
+
+  it('two unlocks of the same year a minute apart stay two events', async () => {
+    const unlock = (n: number, at: string, decisionAt: string) => [
+      triggerRow({ id: `trig-${n}`, action: 'UPDATE', created_at: at, old_state: periodRow({ locked_at: LOCKED }), new_state: periodRow() }),
+      decisionRow({
+        id: `decision-${n}`,
+        created_at: decisionAt,
+        old_state: { locked_at: LOCKED },
+        new_state: { locked_at: null },
+        description: 'Period unlocked: RÅ 2025 (2025-01-01 to 2025-12-31)',
+      }),
+    ]
+    const events = await eventsFor([
+      ...unlock(1, '2026-03-10T10:00:00.000Z', '2026-03-10T10:00:00.040Z'),
+      ...unlock(2, '2026-03-10T10:01:00.000Z', '2026-03-10T10:01:00.050Z'),
+    ])
+
+    expect(events.map((e) => e.id)).toEqual(['audit:decision-1', 'audit:decision-2'])
+  })
+
+  it('a lock in the same minute is not taken for the unlock\'s twin', async () => {
+    const events = await eventsFor([
+      triggerRow({ id: 'lock', action: 'LOCK_PERIOD', old_state: periodRow(), new_state: periodRow({ locked_at: LOCKED }) }),
+      triggerRow({
+        id: 'trig',
+        action: 'UPDATE',
+        created_at: '2026-03-10T10:00:20.000Z',
+        old_state: periodRow({ locked_at: LOCKED }),
+        new_state: periodRow(),
+      }),
+      decisionRow({
+        id: 'decision',
+        created_at: '2026-03-10T10:00:20.040Z',
+        old_state: { locked_at: LOCKED },
+        new_state: { locked_at: null },
+        description: 'Period unlocked: RÅ 2025 (2025-01-01 to 2025-12-31)',
+      }),
+    ])
+
+    expect(events.map((e) => `${e.id} ${e.code}`)).toEqual(['audit:lock period.locked', 'audit:decision period.unlocked'])
+  })
+})

@@ -908,6 +908,78 @@ interface NormaliseContext {
    * period (fetchLinkedEntries). Absent when nothing was looked up.
    */
   linkedEntryById?: Map<string, LinkedEntryRow>
+  /** The two rows of each period decision, read as one event (pairPeriodDecisionRows). */
+  periodDecisionTwins?: PeriodDecisionTwins
+}
+
+/**
+ * A period decision (unlock, klarmarkera, undoing klarmarkera) leaves two
+ * audit_log rows: the trigger's row, with the whole period row before and
+ * after and the credential that changed it, and the decision's own row
+ * (period-service recordPeriodDecision), written right after it, which names
+ * what was decided. They describe one event, so the report shows the decision
+ * row, with the trigger row's actor, and leaves the trigger row out. Both rows
+ * stay in audit_log; only the report reads them as one.
+ */
+interface PeriodDecisionTwins {
+  /** Decision row id → the trigger row of the same change. */
+  triggerOf: Map<string, AuditLogEntry>
+  /** Trigger row ids the report shows through their decision row. */
+  folded: Set<string>
+}
+
+/** How far apart the two rows of one decision may lie; in production they are under a second apart. */
+const PERIOD_DECISION_TWIN_WINDOW_MS = 30_000
+
+type PeriodDecisionKind = 'unlocked' | 'closed_externally' | 'reopened_externally'
+
+/** The decision a fiscal_periods row records, read from its states. Both rows of one decision agree on it. */
+function periodDecisionKind(row: AuditLogEntry): PeriodDecisionKind | null {
+  const before = row.old_state
+  const after = row.new_state
+  if (!before || !after) return null
+  if (after.closed_externally === true && before.closed_externally !== true) return 'closed_externally'
+  if (before.closed_externally === true && after.closed_externally !== true) return 'reopened_externally'
+  if (before.locked_at && !after.locked_at && !before.is_closed) return 'unlocked'
+  return null
+}
+
+/** Pair each decision row with the nearest trigger row of the same period and decision. */
+function pairPeriodDecisionRows(rows: AuditLogEntry[]): PeriodDecisionTwins {
+  const twins: PeriodDecisionTwins = { triggerOf: new Map(), folded: new Set() }
+  const triggersByKey = new Map<string, AuditLogEntry[]>()
+  const decisions: Array<{ row: AuditLogEntry; key: string }> = []
+  for (const row of rows) {
+    if (row.table_name !== 'fiscal_periods' || !row.record_id) continue
+    const kind = periodDecisionKind(row)
+    if (!kind) continue
+    const key = `${row.record_id}:${kind}`
+    // The trigger's row holds the whole period row; a decision row only the fields it decided.
+    if (typeof row.new_state?.id === 'string') {
+      const list = triggersByKey.get(key) ?? []
+      list.push(row)
+      triggersByKey.set(key, list)
+    } else if (row.action === 'UPDATE') {
+      decisions.push({ row, key })
+    }
+  }
+  for (const { row, key } of decisions) {
+    const at = toMs(row.created_at)
+    let twin: AuditLogEntry | null = null
+    let twinGap = PERIOD_DECISION_TWIN_WINDOW_MS
+    for (const trigger of triggersByKey.get(key) ?? []) {
+      const gap = Math.abs(at - toMs(trigger.created_at))
+      if (!twins.folded.has(trigger.id) && gap <= twinGap) {
+        twin = trigger
+        twinGap = gap
+      }
+    }
+    if (twin) {
+      twins.triggerOf.set(row.id, twin)
+      twins.folded.add(twin.id)
+    }
+  }
+  return twins
 }
 
 /** A verifikat a skattekonto row was linked to or unlinked from: its label and its origin. */
@@ -1263,7 +1335,12 @@ function settingsAuditEvent(row: AuditLogEntry): RawBehandlingshistorikEvent | n
   }
 }
 
-function periodAuditEvent(row: AuditLogEntry): RawBehandlingshistorikEvent | null {
+function periodAuditEvent(row: AuditLogEntry, ctx: NormaliseContext): RawBehandlingshistorikEvent | null {
+  // The trigger's half of a decision its decision row shows.
+  if (ctx.periodDecisionTwins?.folded.has(row.id)) return null
+  // A decision row speaks with its trigger row's actor, which names the credential.
+  const twin = ctx.periodDecisionTwins?.triggerOf.get(row.id)
+  const actor = twin ? baseAuditActor(twin) : undefined
   const state = row.new_state ?? row.old_state
   const name = str(state?.name)
   const span =
@@ -1294,6 +1371,16 @@ function periodAuditEvent(row: AuditLogEntry): RawBehandlingshistorikEvent | nul
     case 'UPDATE': {
       const oldState = row.old_state
       const newState = row.new_state
+      // Ahead of the unlock: undoing klarmarkera clears the lock too.
+      if (oldState?.closed_externally && !newState?.closed_externally) {
+        return auditEvent(row, {
+          category: 'period',
+          code: 'period.reopened_externally',
+          event: 'Räkenskapsår öppnat igen (markeringen som stängt i tidigare system ångrad)',
+          object: object ?? (row.description?.replace(/^Period reopened, previous-system close undone: /, '') || null),
+          actor,
+        })
+      }
       // App-written unlock rows carry only { locked_at } in both states.
       if (oldState?.locked_at && !newState?.locked_at) {
         return auditEvent(row, {
@@ -1301,6 +1388,7 @@ function periodAuditEvent(row: AuditLogEntry): RawBehandlingshistorikEvent | nul
           code: 'period.unlocked',
           event: 'Räkenskapsår upplåst',
           object: object ?? (row.description?.replace(/^Period unlocked: /, '') || null),
+          actor,
         })
       }
       if (newState?.closed_externally && !oldState?.closed_externally) {
@@ -1309,6 +1397,7 @@ function periodAuditEvent(row: AuditLogEntry): RawBehandlingshistorikEvent | nul
           code: 'period.closed_externally',
           event: 'Räkenskapsår markerat som stängt i tidigare system',
           object: object ?? (row.description?.replace(/^Period marked as closed in previous system: /, '') || null),
+          actor,
         })
       }
       if (!oldState?.locked_at && newState?.locked_at) {
@@ -2110,7 +2199,7 @@ export function auditRowToEvent(
     case 'company_settings':
       return settingsAuditEvent(row)
     case 'fiscal_periods':
-      return periodAuditEvent(row)
+      return periodAuditEvent(row, ctx)
     case 'api_keys':
       return apiKeyAuditEvent(row)
     case 'service_accounts':
@@ -3945,7 +4034,8 @@ export async function generateBehandlingshistorik(
 
   const linkedIds = linkedEntryIds(auditRows)
   const linkedEntryById = linkedIds.length > 0 ? await fetchLinkedEntries(supabase, companyId, linkedIds) : undefined
-  const ctx: NormaliseContext = { rattelseMetadataAt, entryById, linkedEntryById }
+  const periodDecisionTwins = pairPeriodDecisionRows(auditRows)
+  const ctx: NormaliseContext = { rattelseMetadataAt, entryById, linkedEntryById, periodDecisionTwins }
   for (const row of auditRows) {
     const ev = auditRowToEvent(row, ctx)
     if (ev) raw.push(ev)
