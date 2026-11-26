@@ -12,12 +12,17 @@
  * v1 has the same rule in its wrapper (malformedPathIds) and needs nothing
  * here.
  *
- * Flagged: an app/api route.ts outside v1 that uses withRouteContext, has a
- * path segment named `[id]` or ending in Id (`[employeeId]`), and checks no
- * uuid: no `uuidParams`, no isUuid / UUID_RE, no zod uuid schema. A segment
- * that is not a uuid (a year, an account number, a token) has another name;
- * one named like an id that holds something else belongs in NOT_A_UUID with
- * its reason.
+ * Flagged: an app/api route.ts outside v1 that calls withRouteContext and has
+ * a path segment named `[id]` or ending in Id (`[employeeId]`), where that
+ * segment goes unchecked. A file on the option checks a segment when every
+ * withRouteContext call in it declares the segment in `uuidParams`. A file
+ * without the option checks it the way routes did by hand before the option:
+ * isUuid(<segment>), UUID_RE.test(<segment>), a zod uuid schema keyed by the
+ * segment, or z.uuid().safeParse(<segment>), also under the name it is
+ * destructured into. A uuid check of a body or query field does not count. A
+ * segment that is not a uuid (a year, an account number, a token) has another
+ * name; one named like an id that holds something else belongs in NOT_A_UUID
+ * with its reason.
  *
  * Also flagged, with no baseline: a `uuidParams` name that is none of the
  * route's path segments. The wrapper counts a declared parameter the request
@@ -40,21 +45,64 @@ export const UUID_PATH_PARAM_HINT =
   '    A segment named like an id that is not a uuid goes in NOT_A_UUID in scripts/checks/uuid-path-param.mjs.'
 
 /** { route file: why its id-named segment is not a uuid }. */
-export const NOT_A_UUID = {}
+export const NOT_A_UUID = {
+  'app/api/packages/[packageId]/route.ts': 'a package id is a slug from SWITCHABLE_PACKAGE_IDS (customer-invoices, ...)',
+}
 
-const ID_SEGMENT_RE = /\[(?:\.\.\.)?(id|[A-Za-z]+Id)\]/
-const CHECKED_RE = /\buuidParams\b|\bisUuid\(|\bUUID_RE\b|\.uuid\(\)|\bz\.uuid\(/
+const WRAPPER_CALL_RE = /\bwithRouteContext\s*(?:<[^(]*?>)?\(/g
+const escape = (name) => name.replace(/[$]/g, '\\$&')
+
+/** The path segments of a route file whose name says they hold an id. */
+function idSegments(rel) {
+  return [...rel.matchAll(/\[(?:\.\.\.)?(id|[A-Za-z]+Id)\]/g)].map((m) => m[1])
+}
+
+/** The source without comments, so a call or a check named in prose counts for nothing. */
+function withoutComments(source) {
+  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/[^\n]*/g, '$1')
+}
+
+/** The names each `uuidParams` literal in a source declares, one array per literal. */
+export function uuidParamDeclarations(source) {
+  return [...source.matchAll(/\buuidParams\s*:\s*\{([^}]*)\}/g)].map((m) =>
+    [...m[1].matchAll(/(?:'([^']+)'|"([^"]+)"|([A-Za-z_$][\w$]*))\s*:/g)].map((k) => k[1] ?? k[2] ?? k[3]),
+  )
+}
+
+/**
+ * Whether a file without the option checks one segment by hand: isUuid or
+ * UUID_RE.test on it, a zod uuid schema (inline or a const) parsing it, or a
+ * params schema keying it to z.uuid(). The segment may go by the name it is
+ * destructured into, or be read as `(await params).<segment>`.
+ */
+function checksSegmentByHand(source, segment) {
+  const aliases = [...source.matchAll(new RegExp(`\\b${escape(segment)}\\s*:\\s*([A-Za-z_$][\\w$]*)\\s*[,}]`, 'g'))]
+  const names = [segment, ...aliases.map((m) => m[1])].map(escape).join('|')
+  const target = `(?:(?:${names})\\b|\\(\\s*await\\s+params\\s*\\)\\.${escape(segment)}\\b)`
+  const schemas = [...source.matchAll(/\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*z\.(?:string\(\)\.)?uuid\(\)/g)].map((m) => escape(m[1]))
+  const uuidSchema = `(?:z\\.(?:string\\(\\)\\.)?uuid\\(\\)${schemas.length ? `|\\b(?:${schemas.join('|')})` : ''})`
+  return new RegExp(
+    `\\bisUuid\\(\\s*${target}|\\bUUID_RE\\.test\\(\\s*${target}|${uuidSchema}\\.(?:safeParse|parse)\\(\\s*${target}` +
+      `|\\b(?:${names})\\s*:\\s*z\\.(?:string\\(\\)\\.)?uuid\\(`,
+  ).test(source)
+}
 
 /**
  * Whether one route file is flagged: `rel` is its path relative to src,
  * `source` its text.
  */
 export function isUndeclaredUuidPathParam(rel, source) {
-  if (!rel.startsWith('app/api/') || rel.startsWith('app/api/v1/')) return false
-  if (!rel.endsWith('/route.ts') || !ID_SEGMENT_RE.test(rel)) return false
-  if (!/\bwithRouteContext\b/.test(source)) return false
-  if (Object.hasOwn(NOT_A_UUID, rel)) return false
-  return !CHECKED_RE.test(source)
+  if (!rel.startsWith('app/api/') || rel.startsWith('app/api/v1/') || !rel.endsWith('/route.ts')) return false
+  const segments = idSegments(rel)
+  if (segments.length === 0 || Object.hasOwn(NOT_A_UUID, rel)) return false
+  const code = withoutComments(source)
+  const calls = (code.match(WRAPPER_CALL_RE) ?? []).length
+  if (calls === 0) return false
+  const declarations = uuidParamDeclarations(code)
+  if (declarations.length > 0) {
+    return declarations.length < calls || declarations.some((names) => segments.some((s) => !names.includes(s)))
+  }
+  return segments.some((s) => !checksSegmentByHand(code, s))
 }
 
 function walk(dir, out = []) {
@@ -91,9 +139,7 @@ export function findUndeclaredUuidPathParams(sourceRoot) {
  */
 export function misdeclaredUuidParamsInSource(rel, source) {
   const segments = new Set([...rel.matchAll(/\[(?:\.\.\.)?([^\]]+)\]/g)].map((m) => m[1]))
-  const names = [...source.matchAll(/\buuidParams:\s*\{([^}]*)\}/g)].flatMap((m) =>
-    [...m[1].matchAll(/(\w+)\s*:/g)].map((k) => k[1]),
-  )
+  const names = uuidParamDeclarations(withoutComments(source)).flat()
   return [...new Set(names)].filter((name) => !segments.has(name))
 }
 
@@ -148,6 +194,7 @@ export const UUID_PATH_PARAM_ALLOWED = new Set([
   'app/api/bookkeeping/fiscal-periods/[id]/bokslut-readiness/route.ts',
   'app/api/bookkeeping/fiscal-periods/[id]/bokslutsdispositioner/route.ts',
   'app/api/bookkeeping/fiscal-periods/[id]/close-external/route.ts',
+  'app/api/bookkeeping/fiscal-periods/[id]/depreciation/route.ts',
   'app/api/bookkeeping/fiscal-periods/[id]/ef-declaration/inputs/route.ts',
   'app/api/bookkeeping/fiscal-periods/[id]/ef-declaration/route.ts',
   'app/api/bookkeeping/fiscal-periods/[id]/entry-count/route.ts',
@@ -235,14 +282,15 @@ export const UUID_PATH_PARAM_ALLOWED = new Set([
   'app/api/invoices/recurring/[id]/route.ts',
   'app/api/invoices/recurring/[id]/run/route.ts',
   'app/api/mileage/trips/[id]/route.ts',
-  'app/api/packages/[packageId]/route.ts',
   'app/api/parties/[id]/enrich/candidates/route.ts',
   'app/api/parties/[id]/enrich/route.ts',
   'app/api/parties/[id]/route.ts',
   'app/api/payments/orders/[id]/cancel/route.ts',
+  'app/api/payments/orders/[id]/resolve/route.ts',
   'app/api/payments/signing/[id]/poll/route.ts',
   'app/api/payments/signing/[id]/restart/route.ts',
   'app/api/payments/signing/[id]/second-signature/route.ts',
+  'app/api/pending-operations/[id]/commit/route.ts',
   'app/api/pending-operations/[id]/reject/route.ts',
   'app/api/pos-sales/connections/[id]/disconnect/route.ts',
   'app/api/pos-sales/connections/[id]/settings/route.ts',
@@ -273,7 +321,9 @@ export const UUID_PATH_PARAM_ALLOWED = new Set([
   'app/api/salary/runs/[id]/payment/bank-list/route.ts',
   'app/api/salary/runs/[id]/payment/bg-lb/route.ts',
   'app/api/salary/runs/[id]/payment/pain001/route.ts',
+  'app/api/salary/runs/[id]/payment/pay-via-bank/route.ts',
   'app/api/salary/runs/[id]/payslips/[employeeId]/pdf/route.ts',
+  'app/api/salary/runs/[id]/payslips/send/route.ts',
   'app/api/salary/runs/[id]/preview/route.ts',
   'app/api/salary/runs/[id]/revert/route.ts',
   'app/api/salary/runs/[id]/review/route.ts',
@@ -311,8 +361,10 @@ export const UUID_PATH_PARAM_ALLOWED = new Set([
   'app/api/transactions/[id]/link-journal-entry/route.ts',
   'app/api/transactions/[id]/match-batch/route.ts',
   'app/api/transactions/[id]/match-expense-payout/route.ts',
+  'app/api/transactions/[id]/match-invoice/preview/route.ts',
   'app/api/transactions/[id]/match-invoice/route.ts',
   'app/api/transactions/[id]/match-rot-rut-payout/route.ts',
+  'app/api/transactions/[id]/match-supplier-invoice/preview/route.ts',
   'app/api/transactions/[id]/match-supplier-invoice/route.ts',
   'app/api/transactions/[id]/parts/route.ts',
   'app/api/transactions/[id]/refresh-exchange-rate/route.ts',
