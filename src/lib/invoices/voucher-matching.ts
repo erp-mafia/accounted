@@ -563,28 +563,23 @@ export async function validateVoucherForInvoiceLink(
   arCreditTotal = roundOre(arCreditTotal - used)
 
   // A SEK invoice whose own verifikat booked the öresavrundning (1510 at the
-  // rounded "Att betala", the öre on 3740) is settled in full by the voucher
-  // that clears what 151x carries for it, as the RPC reads it
-  // (20261126170500): with no share when exactly that much is left, with a
-  // share of the whole remainder or of what 151x carries.
+  // rounded "Att betala", the öre on 3740) is settled in full by a voucher
+  // that has exactly what 151x carries for it left, as the RPC reads it
+  // (20261126170500): with no share, or a share of the whole remainder or of
+  // what 151x carries. A voucher with more or less left is judged on the
+  // remainder, as before.
   const remaining = roundOre(remainingAmount)
   const receivable = settlement.side === 'ar_credit' && !sekFallback && isKronorCurrency(invoice.currency)
     ? await bookedOreReceivable(supabase, companyId, invoice)
     : null
-  const clearsCarried = receivable !== null && (statedAmount === null
-    ? Math.abs(arCreditTotal - receivable) <= AMOUNT_TOLERANCE
-    : Math.abs(statedAmount - remaining) <= AMOUNT_TOLERANCE || Math.abs(statedAmount - receivable) <= AMOUNT_TOLERANCE)
+  const clearsCarried = receivable !== null
+    && Math.abs(arCreditTotal - receivable) <= AMOUNT_TOLERANCE
+    && (statedAmount === null
+      || Math.abs(statedAmount - remaining) <= AMOUNT_TOLERANCE
+      || Math.abs(statedAmount - receivable) <= AMOUNT_TOLERANCE)
 
   if (clearsCarried) {
-    // With less than what 151x carries left, 151x would keep the difference
-    // under a paid invoice.
-    if (receivable > arCreditTotal + AMOUNT_TOLERANCE) {
-      return {
-        ok: false,
-        code: 'LINK_VOUCHER_AMOUNT_EXCEEDS_VOUCHER',
-        details: { amount: statedAmount, receivable, available: arCreditTotal, [sideKey]: sideTotal, already_linked: used },
-      }
-    }
+    // The voucher's rest is what 151x carries: the invoice settles in full.
   } else if (statedAmount === null) {
     // No stated share: nothing is split on a guess. What the voucher has left
     // must fit inside the invoice's remainder.
@@ -628,9 +623,9 @@ export async function validateVoucherForInvoiceLink(
   }
 
   // A settlement in full on what 151x carries pays the whole remainder and
-  // takes what 151x carried off the voucher.
+  // takes all the voucher has left.
   const paymentAmount = clearsCarried ? remaining : Math.min(statedAmount ?? arCreditTotal, arCreditTotal, remaining)
-  const cleared = clearsCarried && receivable !== null ? Math.min(receivable, arCreditTotal) : paymentAmount
+  const cleared = clearsCarried ? arCreditTotal : paymentAmount
   const remainingAfter = Math.max(0, roundOre(remainingAmount - paymentAmount))
   const isFullyPaid = remainingAfter <= AMOUNT_TOLERANCE
 

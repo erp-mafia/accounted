@@ -44,7 +44,9 @@ async function validate(
 ) {
   const { supabase, enqueueMany } = createQueuedMockSupabase()
   enqueueMany(queue)
-  return validateVoucherForInvoiceLink(supabase as never, 'company-1', inv as never, 'je-1', amount)
+  const result = await validateVoucherForInvoiceLink(supabase as never, 'company-1', inv as never, 'je-1', amount)
+  const carriedReads = supabase.rpc.mock.calls.filter(([fn]) => fn === 'document_carried_sek').length
+  return { result, carriedReads }
 }
 
 /** The reads up to the carried figure: side, voucher, lines, capacity rows. */
@@ -56,36 +58,40 @@ describe('validateVoucherForInvoiceLink: the issue verifikat booked the öresavr
   })
 
   it('rounded up: 1 000 clears what 1510 carries and settles 999,75 in full', async () => {
-    const result = await validate(invoice(999.75), [...upTo(1000), { data: { ok: true, sek: 1000 } }, { data: [] }])
+    const { result } = await validate(invoice(999.75), [...upTo(1000), { data: { ok: true, sek: 1000 } }, { data: [] }])
     expect(result).toMatchObject({ ok: true, paymentAmount: 999.75, remainingAfter: 0, isFullyPaid: true, voucherRemainingAfter: 0 })
   })
 
   it('rounded down: 1 000 clears what 1510 carries and settles 1 000,40 in full', async () => {
-    const result = await validate(invoice(1000.4), [...upTo(1000), { data: { ok: true, sek: 1000 } }, { data: [] }])
+    const { result } = await validate(invoice(1000.4), [...upTo(1000), { data: { ok: true, sek: 1000 } }, { data: [] }])
     expect(result).toMatchObject({ ok: true, paymentAmount: 1000.4, remainingAfter: 0, isFullyPaid: true, voucherRemainingAfter: 0 })
   })
 
   it('a stated share of the rounded amount settles in full', async () => {
-    const result = await validate(invoice(999.75), [...upTo(1000), { data: { ok: true, sek: 1000 } }, { data: [] }], 1000)
+    const { result } = await validate(invoice(999.75), [...upTo(1000), { data: { ok: true, sek: 1000 } }, { data: [] }], 1000)
     expect(result).toMatchObject({ ok: true, paymentAmount: 999.75, isFullyPaid: true, voucherRemainingAfter: 0 })
   })
 
-  it('a share that settles in full needs what 1510 carries left on the verifikat', async () => {
-    const result = await validate(invoice(999.75), [...upTo(999.8), { data: { ok: true, sek: 1000 } }], 999.75)
-    expect(result).toEqual({
+  it('a voucher with other than what 1510 carries left is judged on the remainder, as before', async () => {
+    // A share of the remainder off a voucher of 999,80: accepted as on main, 0,05 left on it.
+    const share = await validate(invoice(999.75), [...upTo(999.8), { data: { ok: true, sek: 1000 } }, { data: [] }], 999.75)
+    expect(share.result).toMatchObject({ ok: true, paymentAmount: 999.75, isFullyPaid: true, voucherRemainingAfter: 0.05 })
+    // More left than 1510 carries and no share: nothing is split on a guess.
+    const more = await validate(invoice(1000.4), [...upTo(1500), { data: { ok: true, sek: 1000 } }])
+    expect(more.result).toEqual({
       ok: false,
-      code: 'LINK_VOUCHER_AMOUNT_EXCEEDS_VOUCHER',
-      details: { amount: 999.75, receivable: 1000, available: 999.8, ar_credit: 999.8, already_linked: 0 },
+      code: 'LINK_VOUCHER_AMOUNT_EXCEEDS_REMAINING',
+      details: { ar_credit: 1500, remaining: 1000.4 },
     })
   })
 
   it('a part payment links as before', async () => {
-    const result = await validate(invoice(1000.4), [...upTo(400), { data: { ok: true, sek: 1000 } }, { data: [] }])
+    const { result } = await validate(invoice(1000.4), [...upTo(400), { data: { ok: true, sek: 1000 } }, { data: [] }])
     expect(result).toMatchObject({ ok: true, paymentAmount: 400, remainingAfter: 600.4, isFullyPaid: false, voucherRemainingAfter: 0 })
   })
 
   it('an invoice whose 1510 carries the remainder still refuses the rounded payment', async () => {
-    const result = await validate(invoice(999.75), [...upTo(1000), { data: { ok: true, sek: 999.75 } }])
+    const { result } = await validate(invoice(999.75), [...upTo(1000), { data: { ok: true, sek: 999.75 } }])
     expect(result).toEqual({
       ok: false,
       code: 'LINK_VOUCHER_AMOUNT_EXCEEDS_REMAINING',
@@ -94,12 +100,17 @@ describe('validateVoucherForInvoiceLink: the issue verifikat booked the öresavr
   })
 
   it('a failed carried read judges the link on the remainder, as before', async () => {
-    const result = await validate(invoice(999.75), [...upTo(1000), { error: { message: 'boom' } }])
+    const { result, carriedReads } = await validate(invoice(999.75), [...upTo(1000), { error: { message: 'boom' } }])
+    expect(carriedReads).toBe(1)
     expect(result).toMatchObject({ ok: false, code: 'LINK_VOUCHER_AMOUNT_EXCEEDS_REMAINING' })
   })
 
-  it('an invoice without a verifikat costs no carried read', async () => {
-    const result = await validate(invoice(999.75, null), [...upTo(1000)])
-    expect(result).toMatchObject({ ok: false, code: 'LINK_VOUCHER_AMOUNT_EXCEEDS_REMAINING' })
+  it('an invoice without a verifikat, or a whole-krona remainder, costs no carried read', async () => {
+    const unbooked = await validate(invoice(999.75, null), [...upTo(1000)])
+    expect(unbooked.carriedReads).toBe(0)
+    expect(unbooked.result).toMatchObject({ ok: false, code: 'LINK_VOUCHER_AMOUNT_EXCEEDS_REMAINING' })
+    const whole = await validate(invoice(1000), [...upTo(1000), { data: [] }])
+    expect(whole.carriedReads).toBe(0)
+    expect(whole.result).toMatchObject({ ok: true, paymentAmount: 1000, isFullyPaid: true })
   })
 })

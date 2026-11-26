@@ -131,6 +131,19 @@ async function balance(entryIds: string[], account: string): Promise<number> {
   return Number(rows[0]!.balance)
 }
 
+/**
+ * The judge: what the kundreskontra says is open on `invoiceIds` (their
+ * remaining amounts) against what 1510 holds over every verifikat that
+ * touched them. They must agree to the รถre.
+ */
+async function reskontraAnd1510(invoiceIds: string[], entryIds: string[]): Promise<{ reskontra: number; ledger: number }> {
+  const { rows } = await pool().query<{ open: string }>(
+    'SELECT COALESCE(SUM(remaining_amount), 0)::text AS open FROM public.invoices WHERE id = ANY($1::uuid[])',
+    [invoiceIds],
+  )
+  return { reskontra: Number(rows[0]!.open), ledger: await balance(entryIds, '1510') }
+}
+
 async function journalCount(companyId: string): Promise<number> {
   const { rows } = await pool().query<{ n: string }>('SELECT count(*)::text AS n FROM public.journal_entries WHERE company_id = $1', [companyId])
   return Number(rows[0]!.n)
@@ -148,7 +161,7 @@ describe('link_invoice_to_voucher: an invoice whose issue verifikat booked the ร
     expect(result).toMatchObject({ ok: true, invoice_status: 'paid', payment_amount: 999.75, remaining_amount: 0 })
     expect(Number(result.voucher_remaining)).toBe(0)
     expect(await invoiceRow(invoiceId)).toEqual({ status: 'paid', paid: 999.75, remaining: 0 })
-    expect(await balance([issueId, paymentId], '1510')).toBe(0)
+    expect(await reskontraAnd1510([invoiceId], [issueId, paymentId])).toEqual({ reskontra: 0, ledger: 0 })
     // The link posts nothing: the voucher is the payment.
     expect(await journalCount(company.companyId)).toBe(entries)
   })
@@ -163,7 +176,12 @@ describe('link_invoice_to_voucher: an invoice whose issue verifikat booked the ร
     expect(result).toMatchObject({ ok: true, invoice_status: 'paid', payment_amount: 1000.4, remaining_amount: 0 })
     expect(Number(result.voucher_remaining)).toBe(0)
     expect(await invoiceRow(invoiceId)).toEqual({ status: 'paid', paid: 1000.4, remaining: 0 })
-    expect(await balance([issueId, paymentId], '1510')).toBe(0)
+    // On main the invoice stayed open by 0,40 while 1510 was zero.
+    expect(await reskontraAnd1510([invoiceId], [issueId, paymentId])).toEqual({ reskontra: 0, ledger: 0 })
+
+    // The verifikat is used up: it pays no other invoice.
+    const other = await exact(company)
+    expect(await link(company, other.invoiceId, paymentId)).toMatchObject({ ok: false, code: 'LINK_VOUCHER_FULLY_ALLOCATED' })
   })
 
   it('a kreditfaktura whose verifikat mirrored the rounding pays a new invoice of the same amount', async () => {
@@ -181,7 +199,7 @@ describe('link_invoice_to_voucher: an invoice whose issue verifikat booked the ร
 
     expect(result).toMatchObject({ ok: true, invoice_status: 'paid', payment_amount: 999.75 })
     expect(Number(result.voucher_remaining)).toBe(0)
-    expect(await balance([issueId, creditId], '1510')).toBe(0)
+    expect(await reskontraAnd1510([invoiceId], [issueId, creditId])).toEqual({ reskontra: 0, ledger: 0 })
   })
 
   it('a stated share of the whole remainder, or of the rounded amount, settles in full', async () => {
@@ -197,19 +215,42 @@ describe('link_invoice_to_voucher: an invoice whose issue verifikat booked the ร
     expect(Number(result.voucher_remaining)).toBe(0)
   })
 
-  it('a share that settles in full needs what 1510 carries left on the verifikat', async () => {
+  it('one verifikat that pays two invoices: the rounded one settles on what 1510 carries for it', async () => {
     const company = await seedCompany()
-    const { invoiceId } = await roundedUp(company)
-    const short = await payment(company, 999.8)
+    const a = await roundedDown(company)
+    const b = await invoice(company, 500, [
+      ['1510', 500, 0],
+      ['3001', 0, 400],
+      ['2611', 0, 100],
+    ])
+    const bundle = await payment(company, 1500)
 
-    // 999,80 would leave 0,20 on 1510 under a paid invoice.
-    expect(await link(company, invoiceId, short, 999.75)).toMatchObject({ ok: false, code: 'LINK_VOUCHER_AMOUNT_EXCEEDS_VOUCHER' })
-    expect(await invoiceRow(invoiceId)).toEqual({ status: 'sent', paid: 0, remaining: 999.75 })
+    expect(await link(company, b.invoiceId, bundle, 500)).toMatchObject({ ok: true, invoice_status: 'paid', payment_amount: 500 })
+    const result = await link(company, a.invoiceId, bundle)
+    expect(result).toMatchObject({ ok: true, invoice_status: 'paid', payment_amount: 1000.4 })
+    expect(Number(result.voucher_remaining)).toBe(0)
+    expect(await reskontraAnd1510([a.invoiceId, b.invoiceId], [a.issueId, b.issueId, bundle])).toEqual({ reskontra: 0, ledger: 0 })
+  })
+
+  it('a verifikat with other than what 1510 carries left links as before', async () => {
+    const company = await seedCompany()
+    // A share of the remainder off a verifikat of 999,80: accepted, as on main.
+    const up = await roundedUp(company)
+    const short = await payment(company, 999.8)
+    const shareResult = await link(company, up.invoiceId, short, 999.75)
+    expect(shareResult).toMatchObject({ ok: true, invoice_status: 'paid', payment_amount: 999.75 })
+    expect(Number(shareResult.voucher_remaining)).toBe(0.05)
+
+    // A share of the remainder past what the verifikat holds: refused, as on main.
+    const down = await roundedDown(company)
+    const over = await payment(company, 1000.2)
+    expect(await link(company, down.invoiceId, over, 1000.4)).toMatchObject({ ok: false, code: 'LINK_VOUCHER_AMOUNT_EXCEEDS_VOUCHER' })
+    expect(await invoiceRow(down.invoiceId)).toEqual({ status: 'sent', paid: 0, remaining: 1000.4 })
   })
 
   it('a part payment and a payment past what 1510 carries link as before', async () => {
     const company = await seedCompany()
-    const { invoiceId } = await roundedDown(company)
+    const { invoiceId, issueId } = await roundedDown(company)
     const over = await payment(company, 1500)
     expect(await link(company, invoiceId, over)).toMatchObject({ ok: false, code: 'LINK_VOUCHER_AMOUNT_EXCEEDS_REMAINING' })
 
@@ -220,6 +261,7 @@ describe('link_invoice_to_voucher: an invoice whose issue verifikat booked the ร
     // The rest: 600 clears what 1510 carries (1 000 less 400) and settles 600,40.
     const rest = await payment(company, 600)
     expect(await link(company, invoiceId, rest)).toMatchObject({ ok: true, invoice_status: 'paid', payment_amount: 600.4 })
+    expect(await reskontraAnd1510([invoiceId], [issueId, part, rest])).toEqual({ reskontra: 0, ledger: 0 })
   })
 
   it('an invoice whose 1510 carries the remainder still refuses the rounded payment', async () => {

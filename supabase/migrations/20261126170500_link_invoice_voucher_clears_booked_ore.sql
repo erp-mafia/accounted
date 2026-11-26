@@ -17,20 +17,27 @@
 -- For a SEK invoice settled on its 151x side with öre left to pay, the öre
 -- the issue verifikat booked is the remainder less what 151x carries for it
 -- (document_carried_sek, 20261101120200), inside the öre band, else 0. When
--- it is not 0, a link settles the invoice in full when the voucher has
--- exactly what 151x carries left (no stated share), or when the stated share
--- is the whole remainder or what 151x carries and the voucher has that much
--- left. The payment row then pays the whole remainder and the voucher gives up
--- what 151x carried. A part payment, a foreign invoice, the 19xx side and
--- invoices whose 151x carries the remainder link as before. The link still
--- posts nothing but a kursdifferens on the foreign fallback.
+-- it is not 0 and the voucher has exactly what 151x carries left (after the
+-- payment rows of other invoices), the link settles the invoice in full: with
+-- no stated share, or with a share of the whole remainder or of what 151x
+-- carries. The payment row pays the whole remainder and the voucher has
+-- nothing left. A voucher with more or less left, a part payment, a foreign
+-- invoice, the 19xx side and invoices whose 151x carries the remainder link
+-- as before. The link still posts nothing but a kursdifferens on the foreign
+-- fallback.
+--
+-- Not changed here: a voucher's capacity for later links is still the sum of
+-- its payment rows. After a settlement that cleared booked öre the rows
+-- differ from what 151x gave by those öre, as they already do after a stated
+-- share on this door and after the batch, kvittning and payment doors.
 --
 -- Nothing here rewrites a row.
 --
 -- link_invoice_to_voucher is copied from
 --   20261109060100_kontantmetod_bank_debit_requires_sale
 -- the newest definition; the edits are five variables, the block after the
--- capacity check, the two share guards, the advance and the comment.
+-- capacity check, the guard branch, the advance, voucher_remaining and the
+-- comment.
 
 CREATE OR REPLACE FUNCTION public.link_invoice_to_voucher(p_invoice_id uuid, p_journal_entry_id uuid, p_user_id uuid, p_company_id uuid, p_notes text DEFAULT NULL::text, p_amount numeric DEFAULT NULL::numeric, p_actor_type text DEFAULT NULL::text, p_actor_label text DEFAULT NULL::text, p_event_ids uuid[] DEFAULT NULL::uuid[], p_event_mode text DEFAULT NULL::text)
  RETURNS jsonb
@@ -466,30 +473,21 @@ BEGIN
     END IF;
     v_receivable := ROUND((v_receivable - v_booked_ore) * 100) / 100;
   END IF;
-  IF v_booked_ore <> 0 THEN
-    v_clears_carried := CASE
-      -- No stated share: the voucher has exactly what 151x carries left.
-      WHEN v_amount IS NULL THEN ABS(v_ar_credit_total - v_receivable) <= 0.005
-      -- A stated share of the whole remainder, or of what 151x carries (the
-      -- rounded amount the customer was asked to pay).
-      ELSE ABS(v_amount - ROUND(v_remaining * 100) / 100) <= 0.005
-        OR ABS(v_amount - v_receivable) <= 0.005
-    END;
+  -- Only a voucher with exactly what 151x carries left: then the whole of it
+  -- is this invoice's, and nothing of it is left for another one. A voucher
+  -- with more or less left is judged on the remainder, as before. With no
+  -- stated share, or a share of the whole remainder or of what 151x carries
+  -- (the rounded amount the customer was asked to pay).
+  IF v_booked_ore <> 0 AND ABS(v_ar_credit_total - v_receivable) <= 0.005 THEN
+    v_clears_carried := v_amount IS NULL
+      OR ABS(v_amount - ROUND(v_remaining * 100) / 100) <= 0.005
+      OR ABS(v_amount - v_receivable) <= 0.005;
   END IF;
 
   -- Both sides are now in the invoice's currency.
   IF v_clears_carried THEN
-    -- A settlement in full takes what 151x carries off the voucher: with less
-    -- left, 151x would keep the difference under a paid invoice.
-    IF v_receivable > v_ar_credit_total + 0.005 THEN
-      RETURN jsonb_build_object('ok', false, 'code', 'LINK_VOUCHER_AMOUNT_EXCEEDS_VOUCHER',
-        'details', jsonb_build_object(
-          'amount', v_amount,
-          'receivable', v_receivable,
-          'available', v_ar_credit_total,
-          v_side_key, v_side_total,
-          'already_linked', v_used));
-    END IF;
+    -- The voucher's rest is what 151x carries: the invoice settles in full.
+    NULL;
   ELSIF v_amount IS NULL THEN
     -- No stated share: nothing is split on a guess. What the voucher has left
     -- must fit inside the invoice's remainder. Details as before this change.
@@ -641,10 +639,13 @@ BEGIN
   --    never more than the invoice's remainder or the voucher's capacity (the
   --    half-öre tolerance of the guards above is clamped away here). A
   --    settlement in full on what 151x carries pays the whole remainder and
-  --    takes what 151x carried off the voucher.
+  --    takes all the voucher has left. Its payment row then differs from the
+  --    151x credit by the öre the issue verifikat booked: more than the
+  --    credit when rounded down (a later link finds the voucher used up),
+  --    less when rounded up.
   IF v_clears_carried THEN
     v_payment_amount := ROUND(v_remaining * 100) / 100;
-    v_cleared := LEAST(v_receivable, v_ar_credit_total);
+    v_cleared := v_ar_credit_total;
   ELSE
     v_payment_amount := LEAST(COALESCE(v_amount, v_ar_credit_total), v_ar_credit_total, ROUND(v_remaining * 100) / 100);
     v_cleared := v_payment_amount;
@@ -706,6 +707,6 @@ END;
 $function$;
 
 COMMENT ON FUNCTION public.link_invoice_to_voucher(uuid, uuid, uuid, uuid, text, numeric, text, text, uuid[], text) IS
-  'Link a posted verifikat to a customer invoice as its payment. The settlement side comes from invoice_settlement_side(): the debit on 19xx or on the owner''s 2013 (invoice_settlement_line(), 20261031225028) for a kontantmetod company''s invoice with no booking verifikat, the 151x credit otherwise (faktureringsmetoden, and a kontantmetod invoice carried over the year end or otherwise booked). The matched amount is resolved in the INVOICE''S currency: the raw ledger column on a SEK invoice, ABS(amount_in_currency) on a foreign one. A foreign invoice settled by a plain-SEK voucher (within 10% of remaining * exchange_rate) is treated as fully settled; on the 151x side the FX residual is booked as its own verifikat to 7960 (loss) / 3960 (gain), both lines carrying the invoice''s default_dimensions (coerce_dimensions_bag), on the 19xx side nothing is booked; every other unreadable case is refused. On the bank_debit side the verifikat must also book the invoice''s sale or receivable (invoice_voucher_books_sale(), #146), else LINK_VOUCHER_NO_SALE. p_event_ids (the posting port''s sale.payment_received event) are linked to the kursdifferens verifikat before its number is drawn, when one is posted; p_event_mode strict makes a refused link fail the call, anything else logs it (20261018210300). On both sides the voucher''s settlement side is reduced by invoice_payments rows that already point at it for other invoices: one verifikat may settle several invoices, never for more than it holds. p_amount states this invoice''s share (invoice currency, bounded by the invoice''s remainder and by what the voucher has left; not on the SEK-booked fallback); without it what the voucher has left must fit inside the remainder (20261026007000). A SEK invoice whose issue verifikat booked the öresavrundning (151x at the rounded amount, the öre on 3740) is settled in full by a voucher that clears what 151x carries for it (document_carried_sek): with no share when exactly that much is left, with a share of the whole remainder or of what 151x carries when at least that much is left; the payment row pays the whole remainder (20261126170500).';
+  'Link a posted verifikat to a customer invoice as its payment. The settlement side comes from invoice_settlement_side(): the debit on 19xx or on the owner''s 2013 (invoice_settlement_line(), 20261031225028) for a kontantmetod company''s invoice with no booking verifikat, the 151x credit otherwise (faktureringsmetoden, and a kontantmetod invoice carried over the year end or otherwise booked). The matched amount is resolved in the INVOICE''S currency: the raw ledger column on a SEK invoice, ABS(amount_in_currency) on a foreign one. A foreign invoice settled by a plain-SEK voucher (within 10% of remaining * exchange_rate) is treated as fully settled; on the 151x side the FX residual is booked as its own verifikat to 7960 (loss) / 3960 (gain), both lines carrying the invoice''s default_dimensions (coerce_dimensions_bag), on the 19xx side nothing is booked; every other unreadable case is refused. On the bank_debit side the verifikat must also book the invoice''s sale or receivable (invoice_voucher_books_sale(), #146), else LINK_VOUCHER_NO_SALE. p_event_ids (the posting port''s sale.payment_received event) are linked to the kursdifferens verifikat before its number is drawn, when one is posted; p_event_mode strict makes a refused link fail the call, anything else logs it (20261018210300). On both sides the voucher''s settlement side is reduced by invoice_payments rows that already point at it for other invoices: one verifikat may settle several invoices, never for more than it holds. p_amount states this invoice''s share (invoice currency, bounded by the invoice''s remainder and by what the voucher has left; not on the SEK-booked fallback); without it what the voucher has left must fit inside the remainder (20261026007000). A SEK invoice whose issue verifikat booked the öresavrundning (151x at the rounded amount, the öre on 3740) is settled in full by a voucher that has exactly what 151x carries for it left (document_carried_sek): with no share, or with a share of the whole remainder or of what 151x carries; the payment row pays the whole remainder (20261126170500).';
 
 NOTIFY pgrst, 'reload schema';
