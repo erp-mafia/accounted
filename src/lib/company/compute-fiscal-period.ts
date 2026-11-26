@@ -3,6 +3,24 @@ import type { CompanySettings } from '@/types'
 import { getCurrentFiscalYearStart } from '@/lib/company/fiscal-year'
 import { fiscalYearLockedToCalendar, isEntityType } from '@/lib/company/entity-type'
 
+/**
+ * The name a company's first räkenskapsår gets when its creator says the
+ * company is in its first year (is_first_fiscal_year). That answer is not
+ * stored anywhere else, so the name is how a later reader knows that no
+ * räkenskapsår came before this one.
+ */
+const FIRST_YEAR_NAME = 'Första räkenskapsåret'
+const FIRST_YEAR_NAME_SHAPE = /^Första räkenskapsåret \d{4}(?:\/\d{4})?$/
+
+/**
+ * Whether a fiscal period carries the name computeFiscalPeriod gives a
+ * declared first räkenskapsår. A renamed period no longer says so, and is
+ * read like any other year.
+ */
+export function isDeclaredFirstFiscalYearName(name: string | null | undefined): boolean {
+  return typeof name === 'string' && FIRST_YEAR_NAME_SHAPE.test(name.trim())
+}
+
 export interface ComputedFiscalPeriod {
   error: string | null
   startStr: string
@@ -36,8 +54,8 @@ export function computeFiscalPeriod(
     const startYear = parseDateParts(firstYearStart).year
     const endYear = parseDateParts(firstYearEnd).year
     periodName = startYear === endYear
-      ? `Första räkenskapsåret ${startYear}`
-      : `Första räkenskapsåret ${startYear}/${endYear}`
+      ? `${FIRST_YEAR_NAME} ${startYear}`
+      : `${FIRST_YEAR_NAME} ${startYear}/${endYear}`
   } else {
     // The year running today: a broken year that starts in July is, in
     // January, the one that began last July, never the one still to come.

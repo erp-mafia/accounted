@@ -13,6 +13,7 @@ import { AGI_RECEIPT_STATUSES } from '@/lib/deadlines/agi-filed'
 const log = createLogger('deadline-generator')
 import {
   fiscalYearEndKey,
+  fiscalYearForDeadlines,
   fiscalYearsEndingIn,
   getApplicableDeadlineConfigs,
   helarsmomsDeadline,
@@ -20,6 +21,7 @@ import {
   type CompanySettingsForDeadlines,
   type DeadlineFiscalYear,
   type DeadlineInstance,
+  type FiscalPeriodRowForDeadlines,
   type FiscalYearForDeadlines,
   type TaxAssessmentNoticeForDeadline,
 } from './deadline-config'
@@ -225,11 +227,11 @@ async function fetchFiscalYears(
   supabase: SupabaseClient,
   companyId?: string,
 ): Promise<Map<string, FiscalYearForDeadlines[]>> {
-  const rows = await fetchAllRows<{ company_id: string; period_start: string; period_end: string }>(
+  const rows = await fetchAllRows<FiscalPeriodRowForDeadlines & { company_id: string }>(
     ({ from, to }) => {
       let query = supabase
         .from('fiscal_periods')
-        .select('company_id, period_start, period_end')
+        .select('company_id, name, period_start, period_end')
       if (companyId) query = query.eq('company_id', companyId)
       return query.order('id', { ascending: true }).range(from, to)
     },
@@ -237,7 +239,7 @@ async function fetchFiscalYears(
   const byCompany = new Map<string, FiscalYearForDeadlines[]>()
   for (const row of rows) {
     const current = byCompany.get(row.company_id) ?? []
-    current.push({ start: row.period_start, end: row.period_end })
+    current.push(fiscalYearForDeadlines(row))
     byCompany.set(row.company_id, current)
   }
   return byCompany
