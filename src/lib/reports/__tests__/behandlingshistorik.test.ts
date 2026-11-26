@@ -3298,8 +3298,8 @@ describe('generateBehandlingshistorik: a period decision is one event', () => {
     expect(events[0].actor.label).toBe('Byråns nyckel åt Användare user-1')
   })
 
-  it('an owner\'s reopen that resumes one stopped halfway shows once too', async () => {
-    // A locked year with a closing entry: the earlier run opened it, then stopped.
+  it('an owner\'s reopen of a year left open with its closing entry, and locked again, shows once too', async () => {
+    // Open with the bokslutsverifikat still linked, then locked: the reopen lifts the lock.
     const resumed = { is_closed: false, closed_at: null, locked_at: LOCKED, closing_entry_id: 'ce-1' }
     const events = await eventsFor([
       triggerRow({
@@ -3321,7 +3321,38 @@ describe('generateBehandlingshistorik: a period decision is one event', () => {
     ])
 
     expect(events.map((e) => `${e.id} ${e.code}`)).toEqual(['audit:owner-reopen period.reopened'])
-    expect(events[0].details).toContain('En tidigare öppning som stannade halvvägs fortsattes')
+    expect(events[0].details).toContain('Året var redan öppet med bokslutsverifikatet kvar')
+  })
+
+  it('an owner\'s reopen that changed nothing on the year shows once, in Swedish', async () => {
+    // Already open and unlocked: the RPC's UPDATE matches no row, so no trigger row exists.
+    const events = await eventsFor([
+      ownerReopenRow({
+        old_state: { is_closed: false, closed_at: null, locked_at: null, closing_entry_id: 'ce-1' },
+        new_state: { is_closed: false, closed_at: null, locked_at: null, resumed: true },
+      }),
+    ])
+
+    expect(events.map((e) => `${e.code} ${e.object}`)).toEqual(['period.reopened RÅ 2025 (2025-01-01 to 2025-12-31)'])
+  })
+
+  it('an owner\'s reopen does not take an earlier unlock\'s trigger row', async () => {
+    // A plain unlock lifted another lock ten seconds before: the values differ.
+    const events = await eventsFor([
+      triggerRow({
+        id: 'unlock',
+        action: 'UPDATE',
+        old_state: periodRow({ locked_at: LOCKED, closing_entry_id: 'ce-1' }),
+        new_state: periodRow({ closing_entry_id: 'ce-1' }),
+      }),
+      ownerReopenRow({
+        created_at: '2026-03-10T10:00:10.000Z',
+        old_state: { is_closed: false, closed_at: null, locked_at: null, closing_entry_id: 'ce-1' },
+        new_state: { is_closed: false, closed_at: null, locked_at: null, resumed: true },
+      }),
+    ])
+
+    expect(events.map((e) => `${e.id} ${e.code}`)).toEqual(['audit:unlock period.unlocked', 'audit:owner-reopen period.reopened'])
   })
 
   it('a support script\'s row about the same change is not taken for a decision row', async () => {
@@ -3331,12 +3362,36 @@ describe('generateBehandlingshistorik: a period decision is one event', () => {
       decisionRow({
         id: 'script',
         old_state: closed,
-        new_state: { is_closed: false, closed_at: null, locked_at: null, closing_entry_id: null },
+        // The same values as the trigger row: only the description keeps it apart.
+        new_state: { is_closed: false, closed_at: null, locked_at: null, closing_entry_id: 'ce-1' },
         description: 'Administrative year-end undo: period reopened (RÅ 2025, 2025-01-01 to 2025-12-31); closing entry A40 reversed.',
       }),
     ])
 
     expect(events.map((e) => e.id)).toEqual(['audit:trig', 'audit:script'])
+  })
+
+  it('a trigger row that names another person lends no credential either', async () => {
+    const events = await eventsFor([
+      triggerRow({
+        id: 'trig',
+        action: 'UPDATE',
+        user_id: 'user-9',
+        actor_id: 'user-9',
+        old_state: periodRow({ locked_at: LOCKED }),
+        new_state: periodRow(),
+      }),
+      decisionRow({
+        id: 'decision',
+        user_id: 'user-2',
+        actor_id: null,
+        old_state: { locked_at: LOCKED },
+        new_state: { locked_at: null },
+        description: 'Period unlocked: RÅ 2025 (2025-01-01 to 2025-12-31)',
+      }),
+    ])
+
+    expect(events.map((e) => `${e.id} ${e.actor.type} ${e.actor.user_id}`)).toEqual(['audit:decision user user-2'])
   })
 
   it('a trigger row that names another person and no credential does not lend its actor', async () => {

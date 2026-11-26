@@ -1031,7 +1031,7 @@ function ownerReopenDetails(after: Record<string, unknown> | null): string[] {
   if (confirmation?.annual_report_not_signed_adopted_or_filed === true) {
     details.push('Ägaren bekräftade att årsredovisningen inte är undertecknad, fastställd på stämma eller inskickad')
   }
-  if (after?.resumed === true) details.push('En tidigare öppning som stannade halvvägs fortsattes')
+  if (after?.resumed === true) details.push('Året var redan öppet med bokslutsverifikatet kvar')
   const replaced = Array.isArray(after?.superseded_annual_report_version_ids) ? after.superseded_annual_report_version_ids.length : 0
   if (replaced > 0) details.push(`Osignerade årsredovisningsversioner som ersattes: ${replaced}`)
   const voided = Array.isArray(after?.voided_signature_request_ids) ? after.voided_signature_request_ids.length : 0
@@ -1043,7 +1043,10 @@ function ownerReopenDetails(after: Record<string, unknown> | null): string[] {
 function periodDecisionObject(row: AuditLogEntry, kind: PeriodDecisionKind): string | null {
   const prefix = PERIOD_DECISION_PREFIX[kind]
   const description = row.description ?? ''
-  return (description.startsWith(prefix) ? description.slice(prefix.length) : description) || null
+  const rest = description.startsWith(prefix) ? description.slice(prefix.length) : description
+  // The owner's reopen goes on after "name (start to end)" in English; the year is enough.
+  const year = kind === 'reopened_by_owner' ? /^.*?\(\d{4}-\d{2}-\d{2} to \d{4}-\d{2}-\d{2}\)/.exec(rest)?.[0] : undefined
+  return (year ?? rest) || null
 }
 
 /** Every value a decision row records equals the trigger row's for that column; timestamps compare as instants. */
@@ -1417,14 +1420,13 @@ function periodAuditEvent(row: AuditLogEntry, ctx: NormaliseContext): RawBehandl
   // The trigger's half of a decision its decision row shows.
   if (ctx.periodDecisionTwins?.folded.has(row.id)) return null
   // A decision row takes from its trigger row the period's name and, when
-  // that row names a credential or the same person, its actor: the decision
-  // row itself records only 'user'.
+  // that row names the same person, its actor with the credential: the
+  // decision row itself records only 'user'. A trigger row naming someone
+  // else (a write outside any actor scope falls back to the period row's own
+  // user_id) lends nothing, so no one else's credential lands on the decision.
   const twin = ctx.periodDecisionTwins?.triggerOf.get(row.id)
   const twinActor = twin ? baseAuditActor(twin) : undefined
-  const actor =
-    twinActor && (twinActor.type !== 'user' || twinActor.user_id === (row.user_id ?? row.actor_id ?? null))
-      ? twinActor
-      : undefined
+  const actor = twinActor && twinActor.user_id === (row.user_id ?? row.actor_id ?? null) ? twinActor : undefined
   const state = (twin ?? row).new_state ?? (twin ?? row).old_state
   const name = str(state?.name)
   const span =
