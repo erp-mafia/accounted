@@ -127,11 +127,18 @@ describe('document_attachments: lookups and cron scans', () => {
       `SELECT to_regclass('public.idx_document_attachments_pages_unread') IS NULL AS dropped`,
     )
     expect(rows[0].dropped).toBe(true)
-    const indexes = await functionIndexes(`SELECT * FROM public.document_backfill_candidates(200)`)
     // Two indexes carry the function's predicate. 20261126000300's walk reads only columns that
     // idx_document_attachments_backfill_walk holds, so the planner takes it once vacuum has marked the table's pages
-    // all-visible; on a table with none marked (as here, at times) the two cost the same.
+    // all-visible; on a table with none marked (as here, at times) the narrower idx_document_attachments_backfill_unread
+    // is cheaper. Either one is a plan by the function's own predicate.
+    const indexes = await functionIndexes(`SELECT * FROM public.document_backfill_candidates(200)`)
     expect(indexes.some((name) => ['idx_document_attachments_backfill_walk', 'idx_document_attachments_backfill_unread'].includes(name))).toBe(true)
+    // Without the narrower one (dropped, and rolled back), the plan names the walk index: its predicate is proven
+    // from the function's WHERE clause, so a predicate that drifted from the function's would show here.
+    const walkOnly = await functionIndexes(`SELECT * FROM public.document_backfill_candidates(200)`, [
+      'DROP INDEX public.idx_document_attachments_backfill_unread',
+    ])
+    expect(walkOnly).toContain('idx_document_attachments_backfill_walk')
   })
 })
 
