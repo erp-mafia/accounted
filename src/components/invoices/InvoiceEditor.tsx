@@ -93,6 +93,7 @@ import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-messag
 import { useUnsavedChanges } from '@/lib/hooks/use-unsaved-changes'
 import CustomerForm from '@/components/customers/CustomerForm'
 import CustomerCombobox from '@/components/customers/CustomerCombobox'
+import { EditCustomerDialog } from '@/components/customers/EditCustomerDialog'
 import { BankDetailsSetupForm } from '@/components/invoices/BankDetailsSetupForm'
 import { FirstInvoiceLogoPrompt } from '@/components/invoices/FirstInvoiceLogoPrompt'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
@@ -778,6 +779,8 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // no-match state; '' when opened from the link below the picker.
   const [createCustomerPrefill, setCreateCustomerPrefill] = useState('')
   const [isCreatingCustomer, setIsCreatingCustomer] = useState(false)
+  // "Redigera kund": the picked customer's card, edited without leaving the invoice.
+  const [isEditCustomerOpen, setIsEditCustomerOpen] = useState(false)
   // The inline "Lägg till betalningsuppgifter" form in the Betalning section.
   const [addingPayee, setAddingPayee] = useState(false)
   // A foreign-currency invoice's account being chosen (chooseForeignPayee).
@@ -1911,6 +1914,19 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     }
 
     setIsCreatingCustomer(false)
+  }
+
+  // The picked customer's card was saved from the editor. EditCustomerDialog
+  // then refreshes the cached register, and the refreshed row re-runs the
+  // customer sync effect above, the path every customer change takes: the
+  // VAT plan, the lines still on the old default rate, the due date from the
+  // card's terms, the article names and the Kund lines follow the card as
+  // saved. Er referens and Märkning follow it by the switch's own rule too
+  // (never over what the user typed), so forget which card they followed.
+  function handleCustomerEdited() {
+    referenceCustomerRef.current = null
+    // The preview prints the card (name, address): render it again.
+    setPreviewRefreshKey((key) => key + 1)
   }
 
   const subtotal = watchItems.reduce((sum, item) => {
@@ -3968,6 +3984,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                 >
                   + {tForm('new_customer')}
                 </button>
+              ) : selectedCustomer && canWrite ? (
+                <button type="button" className={QUIET_LINK_CLASS} onClick={() => setIsEditCustomerOpen(true)}>
+                  {tForm('edit_customer')}
+                </button>
               ) : null
             }
           >
@@ -5703,6 +5723,16 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           />
         </DialogContent>
       </Dialog>
+
+      {/* Edit the picked customer's card without leaving the invoice */}
+      {selectedCustomer && (
+        <EditCustomerDialog
+          customerId={selectedCustomer.id}
+          open={isEditCustomerOpen}
+          onOpenChange={setIsEditCustomerOpen}
+          onSaved={handleCustomerEdited}
+        />
+      )}
 
       {/* First-invoice logo prompt (issue #520) */}
       <FirstInvoiceLogoPrompt

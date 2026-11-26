@@ -7358,6 +7358,7 @@
   },
   "invoice_editor_form": {
     "new_customer": "Ny kund",
+    "edit_customer": "Redigera kund",
     "customer_private": "Privatperson",
     "customer_eu": "EU-företag",
     "customer_non_eu": "Utanför EU",

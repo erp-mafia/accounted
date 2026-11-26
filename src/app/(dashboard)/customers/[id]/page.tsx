@@ -8,7 +8,6 @@ import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { DetailSection, DefRow, DefEmpty } from '@/components/ui/detail-section'
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { ToastAction } from '@/components/ui/toast'
 import {
@@ -19,7 +18,7 @@ import { AttnLine } from '@/components/ui/attn-line'
 import { LoadError, NotFoundState } from '@/components/ui/empty-state'
 import { PageHeader } from '@/components/ui/page-header'
 import { RecordAction, RecordHeader } from '@/components/ui/record-header'
-import CustomerForm from '@/components/customers/CustomerForm'
+import { EditCustomerDialog } from '@/components/customers/EditCustomerDialog'
 import { CustomerMergeDialog } from '@/components/customers/CustomerMergeDialog'
 import type { CustomerMergeResult } from '@/lib/customers/merge-customers'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
@@ -30,7 +29,7 @@ import { getErrorMessage, getResponseErrorMessage, type ErrorLocale } from '@/li
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { invoiceDisplayNumber } from '@/lib/invoices/display'
 import { getCountryName } from '@/lib/vat/country-codes'
-import type { Customer, CustomerType, CreateCustomerInput, InvoiceStatus } from '@/types'
+import type { Customer, CustomerType, InvoiceStatus } from '@/types'
 import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
 import { PartyFactsSection } from '@/components/parties/PartyFactsSection'
 import { CustomerCollectionsExclusion } from '@/components/collections/CustomerCollectionsExclusion'
@@ -126,7 +125,6 @@ export default function CustomerDetailPage({
   const [notFound, setNotFound] = useState(false)
   const [isEditOpen, setIsEditOpen] = useState(false)
   const [isMergeOpen, setIsMergeOpen] = useState(false)
-  const [isUpdating, setIsUpdating] = useState(false)
   // Full personnummer, fetched on demand and held only for this view. Cleared
   // whenever the customer is refetched so it can never outlive the row it
   // belongs to.
@@ -189,45 +187,6 @@ export default function CustomerDetailPage({
       setLoadFailed(true)
     } finally {
       setIsLoading(false)
-    }
-  }
-
-  async function handleUpdate(data: CreateCustomerInput) {
-    setIsUpdating(true)
-    try {
-      const response = await fetch(`/api/customers/${id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-      })
-
-      if (!response.ok) {
-        // The server's sentence says why (a duplicate org number, a field it
-        // refused), not only that it failed.
-        toast({
-          title: t('update_failed_title'),
-          description: await getResponseErrorMessage(response, 'customer', errorLocale),
-          variant: 'destructive',
-        })
-        return
-      }
-
-      toast({
-        title: t('updated_title'),
-        description: data.name,
-      })
-      setIsEditOpen(false)
-      // Every customer picker reads the cached register: refresh it now.
-      void invalidateReferenceData('ref:customers')
-      fetchCustomer()
-    } catch (error) {
-      toast({
-        title: t('update_failed_title'),
-        description: getErrorMessage(error, { context: 'customer', locale: errorLocale, fallback: t('retry') }),
-        variant: 'destructive',
-      })
-    } finally {
-      setIsUpdating(false)
     }
   }
 
@@ -568,49 +527,12 @@ export default function CustomerDetailPage({
         />
       ) : null}
 
-      {/* Edit dialog */}
-      <Dialog open={isEditOpen} onOpenChange={setIsEditOpen}>
-        <DialogContent size="wide">
-          <DialogHeader>
-            <DialogTitle>{t('edit_dialog_title')}</DialogTitle>
-          </DialogHeader>
-          <CustomerForm
-            onSubmit={handleUpdate}
-            isLoading={isUpdating}
-            initialData={{
-              name: customer.name,
-              customer_type: customer.customer_type,
-              customer_number: customer.customer_number || undefined,
-              // Every field the form submits must round-trip here: the form
-              // sends '' / [] for an omitted value on edit as an explicit
-              // clear, so leaving one out wiped it on the next save
-              // (contact_person and the per-customer copy lists did exactly
-              // that, and the contact person also never showed on the page).
-              contact_person: customer.contact_person || undefined,
-              invoice_email_cc_addresses: customer.invoice_email_cc_addresses ?? undefined,
-              invoice_email_bcc_addresses: customer.invoice_email_bcc_addresses ?? undefined,
-              email: customer.email || undefined,
-              phone: customer.phone || undefined,
-              address_line1: customer.address_line1 || undefined,
-              address_line2: customer.address_line2 || undefined,
-              postal_code: customer.postal_code || undefined,
-              city: customer.city || undefined,
-              address_state: customer.address_state || undefined,
-              country: customer.country || undefined,
-              org_number: customer.org_number || undefined,
-              vat_number: customer.vat_number || undefined,
-              personal_number: customer.personal_number || undefined,
-              // Must round-trip: the form defaults omitted values ('sv') and
-              // submits every field, so leaving language out resets it on save.
-              language: customer.language,
-              default_payment_terms: customer.default_payment_terms ?? undefined,
-              invoice_reference: customer.invoice_reference,
-              invoice_marking: customer.invoice_marking,
-              notes: customer.notes || undefined,
-            }}
-          />
-        </DialogContent>
-      </Dialog>
+      <EditCustomerDialog
+        customerId={id}
+        open={isEditOpen}
+        onOpenChange={setIsEditOpen}
+        onSaved={() => void fetchCustomer()}
+      />
     </div>
   )
 }
