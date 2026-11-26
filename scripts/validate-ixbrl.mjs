@@ -18,8 +18,14 @@
  *   2. `python -m arelle.CntlrCmdLine`
  *   3. docker image `arelle/arelle` (mounts the file + taxonomy package)
  *
+ * Arelle is asked for inconsistent duplicate facts (--validateDuplicateFacts
+ * inconsistent): a concept tagged more than once for the same context must
+ * state values that correspond, as the flerårsöversikt in tkr and the
+ * resultaträkning in kronor must (TA §2.7.3).
+ *
  * Arelle itself exits 0 whatever it finds, so the log is read: any ERROR or
- * CRITICAL message fails the run (exit 1); warnings are printed and pass.
+ * CRITICAL message, and any inconsistent duplicate facts (which Arelle logs as
+ * a warning), fail the run (exit 1); other warnings are printed and pass.
  * Exits 0 with a notice when Arelle isn't available (CI machines without
  * Python shouldn't hard-fail), 2 on usage errors.
  */
@@ -63,22 +69,30 @@ const arelleArgs = (filePath, packagePath) => [
   '--packages',
   packagePath,
   '--validate',
+  '--validateDuplicateFacts',
+  'inconsistent',
   '--logLevel',
   'warning',
   '--logFormat',
   LOG_FORMAT,
 ]
 
-/** Run Arelle, echo its log, and turn ERROR/CRITICAL messages into exit 1. */
+/**
+ * Run Arelle, echo its log, and turn ERROR/CRITICAL messages and inconsistent
+ * duplicate facts into exit 1.
+ */
 function runArelle(cmd, argv, label) {
   console.log(`Validating ${basename(file)} against ${basename(TAXONOMY_PACKAGE)} with ${label} …`)
   const run = spawnSync(cmd, argv, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
   const output = `${run.stdout ?? ''}${run.stderr ?? ''}`
   if (output.trim()) process.stdout.write(output.endsWith('\n') ? output : `${output}\n`)
-  const errors = output.split('\n').filter((line) => /^\[(ERROR|CRITICAL)\]/.test(line)).length
+  const lines = output.split('\n')
+  const errors = lines.filter((line) => /^\[(ERROR|CRITICAL)\]/.test(line)).length
+  // Logged as a warning: `[WARNING] [arelle:duplicateFacts] Duplicate fact set ...`.
+  const duplicates = lines.filter((line) => /^\[[A-Z-]+\] \[arelle:duplicateFacts\]/.test(line)).length
   if ((run.status ?? 1) !== 0) return 1
-  if (errors > 0) {
-    console.error(`Arelle reported ${errors} error(s).`)
+  if (errors > 0 || duplicates > 0) {
+    console.error(`Arelle reported ${errors} error(s) and ${duplicates} set(s) of inconsistent duplicate facts.`)
     return 1
   }
   console.log('Arelle: no errors.')
