@@ -39,7 +39,7 @@ import { buildCanonicalAnnualReport } from './model'
 import { cancelSigningForSupersededVersions, slotCoveredByBankIdSigning } from './bankid-signing'
 import { getAnnualReportCapabilities } from './capabilities'
 import { getAnnualReportProfile, upsertAnnualReportProfile } from './profile-service'
-import { getNarrative, upsertNarrative, type NarrativeOverrides, type NarrativeRow } from './narrative-service'
+import { saveMergedNarrative, upsertNarrative, type NarrativeOverrides, type NarrativeRow } from './narrative-service'
 import { mergeFixedAssetNoteRows, type FixedAssetNoteRowsPatch } from './k2-fixed-asset-note'
 import {
   annualReportContentHash,
@@ -109,16 +109,9 @@ function mergeKeyed<T>(
   return merged
 }
 
-async function withMergedKeyedFields(
-  ctx: OperationContext,
-  fiscalPeriodId: string,
-  input: NarrativeUpdateInput,
-): Promise<Partial<NarrativeOverrides>> {
+/** What a save writes: the fields it sends, its keyed fields merged into the stored ones. */
+function withMergedKeyedFields(stored: NarrativeRow | null, input: NarrativeUpdateInput): Partial<NarrativeOverrides> {
   const { disclosure_answers, equity_movement_overrides, fixed_asset_note_rows, ...rest } = input
-  if (disclosure_answers === undefined && equity_movement_overrides === undefined && fixed_asset_note_rows === undefined) {
-    return rest as Partial<NarrativeOverrides>
-  }
-  const stored = await getNarrative(ctx.supabase, ctx.companyId, fiscalPeriodId)
   const out: Partial<NarrativeOverrides> = { ...(rest as Partial<NarrativeOverrides>) }
   const answers = mergeKeyed(
     stored?.disclosure_answers as Record<string, unknown> | undefined,
@@ -138,6 +131,25 @@ async function withMergedKeyedFields(
     )
   }
   return out
+}
+
+/**
+ * Save a narrative update. A save of a keyed field merges into the stored
+ * one, so it goes through saveMergedNarrative, which writes the merge only on
+ * the row it was made from: two overlapping saves (two tabs, or an agent and
+ * a person) cannot drop each other's keys. A save without one reads nothing
+ * and writes only the fields it sends. Null when the merge never landed.
+ */
+function saveNarrative(
+  ctx: OperationContext,
+  fiscalPeriodId: string,
+  input: NarrativeUpdateInput,
+): Promise<NarrativeRow | null> {
+  const { supabase, companyId, userId } = ctx
+  if (input.disclosure_answers === undefined && input.equity_movement_overrides === undefined && input.fixed_asset_note_rows === undefined) {
+    return upsertNarrative(supabase, companyId, userId, fiscalPeriodId, withMergedKeyedFields(null, input))
+  }
+  return saveMergedNarrative(supabase, companyId, userId, fiscalPeriodId, (stored) => withMergedKeyedFields(stored, input))
 }
 
 /** Whether a save states at least one row of the K2 anläggningstillgångar note (clearing states nothing). */
@@ -200,13 +212,9 @@ export async function updateArsredovisningNarrative(
       }
     }
 
-    const data = await upsertNarrative(
-      ctx.supabase,
-      ctx.companyId,
-      ctx.userId,
-      fiscalPeriodId,
-      await withMergedKeyedFields(ctx, fiscalPeriodId, input),
-    )
+    const data = await saveNarrative(ctx, fiscalPeriodId, input)
+    // Another save landed before every attempt: nothing was written.
+    if (!data) return { ok: false, code: 'CONFLICT' }
     const { error: confirmationError } = await ctx.supabase
       .from('annual_report_profiles')
       .update({ narrative_confirmed_at: null })

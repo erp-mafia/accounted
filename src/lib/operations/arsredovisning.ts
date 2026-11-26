@@ -265,7 +265,7 @@ export const arsredovisningUpdateNarrative = defineOperation({
       }
     }),
   output: NarrativeOut,
-  errorCodes: ['PERIOD_NOT_FOUND', 'ARSREDOVISNING_REGISTERED'],
+  errorCodes: ['PERIOD_NOT_FOUND', 'ARSREDOVISNING_REGISTERED', 'CONFLICT'],
   http: { method: 'POST', path: `${BASE}/narrative`, pathParams: { id: 'fiscal_period_id' } },
   mcp: {
     name: 'gnubok_update_arsredovisning_narrative',
