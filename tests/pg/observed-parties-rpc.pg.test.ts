@@ -306,6 +306,36 @@ describe('get_observed_parties (pg)', () => {
   })
 })
 
+interface PlanNode { 'Node Type': string; 'Relation Name'?: string; 'Index Name'?: string; 'CTE Name'?: string; 'Actual Loops'?: number; Plans?: PlanNode[] }
+
+/** The function's own plan, with row counts: auto_explain reports the nested statement to the client. */
+async function functionPlan(companyId: string, limit: number, keys: string[] | null): Promise<PlanNode> {
+  const client = await getClient()
+  const notices: string[] = []
+  const onNotice = (notice: { message?: string }) => {
+    if (notice.message) notices.push(notice.message)
+  }
+  client.on('notice', onNotice)
+  try {
+    await client.query('BEGIN')
+    for (const setting of ['log_min_duration = 0', 'log_nested_statements = on', 'log_analyze = on', 'log_format = json', 'log_level = notice']) {
+      await client.query(`SET LOCAL auto_explain.${setting}`)
+    }
+    await client.query('SELECT public.get_observed_parties($1, NULL, $2, $3)', [companyId, limit, keys])
+  } finally {
+    await client.query('ROLLBACK').catch(() => {})
+    client.off('notice', onNotice)
+    client.release()
+  }
+  const plans = notices.filter((m) => m.includes('"Plan"') && m.includes('journal_entry_lines')).map((m) => (JSON.parse(m.slice(m.indexOf('{'))) as { Plan: PlanNode }).Plan)
+  expect(plans).toHaveLength(1)
+  return plans[0]!
+}
+
+function loops(node: PlanNode, match: (n: PlanNode) => boolean): number[] {
+  return [...(match(node) ? [node['Actual Loops'] ?? 0] : []), ...(node.Plans ?? []).flatMap((child) => loops(child, match))]
+}
+
 /**
  * 20261123005000: the party dossier asks for its party's keys and no ranked
  * key (p_limit 0), and the function then reads only the vouchers whose
@@ -404,38 +434,8 @@ describe('get_observed_parties ranking nothing (20261123005000)', () => {
     })
   })
 
-  interface PlanNode { 'Node Type': string; 'Relation Name'?: string; 'Index Name'?: string; 'Actual Loops'?: number; Plans?: PlanNode[] }
-
-  /** The function's own plan, with row counts: auto_explain reports the nested statement to the client. */
-  async function functionPlan(limit: number, keys: string[]): Promise<PlanNode> {
-    const client = await getClient()
-    const notices: string[] = []
-    const onNotice = (notice: { message?: string }) => {
-      if (notice.message) notices.push(notice.message)
-    }
-    client.on('notice', onNotice)
-    try {
-      await client.query('BEGIN')
-      for (const setting of ['log_min_duration = 0', 'log_nested_statements = on', 'log_analyze = on', 'log_format = json', 'log_level = notice']) {
-        await client.query(`SET LOCAL auto_explain.${setting}`)
-      }
-      await client.query('SELECT public.get_observed_parties($1, NULL, $2, $3)', [company.companyId, limit, keys])
-    } finally {
-      await client.query('ROLLBACK').catch(() => {})
-      client.off('notice', onNotice)
-      client.release()
-    }
-    const plans = notices.filter((m) => m.includes('"Plan"') && m.includes('journal_entry_lines')).map((m) => (JSON.parse(m.slice(m.indexOf('{'))) as { Plan: PlanNode }).Plan)
-    expect(plans).toHaveLength(1)
-    return plans[0]!
-  }
-
-  function loops(node: PlanNode, match: (n: PlanNode) => boolean): number[] {
-    return [...(match(node) ? [node['Actual Loops'] ?? 0] : []), ...(node.Plans ?? []).flatMap((child) => loops(child, match))]
-  }
-
   it("reads only the named key's vouchers when it ranks nothing", async () => {
-    const plan = await functionPlan(0, [telia])
+    const plan = await functionPlan(company.companyId, 0, [telia])
     // The lines and the bank match: once per Telia voucher of the window that passes the cheap filters (the
     // balance-only one included: its money is read to find there is none), never per voucher of the company.
     const lines = loops(plan, (n) => n['Relation Name'] === 'journal_entry_lines')
@@ -445,11 +445,141 @@ describe('get_observed_parties ranking nothing (20261123005000)', () => {
   })
 
   it('reads every voucher when it ranks, and never works out the named descriptions', async () => {
-    const plan = await functionPlan(1000, [telia])
+    const plan = await functionPlan(company.companyId, 1000, [telia])
     const lines = loops(plan, (n) => n['Relation Name'] === 'journal_entry_lines')
     expect(lines[0]).toBeGreaterThan(teliaVouchers + 1)
     // The scan of the named CTE never runs: journal_entries is read by entries alone.
     const entryScans = loops(plan, (n) => n['Relation Name'] === 'journal_entries')
     expect(entryScans.filter((l) => l > 0)).toHaveLength(1)
+  })
+})
+
+/**
+ * 20261125233000: a SQL function's statement is planned without the values of
+ * its arguments, and below money every CTE is estimated at one row, so the
+ * planner joined CTE to CTE by nested loop. selected_entries compared each
+ * voucher of keyed with each ranked key, and recur ran again for each ranked
+ * key over all the ranked keys' vouchers: the work grew with vouchers times
+ * keys, and the all-years ranking the SIE import's party suggestions ask for
+ * passed the 8 s statement timeout. The function now plans with nested loops
+ * off. Its answer must not move: the function it replaces (20261123005000) is
+ * the oracle.
+ */
+describe('get_observed_parties reads each CTE once (20261125233000)', () => {
+  const shipped = readFileSync(
+    new URL('../../supabase/migrations/20261123005000_observed_parties_named_keys_only.sql', import.meta.url), 'utf8',
+  ).split('AS $$')[1]!.split('$$;')[0]!.trim().replace(/;$/, '')
+    .replaceAll('p_company_id', '$1::uuid')
+    .replaceAll('p_from_date', '$2::date')
+    .replaceAll('p_limit', '$3::integer')
+    .replaceAll('p_keys', '$4::text[]')
+
+  const syllables = ['ka', 'lo', 'mi', 'ne', 'ro', 'su', 'ta', 'vi']
+  /** 64 names without digits: ledger_key drops digit runs, so numbered names would share one key. */
+  const name = (i: number) => `${syllables[i % 8]!.toUpperCase()[0]}${syllables[i % 8]!.slice(1)}${syllables[Math.floor(i / 8) % 8]}ra`
+  const resultAccounts = ['4010', '5410', '6212', '6540', '5611']
+  let company: { userId: string; companyId: string; fiscalPeriodId: string }
+  /** Every key of the seed, by rank. */
+  let ranked: string[] = []
+
+  beforeAll(async () => {
+    company = await seedCompany()
+    const c = company
+    const previousYear = await insertFiscalPeriod({ userId: c.userId, companyId: c.companyId, name: '2025', periodStart: '2025-01-01', periodEnd: '2025-12-31' })
+    const post = (entryDate: string, description: string, lines: Array<{ accountNumber: string; debitAmount: number; creditAmount: number }>, sourceType = 'import') =>
+      insertPostedJournalEntry({
+        userId: c.userId, companyId: c.companyId, sourceType, entryDate, description, lines,
+        fiscalPeriodId: entryDate < '2026-01-01' ? previousYear : c.fiscalPeriodId,
+      })
+    const day = (offset: number) => new Date(Date.UTC(2025, 0, 1) + (offset % 700) * 86_400_000).toISOString().slice(0, 10)
+    // Suppliers over two years: two to seven vouchers each, weekly, monthly,
+    // quarterly or irregular, every third voucher on two result accounts.
+    for (let i = 0; i < 48; i++) {
+      const step = [7, 30, 91, 13][i % 4]!
+      for (let n = 0; n < 2 + (i % 6); n++) {
+        const amount = 100 + 37 * i + 11 * n + 0.25
+        const account = resultAccounts[(i + n) % resultAccounts.length]!
+        const lines = n % 3 === 2
+          ? [
+              { accountNumber: account, debitAmount: amount, creditAmount: 0 },
+              { accountNumber: '6570', debitAmount: 10, creditAmount: 0 },
+              { accountNumber: '2440', debitAmount: 0, creditAmount: amount + 10 },
+            ]
+          : expense(account, amount)
+        await post(day(i * 5 + n * step), `Levfakt ${name(i)} Handel AB (${4000 + n})`, lines)
+      }
+    }
+    // Two suppliers with the same money and count: the name breaks the tie.
+    for (const twin of ['Tvilling Beta AB', 'Tvilling Alfa AB']) {
+      for (const date of ['2025-03-03', '2026-03-03']) await post(date, twin, expense('6230', 450))
+    }
+    // Customers, on two revenue accounts.
+    for (let i = 0; i < 12; i++) {
+      for (let n = 0; n < 1 + (i % 4); n++) {
+        const amount = 1000 + 250 * i + 10 * n
+        await post(day(40 + 9 * i + 30 * n), `Kundfaktura ${name(48 + i)} Konsult AB`, [
+          { accountNumber: '1510', debitAmount: amount * 1.25, creditAmount: 0 },
+          { accountNumber: i % 2 ? '3041' : '3011', debitAmount: 0, creditAmount: amount },
+          { accountNumber: '2611', debitAmount: 0, creditAmount: amount * 0.25 },
+        ])
+      }
+    }
+    // What the function leaves out: a storno, a year-end and a VAT voucher, one
+    // on the balance sheet only, descriptions that key to nothing, and a
+    // voucher the bank side owns.
+    await post('2026-05-05', `Levfakt ${name(0)} Handel AB (4999)`, expense('4010', 99), 'storno')
+    await post('2026-12-31', 'Årets resultat', expense('8999', 100), 'year_end')
+    await post('2026-06-30', 'Momsredovisning', expense('4000', 100), 'vat_settlement')
+    await post('2026-04-02', 'Överföring till sparkonto', expense('1940', 500))
+    await post('2026-04-03', '   ', expense('4000', 500))
+    await post('2026-04-04', '1234567890', expense('4000', 500))
+    const withBank = await post('2026-05-01', 'Loopia AB', [
+      { accountNumber: '6542', debitAmount: 99, creditAmount: 0 },
+      { accountNumber: '1930', debitAmount: 0, creditAmount: 99 },
+    ])
+    const txId = await insertTransaction({ userId: c.userId, companyId: c.companyId, journalEntryId: withBank, description: 'LOOPIA AB', amount: -99, date: '2026-05-01' })
+    await getPool().query(`UPDATE public.transactions SET merchant_name = 'LOOPIA AB' WHERE id = $1`, [txId])
+
+    const { rows } = await getPool().query<{ r: Array<{ key: string }> }>('SELECT public.get_observed_parties($1, NULL, 1000) AS r', [c.companyId])
+    ranked = rows[0]!.r.map((row) => row.key)
+  }, 60_000)
+
+  it('answers as the function it replaces did, ranked, named and windowed', async () => {
+    // The seed reaches the cases: every supplier and customer and both twins are keys, the twins by name.
+    expect(ranked).toHaveLength(48 + 12 + 2)
+    expect(ranked.filter((k) => k.startsWith('tvilling'))).toEqual(['tvilling alfa', 'tvilling beta'])
+    const low = ranked.slice(-3)
+    const keySets: Array<string[] | null> = [null, [], low, [ranked[0]!, 'no such key'], ['']]
+    await withUserContext(company.userId, async (client) => {
+      for (const fromDate of [null, '2025-07-01', '2026-06-01', '2027-01-01']) {
+        for (const limit of [null, 0, 1, 7, 1000]) {
+          for (const keys of keySets) {
+            const args = [company.companyId, fromDate, limit, keys]
+            const before = (await client.query(`SELECT (${shipped}) AS r`, args)).rows[0].r
+            const after = (await client.query('SELECT public.get_observed_parties($1, $2, $3, $4) AS r', args)).rows[0].r
+            expect(after, `${fromDate}/${limit}/${JSON.stringify(keys)}`).toEqual(before)
+          }
+        }
+      }
+    })
+  }, 60_000)
+
+  /** Plan nodes that ran more than once over a CTE: a CTE read again for each row of another. */
+  function cteRereads(node: PlanNode): string[] {
+    const readsCte = (n: PlanNode): boolean => n['Node Type'] === 'CTE Scan' || (n.Plans ?? []).some(readsCte)
+    const here = (node['Actual Loops'] ?? 0) > 1 && readsCte(node)
+      ? [`${node['Node Type']}${node['CTE Name'] ? ` on ${node['CTE Name']}` : ''} x${node['Actual Loops']}`]
+      : []
+    return [...here, ...(node.Plans ?? []).flatMap(cteRereads)]
+  }
+
+  it('reads each CTE once, ranking every key, a few with keys named, or only named keys', async () => {
+    const low = ranked.slice(-3)
+    for (const [limit, keys] of [[1000, null], [7, low], [0, low]] as const) {
+      const plan = await functionPlan(company.companyId, limit, keys)
+      expect(cteRereads(plan), `${limit}/${JSON.stringify(keys)}`).toEqual([])
+      // The vouchers are still probed one by one: the lines once per voucher read, as 20261119223000 has it.
+      expect(loops(plan, (n) => n['Relation Name'] === 'journal_entry_lines')[0]).toBeGreaterThan(1)
+    }
   })
 })
