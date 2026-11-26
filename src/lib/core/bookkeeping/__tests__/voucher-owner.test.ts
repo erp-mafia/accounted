@@ -83,6 +83,57 @@ describe('resolveVoucherOwner', () => {
     expect(owner?.hint_sv).toContain('hör till leverantörsfaktura.')
   })
 
+  // Ångra kreditering is on the page of a credited invoice only, so the hint
+  // names it there and nowhere else. A paid invoice's page changes nothing of
+  // its verifikat: a line-only fix is a radrättelse in the same verifikat,
+  // which the invoice keeps pointing at.
+  it.each(['paid', 'partially_paid'])('points a %s supplier invoice to a line correction, not to Ångra kreditering', async (status) => {
+    const { db, enqueueMany } = client()
+    enqueueMany([{ data: { id: 'si-1', supplier_invoice_number: '3744267', status, credited_invoice_id: null } }])
+
+    const owner = await resolveVoucherOwner(db, COMPANY, {
+      id: 'je-1',
+      source_type: 'supplier_invoice_registered',
+      source_id: 'si-1',
+    })
+
+    expect(owner).toMatchObject({ action: 'open_supplier_invoice', tool: null })
+    expect(owner?.hint_sv).not.toContain('Ångra kreditering')
+    expect(owner?.hint_en).not.toContain('Undo credit')
+    expect(owner?.hint_sv).toContain('gnubok_correct_entry_lines')
+    expect(owner?.hint_en).toContain('gnubok_correct_entry_lines')
+  })
+
+  it('names Ångra kreditering for a credited supplier invoice, whose page has it', async () => {
+    const { db, enqueueMany } = client()
+    enqueueMany([{ data: { id: 'si-1', supplier_invoice_number: '3744267', status: 'credited', credited_invoice_id: null } }])
+
+    const owner = await resolveVoucherOwner(db, COMPANY, {
+      id: 'je-1',
+      source_type: 'supplier_invoice_registered',
+      source_id: 'si-1',
+    })
+
+    expect(owner).toMatchObject({ action: 'open_supplier_invoice', href: '/supplier-invoices/si-1' })
+    expect(owner?.hint_sv).toContain('Ångra kreditering')
+    expect(owner?.hint_en).toContain('Undo credit')
+  })
+
+  it('names no Ångra kreditering for a registered supplier invoice that is not credited', async () => {
+    const { db, enqueueMany } = client()
+    enqueueMany([{ data: { id: 'si-1', supplier_invoice_number: null, status: 'registered', credited_invoice_id: null } }])
+
+    const owner = await resolveVoucherOwner(db, COMPANY, {
+      id: 'je-1',
+      source_type: 'supplier_invoice_registered',
+      source_id: 'si-1',
+    })
+
+    expect(owner).toMatchObject({ action: 'open_supplier_invoice' })
+    expect(owner?.hint_sv).not.toContain('Ångra kreditering')
+    expect(owner?.hint_en).not.toContain('Undo credit')
+  })
+
   it('sends a supplier credit note to the invoice it credits, where Ångra kreditering is', async () => {
     const { db, enqueueMany } = client()
     enqueueMany([{ data: { id: 'scn-1', supplier_invoice_number: 'K-9', status: 'credited', credited_invoice_id: 'si-1' } }])
@@ -94,6 +145,7 @@ describe('resolveVoucherOwner', () => {
     })
 
     expect(owner).toMatchObject({ kind: 'supplier_credit_note', owner_id: 'scn-1', href: '/supplier-invoices/si-1' })
+    expect(owner?.hint_sv).toContain('Ångra kreditering')
   })
 
   it('opens the periodisering a dissolution belongs to', async () => {
