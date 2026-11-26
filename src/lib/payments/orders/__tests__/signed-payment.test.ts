@@ -295,22 +295,4 @@ describe('checkBankHeldPayments', () => {
     expect(check.warnings[0]).not.toHaveProperty('supplier_invoice_id')
   })
 
-  it('a read that does not answer within timeoutMs is a check that did not run: a dialog waits no longer', async () => {
-    setTable('payment_orders', () => new Promise(() => {}))
-
-    const check = await checkBankHeldPayments(client, 'company-1', ['si-1'], 'bank_row', { timeoutMs: 20 })
-
-    expect(check.failed).toBe(true)
-    expect(check.warnings.map((w) => w.code)).toEqual([BANK_PAYMENT_CHECK_FAILED_WARNING])
-    expect(String(check.error)).toContain('no answer within 20 ms')
-  })
-
-  it('a read that answers within timeoutMs is used as it is', async () => {
-    setTable('payment_orders', { data: [ORDER_ROW] })
-
-    const check = await checkBankHeldPayments(client, 'company-1', ['si-1'], 'bank_row', { timeoutMs: 1_000 })
-
-    expect(check.failed).toBe(false)
-    expect(check.payments).toEqual([SIGNED])
-  })
 })

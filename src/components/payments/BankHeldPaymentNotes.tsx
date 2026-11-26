@@ -1,54 +1,40 @@
 'use client'
 
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { AttnLine } from '@/components/ui/attn-line'
-import { useCompanyOptional } from '@/contexts/CompanyContext'
-import { createClient } from '@/lib/supabase/client'
 import { PAYMENTS_PAGE_PATH } from '@/lib/payments/orders/page-path'
-import {
-  checkBankHeldPayments,
-  UNSIGNED_BANK_PAYMENT_WARNING,
-  type BankHeldPaymentVia,
-  type BankHeldPaymentWarning,
-} from '@/lib/payments/orders/signed-payment'
+import { UNSIGNED_BANK_PAYMENT_WARNING } from '@/lib/payments/orders/bank-held-codes'
+import type { BankHeldPaymentVia, BankHeldPaymentWarning } from '@/lib/payments/orders/signed-payment'
+import { askAboutBankHeldPayments, type BankHeldPaymentAnswer } from './bank-held-payments-client'
 
-/**
- * How long a dialog waits for the read of the bank's payments: past it the
- * check reads as not run (SI_BANK_PAYMENT_CHECK_FAILED), so a confirm is held
- * no longer and Kreditera opens.
- */
-export const BANK_PAYMENT_CHECK_TIMEOUT_MS = 2_000
-
-export interface BankHeldPaymentWarnings {
-  warnings: BankHeldPaymentWarning[]
-  /** The read for the invoices asked about has not answered yet: hold the confirm meanwhile. */
+export interface BankHeldPaymentWarnings extends BankHeldPaymentAnswer {
+  /** The answer for the invoices asked about has not come yet: hold the confirm meanwhile (BANK_PAYMENT_CHECK_TIMEOUT_MS at most). */
   pending: boolean
 }
 
-const NOTHING_ASKED: BankHeldPaymentWarnings = { warnings: [], pending: false }
+const NOTHING_ASKED: BankHeldPaymentWarnings = { warnings: [], failed: false, pending: false }
 
 /**
  * What to tell the person about payments the bank holds for these supplier
- * invoices (checkBankHeldPayments), read again whenever the invoices change.
- * While a read is on its way, what the last one said of an invoice still
- * asked about stays, so nothing flashes, and `pending` holds the confirm, for
- * BANK_PAYMENT_CHECK_TIMEOUT_MS at most. Pass no ids to read nothing (a closed
- * dialog, a customer invoice).
+ * invoices, asked again whenever the invoices change. While the answer is on
+ * its way, what the last one said of an invoice still asked about stays, so
+ * nothing flashes, and `pending` holds the confirm, for
+ * BANK_PAYMENT_CHECK_TIMEOUT_MS (bank-held-payments-client.ts) at most. Pass
+ * no ids to ask nothing (a closed dialog, a customer invoice).
  */
 export function useBankHeldPaymentWarnings(
   supplierInvoiceIds: readonly string[],
   via: BankHeldPaymentVia,
 ): BankHeldPaymentWarnings {
-  const companyId = useCompanyOptional()?.company?.id ?? null
-  const supabase = useMemo(() => createClient(), [])
   const asked = [...new Set(supplierInvoiceIds)]
   const ids = asked.join(',')
   const key = `${via}:${ids}`
-  const [read, setRead] = useState<{ key: string; answered: boolean; warnings: BankHeldPaymentWarning[] }>({
+  const [read, setRead] = useState<BankHeldPaymentAnswer & { key: string; answered: boolean }>({
     key,
     answered: false,
     warnings: [],
+    failed: false,
   })
   // Other invoices asked about (adjusted during render, not in an effect):
   // until their answer comes, only what was said of those still asked about stays.
@@ -57,54 +43,56 @@ export function useBankHeldPaymentWarnings(
     setRead({
       key,
       answered: false,
+      failed: false,
       warnings: read.warnings.filter((warning) => !!warning.supplier_invoice_id && still.has(warning.supplier_invoice_id)),
     })
   }
 
   useEffect(() => {
-    if (!companyId || !ids) return
+    if (!ids) return
     let cancelled = false
-    void checkBankHeldPayments(supabase, companyId, ids.split(','), via, { timeoutMs: BANK_PAYMENT_CHECK_TIMEOUT_MS }).then(
-      (check) => {
-        if (!cancelled) setRead({ key: `${via}:${ids}`, answered: true, warnings: check.warnings })
-      },
-    )
+    void askAboutBankHeldPayments(ids.split(','), via).then((answer) => {
+      if (!cancelled) setRead({ key: `${via}:${ids}`, answered: true, ...answer })
+    })
     return () => {
       cancelled = true
     }
-  }, [companyId, ids, supabase, via])
+  }, [ids, via])
 
-  if (!companyId || !ids) return NOTHING_ASKED
-  return { warnings: read.warnings, pending: !read.answered }
+  if (!ids) return NOTHING_ASKED
+  return { warnings: read.warnings, failed: read.failed, pending: !read.answered }
 }
 
 /**
- * The sentences, in the reader's language, for a confirm dialog's text: read
+ * The sentences, in the reader's language, for a confirm dialog's text: asked
  * when the confirm is asked for, for BANK_PAYMENT_CHECK_TIMEOUT_MS at most.
+ * `checkFailed` is the dialog's sentence for a check that did not run.
  */
 export async function readBankHeldPaymentSentences(
-  companyId: string,
   supplierInvoiceIds: readonly string[],
   via: BankHeldPaymentVia,
   locale: string,
+  checkFailed: string,
 ): Promise<string[]> {
-  const check = await checkBankHeldPayments(createClient(), companyId, supplierInvoiceIds, via, {
-    timeoutMs: BANK_PAYMENT_CHECK_TIMEOUT_MS,
-  })
-  return check.warnings.map((warning) => (locale === 'en' ? warning.message_en : warning.message_sv))
+  const answer = await askAboutBankHeldPayments(supplierInvoiceIds, via)
+  return [
+    ...answer.warnings.map((warning) => (locale === 'en' ? warning.message_en : warning.message_sv)),
+    ...(answer.failed ? [checkFailed] : []),
+  ]
 }
 
 /**
  * One sentence per payment the bank holds, said before the person confirms
  * paying or closing the invoice another way: ochre with the way to
  * Betalningar while a signed payment still goes out on its date (or the
- * orders could not be read), blue for an unsigned one, which never executes.
+ * check did not run), blue for an unsigned one, which never executes.
  * Renders nothing when there is none.
  */
-export function BankHeldPaymentNotes({ warnings }: { warnings: readonly BankHeldPaymentWarning[] }) {
+export function BankHeldPaymentNotes({ warnings, failed = false }: { warnings: readonly BankHeldPaymentWarning[]; failed?: boolean }) {
   const t = useTranslations('bank_held_payment')
   const locale = useLocale()
-  if (warnings.length === 0) return null
+  if (warnings.length === 0 && !failed) return null
+  const toPayments = { label: t('open_payments'), href: PAYMENTS_PAGE_PATH }
   return (
     <div className="space-y-2" data-testid="bank-held-payment-notes">
       {warnings.map((warning, index) => {
@@ -113,35 +101,13 @@ export function BankHeldPaymentNotes({ warnings }: { warnings: readonly BankHeld
           <AttnLine
             key={`${warning.code}:${warning.payment_order_id ?? index}`}
             tone={unsigned ? 'info' : 'warning'}
-            action={unsigned ? undefined : { label: t('open_payments'), href: PAYMENTS_PAGE_PATH }}
+            action={unsigned ? undefined : toPayments}
           >
             {locale === 'en' ? warning.message_en : warning.message_sv}
           </AttnLine>
         )
       })}
+      {failed && <AttnLine action={toPayments}>{t('check_failed')}</AttnLine>}
     </div>
-  )
-}
-
-/**
- * The notes, then the actions that confirm (`children`), held while the read
- * is on its way. For a page that loads this module with next/dynamic and so
- * cannot call the hook itself: the read then stays out of its first load.
- */
-export function BankHeldPaymentGate({
-  supplierInvoiceIds,
-  via,
-  children,
-}: {
-  supplierInvoiceIds: readonly string[]
-  via: BankHeldPaymentVia
-  children: (pending: boolean) => ReactNode
-}) {
-  const { warnings, pending } = useBankHeldPaymentWarnings(supplierInvoiceIds, via)
-  return (
-    <>
-      <BankHeldPaymentNotes warnings={warnings} />
-      {children(pending)}
-    </>
   )
 }

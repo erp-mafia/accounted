@@ -713,7 +713,7 @@ export default function InvoiceMatchDialog({
             {/* A payment the bank holds for the supplier invoice: the way out
                 (cancel it under Betalningar, or another row) before the
                 confirm. */}
-            <BankHeldPaymentNotes warnings={bankPayments.warnings} />
+            <BankHeldPaymentNotes warnings={bankPayments.warnings} failed={bankPayments.failed} />
 
             {/* The bank row and the invoice it pays, side by side: the
                 payment as the headline number, the invoice as one line. Both

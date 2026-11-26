@@ -14,7 +14,7 @@ import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import LinkVoucherPicker from '@/components/invoices/LinkVoucherPicker'
 import { RegistrationFirstCard, type RegistrationEntryPreview } from '@/components/supplier-invoices/RegistrationFirstCard'
 import { BankHeldPaymentNotes, useBankHeldPaymentWarnings } from '@/components/payments/BankHeldPaymentNotes'
-import { SIGNED_BANK_PAYMENT_WARNING } from '@/lib/payments/orders/signed-payment'
+import { SIGNED_BANK_PAYMENT_WARNING } from '@/lib/payments/orders/bank-held-codes'
 import { PaymentPreviewLinesCard, usePaymentPreviewEditor } from '@/components/bookkeeping/PaymentPreviewLinesCard'
 import type { LineDimensions } from '@/components/bookkeeping/payment-line-dimensions'
 import type { PaymentPreviewLine } from '@/components/bookkeeping/payment-preview-lines'
@@ -111,7 +111,10 @@ export function SupplierPaymentDialog({
   // one still goes out on its date, so a payment or a verifikat beside it is
   // refused until it is cancelled; an unsigned one is cancelled at the bank
   // once the invoice is paid. Read on every opening.
-  const { warnings: bankPaymentWarnings } = useBankHeldPaymentWarnings(open ? [invoice.id] : [], 'other')
+  const { warnings: bankPaymentWarnings, failed: bankPaymentCheckFailed } = useBankHeldPaymentWarnings(
+    open ? [invoice.id] : [],
+    'other',
+  )
 
   // Every opening starts from the invoice as it is now: what is still owed,
   // today and the last-used account. Closing drops the edited grid and the
@@ -258,6 +261,7 @@ export function SupplierPaymentDialog({
                 ? bankPaymentWarnings.filter((warning) => warning.code !== SIGNED_BANK_PAYMENT_WARNING)
                 : bankPaymentWarnings
             }
+            failed={bankPaymentCheckFailed}
           />
           <Tabs value={payTab} onValueChange={(v) => setPayTab(v as 'new' | 'existing')}>
             <TabsList className="grid w-full grid-cols-2">

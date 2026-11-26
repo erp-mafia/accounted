@@ -217,6 +217,7 @@ export default function SupplierInvoiceDetailPage() {
   const { toast } = useToast()
   const t = useTranslations('supplier_invoice_detail')
   const locale = useLocale()
+  const tBankHeld = useTranslations('bank_held_payment')
   const tAttest = useTranslations('supplier_invoice_attest')
   const tCommon = useTranslations('common')
   // The list page's "Betald {date}" label, so the header reads like the row.
@@ -456,8 +457,9 @@ export default function SupplierInvoiceDetailPage() {
     // A payment the bank holds for the invoice (Betala via banken), said
     // before the confirm: a signed one still goes out, so the credit is
     // refused until it is cancelled; an unsigned one is cancelled at the bank.
-    const bankPaymentNotes =
-      company && invoiceIdParam ? await readBankHeldPaymentSentences(company.id, [invoiceIdParam], 'other', locale) : []
+    const bankPaymentNotes = invoiceIdParam
+      ? await readBankHeldPaymentSentences([invoiceIdParam], 'other', locale, tBankHeld('check_failed'))
+      : []
     const ok = await confirmAction({
       title: t('credit_confirm_title'),
       description: [

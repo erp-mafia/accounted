@@ -10781,6 +10781,11 @@
     "skv_reconnect_cta": "Anslut igen",
     "dialog_match_invoice": "Matcha med faktura",
     "dialog_pick_supplier_invoice": "Matcha med leverantörsfaktura",
+    "si_match_suggestion_body": "Det finns en öppen leverantörsfaktura med samma belopp från samma leverantör. Matcha mot fakturan istället för att bokföra direkt på leverantörsskuldskontot, annars skapas en dubblerad verifikation som måste stornas (BFL 5 kap 5 §).",
+    "si_match_suggestion_supplier": "Leverantör",
+    "si_match_suggestion_remaining": "kvar {amount}",
+    "si_match_suggestion_match": "Matcha",
+    "si_match_suggestion_book_anyway": "Bokför på leverantörsskulder ändå",
     "dialog_match_salary_run": "Matcha med lön {period}",
     "rot_rut_payout_matched_title": "ROT/RUT-utbetalning matchad",
     "rot_rut_payout_matched_description": "Utbetalningen från Skatteverket bokfördes mot begäran {name}",
@@ -18201,6 +18206,7 @@
     "start_subscription": "Starta abonnemang"
   },
   "bank_held_payment": {
+    "check_failed": "Det gick inte att kontrollera om banken har en betalning av fakturan. Titta under Betalningar innan du fortsätter.",
     "open_payments": "Öppna Betalningar"
   },
   "payments_page": {

@@ -32,6 +32,11 @@ import type { OperationOutcome, OperationWarning } from '@/lib/operations/types'
 import type { SupabaseDataClient } from '@/lib/supabase/data-client'
 import { readInSlices } from '@/lib/supabase/read-in-slices'
 import { formatCurrency } from '@/lib/utils'
+import {
+  BANK_PAYMENT_CHECK_FAILED_WARNING,
+  SIGNED_BANK_PAYMENT_WARNING,
+  UNSIGNED_BANK_PAYMENT_WARNING,
+} from './bank-held-codes'
 import { BANK_HELD_PAYMENT_ORDER_STATUSES, SIGNED_PAYMENT_ORDER_STATUSES, type PaymentOrderStatus } from './status'
 
 export interface SignedBankPayment {
@@ -103,8 +108,7 @@ interface BankHeldPaymentRow {
  * The payment the bank holds for each of the given supplier invoices, by
  * invoice id; an invoice without one is absent. An invoice has one open order
  * at most (uq_payment_orders_open_per_supplier_invoice); were there two, the
- * signed one answers, as the one that still executes. Runs on the server and
- * in the browser (members read their company's orders). Throws on a failed
+ * signed one answers, as the one that still executes. Throws on a failed
  * read: a read that did not run never answers "none".
  */
 export async function findBankHeldPayments(
@@ -155,12 +159,7 @@ export async function findBankHeldPayments(
  */
 export type BankHeldPaymentVia = 'bank_row' | 'other'
 
-/** A signed payment the bank still makes on its date. */
-export const SIGNED_BANK_PAYMENT_WARNING = 'SI_SIGNED_BANK_PAYMENT'
-/** An unsigned payment the bank holds: it never executes, and the status sync asks the bank to cancel it. */
-export const UNSIGNED_BANK_PAYMENT_WARNING = 'SI_UNSIGNED_BANK_PAYMENT'
-/** The orders could not be read: nobody can say whether the bank holds a payment. */
-export const BANK_PAYMENT_CHECK_FAILED_WARNING = 'SI_BANK_PAYMENT_CHECK_FAILED'
+export { BANK_PAYMENT_CHECK_FAILED_WARNING, SIGNED_BANK_PAYMENT_WARNING, UNSIGNED_BANK_PAYMENT_WARNING }
 
 /**
  * A warning about a payment the bank holds, naming the order and its invoice,
@@ -224,10 +223,7 @@ export interface BankHeldPaymentCheck {
   error?: unknown
 }
 
-/**
- * The check that could not run (a failed read, or one that did not answer in
- * time): said as a warning of its own, never as "nothing held".
- */
+/** The check that could not run: said as a warning of its own, never as "nothing held". */
 function failedBankHeldPaymentCheck(error: unknown): BankHeldPaymentCheck {
   return {
     error,
@@ -244,34 +240,22 @@ function failedBankHeldPaymentCheck(error: unknown): BankHeldPaymentCheck {
   }
 }
 
-/** The read, or a rejection once timeoutMs has passed without its answer (none without a timeoutMs). */
-function answerWithin<T>(read: Promise<T>, timeoutMs: number | undefined): Promise<T> {
-  if (timeoutMs === undefined) return read
-  let timer: ReturnType<typeof setTimeout> | undefined
-  const late = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`bank payment orders: no answer within ${timeoutMs} ms`)), timeoutMs)
-  })
-  return Promise.race([read, late]).finally(() => clearTimeout(timer))
-}
-
 /**
  * The payments the bank holds for these supplier invoices and what to say of
- * them, for every door that pays or closes an invoice while one may stand.
- * Never throws: a failed read is a warning of its own, so the action goes on
- * and nobody takes a check that did not run for a clean one. A dialog passes
- * `timeoutMs`, so a read that hangs holds its confirm no longer: past it the
- * check reads as not run.
+ * them, for every door that pays or closes an invoice while one may stand,
+ * the dialogs' through GET /api/supplier-invoices/bank-held-payments. Never
+ * throws: a failed read is a warning of its own, so the action goes on and
+ * nobody takes a check that did not run for a clean one.
  */
 export async function checkBankHeldPayments(
   supabase: SupabaseDataClient,
   companyId: string,
   supplierInvoiceIds: readonly string[],
   via: BankHeldPaymentVia,
-  options: { timeoutMs?: number } = {},
 ): Promise<BankHeldPaymentCheck> {
   let held: Map<string, BankHeldPayment>
   try {
-    held = await answerWithin(findBankHeldPayments(supabase, companyId, supplierInvoiceIds), options.timeoutMs)
+    held = await findBankHeldPayments(supabase, companyId, supplierInvoiceIds)
   } catch (error) {
     // Said, not swallowed: the failure is a warning of its own, and the error
     // goes back to the caller for its log.

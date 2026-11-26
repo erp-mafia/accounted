@@ -183,11 +183,11 @@ const MatchVoucherDialog = dynamic(
 )
 const InvoicePicker = dynamic(() => import('@/components/transactions/InvoicePicker'), { loading: InlineDialogContentLoading })
 const MatchAllocationDialog = dynamic(() => import('@/components/transactions/MatchAllocationDialog'), { loading: DialogLoadingSkeleton })
-// A payment the bank holds for a suggested supplier invoice (Betala via
-// banken): said in the suggestion before "Matcha", which waits for the read.
-// Loaded with the suggestion, so the read stays out of this page's first load.
-const BankHeldPaymentGate = dynamic(() =>
-  import('@/components/payments/BankHeldPaymentNotes').then((module) => module.BankHeldPaymentGate),
+// The match suggestion says what the bank holds for its invoices: loaded when
+// it opens, with that read, as the other dialogs here are.
+const SupplierInvoiceMatchSuggestionDialog = dynamic(
+  () => import('@/components/transactions/SupplierInvoiceMatchSuggestionDialog'),
+  { loading: DialogLoadingSkeleton },
 )
 const BulkBookDialog = dynamic(() => import('@/components/transactions/BulkBookDialog'), { loading: DialogLoadingSkeleton })
 const TransactionBookingDialog = dynamic(() => import('@/components/transactions/TransactionBookingDialog'), { loading: DialogLoadingSkeleton })
@@ -474,7 +474,6 @@ export default function TransactionsPage() {
       supplier_name: string | null
     }>
   } | null>(null)
-  const [siMatchProcessing, setSiMatchProcessing] = useState(false)
 
   // Prong B (customer side): prompt to match against an unpaid customer
   // invoice instead of categorizing direct to 1510 on an inbound bank tx.
@@ -2423,52 +2422,29 @@ export default function TransactionsPage() {
     }
   }
 
-  async function handleMatchSuggestedSupplierInvoice(transactionId: string, supplierInvoiceId: string) {
-    setSiMatchProcessing(true)
-    try {
-      const response = await fetch(`/api/transactions/${transactionId}/match-supplier-invoice`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ supplier_invoice_id: supplierInvoiceId }),
-      })
-      const result = await response.json()
-      if (!response.ok) {
-        toast({
-          title: 'Matchning misslyckades',
-          description: getErrorMessage(result, { context: 'transaction', statusCode: response.status }),
-          variant: 'destructive',
-        })
-        setSiMatchProcessing(false)
-        return
-      }
-
-      toast({ title: t('supplier_invoice_matched_title'), description: t('supplier_invoice_matched_description') })
-      setSiMatchSuggestion(null)
-      setExitingIds((prev) => new Set(prev).add(transactionId))
-      setTimeout(() => {
-        setTransactions((prev) =>
-          prev.map((t) =>
-            t.id === transactionId
-              ? {
-                  ...t,
-                  supplier_invoice_id: supplierInvoiceId,
-                  is_business: true,
-                  journal_entry_id: result.journal_entry_id ?? t.journal_entry_id,
-                }
-              : t
-          )
+  // The suggestion dialog booked the match (SupplierInvoiceMatchSuggestionDialog): the row leaves the list.
+  function handleSuggestedSupplierInvoiceMatched(transactionId: string, supplierInvoiceId: string, journalEntryId: string | null) {
+    setSiMatchSuggestion(null)
+    setExitingIds((prev) => new Set(prev).add(transactionId))
+    setTimeout(() => {
+      setTransactions((prev) =>
+        prev.map((t) =>
+          t.id === transactionId
+            ? {
+                ...t,
+                supplier_invoice_id: supplierInvoiceId,
+                is_business: true,
+                journal_entry_id: journalEntryId ?? t.journal_entry_id,
+              }
+            : t
         )
-        setExitingIds((prev) => {
-          const next = new Set(prev)
-          next.delete(transactionId)
-          return next
-        })
-      }, 350)
-    } catch {
-      toast({ title: t('match_failed_title'), description: t('match_failed_description_retry'), variant: 'destructive' })
-    } finally {
-      setSiMatchProcessing(false)
-    }
+      )
+      setExitingIds((prev) => {
+        const next = new Set(prev)
+        next.delete(transactionId)
+        return next
+      })
+    }, 350)
   }
 
   async function handleIgnoreTransaction(tx: TransactionWithInvoice) {
@@ -5402,66 +5378,21 @@ export default function TransactionsPage() {
       )}
 
       {/* Prong B: match-against-supplier-invoice suggestion */}
-      {siMatchSuggestion && <Dialog
-        open
-        onOpenChange={(open) => {
-          if (!open) setSiMatchSuggestion(null)
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{t('dialog_pick_supplier_invoice')}</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4">
-            <p className="text-sm text-muted-foreground">
-              Det finns en öppen leverantörsfaktura med samma belopp från samma leverantör. Matcha mot
-              fakturan istället för att bokföra direkt på leverantörsskuldskontot, annars skapas en
-              dubblerad verifikation som måste stornas (BFL 5 kap 5 §).
-            </p>
-            <BankHeldPaymentGate supplierInvoiceIds={siMatchSuggestion.candidates.map((c) => c.supplier_invoice_id)} via="bank_row">
-              {(bankPaymentPending) => (
-                <div className="space-y-2 rounded-lg p-3 bg-control shadow-raised">
-                  {siMatchSuggestion.candidates.map((c) => (
-                    <div key={c.supplier_invoice_id} className="flex items-center justify-between gap-3 text-sm">
-                      <div className="min-w-0">
-                        <div className="font-medium">
-                          {c.supplier_name || 'Leverantör'}
-                          {c.invoice_number ? ` · ${c.invoice_number}` : null}
-                        </div>
-                        <div className="text-xs text-muted-foreground tabular-nums">
-                          {formatDate(c.invoice_date)} · kvar {formatCurrency(c.remaining_amount, c.currency)}
-                        </div>
-                      </div>
-                      <Button
-                        onClick={() => handleMatchSuggestedSupplierInvoice(siMatchSuggestion.transactionId, c.supplier_invoice_id)}
-                        disabled={siMatchProcessing || bankPaymentPending}
-                      >
-                        Matcha
-                      </Button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </BankHeldPaymentGate>
-            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-              <Button variant="outline" onClick={() => setSiMatchSuggestion(null)}>
-                Avbryt
-              </Button>
-              <Button
-                variant="outline"
-                onClick={async () => {
-                  const retry = siMatchSuggestion?.retry
-                  setSiMatchSuggestion(null)
-                  if (retry) await retry()
-                }}
-                disabled={siMatchProcessing}
-              >
-                Bokför på leverantörsskulder ändå
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>}
+      {siMatchSuggestion && (
+        <SupplierInvoiceMatchSuggestionDialog
+          transactionId={siMatchSuggestion.transactionId}
+          candidates={siMatchSuggestion.candidates}
+          onMatched={(supplierInvoiceId, journalEntryId) =>
+            handleSuggestedSupplierInvoiceMatched(siMatchSuggestion.transactionId, supplierInvoiceId, journalEntryId)
+          }
+          onCancel={() => setSiMatchSuggestion(null)}
+          onBookAnyway={async () => {
+            const retry = siMatchSuggestion.retry
+            setSiMatchSuggestion(null)
+            await retry()
+          }}
+        />
+      )}
 
       {/* Prong B (customer side): match-against-customer-invoice suggestion */}
       {ciMatchSuggestion && <Dialog

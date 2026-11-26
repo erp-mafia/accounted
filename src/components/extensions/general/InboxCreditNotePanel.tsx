@@ -14,7 +14,6 @@ import { notifySessionExpired } from '@/lib/auth/session-timeout-shared'
 import { readsAsCredit } from '@/lib/documents/inbox-kind'
 import type { CreditTargetCandidate, CreditTargetResolution } from '@/lib/supplier-invoices/credit-target'
 import { formatCurrency, formatDate } from '@/lib/utils'
-import { useCompanyOptional } from '@/contexts/CompanyContext'
 import { readBankHeldPaymentSentences } from '@/components/payments/BankHeldPaymentNotes'
 
 /**
@@ -41,7 +40,7 @@ export function InboxCreditNotePanel({
 }) {
   const t = useTranslations('inbox_workspace')
   const locale = useLocale()
-  const companyId = useCompanyOptional()?.company?.id ?? null
+  const tBankHeld = useTranslations('bank_held_payment')
   const { toast } = useToast()
   const { dialogProps, confirm } = useDestructiveConfirm()
   const [target, setTarget] = useState<CreditTargetResolution | null>(null)
@@ -83,9 +82,12 @@ export function InboxCreditNotePanel({
       // A payment the bank holds for the invoice (Betala via banken), said
       // before the confirm: a signed one still goes out, so the credit is
       // refused until it is cancelled; an unsigned one is cancelled at the bank.
-      const bankPaymentNotes = companyId
-        ? await readBankHeldPaymentSentences(companyId, [invoice.supplier_invoice_id], 'other', locale)
-        : []
+      const bankPaymentNotes = await readBankHeldPaymentSentences(
+        [invoice.supplier_invoice_id],
+        'other',
+        locale,
+        tBankHeld('check_failed'),
+      )
       await confirm(
         {
           title: t('credit_note_confirm_title', { number }),
@@ -126,7 +128,7 @@ export function InboxCreditNotePanel({
         },
       )
     },
-    [companyId, confirm, creditDate, itemId, locale, onCredited, t, toast],
+    [confirm, creditDate, itemId, locale, onCredited, t, tBankHeld, toast],
   )
 
   const notACreditNote = async () => {

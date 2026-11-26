@@ -1749,7 +1749,7 @@ export default function MatchAllocationDialog({
           {/* A payment the bank holds for a picked supplier invoice: the way
               out (cancel it under Betalningar, or another row) before the
               confirm. */}
-          <BankHeldPaymentNotes warnings={bankPayments.warnings} />
+          <BankHeldPaymentNotes warnings={bankPayments.warnings} failed={bankPayments.failed} />
 
           {/* Where the split stands, as one line. Undershoot blocks too: the
               verifikat's bank line must equal the bank's actual receipt or
