@@ -76,7 +76,10 @@ vi.mock('@/extensions/general/skatteverket/lib/grant-probe', () => ({
   recordGrantRefusal: vi.fn(),
 }))
 
-vi.mock('@/extensions/general/skatteverket/lib/resolve-auth', () => ({
+vi.mock('@/extensions/general/skatteverket/lib/resolve-auth', async (importOriginal) => ({
+  // The real membership filter, reading company_members from the stub below.
+  keepRowsOfCurrentMembers: (await importOriginal<typeof import('@/extensions/general/skatteverket/lib/resolve-auth')>())
+    .keepRowsOfCurrentMembers,
   currentSkvEnvironment: vi.fn(() => 'test'),
   hasVerifiedGrant: vi.fn().mockResolvedValue(false),
 }))
@@ -96,17 +99,32 @@ function makeRequest(): Request {
   return new Request('http://localhost/api/extensions/skatteverket/skattekonto/sync/cron')
 }
 
+/**
+ * `memberships` answers the company_members read; without it every token
+ * owner is still a member of their company.
+ */
 function makeSupabaseStub(
   tokens: Record<string, unknown>[],
-  opts: { lastSyncedAt?: string; extensionRows?: Record<string, unknown>[] } = {},
+  opts: {
+    lastSyncedAt?: string
+    extensionRows?: Record<string, unknown>[]
+    memberships?: Array<{ company_id: string; user_id: string }>
+    membersError?: { message: string }
+  } = {},
 ) {
+  const memberships =
+    opts.memberships ?? tokens.map((token) => ({ company_id: token.company_id as string, user_id: token.user_id as string }))
   return {
     from: vi.fn((table: string) => {
       const resolved = table === 'skatteverket_tokens'
         ? { data: tokens, error: null }
-        : table === 'extension_data' && opts.extensionRows
-          ? { data: opts.extensionRows, error: null }
-          : { data: null, error: null }
+        : table === 'company_members'
+          ? opts.membersError
+            ? { data: null, error: opts.membersError }
+            : { data: memberships, error: null }
+          : table === 'extension_data' && opts.extensionRows
+            ? { data: opts.extensionRows, error: null }
+            : { data: null, error: null }
       const chain: any = {}
       for (const method of ['select', 'eq', 'in', 'order', 'range']) {
         chain[method] = vi.fn(() => chain)
@@ -186,6 +204,36 @@ describe('GET /api/extensions/skatteverket/skattekonto/sync/cron', () => {
     expect(body).toMatchObject({ processed: 1, synced: 1, errors: 0 })
     expect(mocks.syncSkattekonto).toHaveBeenCalledTimes(1)
     expect(mocks.syncSkattekonto.mock.calls[0][0]).toMatchObject({ companyId: entitledCompanyId })
+  })
+
+  it("never syncs on the connection of someone who left the company, and gives it no place in the run", async () => {
+    const left = { user_id: 'u-left', company_id: 'c-left', expires_at: '2026-01-01T00:00:00Z', refresh_count: 0 }
+    const stayed = { user_id: 'u-a', company_id: 'c-a', expires_at: '2099-01-01T00:00:00Z', refresh_count: 0 }
+    mocks.createClient.mockReturnValue(
+      makeSupabaseStub([left, stayed], { memberships: [{ company_id: 'c-a', user_id: 'u-a' }] }),
+    )
+    mocks.getCompanyIdsWithCapability.mockResolvedValue(new Set(['c-left', 'c-a']))
+
+    const body = await (await GET(makeRequest())).json()
+
+    expect(body).toMatchObject({ processed: 1, synced: 1, errors: 0 })
+    expect(mocks.syncSkattekonto).toHaveBeenCalledTimes(1)
+    expect(mocks.syncSkattekonto.mock.calls[0][1]).toEqual({ mode: 'user', supabase: expect.anything(), userId: 'u-a', companyId: 'c-a' })
+    // Left out of the work list itself: a row that never syncs would otherwise
+    // stay the stalest and take a place at the head of every run.
+    expect(mocks.getCompanyIdsWithCapability.mock.calls[0][1]).toEqual(['c-a'])
+  })
+
+  it('a membership read that fails fails the run, as a failed token read does', async () => {
+    const tokens = [{ user_id: 'u1', company_id: 'c1', expires_at: '2099-01-01T00:00:00Z', refresh_count: 0 }]
+    mocks.createClient.mockReturnValue(makeSupabaseStub(tokens, { membersError: { message: 'boom' } }))
+
+    const response = await GET(makeRequest())
+
+    expect(response.status).toBe(500)
+    expect(await response.json()).toEqual({ error: 'Failed to fetch tokens' })
+    expect(mocks.syncSkattekonto).not.toHaveBeenCalled()
+    expect(log.error).toHaveBeenCalledWith('Failed to fetch tokens', expect.objectContaining({ message: 'boom' }))
   })
 
   it('the hourly schedule is never blocked by the previous run: 55 minutes ago syncs, 30 minutes ago waits', async () => {

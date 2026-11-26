@@ -19,7 +19,11 @@ import { getSystemAuthMode, isSystemAuthConfigured } from '@/extensions/general/
 import { listVerifiedCompanies } from '@/extensions/general/skatteverket/lib/connection-store'
 import { recordGrantRefusal } from '@/extensions/general/skatteverket/lib/grant-probe'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { currentSkvEnvironment, hasVerifiedGrant } from '@/extensions/general/skatteverket/lib/resolve-auth'
+import {
+  currentSkvEnvironment,
+  hasVerifiedGrant,
+  keepRowsOfCurrentMembers,
+} from '@/extensions/general/skatteverket/lib/resolve-auth'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { isSkatteverketEnabled } from '@/lib/skatteverket/enabled'
 import { createLogger } from '@/lib/logger'
@@ -107,10 +111,12 @@ export const GET = withCronContext('cron.skatteverket_skattekonto_sync', async (
   // User-token entries. The token row is keyed by user_id but carries
   // company_id (multi-tenant refactor). Rows flagged needs_reconsent are
   // excluded: SKV's per-flow refresh tokens live 65 minutes, so a connection
-  // that failed with a terminal auth error can never heal on its own.
+  // that failed with a terminal auth error can never heal on its own. So are
+  // rows whose owner has left the company: the connection is that person's,
+  // and removing a member leaves their row in place.
   let tokens
   try {
-    tokens = await fetchAllRows(
+    const active = await fetchAllRows(
       ({ from, to }) => supabase
         .from('skatteverket_tokens')
         .select('user_id, company_id, expires_at, refresh_count')
@@ -122,6 +128,7 @@ export const GET = withCronContext('cron.skatteverket_skattekonto_sync', async (
       // user alone would drop every company but one for multi-company operators.
       { dedupeBy: token => `${token.user_id}:${token.company_id}` },
     )
+    tokens = await keepRowsOfCurrentMembers(supabase, active)
   } catch (error) {
     log.error('Failed to fetch tokens', {
       message: error instanceof Error ? error.message : String(error),

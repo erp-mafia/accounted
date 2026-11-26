@@ -3,7 +3,7 @@ import { TOOL_SCOPE_MAP } from '@/lib/auth/api-keys'
 import { eventBus } from '@/lib/events/bus'
 import { MCP_TOOL_CAPABILITY_MAP } from '@/lib/entitlements/keys'
 import { setBankFeedConnectForTests, type BankFeedConnect } from '@/lib/bank-feed/connect'
-import { createTableMockSupabase } from '@/tests/helpers'
+import { companyMembersChain, createTableMockSupabase } from '@/tests/helpers'
 import { tools } from '../server'
 
 // The filing readiness reads on the service role whichever client the tool
@@ -46,7 +46,12 @@ function listClient(rows: unknown[] | null, error: unknown = null) {
     maybeSingle: vi.fn().mockResolvedValue({ data: rows?.[0] ?? null, error }),
     then: (resolve: (v: unknown) => void) => resolve({ data: rows, error }),
   }
-  const client = { from: vi.fn(() => chain), chain }
+  // Every token owner is still a member of the company.
+  const owners = ((rows ?? []) as Array<{ user_id?: string }>).flatMap((row) => (row.user_id ? [row.user_id] : []))
+  const client = {
+    from: vi.fn((table: string) => (table === 'company_members' ? companyMembersChain(owners) : chain)),
+    chain,
+  }
   serviceDb = client
   return client
 }

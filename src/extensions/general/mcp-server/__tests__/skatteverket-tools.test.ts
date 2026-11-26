@@ -93,6 +93,11 @@ const realResolveAuth = await vi.importActual<typeof import('@/extensions/genera
   '@/extensions/general/skatteverket/lib/resolve-auth',
 )
 
+/** company_members for token rows whose owners are all still members of company-1. */
+const membersOf = (tokens: unknown[]) => ({
+  data: (tokens as Array<{ user_id: string }>).map((token) => ({ company_id: 'company-1', user_id: token.user_id })),
+})
+
 let prevEnv: string | undefined
 beforeEach(() => {
   vi.clearAllMocks()
@@ -294,6 +299,7 @@ describe('VAT filing tools on the caller\'s own session (crm#1263)', () => {
   const clientWith = (rows: unknown[]) => {
     const db = createTableMockSupabase({
       skatteverket_tokens: { data: rows },
+      company_members: membersOf(rows),
       profiles: { data: { full_name: 'Anna Admin' } },
     })
     serviceDb = db.supabase
@@ -861,6 +867,7 @@ describe('Skatteverket read tools: a session that is gone', () => {
     mockFetchVatDeclarationStatus.mockResolvedValue(NOT_CONNECTED)
     const { supabase } = createTableMockSupabase({
       skatteverket_tokens: { data: tokens },
+      company_members: membersOf(tokens),
       profiles: { data: { full_name: 'Anna Admin' } },
     })
     const thrown = await vatStatus
@@ -900,6 +907,7 @@ describe('Skatteverket read tools: a session that is gone', () => {
     const { supabase } = createTableMockSupabase({
       salary_runs: { data: { id: 'sr-1', period_year: 2026, period_month: 9, agi_generated_at: null, agi_submitted_at: null } },
       skatteverket_tokens: { data: tokens },
+      company_members: membersOf(tokens),
       profiles: { data: { full_name: 'Anna Admin' } },
     })
     return agiStatus.execute({ salary_run_id: 'sr-1' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' })
