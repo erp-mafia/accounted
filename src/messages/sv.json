@@ -16078,6 +16078,7 @@
     "progress_total": "{count} verifikat att importera",
     "progress_wait": "Läser och förbereder filen …",
     "progress_written": "{count} verifikat importerade",
+    "progress_written_with_opening": "{count} verifikat importerade, varav {opening, plural, one {1 är ingående balans} other {# är ingående balanser}}",
     "progress_file": "Fil {current} av {total}",
     "th_write_sub": "{tick} av {total}",
     "th_write_preparing": "Förbereder {total} verifikat …",
