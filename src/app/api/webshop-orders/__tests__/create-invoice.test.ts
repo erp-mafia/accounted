@@ -695,3 +695,93 @@ describe('POST /api/webshop-orders/[id]/create-invoice: the email match is exact
     )
   })
 })
+
+/**
+ * The billing address the store sent with a WooCommerce order goes onto the
+ * customer the route creates, so the draft invoice is addressed without the
+ * user typing it in. A customer matched by email or chosen in the dialog
+ * keeps its own card: the route never writes to it.
+ */
+describe('POST /api/webshop-orders/[id]/create-invoice: the billing address', () => {
+  const CHOSEN_ID = '7c9e6679-7425-40de-944b-e07fc1f90ae7'
+  const addressedRow = () =>
+    makeOrderRow({
+      platform: 'woocommerce',
+      customer_address_line1: 'Storgatan 1',
+      customer_address_line2: 'Lgh 1102',
+      customer_postal_code: '111 22',
+      customer_city: 'Stockholm',
+    })
+  const cardWithAddress = {
+    name: 'Testbolaget AB',
+    email: 'kund@example.se',
+    customer_type: 'swedish_business',
+    address_line1: 'Gamla vägen 5',
+    address_line2: null,
+    postal_code: '222 33',
+    city: 'Lund',
+    default_payment_terms: 30,
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    eventBus.clear()
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1', email: 'test@test.se' }, supabase: mockSupabase })
+    requireWriteMock.mockResolvedValue({ ok: true })
+    mockBuildInvoiceWriteData.mockResolvedValue(okBuild)
+  })
+
+  function enqueueInvoiceWrites() {
+    enqueue({ data: { id: 'inv-1', status: 'draft', invoice_number: null } }) // invoices insert
+    enqueue({ data: null }) // invoice_items insert
+    enqueue({ data: [{ id: 'order-1' }] }) // order link-back matched
+  }
+
+  it('puts it on a customer the route creates', async () => {
+    enqueue({ data: addressedRow() }) // order fetch
+    enqueue({ data: null }) // email match: none
+    enqueue({ data: null }) // the company default for the new card
+    enqueue({ data: { id: 'cust-new', name: 'Testbolaget AB', customer_type: 'swedish_business', default_payment_terms: 30 } }) // customers insert
+    enqueueInvoiceWrites()
+
+    expect((await parseJsonResponse(await postCreate())).status).toBe(200)
+    expect(findCall('customers', 'insert')![0]).toMatchObject({
+      name: 'Testbolaget AB',
+      address_line1: 'Storgatan 1',
+      address_line2: 'Lgh 1102',
+      postal_code: '111 22',
+      city: 'Stockholm',
+    })
+  })
+
+  it('leaves a customer matched by email as it is', async () => {
+    enqueue({ data: addressedRow() }) // order fetch
+    enqueue({ data: { id: 'cust-1', ...cardWithAddress } }) // email match
+    enqueueInvoiceWrites()
+
+    expect((await parseJsonResponse(await postCreate())).status).toBe(200)
+    expect(findCall('customers', 'insert')).toBeUndefined()
+    expect(findCall('customers', 'update')).toBeUndefined()
+    expect(mockBuildInvoiceWriteData).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customer: expect.objectContaining({ id: 'cust-1', address_line1: 'Gamla vägen 5', city: 'Lund' }),
+      }),
+    )
+  })
+
+  it('leaves a customer chosen in the dialog as it is', async () => {
+    enqueue({ data: addressedRow() }) // order fetch
+    enqueue({ data: { id: CHOSEN_ID, ...cardWithAddress } }) // customer by id
+    enqueueInvoiceWrites()
+
+    expect((await parseJsonResponse(await postCreate({ customer_id: CHOSEN_ID }))).status).toBe(200)
+    expect(findCall('customers', 'insert')).toBeUndefined()
+    expect(findCall('customers', 'update')).toBeUndefined()
+    expect(mockBuildInvoiceWriteData).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customer: expect.objectContaining({ id: CHOSEN_ID, address_line1: 'Gamla vägen 5', city: 'Lund' }),
+      }),
+    )
+  })
+})

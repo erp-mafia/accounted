@@ -15,6 +15,10 @@ import {
   parseJsonResponse,
 } from '@/tests/helpers'
 
+// Route path ids are uuids: the route answers its 404 to anything else before it reads.
+const DIM_1 = 'ebe91598-12f6-537f-afed-2128c0cb9882'
+const VALUE_1 = '0a21cea2-e2ce-5af1-a625-9f897ebfddad'
+
 const { supabase, enqueue, reset } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
@@ -37,13 +41,13 @@ import { eventBus } from '@/lib/events/bus'
 import { PATCH, DELETE } from '../[id]/values/[valueId]/route'
 
 const CURRENT = {
-  id: 'v1', dimension_id: 'dim-1', code: 'BUTIK', name: 'Butiken',
+  id: VALUE_1, dimension_id: DIM_1, code: 'BUTIK', name: 'Butiken',
   is_active: true, start_date: null, end_date: null,
 }
 const PROJEKT = { sie_dim_no: 6, name: 'Projekt', resets_annually: false }
 
-const params = () => createMockRouteParams({ id: 'dim-1', valueId: 'v1' })
-const URL_PATH = '/api/dimensions/dim-1/values/v1'
+const params = () => createMockRouteParams({ id: DIM_1, valueId: VALUE_1 })
+const URL_PATH = `/api/dimensions/${DIM_1}/values/${VALUE_1}`
 
 describe('PATCH /api/dimensions/[id]/values/[valueId]', () => {
   beforeEach(() => {
@@ -101,7 +105,7 @@ describe('PATCH /api/dimensions/[id]/values/[valueId]', () => {
     expect(body.data.code).toBe('BUTIK')
     expect(archived).toHaveBeenCalledTimes(1)
     expect(archived.mock.calls[0][0]).toMatchObject({
-      dimensionValue: { id: 'v1', sie_dim_no: 6, dimension_name: 'Projekt', code: 'BUTIK', is_active: false },
+      dimensionValue: { id: VALUE_1, sie_dim_no: 6, dimension_name: 'Projekt', code: 'BUTIK', is_active: false },
       previousName: null,
       companyId: 'company-1',
       userId: 'user-1',
@@ -212,7 +216,7 @@ describe('DELETE /api/dimensions/[id]/values/[valueId]', () => {
   })
 
   it('deletes an unreferenced value (happy path)', async () => {
-    enqueue({ data: [{ id: 'v1' }] })
+    enqueue({ data: [{ id: VALUE_1 }] })
 
     const request = createMockRequest(URL_PATH, { method: 'DELETE' })
     const response = await DELETE(request, params())

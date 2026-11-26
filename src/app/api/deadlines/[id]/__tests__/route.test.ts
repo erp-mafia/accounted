@@ -5,6 +5,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import { createMockRequest, parseJsonResponse } from '@/tests/helpers'
 
+// Route path ids are uuids: the route answers its 404 to anything else before it reads.
+const DEADLINE_1 = 'f88a772a-6f47-51b7-a1fc-772f4c4d1096'
+
 const requireAuthMock = vi.fn()
 vi.mock('@/lib/auth/require-auth', () => ({
   requireAuth: (...args: unknown[]) => requireAuthMock(...args),
@@ -22,7 +25,7 @@ vi.mock('@/lib/auth/require-write', () => ({
 
 import { PUT, DELETE } from '../route'
 
-const idParams = { params: Promise.resolve({ id: 'deadline-1' }) }
+const idParams = { params: Promise.resolve({ id: DEADLINE_1 }) }
 
 function createCapturingSupabase(
   results: { data?: unknown; error?: unknown; count?: number | null }[]
@@ -54,7 +57,7 @@ function auth(supabase: unknown) {
 describe('PUT /api/deadlines/[id]', () => {
   it('rejects a malformed body (bad due_date) with 400', async () => {
     auth(createCapturingSupabase([]))
-    const req = createMockRequest('/api/deadlines/deadline-1', {
+    const req = createMockRequest(`/api/deadlines/${DEADLINE_1}`, {
       method: 'PUT',
       body: { due_date: 'banana' },
     })
@@ -64,14 +67,14 @@ describe('PUT /api/deadlines/[id]', () => {
 
   it('rejects an empty body with 400', async () => {
     auth(createCapturingSupabase([]))
-    const req = createMockRequest('/api/deadlines/deadline-1', { method: 'PUT', body: {} })
+    const req = createMockRequest(`/api/deadlines/${DEADLINE_1}`, { method: 'PUT', body: {} })
     const { status } = await parseJsonResponse(await PUT(req, idParams))
     expect(status).toBe(400)
   })
 
   it('maps zero-rows to 404', async () => {
     auth(createCapturingSupabase([{ error: { code: 'PGRST116', message: 'no rows' } }]))
-    const req = createMockRequest('/api/deadlines/deadline-1', {
+    const req = createMockRequest(`/api/deadlines/${DEADLINE_1}`, {
       method: 'PUT',
       body: { title: 'Momsdeklaration Q3' },
     })
@@ -80,8 +83,8 @@ describe('PUT /api/deadlines/[id]', () => {
   })
 
   it('updates the deadline', async () => {
-    auth(createCapturingSupabase([{ data: { id: 'deadline-1', title: 'Momsdeklaration Q3' } }]))
-    const req = createMockRequest('/api/deadlines/deadline-1', {
+    auth(createCapturingSupabase([{ data: { id: DEADLINE_1, title: 'Momsdeklaration Q3' } }]))
+    const req = createMockRequest(`/api/deadlines/${DEADLINE_1}`, {
       method: 'PUT',
       body: { title: 'Momsdeklaration Q3' },
     })
@@ -115,7 +118,7 @@ describe('DELETE /api/deadlines/[id]', () => {
 
   it('hard-deletes a user-created deadline', async () => {
     auth(createCapturingSupabase([
-      { data: { id: 'deadline-1', source: 'user' } },
+      { data: { id: DEADLINE_1, source: 'user' } },
       { count: 1 },
     ]))
     const { status, body } = await parseJsonResponse<{ success: boolean; dismissed?: boolean }>(
@@ -130,8 +133,8 @@ describe('DELETE /api/deadlines/[id]', () => {
     // A hard-deleted system row is recreated by the nightly backfill cron;
     // the route must soft-dismiss so the opt-out is durable.
     auth(createCapturingSupabase([
-      { data: { id: 'deadline-1', source: 'system' } },
-      { data: [{ id: 'deadline-1' }] },
+      { data: { id: DEADLINE_1, source: 'system' } },
+      { data: [{ id: DEADLINE_1 }] },
     ]))
     const { status, body } = await parseJsonResponse<{ success: boolean; dismissed?: boolean }>(
       await DELETE(createMockRequest('/x', { method: 'DELETE' }), idParams)
@@ -145,7 +148,7 @@ describe('DELETE /api/deadlines/[id]', () => {
     // Concurrent regeneration can delete the row between lookup and update;
     // a phantom "dismissed" success would persist nothing.
     auth(createCapturingSupabase([
-      { data: { id: 'deadline-1', source: 'system' } },
+      { data: { id: DEADLINE_1, source: 'system' } },
       { data: [] },
     ]))
     const { status } = await parseJsonResponse(

@@ -1,5 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { chunk } from '@/lib/utils'
+import { ID_READ_CHUNK } from '@/lib/supabase/read-in-slices'
 
 /**
  * Who already holds a document: a link waiting for approval, or a bank
@@ -53,6 +55,21 @@ export async function loadDocumentClaimsAndWaitingLinks(
   if (wanted.size === 0) return { claims, waitingVoucherLinks: 0 }
   const add = (claim: DocumentClaim) => claims.set(claim.document_id, [...(claims.get(claim.document_id) ?? []), claim])
 
+  // The bank rows holding the documents, in slices of ID_READ_CHUNK: the ids
+  // travel in the GET query string, which the gateway refuses past its
+  // limit, and gnubok_link_documents_to_vouchers asks about up to 300
+  // documents. A slice is not paged: a document sits on one bank row at a
+  // time, so 100 documents stay far under the 1000-row cap.
+  const readAttached = async () => {
+    const rows: { id: string; document_id: string }[] = []
+    for (const ids of chunk([...wanted], ID_READ_CHUNK)) {
+      const { data, error } = await supabase.from('transactions').select('id, document_id').eq('company_id', companyId).in('document_id', ids)
+      if (error) throw new Error(`Failed to read attached documents: ${error.message}`)
+      rows.push(...((data ?? []) as { id: string; document_id: string }[]))
+    }
+    return rows
+  }
+
   const [pending, attached] = await Promise.all([
     fetchAllRows<{ id: string; operation_type?: string; params: LinkParams | null }>((range) =>
       supabase
@@ -64,9 +81,8 @@ export async function loadDocumentClaimsAndWaitingLinks(
         .order('id', { ascending: true })
         .range(range.from, range.to),
     ),
-    supabase.from('transactions').select('id, document_id').eq('company_id', companyId).in('document_id', [...wanted]),
+    readAttached(),
   ])
-  if (attached.error) throw new Error(`Failed to read attached documents: ${attached.error.message}`)
 
   for (const op of pending) {
     const p = op.params ?? {}
@@ -83,7 +99,7 @@ export async function loadDocumentClaimsAndWaitingLinks(
       }
     }
   }
-  for (const row of (attached.data ?? []) as { id: string; document_id: string }[]) {
+  for (const row of attached) {
     add({ document_id: row.document_id, operation_id: null, transaction_id: row.id, journal_entry_id: null })
   }
   const waitingVoucherLinks = pending.filter((op) => op.operation_type === 'link_document_to_voucher').length

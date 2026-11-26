@@ -15,6 +15,13 @@ export const VISMA_AUTH_URL = 'https://identity.vismaonline.com/connect/authoriz
 export const VISMA_TOKEN_URL = 'https://identity.vismaonline.com/connect/token';
 export const VISMA_RATE_LIMIT: RateLimitConfig = { maxRequests: 10, windowMs: 1000 };
 
+/**
+ * Visma hands a file out as a temporary, anonymous link into its own storage
+ * (GET /customerinvoices/{id}/pdf answers one). Such a link is followed only to
+ * this domain or a host under it, over https (visma/attachments.ts).
+ */
+export const VISMA_STORAGE_DOMAIN = 'vismaonline.com';
+
 export const VISMA_RESOURCE_CONFIGS: Partial<Record<ResourceType, VismaResourceConfig>> = {
   [ResourceType.SalesInvoices]: {
     listEndpoint: '/customerinvoices',

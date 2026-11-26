@@ -27,6 +27,7 @@ import {
   WORKED_DAYS_RANGE_MAX_DAYS,
   deleteWorkedDaysRange,
   listWorkedDays,
+  toWorkedDayResource,
   upsertWorkedDays,
   workedDaysRangeSpan,
   type WorkedDayPreview,
@@ -62,22 +63,16 @@ const WorkedDay = z.object({
   start_time: z.string().nullable(),
   end_time: z.string().nullable(),
   notes: z.string().nullable(),
+  carried_to_run_id: z
+    .string()
+    .uuid()
+    .nullable()
+    .describe('The later salary run that pays these hours (a late day), or null: the run whose deviation window holds the date.'),
   created_at: z.string(),
   updated_at: z.string(),
 })
 
-function toApiRow(row: WorkedDayRow) {
-  return {
-    salary_worked_day_id: row.id,
-    work_date: row.work_date,
-    hours: Number(row.hours),
-    start_time: row.start_time,
-    end_time: row.end_time,
-    notes: row.notes,
-    created_at: row.created_at,
-    updated_at: row.updated_at,
-  }
-}
+const toApiRow = toWorkedDayResource
 
 // The request schemas live with the service (lib/salary/worked-days.ts): the
 // MCP operations validate with the same ones.
@@ -202,7 +197,9 @@ registerEndpoint({
     'For hourly employees the run\'s gross is derived from these rows (hourly_rate x sum(hours)): PATCH /salary-runs/{id}/employees/{employeeId} monthly_salary is irrelevant for them.',
     'start_time/end_time feed the OB/shift-premium rules: a row without them is priced as an assumed 08:00-17:00 day, so a night or weekend shift earns no premium. Times are HH:MM or HH:MM:SS; end_time before start_time means the shift crosses midnight.',
     'Worked hours plus absence hours on one date may not exceed 24 (DB trigger, shared with absence): the whole PUT is rejected with 409 ABSENCE_HOURS_CONFLICT, nothing is written.',
-    'Dates inside the avvikelseperiod (deviation window, deviation_period_start..deviation_period_end, NULL = the pay month) of a run that is already calculated (review), approved, paid or booked are locked: 409 SALARY_REGISTER_DATES_LOCKED_BY_RUN naming the run (details.salary_run_id, details.status, details.locked_dates), nothing written, dry runs included. The way out is to revert that run to draft (dashboard) or, for a booked run, POST /salary-runs/{id}/correct and register the days against the correction run. Draft runs never lock.',
+    'Days a salary run that is already calculated (review), approved, paid or booked has read are locked: 409 SALARY_REGISTER_DATES_LOCKED_BY_RUN naming the run (details.salary_run_id, details.status, details.locked_dates, details.reason), nothing written, dry runs included. A run is read through its avvikelseperiod (deviation_period_start..deviation_period_end, NULL = the pay month). Draft runs never lock. Run in review or approved, neither paid nor declared: revert it to draft (POST /salary-runs/{id}/revert, after :unapprove for an approved run) and register the hours.',
+    'Hours not registered yet on a date a paid, booked or declared run read are a late day (details.reason late_day_needs_later_run): register them on their real date with carried_to_run_id = the next ordinary run that is neither paid nor declared (details.later_salary_run), a draft with the employee on it, paid hourly as their own period was. That run pays them on top of its own period\'s hours and names the dates on the payslip. Do not correct the paid run for them: a correction run never takes late hours. A wrong carried_to_run_id returns 409 SALARY_REGISTER_LATE_DAY_REFUSED with details.reason.',
+    'A day already registered that a paid or declared run read (details.reason read_by_settled_run) is part of what was paid and is not rewritten: pay a difference with a payslip line on the next run.',
     'Registering hours does not recompute a draft salary run: call POST /salary-runs/{id}/calculate afterwards.',
   ],
   example: {
@@ -268,6 +265,7 @@ export const PUT = withApiV1<{ params: Promise<{ companyId: string; id: string }
         end_time: d.end_time ?? null,
         notes: d.notes ?? null,
       })),
+      carriedToRunId: body.carried_to_run_id ?? null,
       dryRun: ctx.dryRun,
     })
 
@@ -304,10 +302,10 @@ registerEndpoint({
   useWhen:
     'Hours were pushed for the wrong employee or the wrong dates, or a time-tracking re-sync needs a clean period before a fresh PUT.',
   doNotUseFor:
-    'Correcting hours on a day: PUT the day again instead. Rows a calculated, approved, paid or booked run has already read: the delete is refused (409 SALARY_REGISTER_DATES_LOCKED_BY_RUN); use the run correction flow.',
+    'Correcting hours on a day: PUT the day again instead. Rows a calculated, approved, paid or booked run has already read: the delete is refused (409 SALARY_REGISTER_DATES_LOCKED_BY_RUN).',
   pitfalls: [
     'deleted_count: 0 with a 200 means nothing matched: not an error.',
-    'Dates inside the avvikelseperiod (deviation window, deviation_period_start..deviation_period_end, NULL = the pay month) of a run that is already calculated (review), approved, paid or booked are locked: 409 SALARY_REGISTER_DATES_LOCKED_BY_RUN naming the run (details.salary_run_id, details.status, details.locked_dates), nothing written, dry runs included. The way out is to revert that run to draft (dashboard) or, for a booked run, POST /salary-runs/{id}/correct and register the days against the correction run. Draft runs never lock.',
+    'A row a salary run that is already calculated (review), approved, paid or booked reads is not deleted: 409 SALARY_REGISTER_DATES_LOCKED_BY_RUN naming the run (details.salary_run_id, details.status, details.locked_dates), nothing deleted, dry runs included. The run reads a row through its avvikelseperiod, or, for a late day, because the row is carried to it (carried_to_run_id). Judged by the rows: a range with nothing registered on a locked date is not refused. Draft runs never lock: a late day carried to a draft run can be deleted.',
     'Hours a draft run has already summed stay in the run until POST /salary-runs/{id}/calculate is called again.',
   ],
   example: {

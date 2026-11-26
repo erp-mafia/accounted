@@ -261,6 +261,21 @@ describe('what does not touch the calculation', () => {
     expect(stateOf(db, RUN)).toBe('stale')
   })
 
+  it('late hours carried to the run reach it, though its window does not hold their date', async () => {
+    const db = fresh()
+    // August is paid out: a day it never had is a late day, paid in September.
+    db.edit('salary_runs', APPROVED, { status: 'booked' })
+    const result = await upsertWorkedDays(db.supabase, {
+      companyId: C,
+      employeeId: 'anna',
+      days: [{ work_date: '2026-08-20', hours: 8 }],
+      carriedToRunId: RUN,
+    })
+    expect(result.ok).toBe(true)
+    expect(db.rows('salary_worked_days')[0]).toMatchObject({ work_date: '2026-08-20', carried_to_run_id: RUN })
+    expect(staleEmployees(db, RUN)).toEqual(['anna'])
+  })
+
   it('a window of the previous month is read as stored', async () => {
     const db = fresh()
     db.edit('salary_runs', RUN, { deviation_period_start: '2026-07-01', deviation_period_end: '2026-07-31' })

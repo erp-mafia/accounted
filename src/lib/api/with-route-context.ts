@@ -51,7 +51,13 @@ import { startPackageForSessionRequest } from '@/lib/modules/package-doors'
 import { packageStartRefusal } from '@/lib/modules/package-gate'
 import { invoicerRouteAccess, isInvoicerRole } from '@/lib/auth/invoicer-role'
 import { createCompanyScopedClient } from '@/lib/auth/company-scoped-client'
+import {
+  ACTIVE_COMPANY_HEADER,
+  TAB_COMPANY_HEADER,
+  shouldRefuseForTabCompany,
+} from '@/lib/company/tab-guard'
 import { sessionShadow, type TodayOutcome } from '@/lib/permissions/shadow'
+import { malformedUuidParam, type UuidParamCodes } from '@/lib/api/uuid-params'
 
 export interface RouteContext {
   /** Stable id for this HTTP request: appears in logs, error envelope, X-Request-Id header. */
@@ -93,7 +99,7 @@ export interface RouteContext {
   role?: CompanyRole
 }
 
-interface RouteContextOptions {
+interface RouteContextOptions<P extends DynamicParams = DynamicParams> {
   /**
    * Defaults to false. When true, the wrapper rejects callers whose role in
    * the active company is `viewer` (or who have no membership). Mirrors the
@@ -115,6 +121,16 @@ interface RouteContextOptions {
   requireAdmin?: boolean
   /** File exports must not escape while a company has an incomplete import. */
   requireCompleteLedger?: boolean | ((request: Request) => boolean)
+  /**
+   * The path parameters that name a uuid row, each with the code the route
+   * answers for a row that is not there: `{ id: 'ASSET_NOT_FOUND' }`, or
+   * NOT_FOUND where the route has no code of its own. A value that is not a
+   * uuid names no row, and in a uuid filter Postgres refuses it (22P02), which
+   * a route's error branch answered as a 500. The wrapper answers the code in
+   * the handler's place, after the auth, company and role gates, so a 401 or
+   * a 403 still comes first (lib/api/uuid-params.ts).
+   */
+  uuidParams?: UuidParamCodes<ParamName<P>>
 }
 
 // Next.js 16 always passes a `{ params: Promise<...> }` second arg to route
@@ -123,6 +139,9 @@ interface RouteContextOptions {
 // having to declare any params at the call site.
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 type DynamicParams = { params: Promise<Record<string, string | string[]>> } | { params: Promise<{}> }
+
+/** The names of a route's path parameters, as its params type declares them. */
+type ParamName<P extends DynamicParams> = Extract<keyof Awaited<P['params']>, string>
 
 type RouteHandler<P extends DynamicParams = { params: Promise<Record<string, never>> }> = (
   request: Request,
@@ -133,6 +152,31 @@ type RouteHandler<P extends DynamicParams = { params: Promise<Record<string, nev
 function generateRequestId(): string {
   // crypto.randomUUID is available in Node 20+/edge runtimes used by Next.js.
   return `req_${crypto.randomUUID()}`
+}
+
+/**
+ * The response with ACTIVE_COMPANY_HEADER set to the company the server acted
+ * on. A response whose headers are immutable (one relayed from fetch) is
+ * rebuilt around the same body stream; any failure returns it as it was.
+ */
+export function withActiveCompanyHeader(response: Response, companyId: string): Response {
+  try {
+    response.headers.set(ACTIVE_COMPANY_HEADER, companyId)
+    return response
+  } catch {
+    try {
+      const headers = new Headers(response.headers)
+      headers.set(ACTIVE_COMPANY_HEADER, companyId)
+      return new Response(response.body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers,
+      })
+    } catch {
+      // The answer is still correct without the header: send it as it is.
+      return response
+    }
+  }
 }
 
 export type SessionCompany = { ok: true; companyId: string } | { ok: false; response: NextResponse }
@@ -180,7 +224,7 @@ export async function resolveSessionCompany(
 export function withRouteContext<P extends DynamicParams = { params: Promise<Record<string, never>> }>(
   operation: string,
   handler: RouteHandler<P>,
-  options: RouteContextOptions = {},
+  options: RouteContextOptions<P> = {},
 ): (request: Request, params: P) => Promise<Response> {
   const { requireWrite = false, requireAdmin = false } = options
 
@@ -197,6 +241,11 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
     // nothing; a no-op until the role is known.
     let recordShadow: (today: TodayOutcome) => void = () => {}
     let handlerStarted = false
+    // Set once the active company is resolved: every answer from then on
+    // names it in ACTIVE_COMPANY_HEADER.
+    let activeCompanyId: string | null = null
+    const stamp = <R extends Response>(response: R): R | Response =>
+      activeCompanyId ? withActiveCompanyHeader(response, activeCompanyId) : response
 
     try {
       const authStart = Date.now()
@@ -226,6 +275,22 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
 
       if (!company.ok) return company.response
       const { companyId } = company
+      activeCompanyId = companyId
+
+      // A write from a tab that shows another company than the session has
+      // active now is refused before anything runs: the tab names its company
+      // in TAB_COMPANY_HEADER (lib/company/tab-guard.ts). No header, no check.
+      if (
+        shouldRefuseForTabCompany({
+          method: request.method,
+          pathname: new URL(request.url).pathname,
+          tabCompanyHeader: request.headers.get(TAB_COMPANY_HEADER),
+          activeCompanyId: companyId,
+        })
+      ) {
+        userLog.warn('write refused: the tab shows another company than the active one')
+        return stamp(errorResponseFromCode('ACTIVE_COMPANY_CHANGED', userLog.child({ companyId }), { requestId }))
+      }
 
       recordShadow = sessionShadow({
         door: `session:${operation}`,
@@ -249,12 +314,12 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
         if (!access) {
           userLog.warn('invoicer role refused outside its routes')
           recordShadow({ outcome: 'deny', code: 'INVOICER_ROUTE_NOT_ALLOWED', by: 'gate' })
-          return errorResponseFromCode('FORBIDDEN', userLog.child({ companyId }), {
+          return stamp(errorResponseFromCode('FORBIDDEN', userLog.child({ companyId }), {
             requestId,
             messageSv: 'Rollen Fakturering når bara kunder, fakturor, offerter, order och artiklar.',
             messageEn: 'The Invoicing role reaches only customers, invoices, quotes, orders and articles.',
             details: { code: 'INVOICER_ROUTE_NOT_ALLOWED' },
-          })
+          }))
         }
         if (access === 'scoped') {
           handlerSupabase = createCompanyScopedClient({ companyId, userId: user.id }, userLog.child({ companyId }))
@@ -264,7 +329,7 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
       if (requireAdmin) {
         if (!(await isCompanyAdmin(supabase, companyId))) {
           recordShadow({ outcome: 'deny', code: 'ADMIN_REQUIRED', by: 'gate' })
-          return companyAdminRequiredResponse(userLog.child({ companyId }), requestId)
+          return stamp(companyAdminRequiredResponse(userLog.child({ companyId }), requestId))
         }
       } else if (requireWrite) {
         // Delegate to the existing helper so tests that already mock it
@@ -284,7 +349,7 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
           if (!writeCheck.response.headers.get('X-Request-Id')) {
             writeCheck.response.headers.set('X-Request-Id', requestId)
           }
-          return writeCheck.response
+          return stamp(writeCheck.response)
         }
       }
 
@@ -295,12 +360,12 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
       if (startPackage) {
         const refusal = await packageStartRefusal(handlerSupabase, companyId, startPackage)
         if (refusal) {
-          return errorResponseFromCode(refusal.code, userLog.child({ companyId }), {
+          return stamp(errorResponseFromCode(refusal.code, userLog.child({ companyId }), {
             requestId,
             messageSv: refusal.messageSv,
             messageEn: refusal.messageEn,
             details: refusal.details,
-          })
+          }))
         }
       }
 
@@ -316,6 +381,11 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
 
       const handlerStart = Date.now()
       handlerStarted = true
+      // A path id that is not a uuid names no row: the route's not-found,
+      // answered in the handler's place before anything queries with it.
+      const malformedParam = options.uuidParams
+        ? malformedUuidParam(await params?.params, options.uuidParams)
+        : null
       const requireCompleteLedger = typeof options.requireCompleteLedger === 'function'
         ? options.requireCompleteLedger(request) : options.requireCompleteLedger
       // Every commit the handler makes, however many frames down, is stamped
@@ -325,10 +395,15 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
       // The user's id rides along so a write the handler makes through a
       // service-role client (the invoicer role's scoped client, a service
       // client) is audited as theirs, not the row creator's.
-      const response = await runWithActor({ type: 'user', userId: user.id }, () =>
-        requireCompleteLedger
-          ? withSIEPeriodRead(handlerSupabase, companyId, 'report_export', () => handler(request, ctx, params))
-          : handler(request, ctx, params))
+      let response = malformedParam
+        ? errorResponseFromCode(malformedParam.code, ctx.log, {
+            requestId,
+            reason: `path parameter ${malformedParam.param} is not a uuid`,
+          })
+        : await runWithActor({ type: 'user', userId: user.id }, () =>
+            requireCompleteLedger
+              ? withSIEPeriodRead(handlerSupabase, companyId, 'report_export', () => handler(request, ctx, params))
+              : handler(request, ctx, params))
       const handlerMs = Date.now() - handlerStart
       // A 403 from the handler is a check of its own after the gates passed.
       recordShadow(
@@ -355,6 +430,8 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
         )
       }
 
+      if (response instanceof Response) response = stamp(response)
+
       ctx.log.info('op completed', {
         durationMs: Date.now() - start,
         status: response.status,
@@ -368,7 +445,7 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
       // status - thrown 4xx domain errors are expected outcomes (warn), only
       // 5xx are runtime errors. errorResponse logs the error itself at the
       // same threshold.
-      const response = errorResponse(err, errLog, { requestId })
+      const response = stamp(errorResponse(err, errLog, { requestId }))
       if (handlerStarted) {
         recordShadow(
           response.status === 403 ? { outcome: 'deny', code: 'HANDLER_FORBIDDEN', by: 'handler' } : { outcome: 'allow' },

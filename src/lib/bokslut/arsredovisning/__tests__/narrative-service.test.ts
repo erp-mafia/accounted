@@ -11,7 +11,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { errorResponse, type ErrorEnvelope } from '@/lib/errors/get-structured-error'
-import { getNarrative, listFixedAssetNoteRows, upsertNarrative } from '../narrative-service'
+import { getNarrative, listFixedAssetNoteRows, saveMergedNarrative, upsertNarrative, type NarrativeRow } from '../narrative-service'
 
 const noopLogger = { error: () => {}, warn: () => {} }
 
@@ -141,6 +141,92 @@ describe('upsertNarrative', () => {
     ).catch((e: unknown) => e)
 
     expect((await envelopeFor(err)).status).toBe(500)
+  })
+})
+
+// The keyed fields merge into the stored ones, so the merge is made from a
+// read and written only on the row it was made from (#3768): another save
+// landing in between sends it back to read and merge again.
+describe('saveMergedNarrative', () => {
+  const answered = (stored: NarrativeRow | null) => ({
+    disclosure_answers: { ...(stored?.disclosure_answers ?? {}), 'fb.agare': { applies: false } },
+  })
+  const rowWith = (answers: Record<string, unknown>, updatedAt: string) => ({
+    ...narrativeRow,
+    disclosure_answers: answers,
+    updated_at: updatedAt,
+  })
+  const save = (supabase: unknown, merge: Parameters<typeof saveMergedNarrative>[4] = answered) =>
+    saveMergedNarrative(supabase as SupabaseClient, 'company-1', 'user-1', 'period-1', merge)
+  const versionsWritten = (calls: { table: string; method: string; args: unknown[] }[]) =>
+    calls.filter((call) => call.method === 'eq' && call.args[0] === 'updated_at').map((call) => call.args[1])
+
+  it('writes the merge on the updated_at it was read with', async () => {
+    const { supabase, enqueue, findCalls, calls } = createQueuedMockSupabase()
+    const stored = rowWith({ 'not.rattelse': { applies: false } }, '2026-01-15T10:00:00.123456+00:00')
+    enqueue({ data: stored })
+    enqueue({ data: { ...stored, updated_at: '2026-01-15T10:00:01+00:00' } })
+    const result = await save(supabase)
+    expect(result?.updated_at).toBe('2026-01-15T10:00:01+00:00')
+    expect(findCalls('arsredovisning_narratives', 'update')[0]?.[0]).toMatchObject({
+      user_id: 'user-1',
+      disclosure_answers: { 'not.rattelse': { applies: false }, 'fb.agare': { applies: false } },
+    })
+    expect(versionsWritten(calls)).toEqual(['2026-01-15T10:00:00.123456+00:00'])
+    expect(findCalls('arsredovisning_narratives', 'upsert')).toEqual([])
+  })
+
+  it('reads and merges again when another save changed the row in between', async () => {
+    const { supabase, enqueue, findCalls, calls } = createQueuedMockSupabase()
+    enqueue({ data: rowWith({}, 'v1') })
+    enqueue({ data: null }) // the conditional update matched no row
+    enqueue({ data: rowWith({ 'fb.fortlevnad': { applies: false } }, 'v2') })
+    enqueue({ data: rowWith({}, 'v3') })
+    const merge = vi.fn(answered)
+    expect(await save(supabase, merge)).not.toBeNull()
+    expect(merge.mock.calls.map(([stored]) => stored?.updated_at)).toEqual(['v1', 'v2'])
+    expect(versionsWritten(calls)).toEqual(['v1', 'v2'])
+    // The other save's answer is kept.
+    expect(findCalls('arsredovisning_narratives', 'update')[1]?.[0]).toMatchObject({
+      disclosure_answers: { 'fb.fortlevnad': { applies: false }, 'fb.agare': { applies: false } },
+    })
+  })
+
+  it('creates a missing row with a plain insert and merges into the row another save created first', async () => {
+    const { supabase, enqueue, findCalls, calls } = createQueuedMockSupabase()
+    enqueue({ data: null })
+    enqueue({ error: Object.assign(new Error('duplicate key value violates unique constraint'), { name: 'PostgrestError', code: '23505' }) })
+    enqueue({ data: rowWith({ 'fb.fortlevnad': { applies: false } }, 'v1') })
+    enqueue({ data: rowWith({}, 'v2') })
+    expect(await save(supabase)).not.toBeNull()
+    expect(findCalls('arsredovisning_narratives', 'insert')[0]?.[0]).toMatchObject({
+      company_id: 'company-1',
+      fiscal_period_id: 'period-1',
+      disclosure_answers: { 'fb.agare': { applies: false } },
+    })
+    expect(findCalls('arsredovisning_narratives', 'upsert')).toEqual([])
+    expect(versionsWritten(calls)).toEqual(['v1'])
+    expect(findCalls('arsredovisning_narratives', 'update')[0]?.[0]).toMatchObject({
+      disclosure_answers: { 'fb.fortlevnad': { applies: false }, 'fb.agare': { applies: false } },
+    })
+  })
+
+  it('gives up after five attempts that each met another save: null, nothing more written', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    for (let attempt = 1; attempt <= 5; attempt += 1) {
+      enqueue({ data: rowWith({}, `v${attempt}`) })
+      enqueue({ data: null })
+    }
+    expect(await save(supabase)).toBeNull()
+    expect(findCalls('arsredovisning_narratives', 'update')).toHaveLength(5)
+  })
+
+  it('throws any other error with its SQLSTATE, without trying again', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: rowWith({}, 'v1') })
+    enqueue({ error: checkViolation('arsredovisning_narratives_agm_decision_consistency') })
+    await expect(save(supabase)).rejects.toMatchObject({ code: '23514' })
+    expect(findCalls('arsredovisning_narratives', 'update')).toHaveLength(1)
   })
 })
 

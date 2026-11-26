@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { isUuid } from '@/lib/invariants/uuid'
 
 /**
  * GET /api/bookkeeping/journal-entries/[id]/retag-log
@@ -9,8 +11,11 @@ import { withRouteContext } from '@/lib/api/with-route-context'
  */
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'bookkeeping.journal_entry.retag_log',
-  async (_request, { supabase, companyId }, { params }) => {
+  async (_request, { supabase, companyId, log, requestId }, { params }) => {
     const { id } = await params
+    // An id that is not a uuid names no verifikat: 404 before the query,
+    // which Postgres refused with a uuid parse error (answered as a 500).
+    if (!isUuid(id)) return errorResponseFromCode('JOURNAL_ENTRY_NOT_FOUND', log, { requestId })
 
     const { data, error } = await supabase
       .from('dimension_retag_log')

@@ -165,8 +165,11 @@ describe('runSalaryCalculation statements', () => {
 
     expect(small.result.ok).toBe(true)
     expect(large.result.ok).toBe(true)
-    expect(small.db.queries.length).toBe(20 + 10)
-    expect(large.db.queries.length).toBe(20 + 90)
+    // 22: the 20 run-level statements, plus the late days carried to the
+    // run (lib/salary/late-days.ts) read once for absence and once for
+    // worked days, whatever the roster size.
+    expect(small.db.queries.length).toBe(22 + 10)
+    expect(large.db.queries.length).toBe(22 + 90)
     const rosterUpdates = large.db.queries.filter((q) => q.table === 'salary_run_employees' && q.op === 'update')
     expect(rosterUpdates).toHaveLength(90)
     expect(rosterUpdates.every((q) => q.rows === 1)).toBe(true)
@@ -221,6 +224,8 @@ describe('runSalaryCalculation statements', () => {
     expect(result.ok).toBe(true)
     expect(db.queries.filter((q) => q.table === 'salary_worked_days')).toEqual([
       { table: 'salary_worked_days', op: 'select', rows: 1000 },
+      // The late days carried to the run: none, one page.
+      { table: 'salary_worked_days', op: 'select', rows: 0 },
       { table: 'salary_worked_days', op: 'select', rows: 50 },
     ])
     const hours = db.rows('salary_run_employees').map((row) => row.hours_worked)

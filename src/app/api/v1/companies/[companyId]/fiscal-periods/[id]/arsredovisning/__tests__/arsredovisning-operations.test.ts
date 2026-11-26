@@ -333,8 +333,10 @@ describe('POST .../arsredovisning/narrative', () => {
       equity_movement_overrides: { 'dddddddd-dddd-4ddd-8ddd-dddddddddddd': 'rattelse_av_fel' },
     })
     expect(res.status).toBe(200)
-    const upsert = client.calls.find((c) => c.table === 'arsredovisning_narratives' && c.method === 'upsert')
-    const row = upsert?.args[0] as Record<string, unknown>
+    // Written only on the row the merge was made from (saveMergedNarrative).
+    const update = client.calls.find((c) => c.table === 'arsredovisning_narratives' && c.method === 'update')
+    expect(client.calls).toContainEqual({ table: 'arsredovisning_narratives', method: 'eq', args: ['updated_at', 'x'] })
+    const row = update?.args[0] as Record<string, unknown>
     expect(row.disclosure_answers).toEqual({
       'fb.agare': { applies: false },
       'not.handelser_efter_balansdagen': { applies: false },
@@ -343,6 +345,21 @@ describe('POST .../arsredovisning/narrative', () => {
       'cccccccc-cccc-4ccc-8ccc-cccccccccccc': 'utdelning',
       'dddddddd-dddd-4ddd-8ddd-dddddddddddd': 'rattelse_av_fel',
     })
+  })
+
+  it('409 CONFLICT when another save changed the narrative before every attempt; the confirmation stays', async () => {
+    const stored = { id: 'narr-1', company_id: COMPANY_ID, fiscal_period_id: PERIOD_ID, disclosure_answers: {}, updated_at: 'x' }
+    // Every read finds the row, every conditional write matches nothing.
+    const client = use({
+      fiscal_periods: PERIOD,
+      arsredovisning_submissions: NONE,
+      arsredovisning_narratives: Array.from({ length: 5 }, () => [{ data: stored, error: null }, NONE]).flat(),
+    })
+    const res = await post({ disclosure_answers: { 'fb.agare': { applies: false } } })
+    expect(res.status).toBe(409)
+    expect((await res.json()).error.code).toBe('CONFLICT')
+    expect(client.calls.filter((c) => c.table === 'arsredovisning_narratives' && c.method === 'update')).toHaveLength(5)
+    expect(client.calls.some((c) => c.table === 'annual_report_profiles' && c.method === 'update')).toBe(false)
   })
 
   it('400 on an unknown disclosure id or an equity kind a user may not assign', async () => {
@@ -374,7 +391,7 @@ describe('POST .../arsredovisning/narrative', () => {
       arsredovisning_narratives: { data: stored, error: null },
     }
     const saved = (client: Client) =>
-      (client.calls.find((c) => c.table === 'arsredovisning_narratives' && c.method === 'upsert')?.args[0] as Record<string, unknown>)
+      (client.calls.find((c) => c.table === 'arsredovisning_narratives' && c.method === 'update')?.args[0] as Record<string, unknown>)
         .fixed_asset_note_rows
 
     it('merges row by row: a row sent replaces that row and the rest of the post stays', async () => {

@@ -7,6 +7,10 @@ import {
   createMockRouteParams,
 } from '@/tests/helpers'
 
+// Route path ids are uuids: the route answers its 404 to anything else before it reads.
+const EMP_1 = 'fcd49043-9489-5813-aacd-a04b3e121e68'
+const RUN_1 = 'ebdc9458-7643-58fb-bdd9-6b0e8334baa0'
+
 vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 vi.mock('@/lib/auth/require-auth', () => ({ requireAuth: vi.fn() }))
 vi.mock('@/lib/company/context', () => ({
@@ -28,8 +32,8 @@ vi.mock('@/lib/salary/invalidate-calculation', async (original) => ({
 }))
 
 const mockUser = { id: 'user-1', email: 'test@test.se' }
-const URL = '/api/salary/runs/run-1/employees/emp-1/expense-claims'
-const PARAMS = createMockRouteParams({ id: 'run-1', employeeId: 'emp-1' })
+const URL = `/api/salary/runs/${RUN_1}/employees/${EMP_1}/expense-claims`
+const PARAMS = createMockRouteParams({ id: RUN_1, employeeId: EMP_1 })
 
 function authed() {
   const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
@@ -70,8 +74,8 @@ describe('POST /api/salary/runs/[id]/employees/[employeeId]/expense-claims', () 
   it('returns 404 with the structured code when the employee has no open claims', async () => {
     const { enqueueMany } = authed()
     enqueueMany([
-      { data: { id: 'run-1', status: 'draft' } }, // salary_runs gate
-      { data: { id: 'sre-1', employee_id: 'emp-1' } }, // salary_run_employees
+      { data: { id: RUN_1, status: 'draft' } }, // salary_runs gate
+      { data: { id: 'sre-1', employee_id: EMP_1 } }, // salary_run_employees
       { data: [] }, // no registered claims
     ])
     const response = await POST(createMockRequest(URL, { method: 'POST' }), PARAMS)
@@ -82,7 +86,7 @@ describe('POST /api/salary/runs/[id]/employees/[employeeId]/expense-claims', () 
 
   it('returns 400 once the run has left draft', async () => {
     const { enqueueMany } = authed()
-    enqueueMany([{ data: { id: 'run-1', status: 'approved' } }])
+    enqueueMany([{ data: { id: RUN_1, status: 'approved' } }])
     const response = await POST(createMockRequest(URL, { method: 'POST' }), PARAMS)
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
     expect(status).toBe(400)
@@ -92,8 +96,8 @@ describe('POST /api/salary/runs/[id]/employees/[employeeId]/expense-claims', () 
   it('adds the open claims as linked tax-free lines and returns 201', async () => {
     const { enqueueMany, findCall } = authed()
     enqueueMany([
-      { data: { id: 'run-1', status: 'draft' } },
-      { data: { id: 'sre-1', employee_id: 'emp-1' } },
+      { data: { id: RUN_1, status: 'draft' } },
+      { data: { id: 'sre-1', employee_id: EMP_1 } },
       {
         data: [
           { id: 'c-a', description: 'Kabel', expense_date: '2026-06-01', amount_sek: 250.5, liability_account: '2820' },

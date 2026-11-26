@@ -21,6 +21,7 @@ import { supersededTwins, type TwinCandidate } from '@/lib/cash-accounts/twins'
 import { toError } from '@/lib/errors/to-error'
 import { roundOre } from '@/lib/money'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { readInSlices } from '@/lib/supabase/read-in-slices'
 import { listExpenseClaimsAwaitingPayout } from '@/lib/salary/expense-claim-payout-state'
 import { INBOX_ITEM_DOCUMENT_HOLD, isOpenInboxItem, whereInboxItemOpen, withDocumentHold, type DocumentHoldRow } from '@/lib/documents/inbox-item-state'
 import {
@@ -1303,23 +1304,28 @@ export async function listInvoiceCombinationSuggestions(
         .map((invoice) => invoice.id)
     const customerIds = fullyOpen(true)
     const supplierIds = fullyOpen(false)
+    // In slices (readInSlices): the ids travel in the GET query string, which
+    // the gateway refuses past its limit, and the sets of 200 bank rows can
+    // name every invoice of a pool of up to 499. Unpaged: only an invoice whose
+    // status leaked has such a row. A slice that cannot be read fails the
+    // guard, as the one read did.
     const [paidCustomer, paidSupplier] = await Promise.all([
-      customerIds.length > 0
-        ? supabase
-            .from('invoice_payments')
-            .select('invoice_id')
-            .eq('company_id', companyId)
-            .in('invoice_id', customerIds)
-            .not('journal_entry_id', 'is', null)
-        : Promise.resolve({ data: [], error: null }),
-      supplierIds.length > 0
-        ? supabase
-            .from('supplier_invoice_payments')
-            .select('supplier_invoice_id')
-            .eq('company_id', companyId)
-            .in('supplier_invoice_id', supplierIds)
-            .not('journal_entry_id', 'is', null)
-        : Promise.resolve({ data: [], error: null }),
+      readInSlices<{ invoice_id: string }>(customerIds, (slice) =>
+        supabase
+          .from('invoice_payments')
+          .select('invoice_id')
+          .eq('company_id', companyId)
+          .in('invoice_id', slice)
+          .not('journal_entry_id', 'is', null),
+      ),
+      readInSlices<{ supplier_invoice_id: string }>(supplierIds, (slice) =>
+        supabase
+          .from('supplier_invoice_payments')
+          .select('supplier_invoice_id')
+          .eq('company_id', companyId)
+          .in('supplier_invoice_id', slice)
+          .not('journal_entry_id', 'is', null),
+      ),
     ])
     const guardError = paidCustomer.error ?? paidSupplier.error
     if (guardError) {

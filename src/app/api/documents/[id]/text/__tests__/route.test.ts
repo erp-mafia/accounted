@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { parseJsonResponse, createQueuedMockSupabase } from '@/tests/helpers'
 
-const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, reset, calls } = createQueuedMockSupabase()
 
 vi.mock('@/lib/auth/require-auth', () => ({ requireAuth: vi.fn() }))
 vi.mock('@/lib/company/context', () => ({ getActiveCompanyId: vi.fn() }))
@@ -28,6 +28,16 @@ describe('GET /api/documents/[id]/text', () => {
   it('is 404 for a document that is not the company\'s', async () => {
     enqueue({ data: null })
     expect((await parseJsonResponse(await call())).status).toBe(404)
+    expect(ensureDocumentRead).not.toHaveBeenCalled()
+  })
+
+  it('is 404 for an id that is not a uuid, before any query', async () => {
+    // Postgres refused `new` in the document filter, and the route answered 500.
+    const response = await GET(new Request('http://localhost/api/documents/new/text'), { params: Promise.resolve({ id: 'new' }) } as never)
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+    expect(status).toBe(404)
+    expect(body.error.code).toBe('DOC_NOT_FOUND')
+    expect(calls).toEqual([])
     expect(ensureDocumentRead).not.toHaveBeenCalled()
   })
 

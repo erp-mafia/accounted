@@ -123,6 +123,7 @@ describe('GET /api/v1/companies/:companyId/employees/:id/worked-days', () => {
       start_time: '22:00:00',
       end_time: '06:00:00',
       notes: null,
+      carried_to_run_id: null,
       created_at: SAMPLE_DAY.created_at,
       updated_at: SAMPLE_DAY.updated_at,
     })
@@ -251,7 +252,8 @@ describe('PUT /api/v1/companies/:companyId/employees/:id/worked-days', () => {
       (c) => c.table === 'salary_worked_days' && c.method === 'upsert',
     )
     expect(writes).toHaveLength(1)
-    expect(supabaseMock.tables().filter((t) => t === 'salary_worked_days')).toHaveLength(1)
+    // The register lock reads the days' carry first, then the one write.
+    expect(supabaseMock.tables().filter((t) => t === 'salary_worked_days')).toHaveLength(2)
     const [rows, options] = writes[0].args as [Array<Record<string, unknown>>, { onConflict: string }]
     expect(options.onConflict).toBe('employee_id,work_date')
     expect(rows).toHaveLength(2)
@@ -264,6 +266,7 @@ describe('PUT /api/v1/companies/:companyId/employees/:id/worked-days', () => {
       end_time: '06:00',
       notes: null,
       salary_run_employee_id: null,
+      carried_to_run_id: null,
     })
     expect(rows[1]).toMatchObject({ work_date: '2026-03-03', hours: 4, start_time: null, end_time: null, notes: 'Halvdag' })
   })
@@ -339,14 +342,17 @@ describe('PUT /api/v1/companies/:companyId/employees/:id/worked-days', () => {
       createTableMockSupabase({
         company_members: OWNER_MEMBERSHIP,
         employees: { data: { id: EMPLOYEE_ID }, error: null },
-        salary_worked_days: {
-          data: null,
-          error: {
-            code: '23514',
-            message:
-              'Total tid (arbete + frånvaro) för 2026-03-02 får inte överstiga 24 timmar (försökte boka 20, befintligt 8)',
+        salary_worked_days: [
+          { data: [], error: null }, // the register lock: nothing registered on the days
+          {
+            data: null,
+            error: {
+              code: '23514',
+              message:
+                'Total tid (arbete + frånvaro) för 2026-03-02 får inte överstiga 24 timmar (försökte boka 20, befintligt 8)',
+            },
           },
-        },
+        ],
       }).supabase,
     )
 
@@ -383,8 +389,10 @@ describe('PUT /api/v1/companies/:companyId/employees/:id/worked-days', () => {
       deviation_period_start: '2026-03-01',
       deviation_period_end: '2026-03-31',
       locked_dates: ['2026-03-02', '2026-03-03'],
+      settled: true,
+      reason: 'late_day_needs_later_run',
     })
-    expect(supabaseMock.tables()).not.toContain('salary_worked_days')
+    expect(supabaseMock.findCall('salary_worked_days', 'upsert')).toBeUndefined()
   })
 
   it('returns 404 EMPLOYEE_NOT_FOUND without writing', async () => {
@@ -426,6 +434,7 @@ describe('PUT /api/v1/companies/:companyId/employees/:id/worked-days', () => {
       start_time: '22:00',
       end_time: '06:00',
       notes: null,
+      carried_to_run_id: null,
     })
     expect(body.data.preview.days[1]).toEqual({
       work_date: '2026-03-03',
@@ -433,8 +442,9 @@ describe('PUT /api/v1/companies/:companyId/employees/:id/worked-days', () => {
       start_time: null,
       end_time: null,
       notes: 'Halvdag',
+      carried_to_run_id: null,
     })
-    expect(supabaseMock.tables()).not.toContain('salary_worked_days')
+    expect(supabaseMock.findCall('salary_worked_days', 'upsert')).toBeUndefined()
   })
 
   it('forces TEST KEYS into dry-run on PUT', async () => {
@@ -452,7 +462,7 @@ describe('PUT /api/v1/companies/:companyId/employees/:id/worked-days', () => {
 
     expect(res.status).toBe(200)
     expect(res.headers.get('X-Dry-Run')).toBe('true')
-    expect(supabaseMock.tables()).not.toContain('salary_worked_days')
+    expect(supabaseMock.findCall('salary_worked_days', 'upsert')).toBeUndefined()
   })
 
   it('rejects keys without payroll:write scope', async () => {

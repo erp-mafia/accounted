@@ -25,6 +25,9 @@ import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/accou
 import { accountClass } from '@/lib/invariants/account-number'
 import { VAT_OUTPUT_ACCOUNTS } from '@/lib/reports/vat-declaration'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { ID_READ_CHUNK } from '@/lib/supabase/read-in-slices'
+import { chunk } from '@/lib/utils'
 
 export type LinkRotRutPayoutVoucherErrorCode =
   | 'ROT_RUT_REQUEST_NOT_FOUND'
@@ -214,30 +217,46 @@ export async function listRotRutPayoutVoucherCandidates(
   ]
   if (ids.length === 0) return { data: [], error: null }
 
-  const [{ data: entries, error: entryError }, { data: used, error: usedError }] = await Promise.all([
-    supabase
-      .from('journal_entries')
-      .select(
-        'id, entry_date, voucher_series, voucher_number, description, source_type, lines:journal_entry_lines(account_number, debit_amount, credit_amount)',
-      )
-      .eq('company_id', companyId)
-      .eq('status', 'posted')
-      .is('reversed_by_id', null)
-      .in('id', ids),
-    supabase
-      .from('rot_rut_payout_requests')
-      .select('settlement_journal_entry_id')
-      .eq('company_id', companyId)
-      .in('settlement_journal_entry_id', ids),
-  ])
-  if (entryError) return { data: [], error: entryError }
-  if (usedError) return { data: [], error: usedError }
+  // In slices of ID_READ_CHUNK: every verifikat since the begäran that
+  // credits 1513 (and, under kontantmetoden, every bank debit of exactly the
+  // expected payout) is read, with no cap before the cut below, and the ids
+  // travel in the GET query string, which the gateway refuses past its limit.
+  const entries: CandidateEntryRow[] = []
+  const usedIds = new Set<string | null>()
+  for (const slice of chunk(ids, ID_READ_CHUNK)) {
+    const [{ data: entryRows, error: entryError }, used] = await Promise.all([
+      supabase
+        .from('journal_entries')
+        .select(
+          'id, entry_date, voucher_series, voucher_number, description, source_type, lines:journal_entry_lines(account_number, debit_amount, credit_amount)',
+        )
+        .eq('company_id', companyId)
+        .eq('status', 'posted')
+        .is('reversed_by_id', null)
+        .in('id', slice),
+      // Paged: one verifikat can settle several begäran, so a slice can pass
+      // PostgREST's 1000 rows, and a used verifikat left unread would be
+      // offered again.
+      fetchAllRows<{ settlement_journal_entry_id: string | null }>(({ from, to }) =>
+        supabase
+          .from('rot_rut_payout_requests')
+          .select('settlement_journal_entry_id')
+          .eq('company_id', companyId)
+          .in('settlement_journal_entry_id', slice)
+          .order('id', { ascending: true })
+          .range(from, to),
+      ).then(
+        (rows) => ({ rows, error: null }),
+        (error: unknown) => ({ rows: [], error }),
+      ),
+    ])
+    if (entryError) return { data: [], error: entryError }
+    if (used.error) return { data: [], error: used.error }
+    entries.push(...((entryRows ?? []) as CandidateEntryRow[]))
+    for (const r of used.rows) usedIds.add(r.settlement_journal_entry_id)
+  }
 
-  const usedIds = new Set(
-    ((used ?? []) as Array<{ settlement_journal_entry_id: string | null }>).map((r) => r.settlement_journal_entry_id),
-  )
-
-  const candidates = ((entries ?? []) as CandidateEntryRow[])
+  const candidates = entries
     .filter((entry) => !usedIds.has(entry.id) && !['storno', 'opening_balance'].includes(entry.source_type))
     .map((entry) => {
       let bank = 0

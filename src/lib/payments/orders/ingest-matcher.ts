@@ -14,8 +14,14 @@
  * The debit of an order without an invoice (skattekonto, salary) only links
  * the order (findLinkableOrderForDebit, linkOrderToDebit): the row is booked
  * the way it always is, so the pass answers 'none' and the matchers after it
- * and the mapping rule still run on it. A link that fails here (a client
- * that may not write orders) is made by the status sync's sweep.
+ * and the mapping rule still run on it. A link from a bank-feed debit that
+ * fails here is made by the status sync's sweep.
+ *
+ * The batch's client may be a person's session (a poll, a file import),
+ * which may only read payment orders: the booking runs on it, and for a
+ * debit from a bank feed the order's link is written by auto-settle's own
+ * service writer (orderWriter). A debit from a file the person uploaded
+ * links with their own client, as before.
  */
 import type { IngestBatch, IngestMatcher } from '@/lib/transactions/ingest-matcher'
 import type { RawTransaction, Transaction } from '@/types'

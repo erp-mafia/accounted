@@ -55,7 +55,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     return NextResponse.json({ data: { success: true } })
   },
-  { requireWrite: true },
+  { requireWrite: true, uuidParams: { id: 'NOT_FOUND' } },
 )
 
 export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
@@ -78,5 +78,5 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     return NextResponse.json({ data: { success: true } })
   },
-  { requireWrite: true },
+  { requireWrite: true, uuidParams: { id: 'NOT_FOUND' } },
 )

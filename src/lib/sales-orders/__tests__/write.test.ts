@@ -292,12 +292,29 @@ describe('updateSalesOrder', () => {
       customer_vat_validated_snapshot: false,
     })
     // Omitted inputs stay undefined so PostgREST leaves the columns alone.
-    for (const key of ['customer_id', 'currency', 'order_date', 'your_reference', 'our_reference', 'default_dimensions']) {
+    for (const key of ['customer_id', 'currency', 'order_date', 'your_reference', 'our_reference', 'invoice_marking', 'default_dimensions']) {
       expect(headerUpdate).toHaveProperty(key)
       expect(headerUpdate[key]).toBeUndefined()
     }
     expect(findCall('sales_order_items', 'update')).toBeUndefined()
     expect(findCall('sales_order_items', 'insert')).toBeUndefined()
+  })
+
+  it("writes the order's Märkning, and null clears it", async () => {
+    for (const marking of ['PO-4711', null]) {
+      reset()
+      enqueue({ data: makeSalesOrder({ status: 'confirmed', invoice_marking: 'PO-1000' }) })
+      enqueue({ data: [] })
+      enqueue({ data: makeOrderCustomer() })
+      enqueue({ data: null }) // header update
+      enqueue({ data: makeSalesOrder({ status: 'confirmed', invoice_marking: marking }) })
+      enqueue({ data: [] })
+
+      const result = await updateSalesOrder(sb, { companyId: IDS.company, orderId: IDS.order, input: { invoice_marking: marking } })
+
+      expect(result.ok).toBe(true)
+      expect(findCall('sales_orders', 'update')![0]).toMatchObject({ invoice_marking: marking })
+    }
   })
 
   it('replaces lines: updates kept lines by id, inserts new ones, deletes omitted ones, recomputes totals', async () => {
@@ -449,6 +466,26 @@ describe('createSalesOrder', () => {
       p_order_id: IDS.order,
     })
     expect(findCalls('sales_orders', 'eq')).toContainEqual(['id', IDS.order])
+    // No Märkning stated: the order has none, and its invoices take the card's.
+    expect(findCall('sales_orders', 'insert')![0]).toMatchObject({ invoice_marking: null })
+  })
+
+  it("stores the Märkning stated for the order", async () => {
+    enqueue({ data: makeOrderCustomer() })
+    enqueue({ data: { id: IDS.order } }) // header insert
+    enqueue({ data: null }) // items insert
+    enqueue({ data: 'OR-1' }) // generate_sales_order_number
+    enqueue({ data: makeSalesOrder({ status: 'draft', order_number: 'OR-1', invoice_marking: 'PO-4711' }) })
+    enqueue({ data: [] })
+
+    const result = await createSalesOrder(sb, {
+      companyId: IDS.company,
+      userId: IDS.user,
+      input: { customer_id: IDS.customer, invoice_marking: 'PO-4711', items: [baseLine] },
+    })
+
+    expect(result.ok).toBe(true)
+    expect(findCall('sales_orders', 'insert')![0]).toMatchObject({ invoice_marking: 'PO-4711' })
   })
 
   it('rolls the header back when the line insert fails', async () => {

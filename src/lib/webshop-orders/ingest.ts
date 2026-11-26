@@ -84,6 +84,10 @@ type ExistingRow = Pick<
   | 'customer_email'
   | 'customer_orgnr'
   | 'customer_country'
+  | 'customer_address_line1'
+  | 'customer_address_line2'
+  | 'customer_postal_code'
+  | 'customer_city'
   | 'ships_nothing'
   | 'vat_breakdown'
   | 'line_items'
@@ -279,7 +283,7 @@ export async function upsertWebshopOrders(
     const { data: existingData, error: existingError } = await supabase
       .from('webshop_orders')
       .select(
-        'id, external_id, journal_entry_id, invoice_id, manually_booked_at, legacy_transaction_id, remote_changed_after_freeze, total, total_tax, total_sek, exchange_rate, currency, order_date, paid_date, is_paid, payment_method, payment_method_title, gateway_reference, order_number, status, refunded_total, store_label, connection_id, customer_name, customer_company, customer_email, customer_orgnr, customer_country, ships_nothing, vat_breakdown, line_items',
+        'id, external_id, journal_entry_id, invoice_id, manually_booked_at, legacy_transaction_id, remote_changed_after_freeze, total, total_tax, total_sek, exchange_rate, currency, order_date, paid_date, is_paid, payment_method, payment_method_title, gateway_reference, order_number, status, refunded_total, store_label, connection_id, customer_name, customer_company, customer_email, customer_orgnr, customer_country, customer_address_line1, customer_address_line2, customer_postal_code, customer_city, ships_nothing, vat_breakdown, line_items',
       )
       .eq('company_id', companyId)
       .in('external_id', lookupIds)
@@ -347,6 +351,10 @@ export async function upsertWebshopOrders(
           customer_email: incoming.customer_email,
           customer_orgnr: incoming.customer_orgnr,
           customer_country: incoming.customer_country,
+          customer_address_line1: incoming.customer_address_line1 ?? null,
+          customer_address_line2: incoming.customer_address_line2 ?? null,
+          customer_postal_code: incoming.customer_postal_code ?? null,
+          customer_city: incoming.customer_city ?? null,
           ships_nothing: incoming.ships_nothing === true,
           payment_method: incoming.payment_method,
           payment_method_title: incoming.payment_method_title,
@@ -425,6 +433,10 @@ export async function upsertWebshopOrders(
         customer_email: incoming.customer_email,
         customer_orgnr: incoming.customer_orgnr,
         customer_country: incoming.customer_country,
+        customer_address_line1: incoming.customer_address_line1 ?? null,
+        customer_address_line2: incoming.customer_address_line2 ?? null,
+        customer_postal_code: incoming.customer_postal_code ?? null,
+        customer_city: incoming.customer_city ?? null,
         ships_nothing: incoming.ships_nothing === true,
         payment_method: incoming.payment_method,
         payment_method_title: incoming.payment_method_title,
@@ -459,6 +471,10 @@ export async function upsertWebshopOrders(
         (existing.customer_email ?? null) === (incoming.customer_email ?? null) &&
         (existing.customer_orgnr ?? null) === (incoming.customer_orgnr ?? null) &&
         (existing.customer_country ?? null) === (incoming.customer_country ?? null) &&
+        (existing.customer_address_line1 ?? null) === (incoming.customer_address_line1 ?? null) &&
+        (existing.customer_address_line2 ?? null) === (incoming.customer_address_line2 ?? null) &&
+        (existing.customer_postal_code ?? null) === (incoming.customer_postal_code ?? null) &&
+        (existing.customer_city ?? null) === (incoming.customer_city ?? null) &&
         (existing.ships_nothing ?? false) === (incoming.ships_nothing === true) &&
         sameLineItems(existing.line_items, incoming.line_items)
       if (unchanged) {

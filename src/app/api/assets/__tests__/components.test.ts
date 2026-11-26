@@ -3,6 +3,10 @@ import { NextResponse } from 'next/server'
 import { createMockRequest, createQueuedMockSupabase, parseJsonResponse } from '@/tests/helpers'
 import { BookkeepingDatabaseError } from '@/lib/bookkeeping/errors'
 
+// Route path ids are uuids: the route answers its 404 to anything else before it reads.
+const ASSET_1 = '050c55e7-6819-5316-bf30-fea729a331a0'
+const COMP_1 = 'f0bfa90b-a5fa-58e1-8eb7-6def5a235447'
+
 const { supabase, reset } = createQueuedMockSupabase()
 const requireAuthMock = vi.fn()
 const requireWriteMock = vi.fn()
@@ -36,8 +40,8 @@ import { POST as ADD } from '../[id]/components/route'
 import { DELETE, PATCH } from '../[id]/components/[componentId]/route'
 import { POST as REPLACE } from '../[id]/components/[componentId]/replace/route'
 
-const assetParams = { params: Promise.resolve({ id: 'asset-1' }) }
-const componentParams = { params: Promise.resolve({ id: 'asset-1', componentId: 'comp-1' }) }
+const assetParams = { params: Promise.resolve({ id: ASSET_1 }) }
+const componentParams = { params: Promise.resolve({ id: ASSET_1, componentId: COMP_1 }) }
 const PERIOD = '11111111-1111-4111-8111-111111111111'
 const notFound = Object.assign(new Error('ASSET_NOT_FOUND'), { code: 'ASSET_NOT_FOUND' })
 
@@ -61,14 +65,14 @@ describe('POST /api/assets/[id]/components', () => {
 
   it('returns 401 when not authenticated', async () => {
     unauthenticated()
-    const res = await ADD(createMockRequest('/api/assets/asset-1/components', { method: 'POST', body }), assetParams)
+    const res = await ADD(createMockRequest(`/api/assets/${ASSET_1}/components`, { method: 'POST', body }), assetParams)
     expect(res.status).toBe(401)
     expect(addAssetComponent).not.toHaveBeenCalled()
   })
 
   it('returns 400 for a component without a cost', async () => {
     const res = await ADD(
-      createMockRequest('/api/assets/asset-1/components', { method: 'POST', body: { name: 'Hiss', useful_life_months: 300 } }),
+      createMockRequest(`/api/assets/${ASSET_1}/components`, { method: 'POST', body: { name: 'Hiss', useful_life_months: 300 } }),
       assetParams,
     )
     expect(res.status).toBe(400)
@@ -76,15 +80,15 @@ describe('POST /api/assets/[id]/components', () => {
 
   it('returns 404 when the asset is not in the company', async () => {
     vi.mocked(addAssetComponent).mockRejectedValue(notFound)
-    const res = await ADD(createMockRequest('/api/assets/asset-1/components', { method: 'POST', body }), assetParams)
+    const res = await ADD(createMockRequest(`/api/assets/${ASSET_1}/components`, { method: 'POST', body }), assetParams)
     expect(res.status).toBe(404)
   })
 
   it('registers the component for the signed-in user', async () => {
-    vi.mocked(addAssetComponent).mockResolvedValue({ id: 'asset-1' } as never)
-    const res = await ADD(createMockRequest('/api/assets/asset-1/components', { method: 'POST', body }), assetParams)
+    vi.mocked(addAssetComponent).mockResolvedValue({ id: ASSET_1 } as never)
+    const res = await ADD(createMockRequest(`/api/assets/${ASSET_1}/components`, { method: 'POST', body }), assetParams)
     expect(res.status).toBe(200)
-    expect(addAssetComponent).toHaveBeenCalledWith(supabase, 'company-1', 'user-1', 'asset-1', body)
+    expect(addAssetComponent).toHaveBeenCalledWith(supabase, 'company-1', 'user-1', ASSET_1, body)
   })
 })
 
@@ -92,7 +96,7 @@ describe('PATCH and DELETE /api/assets/[id]/components/[componentId]', () => {
   it('returns 401 when not authenticated', async () => {
     unauthenticated()
     const res = await PATCH(
-      createMockRequest('/api/assets/asset-1/components/comp-1', { method: 'PATCH', body: { useful_life_months: 240 } }),
+      createMockRequest(`/api/assets/${ASSET_1}/components/${COMP_1}`, { method: 'PATCH', body: { useful_life_months: 240 } }),
       componentParams,
     )
     expect(res.status).toBe(401)
@@ -100,7 +104,7 @@ describe('PATCH and DELETE /api/assets/[id]/components/[componentId]', () => {
 
   it('returns 400 for a non-integer life', async () => {
     const res = await PATCH(
-      createMockRequest('/api/assets/asset-1/components/comp-1', { method: 'PATCH', body: { useful_life_months: 2.5 } }),
+      createMockRequest(`/api/assets/${ASSET_1}/components/${COMP_1}`, { method: 'PATCH', body: { useful_life_months: 2.5 } }),
       componentParams,
     )
     expect(res.status).toBe(400)
@@ -113,7 +117,7 @@ describe('PATCH and DELETE /api/assets/[id]/components/[componentId]', () => {
     )
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
       await PATCH(
-        createMockRequest('/api/assets/asset-1/components/comp-1', { method: 'PATCH', body: { cost: 1 } }),
+        createMockRequest(`/api/assets/${ASSET_1}/components/${COMP_1}`, { method: 'PATCH', body: { cost: 1 } }),
         componentParams,
       ),
     )
@@ -122,22 +126,41 @@ describe('PATCH and DELETE /api/assets/[id]/components/[componentId]', () => {
   })
 
   it('changes the component', async () => {
-    vi.mocked(updateAssetComponent).mockResolvedValue({ id: 'asset-1' } as never)
+    vi.mocked(updateAssetComponent).mockResolvedValue({ id: ASSET_1 } as never)
     const res = await PATCH(
-      createMockRequest('/api/assets/asset-1/components/comp-1', { method: 'PATCH', body: { useful_life_months: 240 } }),
+      createMockRequest(`/api/assets/${ASSET_1}/components/${COMP_1}`, { method: 'PATCH', body: { useful_life_months: 240 } }),
       componentParams,
     )
     expect(res.status).toBe(200)
-    expect(updateAssetComponent).toHaveBeenCalledWith(supabase, 'company-1', 'asset-1', 'comp-1', { useful_life_months: 240 })
+    expect(updateAssetComponent).toHaveBeenCalledWith(supabase, 'company-1', ASSET_1, COMP_1, { useful_life_months: 240 })
   })
 
   it('removes a component, 404 when it is unknown', async () => {
-    vi.mocked(deleteAssetComponent).mockResolvedValueOnce({ id: 'asset-1' } as never)
-    expect((await DELETE(createMockRequest('/api/assets/asset-1/components/comp-1', { method: 'DELETE' }), componentParams)).status).toBe(200)
+    vi.mocked(deleteAssetComponent).mockResolvedValueOnce({ id: ASSET_1 } as never)
+    expect((await DELETE(createMockRequest(`/api/assets/${ASSET_1}/components/${COMP_1}`, { method: 'DELETE' }), componentParams)).status).toBe(200)
     vi.mocked(deleteAssetComponent).mockRejectedValueOnce(
       Object.assign(new Error('ASSET_COMPONENT_NOT_FOUND'), { code: 'ASSET_COMPONENT_NOT_FOUND' }),
     )
-    expect((await DELETE(createMockRequest('/api/assets/asset-1/components/comp-1', { method: 'DELETE' }), componentParams)).status).toBe(404)
+    expect((await DELETE(createMockRequest(`/api/assets/${ASSET_1}/components/${COMP_1}`, { method: 'DELETE' }), componentParams)).status).toBe(404)
+  })
+
+  it('answers 404 for an asset or a component id that is not a uuid, before the service reads', async () => {
+    // Postgres refused `new` in the uuid filter, and both methods answered 500.
+    const badAsset = await DELETE(
+      createMockRequest(`/api/assets/new/components/${COMP_1}`, { method: 'DELETE' }),
+      { params: Promise.resolve({ id: 'new', componentId: COMP_1 }) },
+    )
+    const badComponent = await PATCH(
+      createMockRequest(`/api/assets/${ASSET_1}/components/new`, { method: 'PATCH', body: { useful_life_months: 240 } }),
+      { params: Promise.resolve({ id: ASSET_1, componentId: 'new' }) },
+    )
+
+    expect(badAsset.status).toBe(404)
+    expect((await parseJsonResponse<{ error: { code: string } }>(badAsset)).body.error.code).toBe('ASSET_NOT_FOUND')
+    expect(badComponent.status).toBe(404)
+    expect((await parseJsonResponse<{ error: { code: string } }>(badComponent)).body.error.code).toBe('ASSET_COMPONENT_NOT_FOUND')
+    expect(deleteAssetComponent).not.toHaveBeenCalled()
+    expect(updateAssetComponent).not.toHaveBeenCalled()
   })
 })
 
@@ -210,7 +233,7 @@ describe('POST /api/assets/[id]/components/[componentId]/replace', () => {
 
   it('posts the replacement', async () => {
     vi.mocked(replaceAssetComponent).mockResolvedValue({
-      asset: { id: 'asset-1' },
+      asset: { id: ASSET_1 },
       entry: { id: 'je-1' },
       newComponentId: 'comp-2',
       plan: {},
@@ -220,6 +243,6 @@ describe('POST /api/assets/[id]/components/[componentId]/replace', () => {
     )
     expect(status).toBe(200)
     expect(json.data).toMatchObject({ journal_entry_id: 'je-1', new_component_id: 'comp-2' })
-    expect(replaceAssetComponent).toHaveBeenCalledWith(supabase, 'company-1', 'user-1', 'asset-1', 'comp-1', body)
+    expect(replaceAssetComponent).toHaveBeenCalledWith(supabase, 'company-1', 'user-1', ASSET_1, COMP_1, body)
   })
 })

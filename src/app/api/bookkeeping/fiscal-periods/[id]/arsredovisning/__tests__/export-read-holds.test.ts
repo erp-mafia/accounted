@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 
+// Route path ids are uuids: the route answers its 404 to anything else before it reads.
+const PERIOD_1 = '967b285e-2dcb-5661-91f6-68a799845858'
+
 const state = vi.hoisted(() => ({ supabase: null as unknown }))
 vi.mock('@/lib/auth/require-auth', () => ({
   requireAuth: vi.fn(async () => ({ user: { id: 'user-1' }, supabase: state.supabase })),
@@ -32,7 +35,7 @@ import { GET as pdf } from '../pdf/route'
 import { GET as ixbrl } from '../ixbrl/route'
 import { POST as createVersion } from '../versions/route'
 
-const params = { params: Promise.resolve({ id: 'period-1' }) }
+const params = { params: Promise.resolve({ id: PERIOD_1 }) }
 const report = { accounting_framework: 'k2', fiscal_period: { period_end: '2025-12-31' } }
 const model = {
   report,
@@ -43,7 +46,7 @@ const input = { period: { end: '2025-12-31' } }
 const version = { id: 'version-1', summary: { status: 'signed' }, report_data: report }
 
 function request(path: string, action?: string) {
-  return new Request(`http://localhost/api/bookkeeping/fiscal-periods/period-1/arsredovisning/${path}`, action ? {
+  return new Request(`http://localhost/api/bookkeeping/fiscal-periods/${PERIOD_1}/arsredovisning/${path}`, action ? {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action }),
   } : undefined)
 }
@@ -140,7 +143,7 @@ describe('annual report import holds', () => {
 
   it.each(['snapshot', 'finalize'])('blocks %s before building or persisting a version', async action => {
     const mock = setup(true)
-    mock.enqueue({ data: { id: 'period-1' } })
+    mock.enqueue({ data: { id: PERIOD_1 } })
     const response = await createVersion(request('versions', action), params)
     expect(response.status).toBe(409)
     expect(buildCanonicalAnnualReport).not.toHaveBeenCalled()
@@ -149,7 +152,7 @@ describe('annual report import holds', () => {
 
   it.each(['snapshot', 'finalize'])('verifies the complete read before persisting a frozen %s', async action => {
     const mock = setup()
-    mock.enqueue({ data: { id: 'period-1' } })
+    mock.enqueue({ data: { id: PERIOD_1 } })
     vi.mocked(buildCanonicalAnnualReport).mockImplementation(async () => {
       expect(mock.isActive()).toBe(true)
       mock.events.push('build')
@@ -169,7 +172,7 @@ describe('annual report import holds', () => {
 
   it.each(['snapshot', 'finalize'])('never persists %s when the model read outlives its lease', async action => {
     const mock = setup()
-    mock.enqueue({ data: { id: 'period-1' } })
+    mock.enqueue({ data: { id: PERIOD_1 } })
     mock.supabase.rpc.mockResolvedValueOnce({ data: 'lease-1', error: null })
       .mockResolvedValueOnce({ data: null, error: { message: 'SIE read lease expired' } })
       .mockResolvedValueOnce({ data: null, error: null })

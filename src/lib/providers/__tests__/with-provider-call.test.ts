@@ -1,3 +1,5 @@
+import http from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { describe, it, expect } from 'vitest'
 import {
   classifyProviderError,
@@ -13,6 +15,10 @@ import { FortnoxApiError, fortnoxApiErrorCode } from '../fortnox/client'
 import { BokioApiError } from '../bokio/client'
 import { VismaApiError } from '../visma/client'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { TimeoutError } from '@/lib/http/fetch-with-timeout'
+import { ExecutionBudgetExceeded } from '@/lib/http/execution-budget'
 
 /**
  * Locks the classification of provider-client failures into structured codes.
@@ -149,6 +155,45 @@ describe('classifyProviderError', () => {
     expect(classifyProviderError(new Error('boom'))).toBeNull()
     expect(classifyProviderError('not an error')).toBeNull()
   })
+
+  // A provider that did not answer before the request's time limit: what
+  // fetch rejects with under AbortSignal.timeout (every provider client), the
+  // TimeoutError fetchWithTimeout throws for the token endpoints, and the
+  // AbortError isTimeoutError has always read as one. It had no class, so the
+  // migration job stored MIGRATION_RETRY and the user read "the record could
+  // not be completed" (#3137).
+  it('maps a request that timed out to PROVIDER_TIMEOUT', () => {
+    expect(classifyProviderError(new DOMException('The operation was aborted due to timeout', 'TimeoutError'))).toBe('PROVIDER_TIMEOUT')
+    expect(classifyProviderError(new TimeoutError('Visma token refresh timed out after 10000ms'))).toBe('PROVIDER_TIMEOUT')
+    expect(classifyProviderError(new DOMException('This operation was aborted', 'AbortError'))).toBe('PROVIDER_TIMEOUT')
+    // A connection that never opened is still unreachable, not slow.
+    expect(classifyProviderError(new TypeError('fetch failed'))).toBe('PROVIDER_UNREACHABLE')
+    // The provider answered: its status decides, whatever the wording.
+    expect(classifyProviderError(vismaError(504, 'Gateway timeout'))).toBe('PROVIDER_UPSTREAM_ERROR')
+  })
+
+  it('leaves the caller\'s own deadline unclassified: it is a deferral, not the provider', () => {
+    expect(classifyProviderError(new ExecutionBudgetExceeded('migration-list'))).toBeNull()
+  })
+
+  it('reads the error a real fetch rejects with when its time limit runs out', async () => {
+    // A server that takes the request and never answers, as a provider did
+    // on a register page: the runtime builds the error, not this test.
+    const silent = http.createServer(() => {})
+    await new Promise<void>((resolve) => silent.listen(0, '127.0.0.1', resolve))
+    try {
+      const { port } = silent.address() as AddressInfo
+      const error = await fetch(`http://127.0.0.1:${port}/`, { signal: AbortSignal.timeout(50) }).then(
+        () => null,
+        (rejected: unknown) => rejected,
+      )
+      expect(error).toBeInstanceOf(Error)
+      expect(classifyProviderError(error)).toBe('PROVIDER_TIMEOUT')
+    } finally {
+      silent.closeAllConnections()
+      await new Promise((resolve) => silent.close(resolve))
+    }
+  })
 })
 
 /**
@@ -240,6 +285,7 @@ describe('structured error registry wiring', () => {
       BOKIO_PLAN_NO_API: true,
       PROVIDER_RATE_LIMITED: true,
       PROVIDER_UNREACHABLE: true,
+      PROVIDER_TIMEOUT: true,
       PROVIDER_UPSTREAM_ERROR: true,
       PROVIDER_CONFIGURATION_ERROR: true,
     }
@@ -249,6 +295,19 @@ describe('structured error registry wiring', () => {
       expect(entry!.message_sv).toBeTruthy()
       expect(entry!.message_en).toBeTruthy()
     }
+  })
+
+  it('answers a timeout with a sentence that says the provider was slow, in Swedish and English', async () => {
+    // A door answers a failed provider call with its classified code
+    // (providerFailureResponse), and the toast reads that envelope. A 502
+    // like the other provider failures: a 504 is the platform's own answer
+    // for a function that ran out of time.
+    const code = classifyProviderError(new DOMException('The operation was aborted due to timeout', 'TimeoutError'))!
+    const res = errorResponseFromCode(code, { error: () => {}, warn: () => {} })
+    expect(res.status).toBe(502)
+    const body = await res.json()
+    expect(getErrorMessage(body)).toBe('Leverantören svarade inte i tid. Försök igen om en stund.')
+    expect(getErrorMessage(body, { locale: 'en' })).toBe('The provider did not answer in time. Try again in a moment.')
   })
 })
 
@@ -282,6 +341,7 @@ describe('isProviderRefusal', () => {
   it.each([
     ['a rate limit', new VismaApiError('x', 429)],
     ['a provider outage', new VismaApiError('x', 503)],
+    ['a request that timed out', new DOMException('The operation was aborted due to timeout', 'TimeoutError')],
     ['one missing invoice', new VismaApiError('x', 404)],
     ['a Fortnox 400 that refuses nothing', new FortnoxApiError('x', 400, '{"ErrorInformation":{"message":"Ogiltigt datum"}}')],
     ['anything else', new Error('boom')],

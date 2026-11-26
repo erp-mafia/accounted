@@ -372,6 +372,82 @@ describe('upsertWebshopOrders', () => {
     })
   })
 
+  describe('billing address', () => {
+    const address = {
+      customer_address_line1: 'Storgatan 1',
+      customer_address_line2: 'Lgh 1102',
+      customer_postal_code: '111 22',
+      customer_city: 'Stockholm',
+    }
+    const noAddress = {
+      customer_address_line1: null,
+      customer_address_line2: null,
+      customer_postal_code: null,
+      customer_city: null,
+    }
+
+    it('stores it on insert, null when the platform does not send it', async () => {
+      mock.enqueueMany([
+        { data: [] },
+        { data: [] },
+        {
+          data: [
+            { id: 'new-1', external_id: 'a' },
+            { id: 'new-2', external_id: 'b' },
+          ],
+        },
+      ])
+
+      await upsertWebshopOrders(supabase(), COMPANY, USER, [
+        makeUpsert({ external_id: 'a', ...address }),
+        makeUpsert({ external_id: 'b' }),
+      ])
+
+      const payloads = mock.findCall('webshop_orders', 'insert')![0] as Record<string, unknown>[]
+      expect(payloads[0]).toMatchObject(address)
+      expect(payloads[1]).toMatchObject(noAddress)
+    })
+
+    it('fills it in on an unbooked row synced before the store sent it', async () => {
+      mock.enqueueMany([{ data: [existingRow(noAddress)] }, { data: [] }, { data: null }])
+
+      const result = await upsertWebshopOrders(supabase(), COMPANY, USER, [makeUpsert(address)])
+
+      expect(result).toMatchObject({ updated: 1, unchanged: 0 })
+      const update = mock.findCall('webshop_orders', 'update')![0] as Record<string, unknown>
+      expect(update).toMatchObject(address)
+    })
+
+    it('refreshes a corrected address on an unbooked row', async () => {
+      mock.enqueueMany([{ data: [existingRow(address)] }, { data: [] }, { data: null }])
+
+      const result = await upsertWebshopOrders(supabase(), COMPANY, USER, [
+        makeUpsert({ ...address, customer_address_line1: 'Storgatan 3' }),
+      ])
+
+      expect(result).toMatchObject({ updated: 1, unchanged: 0 })
+      const update = mock.findCall('webshop_orders', 'update')![0] as Record<string, unknown>
+      expect(update.customer_address_line1).toBe('Storgatan 3')
+    })
+
+    it('counts the same address as unchanged', async () => {
+      mock.enqueueMany([{ data: [existingRow(address)] }, { data: [] }])
+
+      const result = await upsertWebshopOrders(supabase(), COMPANY, USER, [makeUpsert(address)])
+
+      expect(result).toMatchObject({ updated: 0, unchanged: 1 })
+    })
+
+    it('leaves a booked row alone, like the other customer fields', async () => {
+      mock.enqueueMany([{ data: [existingRow({ journal_entry_id: 'je-1', ...noAddress })] }, { data: [] }])
+
+      const result = await upsertWebshopOrders(supabase(), COMPANY, USER, [makeUpsert(address)])
+
+      expect(result).toMatchObject({ updated: 0, unchanged: 1 })
+      expect(mock.findCall('webshop_orders', 'update')).toBeUndefined()
+    })
+  })
+
   it('fills in the country on a booked row that has none (crm#1032)', async () => {
     mock.enqueueMany([
       { data: [existingRow({ journal_entry_id: 'je-1', customer_country: null })] },

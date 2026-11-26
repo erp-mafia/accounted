@@ -10,6 +10,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { NextResponse } from 'next/server'
 import { createMockRequest, createQueuedMockSupabase, parseJsonResponse } from '@/tests/helpers'
 
+// Route path ids are uuids: the route answers its 404 to anything else before it reads.
+const ASSET_1 = '050c55e7-6819-5316-bf30-fea729a331a0'
+
 const { supabase, enqueue, reset } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
@@ -50,10 +53,10 @@ const mockDelete = vi.mocked(deleteNeverPostedAsset)
 const mockGetAsset = vi.mocked(getAsset)
 const mockHasPosted = vi.mocked(hasPostedDepreciation)
 const mockList = vi.mocked(listAssets)
-const routeParams = { params: Promise.resolve({ id: 'asset-1' }) }
+const routeParams = { params: Promise.resolve({ id: ASSET_1 }) }
 
 const ASSET = {
-  id: 'asset-1',
+  id: ASSET_1,
   company_id: 'company-1',
   name: 'Testrad',
   acquisition_cost: 12000,
@@ -76,7 +79,7 @@ describe('DELETE /api/assets/[id]', () => {
       error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
     })
 
-    const res = await DELETE(createMockRequest('/api/assets/asset-1', { method: 'DELETE' }), routeParams)
+    const res = await DELETE(createMockRequest(`/api/assets/${ASSET_1}`, { method: 'DELETE' }), routeParams)
 
     expect(res.status).toBe(401)
     expect(mockDelete).not.toHaveBeenCalled()
@@ -86,7 +89,7 @@ describe('DELETE /api/assets/[id]', () => {
     mockDelete.mockRejectedValue(new AssetNotFoundError())
 
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
-      await DELETE(createMockRequest('/api/assets/asset-1', { method: 'DELETE' }), routeParams),
+      await DELETE(createMockRequest(`/api/assets/${ASSET_1}`, { method: 'DELETE' }), routeParams),
     )
 
     expect(status).toBe(404)
@@ -98,7 +101,7 @@ describe('DELETE /api/assets/[id]', () => {
 
     const { status, body } = await parseJsonResponse<{
       error: { code: string; message: string; message_en: string }
-    }>(await DELETE(createMockRequest('/api/assets/asset-1', { method: 'DELETE' }), routeParams))
+    }>(await DELETE(createMockRequest(`/api/assets/${ASSET_1}`, { method: 'DELETE' }), routeParams))
 
     expect(status).toBe(409)
     expect(body.error.code).toBe('ASSET_DELETE_BLOCKED')
@@ -111,7 +114,7 @@ describe('DELETE /api/assets/[id]', () => {
     mockDelete.mockRejectedValue(new AssetDeleteBlockedError('disposed'))
 
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
-      await DELETE(createMockRequest('/api/assets/asset-1', { method: 'DELETE' }), routeParams),
+      await DELETE(createMockRequest(`/api/assets/${ASSET_1}`, { method: 'DELETE' }), routeParams),
     )
 
     expect(status).toBe(409)
@@ -122,12 +125,12 @@ describe('DELETE /api/assets/[id]', () => {
     mockDelete.mockResolvedValue(ASSET as never)
 
     const { status, body } = await parseJsonResponse<{ data: { id: string; deleted: boolean } }>(
-      await DELETE(createMockRequest('/api/assets/asset-1', { method: 'DELETE' }), routeParams),
+      await DELETE(createMockRequest(`/api/assets/${ASSET_1}`, { method: 'DELETE' }), routeParams),
     )
 
     expect(status).toBe(200)
-    expect(body.data).toEqual({ id: 'asset-1', deleted: true })
-    expect(mockDelete).toHaveBeenCalledWith(supabase, 'company-1', 'asset-1')
+    expect(body.data).toEqual({ id: ASSET_1, deleted: true })
+    expect(mockDelete).toHaveBeenCalledWith(supabase, 'company-1', ASSET_1)
   })
 })
 
@@ -159,13 +162,13 @@ describe('deletable annotation', () => {
 
     const { status, body } = await parseJsonResponse<{
       data: { id: string; has_posted_depreciation: boolean; deletable: boolean }
-    }>(await GET(createMockRequest('/api/assets/asset-1'), routeParams))
+    }>(await GET(createMockRequest(`/api/assets/${ASSET_1}`), routeParams))
 
     expect(status).toBe(200)
-    expect(body.data.id).toBe('asset-1')
+    expect(body.data.id).toBe(ASSET_1)
     expect(body.data.has_posted_depreciation).toBe(true)
     expect(body.data.deletable).toBe(false)
-    expect(mockHasPosted).toHaveBeenCalledWith(supabase, 'company-1', 'asset-1')
+    expect(mockHasPosted).toHaveBeenCalledWith(supabase, 'company-1', ASSET_1)
   })
 
   it('GET /api/assets/[id] marks a never-posted row deletable', async () => {
@@ -173,7 +176,7 @@ describe('deletable annotation', () => {
     mockHasPosted.mockResolvedValue(false)
 
     const { body } = await parseJsonResponse<{ data: { deletable: boolean } }>(
-      await GET(createMockRequest('/api/assets/asset-1'), routeParams),
+      await GET(createMockRequest(`/api/assets/${ASSET_1}`), routeParams),
     )
 
     expect(body.data.deletable).toBe(true)

@@ -2,6 +2,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { NextResponse } from 'next/server'
 import { createMockRequest, createQueuedMockSupabase, parseJsonResponse } from '@/tests/helpers'
 
+// Route path ids are uuids: the route answers its 404 to anything else before it reads.
+const PERIOD_1 = '967b285e-2dcb-5661-91f6-68a799845858'
+
 const requireAuthMock = vi.fn()
 const requireWriteMock = vi.fn()
 vi.mock('@/lib/auth/require-auth', () => ({
@@ -17,7 +20,7 @@ vi.mock('@/lib/auth/require-write', () => ({
 
 import { GET, POST } from '../route'
 
-const params = { params: Promise.resolve({ id: 'period-1' }) }
+const params = { params: Promise.resolve({ id: PERIOD_1 }) }
 const validBody = { role: 'Styrelseledamot', signer_name: 'Anna Andersson' }
 
 function setup() {
@@ -66,7 +69,7 @@ describe('annual report signer roster route', () => {
 
   it('returns 409 for a duplicate unbound signer', async () => {
     const { enqueue } = setup()
-    enqueue({ data: { id: 'period-1' }, error: null })
+    enqueue({ data: { id: PERIOD_1 }, error: null })
     enqueue({ data: { id: 'signature-existing' }, error: null })
     const response = await POST(
       createMockRequest('/x', { method: 'POST', body: validBody }),
@@ -77,13 +80,13 @@ describe('annual report signer roster route', () => {
 
   it('creates a new unbound signer roster slot', async () => {
     const { enqueue } = setup()
-    enqueue({ data: { id: 'period-1' }, error: null })
+    enqueue({ data: { id: PERIOD_1 }, error: null })
     enqueue({ data: null, error: null })
     enqueue({
       data: {
         id: 'signature-1',
         company_id: 'company-1',
-        fiscal_period_id: 'period-1',
+        fiscal_period_id: PERIOD_1,
         role: 'Styrelseledamot',
         signer_name: 'Anna Andersson',
         status: 'pending',

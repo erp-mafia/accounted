@@ -19,6 +19,7 @@ import { InkText } from '@/components/onboarding/journey/ink'
 import type { TheaterApi } from '../engines/theater-engine'
 import { Theater, type TheaterLine, type TheaterModelInput } from '../ui/Theater'
 import { Wait } from '../ui/Verdicts'
+import { BooksOnward } from '../ui/BooksOnward'
 import { InsightPanel } from '../ui/InsightPanel'
 import { Pill, Pills } from '../ui/Pills'
 import { OptRow, OptRows, Sentence, Switch } from '../ui/Sentence'
@@ -471,13 +472,21 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
     }
   }
 
+  // The sources arrangement: once every selected year is in, the step says so
+  // and its one way on stands right under the title, over the theater, in
+  // view without scrolling, as on the SIE step (books.css, .is-done).
+  const doneView = flags.sourcesFlow === true && phase === 'imported' && !importError
+  // A provider that hands over no SIE brought registers, not books: the title says only what is true of it.
+  const doneTitle = preview?.sieAvailable === false ? t('provider_done_title') : t('sie_done_title')
+
   /* ── render ──────────────────────────────────────────────────────── */
   return (
-    <div className="bks-host">
+    <div className={doneView ? 'bks-host is-done' : 'bks-host'}>
       <div className="jny-qstep" style={{ textAlign: 'center' }}>
-        <h1 className="jny-qtitle"><InkText text={t('provider_title')} /></h1>
+        <h1 className="jny-qtitle"><InkText text={doneView ? doneTitle : t('provider_title')} /></h1>
         {phase === 'connect' || phase === 'connecting' || phase === 'token' ? <p className="jny-qsub">{t('provider_sub')}</p> : null}
         {error ? <p className="jny-attn">{error}</p> : null}
+        {doneView ? <BooksOnward ctx={ctx} bringIntoView /> : null}
       </div>
 
       {phase === 'connect' ? (
@@ -654,13 +663,7 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
           are ignored by the overlap check) and the opening balance it may
           have written is skipped, not duplicated, on the next run. Years
           that did complete are skipped by the retry, not sent again. */}
-      {phase === 'imported' && !importError ? (
-        <div className="jny-qactions">
-          <Button size="lg" onClick={() => dispatch({ type: 'AFTER_BOOKS', flags })}>
-            {flags.hasBanking ? t('to_bank') : flags.hasSkatteverket ? t('to_skv') : t('to_done')}
-          </Button>
-        </div>
-      ) : null}
+      {phase === 'imported' && !importError && !doneView ? <BooksOnward ctx={ctx} /> : null}
       {phase === 'imported' && importError ? (
         <div className="jny-qactions">
           <Button size="lg" onClick={() => { setShown(0); setTick(0); void runImport() }}>

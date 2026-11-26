@@ -7,6 +7,7 @@ import { mapBokioToSupplierInvoice } from '@/lib/providers/bokio/mapper'
 import { mapBLToSupplierInvoice } from '@/lib/providers/bjornlunden/mapper'
 import { mapVismaToSupplierInvoice } from '@/lib/providers/visma/mapper'
 import { buildSupplierCreditNoteRow, supplierPayableEffectSek } from '@/lib/supplier-invoices/credit-note'
+import { roundOre } from '@/lib/money'
 
 /**
  * Guards the kreditfaktura shape written by mapSalesInvoice.
@@ -353,6 +354,59 @@ describe('mapSalesInvoice: a provider credit note end to end (#2789)', () => {
     expect(net).toBe(invoice.subtotal)
   })
 
+  it('keeps the VAT sign of a negative document whose VAT is positive, so its rows add up to it', () => {
+    // An avtalsfaktura that credits an amount at 6 % and charges fees at 25 %
+    // on the same document. The credit outweighs the fees, so the total is
+    // negative, but the 25 % VAT on the fees outweighs the 6 % VAT on the
+    // credit, so TotalVAT is positive. Taking the header VAT's absolute value
+    // set it against the rows by twice its amount, and the import refused the
+    // invoice as rows that contradict their header.
+    const settlement = {
+      DocumentNumber: '2207', CustomerNumber: '31', CustomerName: 'Kund AB',
+      InvoiceDate: '2026-02-28', DueDate: '2026-03-30', Currency: 'SEK',
+      InvoiceType: 'AGREEMENTINVOICE', ContractReference: 14, Credit: 'false', CreditInvoiceReference: 0,
+      Booked: true, Sent: true, Cancelled: false, VATIncluded: false,
+      Net: -632.21, TotalVAT: 39.15, Gross: -593.06, RoundOff: 0.06, Total: -593, Balance: -593,
+      InvoiceRows: [
+        { RowId: 1, AccountNumber: 3003, Description: 'Kreditering', DeliveredQuantity: '1.00', Unit: 'st', VAT: 6,
+          Price: -1037.9, PriceExcludingVAT: -1037.9, Total: -1037.9, TotalExcludingVAT: -1037.9 },
+        { RowId: 2, AccountNumber: 3001, Description: 'Serviceavgift', DeliveredQuantity: '1.00', Unit: 'st', VAT: 25,
+          Price: 155.69, PriceExcludingVAT: 155.69, Total: 155.69, TotalExcludingVAT: 155.69 },
+        { RowId: 3, AccountNumber: 3001, Description: 'Månadsavgift', DeliveredQuantity: '1.00', Unit: 'st', VAT: 25,
+          Price: 250, PriceExcludingVAT: 250, Total: 250, TotalExcludingVAT: 250 },
+      ],
+    }
+    const { invoice, items } = importRow(mapFortnoxToSalesInvoice(settlement))
+    // The öresavrundning stays in the net, as on every Fortnox invoice; the
+    // VAT is the figure the source booked.
+    expect(invoice).toMatchObject({ status: 'credited', total: -593, subtotal: -632.15, vat_amount: 39.15, vat_rate: null })
+    expect(items.map((item) => [item.quantity, item.unit_price, item.line_total, item.vat_rate, item.vat_amount])).toEqual([
+      [-1, 1037.9, -1037.9, 6, -62.27],
+      [1, 155.69, 155.69, 25, 38.92],
+      [1, 250, 250, 25, 62.5],
+    ])
+    const rowsNet = roundOre(items.reduce((sum, item) => sum + Number(item.line_total), 0))
+    const rowsVat = roundOre(items.reduce((sum, item) => sum + Number(item.vat_amount), 0))
+    expect(rowsVat).toBe(invoice.vat_amount)
+    // Within the öre the migration worker allows between rows and header.
+    expect(Math.abs(rowsNet - Number(invoice.subtotal))).toBeLessThanOrEqual(1)
+    expect(roundOre(Number(invoice.subtotal) + Number(invoice.vat_amount))).toBe(invoice.total)
+  })
+
+  it('reads no direction into a zero total, so a credit note whose net and VAT cancel out stays held back', () => {
+    // Its rows' net is positive, so they read as magnitudes already; flipped
+    // with them, the header would import as the mirror image of the source.
+    // Kept as magnitudes, it disagrees with its rows and the worker refuses it.
+    const zero = { ...fortnoxCredit, Net: 250, TotalVAT: -250, Total: 0, Balance: 0,
+      InvoiceRows: [
+        { RowId: 1, Description: 'Retur vara', DeliveredQuantity: '-2.00', Price: 500, Total: -1000, VAT: 25 },
+        { RowId: 2, Description: 'Avgift', DeliveredQuantity: '1.00', Price: 1250, Total: 1250, VAT: 0 },
+      ] }
+    const { invoice, items } = importRow(mapFortnoxToSalesInvoice(zero))
+    const rowsVat = roundOre(items.reduce((sum, item) => sum + Number(item.vat_amount), 0))
+    expect(Math.abs(rowsVat - Number(invoice.vat_amount))).toBeGreaterThan(1)
+  })
+
   it('keeps the relative sign of the rows when the provider states the credit note in magnitudes', () => {
     // The same document as Bokio or the gateway would state it: credited rows
     // positive, the fee negative, the header a magnitude.
@@ -476,6 +530,25 @@ describe('mapSupplierInvoice: kreditfaktura', () => {
     expect(items.map((item) => [item.quantity, item.unit_price, item.line_total, item.vat_amount]))
       .toEqual([[1, 1200, 1200, 300], [-1, 200, -200, -50]])
     expect(items.reduce((sum, item) => sum + Number(item.line_total), 0)).toBe(invoice.subtotal)
+  })
+
+  it('keeps the rows of a credit note whose VAT has the other sign than its total', () => {
+    // The same normaliser as the sales side, at the DTO: 1 000 credited at
+    // 6 %, 400 charged at 25 %, each row with its rate. The total is negative
+    // and the VAT positive; as magnitudes the credit note is 600 net and -40
+    // VAT, which its rows say too.
+    const line = (id: string, total: number, rate: number) => ({ id, accountNumber: '4010', quantity: total < 0 ? -1 : 1,
+      unitPrice: { value: Math.abs(total), currencyCode: 'SEK' }, lineExtensionAmount: { value: total, currencyCode: 'SEK' },
+      taxPercent: rate, taxAmount: { value: roundOre(total * rate / 100), currencyCode: 'SEK' } })
+    const { items, invoice, rowsMismatch } = mapSupplier({
+      ...supplierDto({ invoiceTypeCode: '381' }),
+      lines: [line('1', -1000, 6), line('2', 400, 25)],
+      taxTotal: { taxAmount: { value: 40, currencyCode: 'SEK' } },
+      legalMonetaryTotal: { lineExtensionAmount: { value: -600, currencyCode: 'SEK' }, payableAmount: { value: -560, currencyCode: 'SEK' } },
+    })
+    expect(rowsMismatch).toBe(false)
+    expect(invoice).toMatchObject({ is_credit_note: true, subtotal: 600, vat_amount: -40, total: 560 })
+    expect(items.map((item) => [item.line_total, item.vat_amount])).toEqual([[1000, 60], [-400, -100]])
   })
 
   it('names the credited invoice in notes and hands the reference to the pairing pass', () => {

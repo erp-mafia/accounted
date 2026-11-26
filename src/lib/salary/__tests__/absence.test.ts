@@ -41,8 +41,41 @@ const REVIEW_RUN_MARCH = {
 let mock: ReturnType<typeof createQueuedMockSupabase>
 let supabase: SupabaseClient
 
-/** The register-lock lookup every write makes right after the employee check. */
-const enqueueNoLockingRuns = () => mock.enqueue({ data: [] })
+/** October 2026 pay month, booked, reading October: its days are settled. */
+const BOOKED_RUN_OCTOBER = {
+  id: 'run-oct',
+  status: 'booked',
+  period_year: 2026,
+  period_month: 10,
+  deviation_period_start: '2026-10-01',
+  deviation_period_end: '2026-10-31',
+  agi_submitted_at: null,
+  corrects_run_id: null,
+}
+
+/** November 2026, a draft: the next run after October. */
+const DRAFT_RUN_NOVEMBER = {
+  id: 'run-nov',
+  status: 'draft',
+  period_year: 2026,
+  period_month: 11,
+  deviation_period_start: '2026-11-01',
+  deviation_period_end: '2026-11-30',
+  agi_submitted_at: null,
+  corrects_run_id: null,
+}
+
+/**
+ * The register-lock lookups every upsert makes right after the employee
+ * check: the company's runs, then the days already registered on the key.
+ */
+const enqueueNoLockingRuns = () => {
+  mock.enqueue({ data: [] })
+  mock.enqueue({ data: [] })
+}
+
+/** The rows a range delete reaches, read before anything else: none. */
+const enqueueNothingRegistered = () => mock.enqueue({ data: [] })
 
 const fromCalls = () =>
   (mock.supabase.from as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0])
@@ -139,7 +172,12 @@ describe('upsertAbsenceRange', () => {
 
     expect(result.ok).toBe(true)
     if (result.ok) expect(result.data.count).toBe(2)
-    expect(fromCalls()).toEqual(['employees', 'salary_runs', 'salary_absence_days'])
+    expect(fromCalls()).toEqual(['employees', 'salary_runs', 'salary_absence_days', 'salary_absence_days'])
+    // A day no paid run read carries to no run.
+    expect(mock.findCall('salary_absence_days', 'upsert')?.[0]).toEqual([
+      expect.objectContaining({ absence_date: '2026-03-02', carried_to_run_id: null }),
+      expect.objectContaining({ absence_date: '2026-03-03', carried_to_run_id: null }),
+    ])
   })
 
   it('dry-run expands without touching salary_absence_days', async () => {
@@ -163,14 +201,17 @@ describe('upsertAbsenceRange', () => {
         absence_date: '2026-03-02',
         absence_type: 'vab',
         hours: 4,
+        carried_to_run_id: null,
       })
     }
-    expect(fromCalls()).toEqual(['employees', 'salary_runs'])
+    expect(fromCalls()).toEqual(['employees', 'salary_runs', 'salary_absence_days'])
+    expect(mock.findCall('salary_absence_days', 'upsert')).toBeUndefined()
   })
 
   it('refuses dates a run in review has already read (SALARY_REGISTER_DATES_LOCKED_BY_RUN) without writing', async () => {
     mock.enqueue({ data: { id: EMPLOYEE_ID } })
     mock.enqueue({ data: [REVIEW_RUN_MARCH] })
+    mock.enqueue({ data: [] })
 
     const result = await upsertAbsenceRange(supabase, {
       companyId: COMPANY_ID,
@@ -191,14 +232,18 @@ describe('upsertAbsenceRange', () => {
         deviation_period_start: '2026-03-01',
         deviation_period_end: '2026-03-31',
         locked_dates: ['2026-03-02', '2026-03-03'],
+        settled: false,
+        reason: 'run_not_settled',
       })
     }
-    expect(fromCalls()).toEqual(['employees', 'salary_runs'])
+    expect(fromCalls()).toEqual(['employees', 'salary_runs', 'salary_absence_days'])
+    expect(mock.findCall('salary_absence_days', 'upsert')).toBeUndefined()
   })
 
   it('reports the lock on a dry run too: that is what the preview is for', async () => {
     mock.enqueue({ data: { id: EMPLOYEE_ID } })
     mock.enqueue({ data: [REVIEW_RUN_MARCH] })
+    mock.enqueue({ data: [] })
 
     const result = await upsertAbsenceRange(supabase, {
       companyId: COMPANY_ID,
@@ -216,6 +261,7 @@ describe('upsertAbsenceRange', () => {
   it('does not lock dates outside every locking window', async () => {
     mock.enqueue({ data: { id: EMPLOYEE_ID } })
     mock.enqueue({ data: [REVIEW_RUN_MARCH] })
+    mock.enqueue({ data: [] })
     mock.enqueue({
       data: [
         { id: '1', absence_date: '2026-04-01', absence_type: 'sick', hours: 8, notes: null, salary_run_employee_id: null, created_at: '', updated_at: '' },
@@ -231,7 +277,7 @@ describe('upsertAbsenceRange', () => {
     })
 
     expect(result.ok).toBe(true)
-    expect(fromCalls()).toEqual(['employees', 'salary_runs', 'salary_absence_days'])
+    expect(fromCalls()).toEqual(['employees', 'salary_runs', 'salary_absence_days', 'salary_absence_days'])
   })
 
   it('maps the 24h-cap trigger (23514) to ABSENCE_HOURS_CONFLICT', async () => {
@@ -352,6 +398,7 @@ describe('upsertAbsenceDay', () => {
   it('refuses a single day a calculated run has already read, without writing', async () => {
     mock.enqueue({ data: { id: EMPLOYEE_ID } })
     mock.enqueue({ data: [REVIEW_RUN_MARCH] })
+    mock.enqueue({ data: [] })
 
     const result = await upsertAbsenceDay(supabase, {
       companyId: COMPANY_ID,
@@ -390,7 +437,8 @@ describe('listAbsenceDays / deleteAbsenceRange', () => {
 
   it('deletes a range and reports the count', async () => {
     mock.enqueue({ data: { id: EMPLOYEE_ID } })
-    enqueueNoLockingRuns()
+    mock.enqueue({ data: [{ absence_date: '2026-03-02', carried_to_run_id: null }] })
+    enqueueNothingRegistered() // the company has no runs
     mock.enqueue({ data: null, count: 3 })
 
     const result = await deleteAbsenceRange(supabase, {
@@ -407,7 +455,7 @@ describe('listAbsenceDays / deleteAbsenceRange', () => {
 
   it('dry-run delete counts without deleting', async () => {
     mock.enqueue({ data: { id: EMPLOYEE_ID } })
-    enqueueNoLockingRuns()
+    enqueueNothingRegistered()
     mock.enqueue({ data: null, count: 2 })
 
     const result = await deleteAbsenceRange(supabase, {
@@ -422,8 +470,15 @@ describe('listAbsenceDays / deleteAbsenceRange', () => {
     if (result.ok) expect(result.data.deleted_count).toBe(2)
   })
 
-  it('refuses a range delete that overlaps a locked window, computed from the range in one query', async () => {
+  it('refuses a range delete when a row in it was read by a calculated run, naming those dates', async () => {
     mock.enqueue({ data: { id: EMPLOYEE_ID } })
+    mock.enqueue({
+      data: [
+        { absence_date: '2026-03-30', carried_to_run_id: null },
+        { absence_date: '2026-03-31', carried_to_run_id: null },
+        { absence_date: '2026-04-01', carried_to_run_id: null },
+      ],
+    })
     mock.enqueue({ data: [REVIEW_RUN_MARCH] })
 
     const result = await deleteAbsenceRange(supabase, {
@@ -442,7 +497,141 @@ describe('listAbsenceDays / deleteAbsenceRange', () => {
         locked_dates: ['2026-03-30', '2026-03-31'],
       })
     }
-    // The register was never read for row counts nor deleted from.
-    expect(fromCalls()).toEqual(['employees', 'salary_runs'])
+    // Nothing was counted or deleted.
+    expect(fromCalls()).toEqual(['employees', 'salary_absence_days', 'salary_runs'])
+    expect(mock.findCall('salary_absence_days', 'delete')).toBeUndefined()
+  })
+
+  it('a range overlapping a locked window with nothing registered there deletes nothing and is not refused', async () => {
+    mock.enqueue({ data: { id: EMPLOYEE_ID } })
+    enqueueNothingRegistered()
+    mock.enqueue({ data: null, count: 0 })
+
+    const result = await deleteAbsenceRange(supabase, {
+      companyId: COMPANY_ID,
+      employeeId: EMPLOYEE_ID,
+      from: '2026-03-30',
+      to: '2026-04-02',
+    })
+
+    expect(result).toEqual({ ok: true, data: { deleted_count: 0 } })
+  })
+
+  it('deletes a late day carried to a draft run although a booked run holds its date', async () => {
+    mock.enqueue({ data: { id: EMPLOYEE_ID } })
+    mock.enqueue({ data: [{ absence_date: '2026-10-19', carried_to_run_id: 'run-nov' }] })
+    mock.enqueue({ data: [BOOKED_RUN_OCTOBER, DRAFT_RUN_NOVEMBER] })
+    mock.enqueue({ data: null, count: 1 })
+
+    const result = await deleteAbsenceRange(supabase, {
+      companyId: COMPANY_ID,
+      employeeId: EMPLOYEE_ID,
+      from: '2026-10-19',
+      to: '2026-10-19',
+      absenceType: 'parental',
+    })
+
+    expect(result).toEqual({ ok: true, data: { deleted_count: 1 } })
+  })
+})
+
+describe('late days (absence known after its run was paid)', () => {
+  it('refuses a new day a booked run read without a later run, and names the run it goes to', async () => {
+    mock.enqueue({ data: { id: EMPLOYEE_ID } })
+    mock.enqueue({ data: [BOOKED_RUN_OCTOBER, DRAFT_RUN_NOVEMBER] })
+    mock.enqueue({ data: [] })
+
+    const result = await upsertAbsenceRange(supabase, {
+      companyId: COMPANY_ID,
+      employeeId: EMPLOYEE_ID,
+      from: '2026-10-19',
+      to: '2026-10-23',
+      absenceType: 'parental',
+    })
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: 'SALARY_REGISTER_DATES_LOCKED_BY_RUN',
+      details: {
+        salary_run_id: 'run-oct',
+        settled: true,
+        reason: 'late_day_needs_later_run',
+        locked_dates: ['2026-10-19', '2026-10-20', '2026-10-21', '2026-10-22', '2026-10-23'],
+        later_salary_run: { salary_run_id: 'run-nov', status: 'draft', period_year: 2026, period_month: 11 },
+      },
+    })
+    expect(mock.findCall('salary_absence_days', 'upsert')).toBeUndefined()
+  })
+
+  it('registers the days on their real dates, carried to the next draft run', async () => {
+    mock.enqueue({ data: { id: EMPLOYEE_ID } })
+    mock.enqueue({ data: [BOOKED_RUN_OCTOBER, DRAFT_RUN_NOVEMBER] })
+    mock.enqueue({ data: [] }) // nothing registered on the days yet
+    mock.enqueue({ data: [{ salary_run_id: 'run-nov', salary_type: 'monthly' }, { salary_run_id: 'run-oct', salary_type: 'monthly' }] }) // on November; October paid the employee monthly
+    mock.enqueue({ data: { salary_calculation_policy: {} } })
+    mock.enqueue({
+      data: [
+        { id: '1', absence_date: '2026-10-29', absence_type: 'parental', hours: 8, notes: null, salary_run_employee_id: null, carried_to_run_id: 'run-nov', created_at: '', updated_at: '' },
+        { id: '2', absence_date: '2026-10-30', absence_type: 'parental', hours: 8, notes: null, salary_run_employee_id: null, carried_to_run_id: 'run-nov', created_at: '', updated_at: '' },
+      ],
+    })
+
+    const result = await upsertAbsenceRange(supabase, {
+      companyId: COMPANY_ID,
+      employeeId: EMPLOYEE_ID,
+      from: '2026-10-29',
+      to: '2026-10-30',
+      absenceType: 'parental',
+      carriedToRunId: 'run-nov',
+    })
+
+    expect(result.ok).toBe(true)
+    expect(mock.findCall('salary_absence_days', 'upsert')?.[0]).toEqual([
+      expect.objectContaining({ absence_date: '2026-10-29', absence_type: 'parental', carried_to_run_id: 'run-nov' }),
+      expect.objectContaining({ absence_date: '2026-10-30', absence_type: 'parental', carried_to_run_id: 'run-nov' }),
+    ])
+  })
+
+  it('previews the late days with the run they go to', async () => {
+    mock.enqueue({ data: { id: EMPLOYEE_ID } })
+    mock.enqueue({ data: [BOOKED_RUN_OCTOBER, DRAFT_RUN_NOVEMBER] })
+    mock.enqueue({ data: [] })
+    mock.enqueue({ data: [{ salary_run_id: 'run-nov', salary_type: 'monthly' }, { salary_run_id: 'run-oct', salary_type: 'monthly' }] })
+    mock.enqueue({ data: { salary_calculation_policy: {} } })
+
+    const result = await upsertAbsenceRange(supabase, {
+      companyId: COMPANY_ID,
+      employeeId: EMPLOYEE_ID,
+      from: '2026-10-30',
+      to: '2026-11-02',
+      absenceType: 'vab',
+      carriedToRunId: 'run-nov',
+      dryRun: true,
+    })
+
+    expect(result.ok && result.data.days).toEqual([
+      { absence_date: '2026-10-30', absence_type: 'vab', hours: 8, carried_to_run_id: 'run-nov' },
+      // November's own day: read by November's window, carried nowhere.
+      { absence_date: '2026-11-02', absence_type: 'vab', hours: 8, carried_to_run_id: null },
+    ])
+    expect(mock.findCall('salary_absence_days', 'upsert')).toBeUndefined()
+  })
+
+  it('a single day keeps the carry it already has', async () => {
+    mock.enqueue({ data: { id: EMPLOYEE_ID } })
+    mock.enqueue({ data: [BOOKED_RUN_OCTOBER, DRAFT_RUN_NOVEMBER] })
+    mock.enqueue({ data: [{ absence_date: '2026-10-30', carried_to_run_id: 'run-nov' }] })
+    mock.enqueue({
+      data: { id: '1', absence_date: '2026-10-30', absence_type: 'parental', hours: 4, notes: null, salary_run_employee_id: null, carried_to_run_id: 'run-nov', created_at: '', updated_at: '' },
+    })
+
+    const result = await upsertAbsenceDay(supabase, {
+      companyId: COMPANY_ID,
+      employeeId: EMPLOYEE_ID,
+      day: { absence_date: '2026-10-30', absence_type: 'parental', hours: 4 },
+    })
+
+    expect(result.ok).toBe(true)
+    expect(mock.findCall('salary_absence_days', 'upsert')?.[0]).toMatchObject({ carried_to_run_id: 'run-nov', hours: 4 })
   })
 })

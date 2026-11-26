@@ -23,7 +23,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string; lineId: st
 
     return NextResponse.json({ data: result.data })
   },
-  { requireWrite: true },
+  { requireWrite: true, uuidParams: { id: 'EMPLOYEE_NOT_FOUND', lineId: 'NOT_FOUND' } },
 )
 
 export const DELETE = withRouteContext<{ params: Promise<{ id: string; lineId: string }> }>(
@@ -42,5 +42,5 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string; lineId: s
 
     return NextResponse.json({ data: result.data })
   },
-  { requireWrite: true },
+  { requireWrite: true, uuidParams: { id: 'EMPLOYEE_NOT_FOUND', lineId: 'NOT_FOUND' } },
 )

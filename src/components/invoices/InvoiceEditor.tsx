@@ -93,6 +93,7 @@ import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-messag
 import { useUnsavedChanges } from '@/lib/hooks/use-unsaved-changes'
 import CustomerForm from '@/components/customers/CustomerForm'
 import CustomerCombobox from '@/components/customers/CustomerCombobox'
+import { EditCustomerDialog } from '@/components/customers/EditCustomerDialog'
 import { BankDetailsSetupForm } from '@/components/invoices/BankDetailsSetupForm'
 import { FirstInvoiceLogoPrompt } from '@/components/invoices/FirstInvoiceLogoPrompt'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
@@ -205,6 +206,7 @@ import { hasRequiredSellerVatNumber } from '@/lib/invoices/seller-vat-number'
 import { invoicePartiesVerdict } from '@/lib/invoices/invoice-parties'
 import { InvoicePartiesNotice } from '@/components/invoices/InvoicePartiesNotice'
 import {
+  cardEditReplans,
   customerCardReference,
   customerChangedForReference,
   planMarkingPrefill,
@@ -778,6 +780,8 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // no-match state; '' when opened from the link below the picker.
   const [createCustomerPrefill, setCreateCustomerPrefill] = useState('')
   const [isCreatingCustomer, setIsCreatingCustomer] = useState(false)
+  // "Redigera kund": the picked customer's card, edited without leaving the invoice.
+  const [isEditCustomerOpen, setIsEditCustomerOpen] = useState(false)
   // The inline "Lägg till betalningsuppgifter" form in the Betalning section.
   const [addingPayee, setAddingPayee] = useState(false)
   // A foreign-currency invoice's account being chosen (chooseForeignPayee).
@@ -910,6 +914,11 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // customer, so its value stands until another one is picked; a new or
   // copied invoice starts on none.
   const referenceCustomerRef = useRef<string | null>(isEditMode ? (initial?.customer_id ?? null) : null)
+  // The picked card as it stood before a save from the editor
+  // (handleCustomerEdited). The customer sync effect reads it once, on the
+  // refresh that save asks for, and fills the invoice again only from the card
+  // fields the save changed.
+  const cardBeforeEditRef = useRef<Customer | null>(null)
 
   // Edit mode: the claim card's property fields are restored from the first
   // line that names the property (ROT or grön teknik: stamped onto every
@@ -1730,6 +1739,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   }, [company?.id, watchDocumentType, isEditMode, initial?.invoice_number])
 
   useEffect(() => {
+    // After a save of the picked card from the editor, this run is the refresh
+    // that save asked for: read the card as it stood before, once.
+    const cardBeforeEdit = cardBeforeEditRef.current
+    cardBeforeEditRef.current = null
     if (watchCustomerId) {
       const customer = customers.find((c) => c.id === watchCustomerId)
       setSelectedCustomer(customer || null)
@@ -1756,7 +1769,11 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           // today + terms. This fill is the second writer of due_date, and the
           // only one that knows a term the date pair cannot show (fakturadatum
           // may be empty here), so it hands that term to the sync baseline.
-          if (customer.default_payment_terms != null) {
+          // After a save of this same card only a changed term moves it: an
+          // unchanged one keeps the invoice's due date, a hand-picked one too.
+          const termsFollow =
+            cardBeforeEdit?.id !== customer.id || cardBeforeEdit.default_payment_terms !== customer.default_payment_terms
+          if (customer.default_payment_terms != null && termsFollow) {
             const fill = planCustomerTermsFill({
               invoiceDate: getValues('invoice_date') || '',
               // A private person's invoice is due within 50 days
@@ -1812,29 +1829,39 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     // changes: this effect also re-runs
     // on a refreshed customer list, which must not refill a field the user
     // emptied, and a saved draft's own customer never replaces its value.
+    // After a save of the picked card each is planned again only when its
+    // card source changed in that save (cardEditReplans).
     // Never for a received självfaktura (no references).
     if (mode === 'self_billed') return
     const customer = watchCustomerId ? customers.find((c) => c.id === watchCustomerId) : null
     if (watchCustomerId && !customer) return
-    if (!customerChangedForReference(referenceCustomerRef.current, watchCustomerId)) return
+    const switched = customerChangedForReference(referenceCustomerRef.current, watchCustomerId)
+    const edited = customer && cardBeforeEdit?.id === customer.id ? cardEditReplans(cardBeforeEdit, customer) : null
+    const planReference = switched || Boolean(edited?.reference)
+    const planMarking = switched || Boolean(edited?.marking)
+    if (!planReference && !planMarking) return
     referenceCustomerRef.current = watchCustomerId || null
-    const current = getValues('your_reference') ?? ''
-    const plan = planYourReferencePrefill({
-      current,
-      prefilled: prefilledReferenceRef.current,
-      customerReference: customerCardReference(customer),
-    })
-    prefilledReferenceRef.current = plan.prefilled
-    if (plan.value !== current) setValue('your_reference', plan.value, { shouldDirty: true })
-    // Märkning from the card's Märkning (crm#1477), by the same rule.
-    const currentMarking = getValues('invoice_marking') ?? ''
-    const markingPlan = planMarkingPrefill({
-      current: currentMarking,
-      prefilled: prefilledMarkingRef.current,
-      customer,
-    })
-    prefilledMarkingRef.current = markingPlan.prefilled
-    if (markingPlan.value !== currentMarking) setValue('invoice_marking', markingPlan.value, { shouldDirty: true })
+    if (planReference) {
+      const current = getValues('your_reference') ?? ''
+      const plan = planYourReferencePrefill({
+        current,
+        prefilled: prefilledReferenceRef.current,
+        customerReference: customerCardReference(customer),
+      })
+      prefilledReferenceRef.current = plan.prefilled
+      if (plan.value !== current) setValue('your_reference', plan.value, { shouldDirty: true })
+    }
+    if (planMarking) {
+      // Märkning from the card's Märkning (crm#1477), by the same rule.
+      const currentMarking = getValues('invoice_marking') ?? ''
+      const markingPlan = planMarkingPrefill({
+        current: currentMarking,
+        prefilled: prefilledMarkingRef.current,
+        customer,
+      })
+      prefilledMarkingRef.current = markingPlan.prefilled
+      if (markingPlan.value !== currentMarking) setValue('invoice_marking', markingPlan.value, { shouldDirty: true })
+    }
   }, [watchCustomerId, customers, setValue, getValues, mode])
 
   // One-click VIES check from the draft (#2749). /api/vat/validate has
@@ -1911,6 +1938,21 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     }
 
     setIsCreatingCustomer(false)
+  }
+
+  // The picked customer's card was saved from the editor. EditCustomerDialog
+  // then refreshes the cached register, and the refreshed row re-runs the
+  // customer sync effect above, the path every customer change takes: the
+  // VAT plan, the type badge and the Kund lines follow the card as saved, and
+  // the lines on the old default rate move only if that default changed. What
+  // the user set on the invoice moves only with the card field it comes from:
+  // the due date with the terms, Er referens with the Fakturareferens (or the
+  // contact person), Märkning with the card's Märkning.
+  function handleCustomerEdited() {
+    // The effect compares the refreshed card with this one.
+    cardBeforeEditRef.current = selectedCustomer
+    // The preview prints the card (name, address): render it again.
+    setPreviewRefreshKey((key) => key + 1)
   }
 
   const subtotal = watchItems.reduce((sum, item) => {
@@ -3968,6 +4010,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                 >
                   + {tForm('new_customer')}
                 </button>
+              ) : selectedCustomer && canWrite ? (
+                <button type="button" className={QUIET_LINK_CLASS} onClick={() => setIsEditCustomerOpen(true)}>
+                  {tForm('edit_customer')}
+                </button>
               ) : null
             }
           >
@@ -5703,6 +5749,16 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           />
         </DialogContent>
       </Dialog>
+
+      {/* Edit the picked customer's card without leaving the invoice */}
+      {selectedCustomer && (
+        <EditCustomerDialog
+          customerId={selectedCustomer.id}
+          open={isEditCustomerOpen}
+          onOpenChange={setIsEditCustomerOpen}
+          onSaved={handleCustomerEdited}
+        />
+      )}
 
       {/* First-invoice logo prompt (issue #520) */}
       <FirstInvoiceLogoPrompt

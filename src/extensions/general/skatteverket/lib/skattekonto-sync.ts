@@ -7,6 +7,8 @@ import { companyRedovisare } from '@/lib/company/org-number'
 import { computeDedupKey, contentSignature } from '@/lib/skatteverket/skattekonto-dedup'
 import { getEarliestFiscalPeriodStart } from '@/lib/core/bookkeeping/period-service'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { chunk } from '@/lib/utils'
+import { ID_READ_CHUNK } from '@/lib/supabase/read-in-slices'
 import { settleAgiTaxPayments } from './agi-tax-settlement'
 import { refreshSkattekontoProposals } from './skattekonto-proposals'
 import { getSkattekontoReconciliationStatus } from '@/lib/reconciliation/skattekonto-reconciliation'
@@ -272,6 +274,33 @@ function upcomingToRow(companyId: string, tx: SkatteverketUpcomingTransaction): 
 }
 
 /**
+ * One row per dedup_key of a response. Postgres refuses an INSERT ... ON
+ * CONFLICT DO UPDATE that proposes one key twice ("ON CONFLICT DO UPDATE
+ * command cannot affect row a second time"), so a response that carried a key
+ * twice failed the whole sync, every hour until Skatteverket's answer changed
+ * (2026-11-25). The takeover of file-imported rows must see each key once
+ * too: a repeat would use up a second file row. A booked row wins over an
+ * upcoming one with the same key: the booked row is the transaction, the
+ * upcoming one only predicts it, the order the takeover and
+ * partitionFileRows keep too. Of two rows with the same status the first in
+ * the response stays. Each row left out comes back with the row kept in its
+ * place.
+ */
+function oneRowPerDedupKey(rows: SyncRow[]): { rows: SyncRow[]; dropped: { row: SyncRow; kept: SyncRow }[] } {
+  const kept = new Map<string, SyncRow>()
+  for (const row of rows) {
+    const held = kept.get(row.dedup_key)
+    if (!held || (held.status === 'upcoming' && row.status === 'booked')) kept.set(row.dedup_key, row)
+  }
+  const dropped: { row: SyncRow; kept: SyncRow }[] = []
+  for (const row of rows) {
+    const keptRow = kept.get(row.dedup_key)
+    if (keptRow && keptRow !== row) dropped.push({ row, kept: keptRow })
+  }
+  return { rows: [...kept.values()], dropped }
+}
+
+/**
  * Delete the company's stored upcoming rows whose dedup_key is not among
  * `currentKeys`, the kommande rows of the response just stored. Only rows the
  * API wrote and nobody has acted on: a linked or ignored row is a step in the
@@ -434,15 +463,22 @@ export async function syncSkattekonto(
       .map(tx => tx.transaktionsidentitet)
       .filter((id): id is number => id != null),
   )
-  const mergedEntries = [...byKey.values()].filter(
+  const allEntries = [...byKey.values()]
+  const traceOf = (entries: SkattekontoSkippedRowEntry[]): SkattekontoSkippedRowsRecord => ({
+    updatedAt: now,
+    truncated: entries.length > MAX_SKIPPED_ROWS_RETAINED || undefined,
+    rows: entries.slice(0, MAX_SKIPPED_ROWS_RETAINED),
+  })
+  const mergedEntries = allEntries.filter(
     e => e.row.transaktionsidentitet == null || !resolvedIds.has(e.row.transaktionsidentitet),
   )
-  const skippedRecord: SkattekontoSkippedRowsRecord = {
-    updatedAt: now,
-    truncated: mergedEntries.length > MAX_SKIPPED_ROWS_RETAINED || undefined,
-    rows: mergedEntries.slice(0, MAX_SKIPPED_ROWS_RETAINED),
-  }
-  await ctx.settings.set(SKIPPED_ROWS_KEY, skippedRecord)
+  const skippedRecord = traceOf(mergedEntries)
+  // Written in two steps when an entry resolves: now with every entry, the
+  // resolved ones too, and once the upsert has stored their rows without
+  // them. A sync that fails in between keeps both the new skipped rows and a
+  // resolved row's only record.
+  const resolvesEntries = mergedEntries.length !== allEntries.length
+  await ctx.settings.set(SKIPPED_ROWS_KEY, resolvesEntries ? traceOf(allEntries) : skippedRecord)
   if (skipped > 0) {
     log.warn('skipped transaktioner rows missing required fields', {
       companyId: ctx.companyId,
@@ -458,30 +494,57 @@ export async function syncSkattekonto(
     })
   }
 
-  const bookedRows = tidigare.map(tx => bookedToRow(ctx.companyId, tx))
-  const upcomingRows = kommande.map(tx => upcomingToRow(ctx.companyId, tx))
-
   // Upsert in two steps to keep the conflict target consistent. We rely on
   // the (company_id, dedup_key) unique constraint defined in the migration.
-  const allRows = [...bookedRows, ...upcomingRows]
+  // One row per key from here on: the takeover, the upsert, the AGI
+  // settlement and the counts all see a repeated transaction once.
+  const { rows: allRows, dropped } = oneRowPerDedupKey([
+    ...tidigare.map(tx => bookedToRow(ctx.companyId, tx)),
+    ...kommande.map(tx => upcomingToRow(ctx.companyId, tx)),
+  ])
+  if (dropped.length > 0) {
+    // Minimized like the skipped-row warning above: no text, no amounts.
+    log.warn('skattekonto response repeated a transaction, one row kept per key', {
+      companyId: ctx.companyId,
+      rows: dropped.map(d => ({
+        transaktionsidentitet: d.row.transaktionsidentitet,
+        transaktionsdatum: d.row.transaktionsdatum,
+        droppedStatus: d.row.status,
+        keptStatus: d.kept.status,
+        amountDiffers: d.row.belopp_skatteverket !== d.kept.belopp_skatteverket,
+      })),
+    })
+  }
+  const bookedRows = allRows.filter(r => r.status === 'booked')
+  const upcomingRows = allRows.filter(r => r.status === 'upcoming')
 
   // Find which dedup_keys are NEW (not yet in the table) so we can fire
   // the `skattekonto.transaction.upcoming` event only for first-appearance
   // upcoming rows.
+  //
+  // In slices of ID_READ_CHUNK keys: they travel in the GET query string, and
+  // the response carries every row of SKV's window (up to 555 days), more
+  // than the gateway takes in one URL for a busy account. A slice that cannot
+  // be read fails the sync, like the upsert below: read as "nothing stored",
+  // every upcoming row would be announced again and could overwrite a row
+  // stored as booked.
   const dedupKeys = allRows.map(r => r.dedup_key)
-  const { data: existingRows } = dedupKeys.length
-    ? await ctx.supabase
-        .from('skattekonto_transactions')
-        .select('dedup_key, status')
-        .eq('company_id', ctx.companyId)
-        .in('dedup_key', dedupKeys)
-    : { data: [] }
-
   const existingMap = new Map<string, { status: 'booked' | 'upcoming' }>()
-  for (const row of existingRows ?? []) {
-    existingMap.set(row.dedup_key as string, {
-      status: row.status as 'booked' | 'upcoming',
-    })
+  for (const keys of chunk(dedupKeys, ID_READ_CHUNK)) {
+    const { data: existingRows, error: existingError } = await ctx.supabase
+      .from('skattekonto_transactions')
+      .select('dedup_key, status')
+      .eq('company_id', ctx.companyId)
+      .in('dedup_key', keys)
+    if (existingError) {
+      log.error('stored rows read failed', { companyId: ctx.companyId, message: existingError.message })
+      throw new Error(`Kunde inte läsa sparade skattekonto-transaktioner: ${existingError.message}`)
+    }
+    for (const row of existingRows ?? []) {
+      existingMap.set(row.dedup_key as string, {
+        status: row.status as 'booked' | 'upcoming',
+      })
+    }
   }
 
   // Take over hash-keyed rows for transactions the API now identifies.
@@ -604,6 +667,8 @@ export async function syncSkattekonto(
       throw new Error(`Kunde inte spara skattekonto-transaktioner: ${error.message}`)
     }
   }
+  // The rows of the resolved entries are stored: they leave the trace.
+  if (resolvesEntries) await ctx.settings.set(SKIPPED_ROWS_KEY, skippedRecord)
 
   // SKV's kommande list is its whole current forecast, so a stored upcoming
   // row this response no longer carries was withdrawn at Skatteverket (a debit
@@ -735,10 +800,12 @@ export async function syncSkattekonto(
     })
   }
 
-  // First-appearance upcoming transactions.
+  // First-appearance upcoming transactions, one per row stored as upcoming: a
+  // key the response repeated is announced once, and one kept as booked not at all.
+  const storedUpcoming = new Set(safeRows.filter(r => r.status === 'upcoming').map(r => r.dedup_key))
   for (const tx of kommande) {
     const key = computeDedupKey(tx)
-    if (existingMap.has(key)) continue
+    if (existingMap.has(key) || !storedUpcoming.delete(key)) continue
     await ctx.emit({
       type: 'skattekonto.transaction.upcoming',
       payload: {

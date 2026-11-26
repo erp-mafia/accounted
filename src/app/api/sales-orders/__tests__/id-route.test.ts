@@ -194,13 +194,13 @@ describe('PATCH /api/sales-orders/[id]', () => {
     enqueue({ data: [] })
 
     const { status, body } = await parseJsonResponse<{ data: SalesOrder }>(
-      await patch({ notes: 'Ring innan leverans' }),
+      await patch({ notes: 'Ring innan leverans', invoice_marking: 'PO-4711' }),
     )
 
     expect(status).toBe(200)
     expect(body.data.notes).toBe('Ring innan leverans')
     expect(body.data.delivery_progress).toBe('none')
-    expect(findCall('sales_orders', 'update')![0]).toMatchObject({ notes: 'Ring innan leverans' })
+    expect(findCall('sales_orders', 'update')![0]).toMatchObject({ notes: 'Ring innan leverans', invoice_marking: 'PO-4711' })
   })
 })
 

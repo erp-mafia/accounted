@@ -89,11 +89,39 @@ function inconsistentDuplicates(xhtml: string): string[] {
   return out
 }
 
-/** The fixture with the year's nettoomsättning and resultat efter finansiella poster set in the RR and the overview alike. */
+/**
+ * The fixture with the year's nettoomsättning and resultat efter finansiella
+ * poster set in the RR and the overview alike. The resultaträkning still adds
+ * up, as the taxonomy's calculation linkbase asks: the operating rows close
+ * the gap between the two figures (övriga rörelseintäkter when the result
+ * needs more than the revenue gives, övriga externa kostnader when it needs
+ * less), and the periodiseringsfond takes the change in the result, so
+ * resultat före skatt, årets resultat and the balance sheet stay the
+ * fixture's.
+ */
 function withYearFigures(net: number, result: number, tkr = true): IxbrlArsredovisningInput {
   const input = makeInput()
-  input.rr['Nettoomsattning'] = { ...input.rr['Nettoomsattning'], current: net }
-  input.totals.resultatEfterFinansiellaPoster = { ...input.totals.resultatEfterFinansiellaPoster, current: result }
+  const { rr, totals } = input
+  const row = (concept: string) => rr[concept]?.current ?? 0
+  const setRow = (concept: string, current: number) => {
+    rr[concept] = { previous: rr[concept]?.previous ?? null, current }
+  }
+  const setTotal = (key: keyof typeof totals, current: number) => {
+    totals[key] = { ...totals[key], current }
+  }
+  const rorelseintakter = totals.rorelseintakter.current - row('Nettoomsattning') + net
+  const rorelseresultat = result - totals.finansiellaPoster.current
+  const gap = rorelseresultat - (rorelseintakter - totals.rorelsekostnader.current)
+  const resultChange = result - totals.resultatEfterFinansiellaPoster.current
+  setRow('Nettoomsattning', net)
+  if (gap > 0) setRow('OvrigaRorelseintakter', row('OvrigaRorelseintakter') + gap)
+  if (gap < 0) setRow('OvrigaExternaKostnader', row('OvrigaExternaKostnader') - gap)
+  setRow('ForandringPeriodiseringsfond', row('ForandringPeriodiseringsfond') - resultChange)
+  setTotal('rorelseintakter', rorelseintakter + Math.max(gap, 0))
+  setTotal('rorelsekostnader', totals.rorelsekostnader.current + Math.max(-gap, 0))
+  setTotal('rorelseresultat', rorelseresultat)
+  setTotal('resultatEfterFinansiellaPoster', result)
+  setTotal('bokslutsdispositioner', totals.bokslutsdispositioner.current - resultChange)
   const fb = input.forvaltningsberattelse
   fb.flerarsoversikt[0] = { ...fb.flerarsoversikt[0], nettoomsattning: net, resultatEfterFinansiellaPoster: result }
   if (tkr) fb.flerarsoversiktTkr = true

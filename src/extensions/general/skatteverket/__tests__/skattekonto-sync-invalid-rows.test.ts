@@ -252,8 +252,10 @@ describe('syncSkattekonto: rows missing NOT NULL fields', () => {
 
     expect(result.skipped).toBe(0)
     const writes = skippedRowsWrites()
-    expect(writes).toHaveLength(1)
-    const record = writes[0][1] as { rows: Array<{ row: { transaktionstext: string } }> }
+    // 9003 keeps its entry until the upsert has stored its row, then leaves.
+    expect(writes).toHaveLength(2)
+    expect((writes[0][1] as { rows: unknown[] }).rows).toHaveLength(2)
+    const record = writes[1][1] as { rows: Array<{ row: { transaktionstext: string } }> }
     // 9003 resolved into the table and left the trace; the aged-out id-less
     // row survives with its original firstSeenAt.
     expect(record.rows).toHaveLength(1)

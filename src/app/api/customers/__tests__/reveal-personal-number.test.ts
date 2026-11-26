@@ -17,6 +17,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMockRequest, parseJsonResponse } from '@/tests/helpers'
 import { encryptPersonnummer } from '@/lib/salary/personnummer'
 
+// Route path ids are uuids: the route answers its 404 to anything else before it reads.
+const CUSTOMER_1 = '1c3d7fa0-4f88-57d0-80ff-cdcb25afde25'
+const MISSING_ID = '5d628215-dc15-5cac-9006-b67b9a4bd32b'
+
 let queryResult: { data: unknown; error: unknown } = { data: null, error: null }
 
 const buildChain = (): unknown =>
@@ -61,8 +65,8 @@ const PERSONAL_NUMBER = '19900101-1234'
 const GARBAGE_HEX = 'ab'.repeat(40)
 
 describe('GET /api/customers/[id]/personal-number', () => {
-  const routeParams = { params: Promise.resolve({ id: 'customer-1' }) }
-  const request = () => createMockRequest('/api/customers/customer-1/personal-number')
+  const routeParams = { params: Promise.resolve({ id: CUSTOMER_1 }) }
+  const request = () => createMockRequest(`/api/customers/${CUSTOMER_1}/personal-number`)
 
   beforeEach(() => {
     vi.clearAllMocks()
@@ -83,7 +87,7 @@ describe('GET /api/customers/[id]/personal-number', () => {
       ),
     })
     queryResult = {
-      data: { id: 'customer-1', personal_number: encryptPersonnummer(PERSONAL_NUMBER) },
+      data: { id: CUSTOMER_1, personal_number: encryptPersonnummer(PERSONAL_NUMBER) },
       error: null,
     }
 
@@ -106,7 +110,7 @@ describe('GET /api/customers/[id]/personal-number', () => {
 
   it('returns the full personnummer for a stored ciphertext', async () => {
     queryResult = {
-      data: { id: 'customer-1', personal_number: encryptPersonnummer(PERSONAL_NUMBER) },
+      data: { id: CUSTOMER_1, personal_number: encryptPersonnummer(PERSONAL_NUMBER) },
       error: null,
     }
 
@@ -118,7 +122,7 @@ describe('GET /api/customers/[id]/personal-number', () => {
   })
 
   it('returns a legacy plaintext value unchanged', async () => {
-    queryResult = { data: { id: 'customer-1', personal_number: '900101-1234' }, error: null }
+    queryResult = { data: { id: CUSTOMER_1, personal_number: '900101-1234' }, error: null }
 
     const { status, body } = await parseJsonResponse<{ data: { personal_number: string } }>(
       await GET(request(), routeParams),
@@ -131,13 +135,13 @@ describe('GET /api/customers/[id]/personal-number', () => {
   it('returns 404 when the customer does not exist in the active company', async () => {
     queryResult = { data: null, error: { code: 'PGRST116', message: 'No rows returned' } }
 
-    const response = await GET(request(), { params: Promise.resolve({ id: 'missing' }) })
+    const response = await GET(request(), { params: Promise.resolve({ id: MISSING_ID }) })
 
     expect(response.status).toBe(404)
   })
 
   it('returns 404 when the customer has no stored personnummer', async () => {
-    queryResult = { data: { id: 'customer-1', personal_number: null }, error: null }
+    queryResult = { data: { id: CUSTOMER_1, personal_number: null }, error: null }
 
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
       await GET(request(), routeParams),
@@ -150,7 +154,7 @@ describe('GET /api/customers/[id]/personal-number', () => {
   it('answers with a specific code, not a 500, when the value cannot be decrypted', async () => {
     // The row that renders as '********-????'. Retrying never helps, so this
     // must not look transient: the UI turns this code into "type it in again".
-    queryResult = { data: { id: 'customer-1', personal_number: GARBAGE_HEX }, error: null }
+    queryResult = { data: { id: CUSTOMER_1, personal_number: GARBAGE_HEX }, error: null }
 
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
       await GET(request(), routeParams),
@@ -162,7 +166,7 @@ describe('GET /api/customers/[id]/personal-number', () => {
 
   it('never leaks the stored ciphertext, whatever the outcome', async () => {
     const stored = encryptPersonnummer(PERSONAL_NUMBER)
-    queryResult = { data: { id: 'customer-1', personal_number: stored }, error: null }
+    queryResult = { data: { id: CUSTOMER_1, personal_number: stored }, error: null }
 
     const raw = await (await GET(request(), routeParams)).text()
 

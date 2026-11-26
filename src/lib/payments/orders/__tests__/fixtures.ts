@@ -1,6 +1,6 @@
 import { vi } from 'vitest'
 import type { PaymentInitiationProvider } from '@/lib/payments/initiation/provider'
-import { makeTransaction, type createTableMockSupabase, type TableMockResolver } from '@/tests/helpers'
+import { makeTransaction, type createTableMockSupabase, type TableMockResolver, type TableMockResult } from '@/tests/helpers'
 import type { Transaction } from '@/types'
 import type { PaymentOrderBatchRow, PaymentOrderRow } from '../types'
 
@@ -159,6 +159,34 @@ export function rowsTable<T extends object>(rows: T[]): TableMockResolver {
 }
 
 type MockDb = ReturnType<typeof createTableMockSupabase>
+
+/** The payment-order tables only the service role writes (the payment_orders migration): a person's session reads them. */
+const SERVICE_WRITTEN = ['payment_orders', 'payment_order_batches', 'payment_order_events'] as const
+const WRITE_METHODS = new Set(['insert', 'update', 'upsert', 'delete'])
+
+/**
+ * A person's session as production grants it, for a createTableMockSupabase
+ * map: each service-written table answers its reads in order (the last one
+ * repeats), and any write there is refused with 42501 wherever it falls, as
+ * PostgREST refuses it.
+ */
+export function asSession(
+  answers: Record<string, TableMockResult | TableMockResult[] | TableMockResolver>,
+): Record<string, TableMockResult | TableMockResult[] | TableMockResolver> {
+  const session = { ...answers }
+  for (const table of SERVICE_WRITTEN) {
+    const given = answers[table]
+    if (typeof given === 'function') throw new Error(`asSession answers ${table} itself: pass rows, not a resolver`)
+    const reads: TableMockResult[] = given === undefined ? [] : Array.isArray(given) ? [...given] : [given]
+    session[table] = (chain) => {
+      if (chain.some((c) => WRITE_METHODS.has(c.method))) {
+        return { data: null, error: { code: '42501', message: `permission denied for table ${table}` } }
+      }
+      return (reads.length > 1 ? reads.shift() : reads[0]) ?? { data: null }
+    }
+  }
+  return session
+}
 
 /**
  * A signing and its orders held as rows: the batch and order tables answer

@@ -333,11 +333,31 @@ describe('bounded durable worker', () => {
     const db = database({ resources: ['customers', 'supplierInvoices'], resource_index: 2, next_page: 4 })
     mocks.page.mockRejectedValue(Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' }))
     await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
-    expect(db.job).toMatchObject({ state: 'retry_wait', error_code: 'MIGRATION_RETRY', next_page: 4, failures: 1 })
+    // The job row says what the log line says: the provider did not answer
+    // in time, not a record that could not be completed (#3137).
+    expect(db.job).toMatchObject({ state: 'retry_wait', error_code: 'PROVIDER_TIMEOUT', next_page: 4, failures: 1 })
     expect(mocks.warn).toHaveBeenCalledWith('migration yielded', expect.objectContaining({
-      code: 'MIGRATION_RETRY', needsAttention: false, phase: 'discover', resource: 'supplierInvoices', page: 4,
+      code: 'PROVIDER_TIMEOUT', needsAttention: false, phase: 'discover', resource: 'supplierInvoices', page: 4,
       errorName: 'TimeoutError', elapsedMs: expect.any(Number),
     }))
+  })
+  // Only the code is new. A timeout is tried again with the same backoff as
+  // any failure the worker has no class for, and five failed claims in a row
+  // still park the job for the user.
+  it.each([
+    ['a register page that timed out', () => new DOMException('The operation was aborted due to timeout', 'TimeoutError'), 'PROVIDER_TIMEOUT'],
+    ['a failure with no class', () => new Error('boom'), 'MIGRATION_RETRY'],
+  ])('retries %s with the same backoff and parks it after five in a row', async (_cause, failure, code) => {
+    const db = database({ next_page: 4 })
+    mocks.page.mockRejectedValue(failure())
+    for (let claim = 1; claim <= 4; claim++) {
+      await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+      expect(db.job).toMatchObject({ state: 'retry_wait', error_code: code, failures: claim, next_page: 4 })
+    }
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(db.job).toMatchObject({ state: 'needs_attention', error_code: code, failures: 5, next_page: 4 })
+    expect(db.rpc.mock.calls.filter(([name]) => name === 'release_provider_migration_job')
+      .map(([, args]) => args.p_retry_seconds)).toEqual([15, 30, 60, 120, -1])
   })
   it('treats its own exhausted budget as a deferral after a saved page, even on a long failure streak', async () => {
     const db = database({ failures: 4, next_page: 4 })

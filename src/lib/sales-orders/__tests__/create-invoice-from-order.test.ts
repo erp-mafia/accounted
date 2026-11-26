@@ -345,17 +345,34 @@ describe('createInvoiceFromSalesOrder', () => {
     expect(await builtYourReference('Anna Andersson')).toBe('Anna Andersson')
   })
 
-  it("builds the invoice with the customer card's Märkning (crm#1477)", async () => {
-    enqueue({ data: orderWith([makeSalesOrderItem()]) })
+  // The order's Märkning (copied from its offert or proforma, or typed on the
+  // order), else the customer card's.
+  async function builtMarking(orderMarking: string | null, cardMarking: string | null) {
+    enqueue({ data: orderWith([makeSalesOrderItem()], { invoice_marking: orderMarking }) })
     enqueue({ data: [] })
-    enqueue({ data: makeOrderCustomer({ invoice_marking: '4500012345' }) })
+    enqueue({ data: makeOrderCustomer({ invoice_marking: cardMarking }) })
     enqueue({ data: { id: IDS.invoice, status: 'draft', invoice_number: null, sales_order_id: IDS.order } })
     enqueue({ data: null })
     enqueue({ data: orderWith() })
     enqueue({ data: [invoicedRow(IDS.item1, 10)] })
     await createInvoiceFromSalesOrder(sb, { ...params, input: {} })
-    const built = mockBuildInvoiceWriteData.mock.calls[0][0] as { input: { invoice_marking?: string } }
-    expect(built.input.invoice_marking).toBe('4500012345')
+    return (mockBuildInvoiceWriteData.mock.calls[0][0] as { input: { invoice_marking?: string } }).input.invoice_marking
+  }
+
+  it("keeps the order's own Märkning over the customer card's", async () => {
+    expect(await builtMarking('PO-4711', '4500012345')).toBe('PO-4711')
+  })
+
+  it("falls back to the customer card's Märkning when the order has none", async () => {
+    expect(await builtMarking(null, '4500012345')).toBe('4500012345')
+  })
+
+  it("treats a blank Märkning on the order as none and takes the card's", async () => {
+    expect(await builtMarking('   ', '4500012345')).toBe('4500012345')
+  })
+
+  it('leaves the Märkning out when neither the order nor the card has one', async () => {
+    expect(await builtMarking(null, null)).toBeUndefined()
   })
 
   it('still creates the invoice for a foreign-currency order when the rate is present', async () => {

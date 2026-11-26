@@ -8,6 +8,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import { createQueuedMockSupabase, createMockRequest, parseJsonResponse } from '@/tests/helpers'
 
+// Route path ids are uuids: the route answers its 404 to anything else before it reads.
+const EMP_1 = 'fcd49043-9489-5813-aacd-a04b3e121e68'
+const LINE_1 = '2d533c08-c547-5272-8f4a-9a83da8a91cb'
+const NOPE_ID = 'de4ba771-91d4-59ed-8f99-a25a38e6dbeb'
+
 const { supabase, enqueue, reset, findCall } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
@@ -35,10 +40,10 @@ vi.mock('@/lib/salary/invalidate-calculation', async (original) => ({
   invalidateRunCalculation: vi.fn(async () => null),
 }))
 
-const params = { params: Promise.resolve({ id: 'emp-1', lineId: 'line-1' }) } as never
+const params = { params: Promise.resolve({ id: EMP_1, lineId: LINE_1 }) } as never
 
 function patch(body: unknown) {
-  return createMockRequest('/api/salary/employees/emp-1/recurring-lines/line-1', {
+  return createMockRequest(`/api/salary/employees/${EMP_1}/recurring-lines/${LINE_1}`, {
     method: 'PATCH',
     body,
   })
@@ -81,7 +86,7 @@ describe('PATCH /api/salary/employees/[id]/recurring-lines/[lineId]', () => {
 
   it('updates the amount (happy path)', async () => {
     enqueue({ data: storedLine }) // fetch existing
-    enqueue({ data: { id: 'line-1', amount: -700 } }) // update
+    enqueue({ data: { id: LINE_1, amount: -700 } }) // update
 
     const response = await PATCH(patch({ amount: -700 }), params)
     const { status, body } = await parseJsonResponse<{ data: { amount: number } }>(response)
@@ -95,7 +100,7 @@ describe('PATCH /api/salary/employees/[id]/recurring-lines/[lineId]', () => {
     // conditionally, so the phantom-column scanner cannot resolve it. This
     // pins the column set the route can ever write.
     enqueue({ data: storedLine }) // fetch existing
-    enqueue({ data: { id: 'line-1' } }) // update
+    enqueue({ data: { id: LINE_1 } }) // update
 
     await PATCH(
       patch({
@@ -178,7 +183,7 @@ describe('DELETE /api/salary/employees/[id]/recurring-lines/[lineId]', () => {
       error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
     })
 
-    const request = createMockRequest('/api/salary/employees/emp-1/recurring-lines/line-1', {
+    const request = createMockRequest(`/api/salary/employees/${EMP_1}/recurring-lines/${LINE_1}`, {
       method: 'DELETE',
     })
     const response = await DELETE(request, params)
@@ -186,9 +191,9 @@ describe('DELETE /api/salary/employees/[id]/recurring-lines/[lineId]', () => {
   })
 
   it('hard-deletes a line that has never been derived into a run', async () => {
-    enqueue({ data: { id: 'line-1' } }) // delete returns the removed row
+    enqueue({ data: { id: LINE_1 } }) // delete returns the removed row
 
-    const request = createMockRequest('/api/salary/employees/emp-1/recurring-lines/line-1', {
+    const request = createMockRequest(`/api/salary/employees/${EMP_1}/recurring-lines/${LINE_1}`, {
       method: 'DELETE',
     })
     const response = await DELETE(request, params)
@@ -203,11 +208,11 @@ describe('DELETE /api/salary/employees/[id]/recurring-lines/[lineId]', () => {
     // delete reports no error and no row.
     enqueue({ data: null })
 
-    const request = createMockRequest('/api/salary/employees/emp-1/recurring-lines/nope', {
+    const request = createMockRequest(`/api/salary/employees/${EMP_1}/recurring-lines/nope`, {
       method: 'DELETE',
     })
     const response = await DELETE(request, {
-      params: Promise.resolve({ id: 'emp-1', lineId: 'nope' }),
+      params: Promise.resolve({ id: EMP_1, lineId: NOPE_ID }),
     } as never)
     expect(response.status).toBe(404)
   })
@@ -218,7 +223,7 @@ describe('DELETE /api/salary/employees/[id]/recurring-lines/[lineId]', () => {
     enqueue({ error: { code: '23503', message: 'violates foreign key constraint' } })
     enqueue({ data: null }) // is_active=false update resolves
 
-    const request = createMockRequest('/api/salary/employees/emp-1/recurring-lines/line-1', {
+    const request = createMockRequest(`/api/salary/employees/${EMP_1}/recurring-lines/${LINE_1}`, {
       method: 'DELETE',
     })
     const response = await DELETE(request, params)

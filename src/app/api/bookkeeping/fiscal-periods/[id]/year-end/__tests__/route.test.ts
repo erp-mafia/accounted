@@ -2,6 +2,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { NextResponse } from 'next/server'
 import { createMockRequest, createMockRouteParams, parseJsonResponse } from '@/tests/helpers'
 
+// Route path ids are uuids: the route answers its 404 to anything else before it reads.
+const PERIOD_1 = '967b285e-2dcb-5661-91f6-68a799845858'
+
 vi.mock('@/lib/core/bookkeeping/year-end-service', () => ({
   validateYearEndReadiness: vi.fn(),
   previewYearEndClosing: vi.fn(),
@@ -34,8 +37,8 @@ import {
 import { bolagsskattOnLedger } from '@/lib/bokslut/dispositions-proposal-builder'
 import { GET, POST } from '../route'
 
-const params = createMockRouteParams({ id: 'period-1' })
-const request = () => createMockRequest('/api/bookkeeping/fiscal-periods/period-1/year-end', {
+const params = createMockRouteParams({ id: PERIOD_1 })
+const request = () => createMockRequest(`/api/bookkeeping/fiscal-periods/${PERIOD_1}/year-end`, {
   method: 'POST',
 })
 
@@ -99,7 +102,7 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/year-end', () => {
       {},
       'company-1',
       'user-1',
-      'period-1',
+      PERIOD_1,
       expect.any(Function), // what the door saw, read by the posting port only while POSTING_EVENTS is on
     )
   })
@@ -111,7 +114,7 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/year-end', () => {
  * (underskottsavdrag) has nothing to book and gets no warning.
  */
 describe('GET /api/bookkeeping/fiscal-periods/[id]/year-end: bolagsskattMissing', () => {
-  const getRequest = () => createMockRequest('/api/bookkeeping/fiscal-periods/period-1/year-end')
+  const getRequest = () => createMockRequest(`/api/bookkeeping/fiscal-periods/${PERIOD_1}/year-end`)
 
   beforeEach(() => {
     vi.mocked(validateYearEndReadiness).mockResolvedValue({ ready: true } as never)
@@ -140,7 +143,7 @@ describe('GET /api/bookkeeping/fiscal-periods/[id]/year-end: bolagsskattMissing'
 
     expect(status).toBe(200)
     expect(body.data.preview.bolagsskattMissing).toBe(true)
-    expect(bolagsskattOnLedger).toHaveBeenCalledWith(expect.anything(), 'company-1', 'period-1')
+    expect(bolagsskattOnLedger).toHaveBeenCalledWith(expect.anything(), 'company-1', PERIOD_1)
   })
 
   it('drops the line when the tax on the ledger is 0 kr', async () => {

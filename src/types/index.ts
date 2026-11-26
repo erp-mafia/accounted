@@ -1424,6 +1424,12 @@ export interface SalesOrder {
   total: number
   your_reference: string | null
   our_reference: string | null
+  /**
+   * Märkning for the order's invoices: copied from the offert or proforma it
+   * was converted from, or set on the order. Null leaves each invoice to the
+   * customer card's (lib/customers/invoice-marking.ts).
+   */
+  invoice_marking: string | null
   notes: string | null
   default_dimensions: Record<string, string>
   confirmed_at: string | null
@@ -4915,6 +4921,15 @@ export interface WebshopOrder {
    */
   customer_country: string | null
   /**
+   * The billing address the store sent with the order, on WooCommerce order
+   * rows (null on the other platforms' rows and on refund rows). A customer
+   * that the create-invoice route creates from the order gets it.
+   */
+  customer_address_line1: string | null
+  customer_address_line2: string | null
+  customer_postal_code: string | null
+  customer_city: string | null
+  /**
    * Shopify: true when the store reported that no line of the order needs
    * shipping (digital products, services), on the order row and its refund
    * rows. The country rules then book a sale abroad as services
@@ -5440,6 +5455,10 @@ export interface SalaryLineItem {
   /** The benefit a net_deduction_benefit_payment row pays for (employee_benefits
    *  benefit_type, migration 20261028030447); null = the payslip's only benefit type. */
   benefit_type?: 'bike' | 'car' | 'meals' | 'housing' | 'wellness' | 'other' | null
+  /** A manual semesterersättning row paying semesterlön for rörliga lönedelar
+   *  with the salary under a central kollektivavtal (migration 20261125180000,
+   *  lib/salary/variable-vacation-pay.ts); absent before the migration. */
+  settles_variable_vacation_pay?: boolean
   created_at: string
   updated_at: string
 }

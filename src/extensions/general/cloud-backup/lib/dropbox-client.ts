@@ -4,8 +4,8 @@
  *
  * Two upload paths, picked by size:
  *   - files/upload for anything that fits one chunk (one round trip),
- *   - files/upload_session/* in 8 MB chunks for the large archives, which
- *     avoids holding a second copy of the payload for a multipart body.
+ *   - files/upload_session/* in 8 MB chunks for the large archives, sent as
+ *     the file is read, so memory holds a chunk or two and never the file.
  *
  * Both write with `mode: overwrite`, which makes uploads idempotent and lets
  * Dropbox keep its own version history (30 days on Basic, longer on paid
@@ -18,6 +18,8 @@
  */
 
 import { createHash } from 'node:crypto'
+import type { FileBytes } from './cloud-provider'
+import { uploadChunks } from './upload-chunks'
 
 const CONTENT_API = 'https://content.dropboxapi.com/2'
 
@@ -50,17 +52,36 @@ interface DropboxFileMetadata {
  * an upload, since Dropbox reports this and no other checksum.
  */
 export function dropboxContentHash(data: ArrayBuffer): string {
-  const buffer = Buffer.from(data)
+  const hash = dropboxContentHasher()
+  hash.update(new Uint8Array(data))
+  return hash.digest()
+}
+
+/** dropboxContentHash over bytes that arrive in parts of any size. */
+function dropboxContentHasher(): { update(bytes: Uint8Array): void; digest(): string } {
   const blockHashes: Buffer[] = []
-  for (let offset = 0; offset < buffer.length; offset += CONTENT_HASH_BLOCK_BYTES) {
-    const block = buffer.subarray(
-      offset,
-      Math.min(offset + CONTENT_HASH_BLOCK_BYTES, buffer.length)
-    )
-    blockHashes.push(createHash('sha256').update(block).digest())
+  let block = createHash('sha256')
+  let inBlock = 0
+  return {
+    update(bytes) {
+      for (let at = 0; at < bytes.length; ) {
+        const take = Math.min(CONTENT_HASH_BLOCK_BYTES - inBlock, bytes.length - at)
+        block.update(bytes.subarray(at, at + take))
+        inBlock += take
+        at += take
+        if (inBlock === CONTENT_HASH_BLOCK_BYTES) {
+          blockHashes.push(block.digest())
+          block = createHash('sha256')
+          inBlock = 0
+        }
+      }
+    },
+    digest() {
+      if (inBlock > 0) blockHashes.push(block.digest())
+      // An empty file hashes the empty concatenation, which is what Dropbox reports.
+      return createHash('sha256').update(Buffer.concat(blockHashes)).digest('hex')
+    },
   }
-  // An empty file hashes the empty concatenation, which is what Dropbox reports.
-  return createHash('sha256').update(Buffer.concat(blockHashes)).digest('hex')
 }
 
 /**
@@ -128,23 +149,20 @@ class DropboxFatalError extends Error {}
 export async function uploadDropboxFile(
   accessToken: string,
   path: string,
-  data: ArrayBuffer
+  data: FileBytes
 ): Promise<DropboxUploadResult> {
-  const expected = dropboxContentHash(data)
   let lastError: Error | null = null
 
   // One full retry on a hash mismatch, mirroring the Drive target: a mismatch
   // is far more likely to be a truncated transfer than a corrupted source.
+  // The retry reads the file again from its first byte.
   for (let attempt = 0; attempt < 2; attempt++) {
-    const meta =
-      data.byteLength <= UPLOAD_CHUNK_BYTES
-        ? await singleShotUpload(accessToken, path, data)
-        : await sessionUpload(accessToken, path, data)
+    const { meta, size, expected } = await streamUpload(accessToken, path, data)
 
     const result: DropboxUploadResult = {
       path: meta.path_display || meta.path_lower || path,
       name: meta.name,
-      size_bytes: typeof meta.size === 'number' ? meta.size : data.byteLength,
+      size_bytes: typeof meta.size === 'number' ? meta.size : size,
       content_hash: meta.content_hash,
     }
     if (!result.content_hash || result.content_hash === expected) {
@@ -169,77 +187,63 @@ function commitArg(path: string) {
   }
 }
 
-async function singleShotUpload(
-  accessToken: string,
-  path: string,
-  data: ArrayBuffer
-): Promise<DropboxFileMetadata> {
-  const res = await contentFetch(accessToken, '/files/upload', commitArg(path), data)
-  return (await res.json()) as DropboxFileMetadata
-}
-
 /**
- * Chunked upload session. Transient failures are retried per chunk; the
- * session itself is not resumed across a failed run, because `performSync`
- * already persists per-file progress and simply re-uploads this one file.
+ * Send the file as it is read: a file that fits one chunk in one files/upload
+ * call, a larger one through an upload session, its last chunk on the finish
+ * call. Transient failures are retried per chunk; the session itself is not
+ * resumed across a failed run, because `performSync` already persists
+ * per-file progress and simply re-uploads this one file.
  */
-async function sessionUpload(
+async function streamUpload(
   accessToken: string,
   path: string,
-  data: ArrayBuffer
-): Promise<DropboxFileMetadata> {
-  const total = data.byteLength
-
-  // Chunks are sliced off the source rather than viewed into it: a view would
-  // keep the whole 300 MB archive reachable from every in-flight request body.
-  const firstChunk = data.slice(0, UPLOAD_CHUNK_BYTES)
-  const startRes = await contentFetch(
-    accessToken,
-    '/files/upload_session/start',
-    { close: false },
-    firstChunk
-  )
-  const { session_id: sessionId } = (await startRes.json()) as { session_id: string }
-  let offset = firstChunk.byteLength
-
-  while (offset < total) {
-    const end = Math.min(offset + UPLOAD_CHUNK_BYTES, total)
-    const chunk = data.slice(offset, end)
-
-    if (end >= total) {
+  data: FileBytes
+): Promise<{ meta: DropboxFileMetadata; size: number; expected: string }> {
+  const hash = dropboxContentHasher()
+  let sessionId: string | null = null
+  let offset = 0
+  for await (const { bytes, last } of uploadChunks(data(), UPLOAD_CHUNK_BYTES)) {
+    hash.update(bytes)
+    const size = offset + bytes.length
+    if (sessionId === null && last) {
+      const res = await contentFetch(accessToken, '/files/upload', commitArg(path), bytes)
+      return { meta: (await res.json()) as DropboxFileMetadata, size, expected: hash.digest() }
+    }
+    if (sessionId === null) {
+      const startRes = await contentFetch(
+        accessToken,
+        '/files/upload_session/start',
+        { close: false },
+        bytes
+      )
+      sessionId = ((await startRes.json()) as { session_id: string }).session_id
+    } else if (last) {
       const finishRes = await contentFetch(
         accessToken,
         '/files/upload_session/finish',
         { cursor: { session_id: sessionId, offset }, commit: commitArg(path) },
-        chunk
+        bytes
       )
-      return (await finishRes.json()) as DropboxFileMetadata
+      return { meta: (await finishRes.json()) as DropboxFileMetadata, size, expected: hash.digest() }
+    } else {
+      await contentFetch(
+        accessToken,
+        '/files/upload_session/append_v2',
+        { cursor: { session_id: sessionId, offset }, close: false },
+        bytes
+      )
     }
-
-    await contentFetch(
-      accessToken,
-      '/files/upload_session/append_v2',
-      { cursor: { session_id: sessionId, offset }, close: false },
-      chunk
-    )
-    offset = end
+    offset = size
   }
-
-  // Payload was an exact multiple of the chunk size: close with an empty commit.
-  const finishRes = await contentFetch(
-    accessToken,
-    '/files/upload_session/finish',
-    { cursor: { session_id: sessionId, offset }, commit: commitArg(path) },
-    new ArrayBuffer(0)
-  )
-  return (await finishRes.json()) as DropboxFileMetadata
+  // uploadChunks always ends on a last chunk, which returns above.
+  throw new Error('Dropbox upload ended without its last chunk')
 }
 
 async function contentFetch(
   accessToken: string,
   endpoint: string,
   arg: unknown,
-  body: ArrayBuffer
+  body: Uint8Array<ArrayBuffer>
 ): Promise<Response> {
   let lastErr: unknown = null
   for (let attempt = 0; attempt < CHUNK_MAX_ATTEMPTS; attempt++) {

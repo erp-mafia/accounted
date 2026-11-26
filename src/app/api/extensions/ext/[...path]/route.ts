@@ -2,7 +2,8 @@ import { requireAuth } from '@/lib/auth/require-auth'
 import { NextResponse } from 'next/server'
 import { extensionRegistry } from '@/lib/extensions/registry'
 import { createExtensionContext } from '@/lib/extensions/context-factory'
-import { resolveSessionCompany } from '@/lib/api/with-route-context'
+import { resolveSessionCompany, withActiveCompanyHeader } from '@/lib/api/with-route-context'
+import { TAB_COMPANY_HEADER, shouldRefuseForTabCompany } from '@/lib/company/tab-guard'
 import type { ActiveCompanyFacts } from '@/lib/company/active-company'
 import { isInvoicerRole } from '@/lib/auth/invoicer-role'
 import {
@@ -332,6 +333,25 @@ async function dispatchRequest(
   if (!company.ok) return decorateResponse(company.response, requestId)
   const { companyId } = company
 
+  // Every answer from here on names the company the server acted on
+  // (ACTIVE_COMPANY_HEADER), the refusals of the gates below included.
+  const answer = async (response: Response): Promise<Response> =>
+    withActiveCompanyHeader(await decorateResponse(response, requestId), companyId)
+
+  // A write from a tab that shows another company than the session has active
+  // now is refused before anything runs, as withRouteContext refuses it.
+  if (
+    shouldRefuseForTabCompany({
+      method,
+      pathname: new URL(request.url).pathname,
+      tabCompanyHeader: request.headers.get(TAB_COMPANY_HEADER),
+      activeCompanyId: companyId,
+    })
+  ) {
+    log.warn('extension call refused: the tab shows another company than the active one', { userId: user.id })
+    return answer(errorResponseFromCode('ACTIVE_COMPANY_CHANGED', log, { requestId }))
+  }
+
   // The permission shadow (lib/permissions/shadow.ts): decide() beside the
   // role gates below, told what they did. It reads nothing and changes nothing.
   const recordShadow = sessionShadow({
@@ -349,14 +369,13 @@ async function dispatchRequest(
   if (isInvoicerRole(resolved.role)) {
     log.warn('extension call blocked: invoicer role', { userId: user.id })
     recordShadow({ outcome: 'deny', code: 'INVOICER_ROUTE_NOT_ALLOWED', by: 'gate' })
-    return decorateResponse(
+    return answer(
       errorResponseFromCode('FORBIDDEN', log, {
         requestId,
         messageSv: 'Rollen Fakturering når bara kunder, fakturor, offerter, order och artiklar.',
         messageEn: 'The Invoicing role reaches only customers, invoices, quotes, orders and articles.',
         details: { code: 'INVOICER_ROUTE_NOT_ALLOWED' },
       }),
-      requestId,
     )
   }
 
@@ -368,14 +387,14 @@ async function dispatchRequest(
   if (route.requireAdmin) {
     if (!(await isCompanyAdmin(supabase, companyId))) {
       recordShadow({ outcome: 'deny', code: 'ADMIN_REQUIRED', by: 'gate' })
-      return decorateResponse(companyAdminRequiredResponse(log, requestId), requestId)
+      return answer(companyAdminRequiredResponse(log, requestId))
     }
   } else if (route.requireWrite || (route.method !== 'GET' && route.viewerMay !== true)) {
     const writeCheck = await requireWritePermission(supabase, user.id, { companyId, role: resolved.role })
     if (!writeCheck.ok) {
       log.warn('extension call blocked: write permission denied', { userId: user.id })
       recordShadow({ outcome: 'deny', code: 'WRITE_REQUIRED', by: 'gate' })
-      return decorateResponse(writeCheck.response, requestId)
+      return answer(writeCheck.response)
     }
   }
 
@@ -392,7 +411,7 @@ async function dispatchRequest(
     const blocked = await requireCapability(supabase, companyId, requiredCapability)
     if (blocked) {
       log.info('extension call blocked: capability required', { capability: requiredCapability })
-      return decorateResponse(blocked, requestId)
+      return answer(blocked)
     }
   }
 
@@ -404,14 +423,13 @@ async function dispatchRequest(
     const refusal = await packageStartRefusal(supabase, companyId, startPackage)
     if (refusal) {
       log.info('extension call blocked: package off', { packageId: refusal.packageId })
-      return decorateResponse(
+      return answer(
         errorResponseFromCode(refusal.code, log, {
           requestId,
           messageSv: refusal.messageSv,
           messageEn: refusal.messageEn,
           details: refusal.details,
         }),
-        requestId,
       )
     }
   }
@@ -432,7 +450,7 @@ async function dispatchRequest(
     userId: user.id,
     companyId,
   })
-  return decorateResponse(response, requestId)
+  return answer(response)
 }
 
 export const GET = handleRequest

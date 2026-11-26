@@ -52,5 +52,8 @@ export const GET = withRouteContext(
     })
   },
   // The inline preview contains the same financial document as the download.
-  { requireCompleteLedger: request => !new URL(request.url).searchParams.get('version') },
+  {
+    requireCompleteLedger: request => !new URL(request.url).searchParams.get('version'),
+    uuidParams: { id: 'PERIOD_NOT_FOUND' },
+  },
 )

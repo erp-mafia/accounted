@@ -35,6 +35,7 @@ export const GET = withRouteContext(
 
     return NextResponse.json({ data })
   },
+  { uuidParams: { id: 'ARTICLE_NOT_FOUND' } },
 )
 
 export const PATCH = withRouteContext(
@@ -60,7 +61,7 @@ export const PATCH = withRouteContext(
 
     return NextResponse.json({ data })
   },
-  { requireWrite: true },
+  { requireWrite: true, uuidParams: { id: 'ARTICLE_NOT_FOUND' } },
 )
 
 // Articles are master data, while invoice lines hold frozen copies of the
@@ -140,5 +141,5 @@ export const DELETE = withRouteContext(
 
     return NextResponse.json({ success: true })
   },
-  { requireWrite: true },
+  { requireWrite: true, uuidParams: { id: 'ARTICLE_NOT_FOUND' } },
 )

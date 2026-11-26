@@ -37,9 +37,8 @@ export const MAX_BANK_ROW_SPLIT = Math.floor((MAX_ROWS_PER_REQUEST - 1) / 2)
 export const MAX_LINK_REQUEST_ENTRIES = 10_000
 
 /**
- * Ids per PostgREST `.in()` read on these paths. Ids travel in the GET query
- * string, and a gateway with the stock 8 KB header buffer answers a long one
- * with 414 before PostgREST sees it (#2395); a split of MAX_BANK_ROW_SPLIT
- * verifikat is read in slices of this size.
+ * Ids per PostgREST `.in()` read on these paths: a split of
+ * MAX_BANK_ROW_SPLIT verifikat is read in slices of this size. Defined beside
+ * the slice loop in lib/supabase/read-in-slices.ts, its one home.
  */
-export const ID_READ_CHUNK = 100
+export { ID_READ_CHUNK } from '@/lib/supabase/read-in-slices'

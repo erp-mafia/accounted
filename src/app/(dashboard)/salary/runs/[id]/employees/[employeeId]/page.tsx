@@ -97,9 +97,10 @@ function isRemovableLine(li: LineRow): boolean {
   if (li.source_expense_claim_id) return true
   // calculation_source marks an engine row, such as the semestertillägg the
   // calculation derives from a vacation line's days (#85): the vacation line
-  // itself stays removable.
+  // itself stays removable. A Semesterlön rörliga lönedelar row is stored as
+  // semesterersättning, a type the dialog does not offer on its own.
   return (
-    isManualPayslipLineType(li.item_type) &&
+    (isManualPayslipLineType(li.item_type) || li.settles_variable_vacation_pay === true) &&
     !li.source_recurring_line_id &&
     !li.source_benefit_id &&
     !li.calculation_source
@@ -498,6 +499,7 @@ export default function SalaryRunEmployeeDetailPage({
             mealSchablon={mealBenefitSchablonFromRunParams(run.calculation_params)}
             employmentType={employee.employment_type}
             personnelCategory={employee.personnel_category}
+            vacationRule={employee.vacation_rule}
             onAdded={load}
           />
         )}

@@ -274,6 +274,12 @@
  *      ignores (committed before the rule, added with -f, or brought along
  *      by a branch cut before the rule). Implementation and rationale in
  *      tracked-ignored.mjs. No baseline: any hit fails.
+ *   35. uuid-path-param: a session route (withRouteContext) with an id path
+ *      segment and no uuid check, so a malformed id reaches a uuid filter and
+ *      Postgres refuses it (22P02). Declare it with `uuidParams`.
+ *      Implementation and rationale in uuid-path-param.mjs; allowlisted
+ *      file-set, may only shrink. A `uuidParams` name that is none of the
+ *      route's path segments fails with no baseline (uuid-param-name).
  *
  * Usage:
  *   node scripts/checks/no-new-antipatterns.mjs            # check (CI)
@@ -315,6 +321,12 @@ import {
 } from './extension-route-guards.mjs'
 import { findInitReach } from './static-init-import.mjs'
 import { findLimitsAbovePage, LIMIT_ABOVE_PAGE_ALLOWED } from './limit-above-page.mjs'
+import {
+  findMisdeclaredUuidParams,
+  findUndeclaredUuidPathParams,
+  UUID_PATH_PARAM_ALLOWED,
+  UUID_PATH_PARAM_HINT,
+} from './uuid-path-param.mjs'
 import { findLinesInnerEmbeds, LINES_INNER_EMBED_ALLOWED } from './lines-inner-embed.mjs'
 import { findLocalTestMocks, LOCAL_SUPABASE_CHAIN_ALLOWED } from './local-test-mock.mjs'
 import {
@@ -1372,6 +1384,8 @@ const current = {
   uiUniformity: findUiUniformityFindings(SOURCE_ROOT),
   tableWithoutGrant: findTablesWithoutGrant(ROOT),
   limitsAbovePage: findLimitsAbovePage(SOURCE_ROOT),
+  uuidPathParams: findUndeclaredUuidPathParams(SOURCE_ROOT),
+  misdeclaredUuidParams: findMisdeclaredUuidParams(SOURCE_ROOT),
   linesInnerEmbeds: findLinesInnerEmbeds(SOURCE_ROOT),
   localTestMocks: findLocalTestMocks(ROOT),
   utcToday: findUtcTodaySites(SOURCE_ROOT),
@@ -1938,6 +1952,31 @@ if (newLimitsAbovePage.length) {
       '    { maxRows } to keep a deliberate cap. Read an aggregate for a sum or a count. A sample stays at\n' +
       '    .limit(1000) or below, with a comment saying it is a sample.',
   )
+}
+
+// 1g2b. uuid-path-param: allowlist lives in uuid-path-param.mjs
+// (UUID_PATH_PARAM_ALLOWED) and may only shrink. A session route that hands
+// its id segment to a uuid filter unchecked answers 500 to a malformed id.
+const newUuidPathParams = current.uuidPathParams.filter((f) => !UUID_PATH_PARAM_ALLOWED.has(f))
+const uuidPathParamsNow = new Set(current.uuidPathParams)
+const declaredSinceBaseline = [...UUID_PATH_PARAM_ALLOWED].filter((f) => !uuidPathParamsNow.has(f))
+if (newUuidPathParams.length) {
+  failed = true
+  console.error(
+    `\n✗ uuid-path-param: ${newUuidPathParams.length} session route(s) take an id from the path and check no uuid, ` +
+      'so a malformed id reaches a uuid filter, which Postgres refuses (22P02):',
+  )
+  newUuidPathParams.forEach((f) => console.error(`    ${f}`))
+  console.error(UUID_PATH_PARAM_HINT)
+}
+if (current.misdeclaredUuidParams.length) {
+  failed = true
+  console.error(
+    `\n✗ uuid-path-param: ${current.misdeclaredUuidParams.length} route(s) declare a uuidParams name that is none of ` +
+      'their path segments, so every request answers 404:',
+  )
+  current.misdeclaredUuidParams.forEach((f) => console.error(`    ${f.file}  ${f.names.join(', ')}`))
+  console.error('  → name the parameter as the [segment] in the route\'s folder spells it.')
 }
 
 // 1g3. lines-inner-embed: allowlist lives in lines-inner-embed.mjs
@@ -2549,6 +2588,14 @@ if (gatedSinceBaseline.length) {
   gatedSinceBaseline.forEach((f) => console.log(`    ${f}`))
 }
 
+if (declaredSinceBaseline.length) {
+  console.log(
+    `\n✓ uuid-path-param progress: ${declaredSinceBaseline.length} allowlisted route(s) now check their path ids.` +
+      ' Remove them from UUID_PATH_PARAM_ALLOWED in scripts/checks/uuid-path-param.mjs to lock it in:',
+  )
+  declaredSinceBaseline.forEach((f) => console.log(`    ${f}`))
+}
+
 if (pagedSinceBaseline.length) {
   console.log(
     `\n✓ limit-above-page progress: ${pagedSinceBaseline.length} allowlisted file(s) no longer read past a page with .limit().` +
@@ -2578,5 +2625,5 @@ if (failed) {
   process.exit(1)
 }
 console.log(
-  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, mcp-bare-error: ${current.mcpBareErrorThrows}, hand-rolled-invariant: ${current.handRolledInvariants}, literal-legal-form: ${current.literalLegalForm.length}, hand-built-voucher-ref: ${current.handBuiltVoucherRef.length}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, direct-invoice-payment-insert: 0, hand-written-sie-extensions: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, hand-read-api-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, ui-uniformity: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, static-init-import: 0, lazy-init-reach: ${current.lazyInitEntries.length}/${lazyInitBaseline?.count ?? 'no baseline'}, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), raw-reference-fetch: ${current.rawReferenceFetch.length} file(s), client-node-builtin: ${current.clientNodeBuiltins.length}, client-server-only: ${current.clientServerOnly.length}, consent-token-access: 0, ambiguous-embed: ${current.ambiguousEmbeds.length}, provider-host: ${current.providerHosts.length} file(s), provider-name-denylist: ${current.providerNameDenylist.skipped ? 'skipped' : current.providerNameDenylist.findings.length}, table-without-grant: ${tableWithoutGrantFiles.length}/${tableWithoutGrantBaseline.size} grandfathered file(s), functiondef-patch: ${functiondefPatchFiles.length}/${functiondefPatchBaseline.size} grandfathered file(s), direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted, limit-above-page: ${limitAbovePageFilesNow.size}/${LIMIT_ABOVE_PAGE_ALLOWED.size} allowlisted file(s), utc-today: ${current.utcToday.length} in ${UTC_TODAY_ALLOWED.size} allowlisted file(s), bas-account-literal: ${current.jurisdictionWelds.basAccountLiteral.length} in ${Object.keys(basLiteralCounts).length} file(s), sek-literal: ${current.jurisdictionWelds.sekLiteral.length} in ${Object.keys(sekLiteralCounts).length} file(s), kernel-import: ${kernelImportEdgeCount} edge(s), posting-port-bypass: ${postingBypassEdgeCount}/${countEdges(postingBypassBaseline)} baselined edge(s) + ${countEdges(current.postingPort.allowlisted)} permanent, swedish-ui-literal: ${current.swedishUiLiterals.length} in ${Object.keys(swedishUiLiteralCounts).length} file(s), script-init-condition: 0, duplicate-block: ${duplicateLineCount} shared line(s) in ${Object.keys(duplicatePairs).length} file pair(s), error-masking: ${current.errorMasking.length} in ${Object.keys(errorMaskingCounts).length} file(s)).`,
+  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, mcp-bare-error: ${current.mcpBareErrorThrows}, hand-rolled-invariant: ${current.handRolledInvariants}, literal-legal-form: ${current.literalLegalForm.length}, hand-built-voucher-ref: ${current.handBuiltVoucherRef.length}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, direct-invoice-payment-insert: 0, hand-written-sie-extensions: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, hand-read-api-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, ui-uniformity: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, static-init-import: 0, lazy-init-reach: ${current.lazyInitEntries.length}/${lazyInitBaseline?.count ?? 'no baseline'}, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), raw-reference-fetch: ${current.rawReferenceFetch.length} file(s), client-node-builtin: ${current.clientNodeBuiltins.length}, client-server-only: ${current.clientServerOnly.length}, consent-token-access: 0, ambiguous-embed: ${current.ambiguousEmbeds.length}, provider-host: ${current.providerHosts.length} file(s), provider-name-denylist: ${current.providerNameDenylist.skipped ? 'skipped' : current.providerNameDenylist.findings.length}, table-without-grant: ${tableWithoutGrantFiles.length}/${tableWithoutGrantBaseline.size} grandfathered file(s), functiondef-patch: ${functiondefPatchFiles.length}/${functiondefPatchBaseline.size} grandfathered file(s), direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted, limit-above-page: ${limitAbovePageFilesNow.size}/${LIMIT_ABOVE_PAGE_ALLOWED.size} allowlisted file(s), uuid-path-param: ${uuidPathParamsNow.size}/${UUID_PATH_PARAM_ALLOWED.size} allowlisted route(s), uuid-param-name: 0, utc-today: ${current.utcToday.length} in ${UTC_TODAY_ALLOWED.size} allowlisted file(s), bas-account-literal: ${current.jurisdictionWelds.basAccountLiteral.length} in ${Object.keys(basLiteralCounts).length} file(s), sek-literal: ${current.jurisdictionWelds.sekLiteral.length} in ${Object.keys(sekLiteralCounts).length} file(s), kernel-import: ${kernelImportEdgeCount} edge(s), posting-port-bypass: ${postingBypassEdgeCount}/${countEdges(postingBypassBaseline)} baselined edge(s) + ${countEdges(current.postingPort.allowlisted)} permanent, swedish-ui-literal: ${current.swedishUiLiterals.length} in ${Object.keys(swedishUiLiteralCounts).length} file(s), script-init-condition: 0, duplicate-block: ${duplicateLineCount} shared line(s) in ${Object.keys(duplicatePairs).length} file pair(s), error-masking: ${current.errorMasking.length} in ${Object.keys(errorMaskingCounts).length} file(s)).`,
 )

@@ -152,5 +152,6 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
         facts: status === 'succeeded' ? readUnderlagFacts(row.extracted_data) : null,
       },
     })
-  }
+  },
+  { uuidParams: { id: 'DOC_NOT_FOUND' } },
 )

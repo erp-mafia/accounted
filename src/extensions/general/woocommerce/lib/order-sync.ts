@@ -400,6 +400,14 @@ function customerName(order: WooOrder): string | null {
   return name || null
 }
 
+/**
+ * One billing address field, trimmed; blank, or not text at all (plugins can
+ * reshape the payload), is null.
+ */
+function billingText(value: unknown): string | null {
+  return typeof value === 'string' ? value.trim() || null : null
+}
+
 /** Sum of refund totals (positive) reported inline on the order. */
 function refundedTotal(order: WooOrder): number {
   let sum = 0
@@ -460,6 +468,12 @@ export function mapOrderToWebshopRow(
       customer_email: order.billing?.email || null,
       customer_orgnr: extractOrgnr(order),
       customer_country: order.billing?.country?.toUpperCase() || null,
+      // For the customer Skapa faktura creates from the order. Refund rows
+      // never become an invoice and carry none.
+      customer_address_line1: billingText(order.billing?.address_1),
+      customer_address_line2: billingText(order.billing?.address_2),
+      customer_postal_code: billingText(order.billing?.postcode),
+      customer_city: billingText(order.billing?.city),
       payment_method: order.payment_method || null,
       payment_method_title: order.payment_method_title || null,
       gateway_reference: order.transaction_id || null,

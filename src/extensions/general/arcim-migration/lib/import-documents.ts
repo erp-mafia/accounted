@@ -79,6 +79,13 @@
  * Additive like the supplier-invoice files: a refusal is reported in
  * `unreachableSources` and the other files carry on.
  *
+ * From Visma the customer invoice copy is the only source (vismaSource):
+ * Visma's own PDF of each invoice the migration imported from that account,
+ * stored the same way. Visma names an invoice's booking voucher by number
+ * alone, without a year or a date, and the migration already weighed that
+ * number against the amount when it linked the invoice: the copy goes on the
+ * verifikat of that link, or on the invoice only.
+ *
  * Resumable: one call works through the provider's attachment list (sorted
  * by provider id so the order is stable between calls) until `timeBudgetMs`
  * is spent, then returns `partial: true` with `nextCursor` = the id of the
@@ -124,6 +131,8 @@ import {
   type FortnoxBookingVoucher,
   type FortnoxFinancialYear,
 } from '@/lib/providers/fortnox/attachments'
+import { VismaApiError, VismaClient } from '@/lib/providers/visma/client'
+import { fetchVismaInvoicePdf } from '@/lib/providers/visma/attachments'
 import { providerRefusalReason, type ProviderRefusalReason } from '@/lib/providers/with-provider-call'
 import {
   uploadDocument,
@@ -334,7 +343,7 @@ export type UnmatchedReason =
   | UnresolvedRefReason
 
 /**
- * Customer invoice copies (Fortnox's PDF of each imported invoice). Each one
+ * Customer invoice copies (Fortnox's or Visma's PDF of each imported invoice). Each one
  * is also in the general counts: linked and invoiceOnly in `linked`, skipped,
  * locked and failed in theirs.
  */
@@ -398,15 +407,17 @@ interface ProviderAttachment {
   ref: AttachmentRef | null
   /** The ref needs one more provider read (resolveRef) before it is known. */
   refPending?: boolean
-  /** A migrated customer invoice whose own PDF the sweep archives (Fortnox). */
+  /** A migrated customer invoice whose own PDF the sweep archives (Fortnox, Visma). */
   customerInvoice?: CustomerInvoiceCopy
 }
 
-/** A customer invoice the migration imported from Fortnox. */
+/** A customer invoice the migration imported from Fortnox or Visma. */
 interface CustomerInvoiceCopy {
   invoiceId: string
-  /** Fortnox's DocumentNumber: the preview's key and the printed number. */
+  /** The printed invoice number. From Fortnox also the preview's key (DocumentNumber). */
   documentNumber: string
+  /** The provider's own key for the invoice when it is not the printed number: Visma's invoice Id. */
+  providerInvoiceId?: string
   /** The registration verifikat the migration linked, when it did. */
   journalEntryId: string | null
   /** The invoice already holds its imported copy: skipped before any call. */
@@ -434,6 +445,16 @@ interface ProviderAttachmentSource {
   resolveRef?(attachment: ProviderAttachment): Promise<AttachmentRef | null>
 }
 
+/** Visma refuses the register (403): the connection lacks the right, asking again does not help. */
+function vismaRefusedRegister(error: unknown): boolean {
+  return error instanceof VismaApiError && error.statusCode === 403
+}
+
+/** The provider refuses the customer invoice register, not one invoice. */
+function customerInvoiceRegisterRefused(error: unknown): boolean {
+  return isFortnoxPermissionError(error) || vismaRefusedRegister(error)
+}
+
 function unreachableFrom(
   scope: FortnoxDocumentScope,
   error: unknown,
@@ -442,7 +463,11 @@ function unreachableFrom(
   return {
     source,
     scope,
-    reason: isFortnoxPermissionError(error) ? providerRefusalReason(error) : 'error',
+    reason: isFortnoxPermissionError(error)
+      ? providerRefusalReason(error)
+      : vismaRefusedRegister(error)
+        ? 'permission'
+        : 'error',
     providerMessage: fortnoxErrorMessage(error),
   }
 }
@@ -578,6 +603,110 @@ function importedCopyReference(copy: CustomerInvoiceCopy): string {
   return `invoice:${copy.documentNumber}:${copy.invoiceId}`
 }
 
+/**
+ * One attachment per customer invoice this connection's migration imported:
+ * the invoice's own PDF. Read from the migration's source records, so a
+ * native invoice, or one from another connection, is never touched. Read from
+ * the database alone; the invoices that already hold their imported copy are
+ * marked so the sweep skips them without a provider call.
+ *
+ * Fortnox keys an invoice by its DocumentNumber, the printed number. Visma
+ * keys it by its invoice Id: the printed number is read from the invoice, and
+ * the Id is kept as the key the PDF is fetched by.
+ */
+async function importedCustomerInvoiceCopies(
+  supabase: SupabaseClient,
+  companyId: string,
+  provider: 'fortnox' | 'visma',
+  accountKey: string,
+): Promise<ProviderAttachment[]> {
+  const sourceRecords = await fetchAllRows<{ id: string; source_id: string; target_id: string }>(
+    ({ from, to }) =>
+      supabase
+        .from('migration_source_records')
+        .select('id, source_id, target_id')
+        .eq('company_id', companyId)
+        .eq('provider', provider)
+        .eq('account_key', accountKey)
+        .eq('resource', 'salesInvoices')
+        .order('id', { ascending: true })
+        .range(from, to),
+  )
+  if (sourceRecords.length === 0) return []
+
+  const sourceIdByInvoice = new Map(sourceRecords.map((record) => [record.target_id, String(record.source_id).trim()]))
+  const invoiceIds = [...sourceIdByInvoice.keys()]
+  type ImportedInvoice = { id: string; status: string | null; journal_entry_id: string | null; invoice_number: string | null }
+  const invoices: ImportedInvoice[] = []
+  for (let index = 0; index < invoiceIds.length; index += INVOICE_ID_CHUNK) {
+    const chunk = invoiceIds.slice(index, index + INVOICE_ID_CHUNK)
+    invoices.push(
+      ...(await fetchAllRows<ImportedInvoice>(({ from, to }) =>
+        supabase
+          .from('invoices')
+          .select('id, status, journal_entry_id, invoice_number')
+          .eq('company_id', companyId)
+          .in('id', chunk)
+          .order('id', { ascending: true })
+          .range(from, to),
+      )),
+    )
+  }
+  const archived = await fetchInvoicesWithImportedCopy(companyId)
+
+  const attachments: ProviderAttachment[] = []
+  for (const invoice of invoices) {
+    if (invoice.status && NEVER_ISSUED_INVOICE_STATUSES.has(invoice.status)) continue
+    const sourceId = sourceIdByInvoice.get(invoice.id) ?? ''
+    const documentNumber = provider === 'fortnox' ? sourceId : String(invoice.invoice_number ?? '').trim()
+    if (provider === 'fortnox' ? !/^\d+$/.test(documentNumber) : !documentNumber || !sourceId) continue
+    attachments.push({
+      id: `${CUSTOMER_INVOICE_ATTACHMENT_PREFIX}${documentNumber}`,
+      fileName: `Faktura ${documentNumber}.pdf`,
+      fileNameIsBaseName: false,
+      declaredContentType: 'application/pdf',
+      ref: null,
+      customerInvoice: {
+        invoiceId: invoice.id,
+        documentNumber,
+        ...(provider === 'visma' ? { providerInvoiceId: sourceId } : {}),
+        journalEntryId: invoice.journal_entry_id,
+        archived: archived.has(invoice.id),
+      },
+    })
+  }
+  return attachments
+}
+
+/**
+ * Visma: the customer invoices' own PDFs and nothing else. No resolveRef:
+ * the copy goes on the verifikat the migration linked the invoice to, or on
+ * the invoice only (the header above). A failed listing is a database read
+ * and fails the call, which is retried as a whole.
+ */
+function vismaSource(
+  client: VismaClient,
+  accessToken: () => string,
+  supabase: SupabaseClient,
+  companyId: string,
+  /** The migration's account key for this connection (migration_source_records.account_key). */
+  accountKey: string,
+): ProviderAttachmentSource {
+  return {
+    async list() {
+      return {
+        attachments: await importedCustomerInvoiceCopies(supabase, companyId, 'visma', accountKey),
+        unreachable: [],
+      }
+    },
+    async download(attachment) {
+      const invoiceId = attachment.customerInvoice?.providerInvoiceId
+      if (!invoiceId) throw new Error('VISMA_ATTACHMENT_NOT_A_CUSTOMER_INVOICE')
+      return fetchVismaInvoicePdf(client, accessToken(), invoiceId)
+    },
+  }
+}
+
 function fortnoxSource(
   client: FortnoxClient,
   accessToken: () => string,
@@ -685,71 +814,13 @@ function fortnoxSource(
   }
 
   /**
-   * One attachment per customer invoice this Fortnox account's migration
-   * imported: the invoice's own PDF. Read from the migration's source records,
-   * so a native invoice, or one from another connection, is never touched.
-   * Read from the database alone; the invoices that already hold their
-   * imported copy are marked so the sweep skips them without a Fortnox call.
-   * Additive like the supplier-invoice files: a failure is reported and the
-   * other files carry on.
+   * The customer invoices this Fortnox account's migration imported
+   * (importedCustomerInvoiceCopies). Additive like the supplier-invoice
+   * files: a failure is reported and the other files carry on.
    */
   const customerInvoiceAttachments = async (): Promise<ProviderAttachmentListing> => {
     try {
-      const sourceRecords = await fetchAllRows<{ id: string; source_id: string; target_id: string }>(
-        ({ from, to }) =>
-          supabase
-            .from('migration_source_records')
-            .select('id, source_id, target_id')
-            .eq('company_id', companyId)
-            .eq('provider', 'fortnox')
-            .eq('account_key', accountKey)
-            .eq('resource', 'salesInvoices')
-            .order('id', { ascending: true })
-            .range(from, to),
-      )
-      if (sourceRecords.length === 0) return { attachments: [], unreachable: [] }
-
-      const documentNumberByInvoice = new Map(
-        sourceRecords.map((record) => [record.target_id, String(record.source_id).trim()]),
-      )
-      const invoiceIds = [...documentNumberByInvoice.keys()]
-      const invoices: { id: string; status: string | null; journal_entry_id: string | null }[] = []
-      for (let index = 0; index < invoiceIds.length; index += INVOICE_ID_CHUNK) {
-        const chunk = invoiceIds.slice(index, index + INVOICE_ID_CHUNK)
-        invoices.push(
-          ...(await fetchAllRows<{ id: string; status: string | null; journal_entry_id: string | null }>(
-            ({ from, to }) =>
-              supabase
-                .from('invoices')
-                .select('id, status, journal_entry_id')
-                .eq('company_id', companyId)
-                .in('id', chunk)
-                .order('id', { ascending: true })
-                .range(from, to),
-          )),
-        )
-      }
-      const archived = await fetchInvoicesWithImportedCopy(companyId)
-
-      const attachments: ProviderAttachment[] = []
-      for (const invoice of invoices) {
-        if (invoice.status && NEVER_ISSUED_INVOICE_STATUSES.has(invoice.status)) continue
-        const documentNumber = documentNumberByInvoice.get(invoice.id) ?? ''
-        if (!/^\d+$/.test(documentNumber)) continue
-        attachments.push({
-          id: `${CUSTOMER_INVOICE_ATTACHMENT_PREFIX}${documentNumber}`,
-          fileName: `Faktura ${documentNumber}.pdf`,
-          fileNameIsBaseName: false,
-          declaredContentType: 'application/pdf',
-          ref: null,
-          customerInvoice: {
-            invoiceId: invoice.id,
-            documentNumber,
-            journalEntryId: invoice.journal_entry_id,
-            archived: archived.has(invoice.id),
-          },
-        })
-      }
+      const attachments = await importedCustomerInvoiceCopies(supabase, companyId, 'fortnox', accountKey)
       return { attachments, unreachable: [] }
     } catch (error) {
       if (error instanceof ExecutionBudgetExceeded) throw error
@@ -925,7 +996,7 @@ export async function importProviderDocuments(
     failed: 0,
     refused: 0,
   }
-  if (provider === 'fortnox') result.customerInvoicePdfs = copyCounts
+  if (provider === 'fortnox' || provider === 'visma') result.customerInvoicePdfs = copyCounts
 
   // Unsupported providers are a no-op rather than an error
   // so a mixed-provider caller can invoke this unconditionally. The migration
@@ -942,7 +1013,7 @@ export async function importProviderDocuments(
   // The account key the migration recorded its source records under: the
   // connection's organisation number, else the provider's company id (as the
   // migration job worker derives it).
-  const fortnoxAccountKey =
+  const migrationAccountKey =
     String(resolved.consent.org_number ?? '').replace(/[^a-z0-9]/gi, '') || resolved.providerCompanyId || ''
   const fortnox =
     provider === 'fortnox'
@@ -951,17 +1022,24 @@ export async function importProviderDocuments(
           () => resolved.accessToken,
           supabase,
           companyId,
-          fortnoxAccountKey,
+          migrationAccountKey,
           () =>
             sweepDeadline === undefined
               ? SUPPLIER_INVOICE_INDEX_MAX_MS
               : Math.min(SUPPLIER_INVOICE_INDEX_MAX_MS, (sweepDeadline - now()) / 2),
         )
       : null
+  // Like Fortnox's, Visma's source reads the token on every request.
+  const visma =
+    provider === 'visma'
+      ? vismaSource(new VismaClient(), () => resolved.accessToken, supabase, companyId, migrationAccountKey)
+      : null
   const source = (): ProviderAttachmentSource =>
     provider === 'bokio'
       ? bokioSource(bokioClient as BokioClient, resolved)
-      : (fortnox as ProviderAttachmentSource)
+      : provider === 'visma'
+        ? (visma as ProviderAttachmentSource)
+        : (fortnox as ProviderAttachmentSource)
 
   // The token a refresh after a Fortnox 401 handed out. A 401 on that very
   // token means the grant itself is gone, not that the token aged out.
@@ -978,6 +1056,9 @@ export async function importProviderDocuments(
     error instanceof ProviderConnectionRefusedError || (refreshFailure !== undefined && error === refreshFailure)
   const refusal = (error: unknown): ProviderConnectionRefusedError | null => {
     if (provider === 'fortnox' && error instanceof FortnoxApiError && error.statusCode === 401) {
+      return new ProviderConnectionRefusedError(provider, 'PROVIDER_AUTH_EXPIRED', 401)
+    }
+    if (provider === 'visma' && error instanceof VismaApiError && error.statusCode === 401) {
       return new ProviderConnectionRefusedError(provider, 'PROVIDER_AUTH_EXPIRED', 401)
     }
     // Bokio tokens never expire and cannot be refreshed: a refusal is final.
@@ -1004,7 +1085,7 @@ export async function importProviderDocuments(
     } catch (error) {
       const refused = refusal(error)
       if (!refused) throw error
-      if (provider !== 'fortnox' || tokenFromRefresh === resolved.accessToken) throw refused
+      if ((provider !== 'fortnox' && provider !== 'visma') || tokenFromRefresh === resolved.accessToken) throw refused
       try {
         resolved = await resolveConsent(companyId, consentId, { rejectedAccessToken: resolved.accessToken })
       } catch (refreshError) {
@@ -1152,7 +1233,7 @@ export async function importProviderDocuments(
     }
   }
 
-  // ── Customer invoice copies (Fortnox) ──
+  // ── Customer invoice copies (Fortnox, Visma) ──
   // Live migrated verifikat: the only ones an invoice's own link may hand its
   // copy to (isLiveCopy: never a reversed copy left by an SIE re-sync).
   const liveEntryIds = new Set(vouchers.filter(isLiveCopy).map((voucher) => voucher.id))
@@ -1164,8 +1245,10 @@ export async function importProviderDocuments(
     if (customerInvoiceCopiesRefused) return
     customerInvoiceCopiesRefused = true
     result.unreachableSources.push(unreachableFrom('invoice', error, 'customer_invoice_files'))
-    log.warn('fortnox refused customer invoice copies', {
-      providerStatus: error instanceof FortnoxApiError ? error.statusCode : undefined,
+    log.warn('provider refused customer invoice copies', {
+      provider,
+      providerStatus:
+        error instanceof FortnoxApiError || error instanceof VismaApiError ? error.statusCode : undefined,
       providerMessage: fortnoxErrorMessage(error),
     })
   }
@@ -1174,11 +1257,11 @@ export async function importProviderDocuments(
   // the ones an earlier run was told about are counted without a call, the
   // ones this call is told about are kept for the next run. Best effort both
   // ways: without the memory every copy is simply asked, as before.
-  const copyRefusalScope = { companyId, userId, accountKey: fortnoxAccountKey }
+  const copyRefusalScope = { companyId, userId, accountKey: migrationAccountKey }
   let knownCopyRefusals = new Map<string, CopyRefusal>()
   if (provider === 'fortnox' && attachments.some((a) => a.customerInvoice && !a.customerInvoice.archived)) {
     try {
-      knownCopyRefusals = await readCopyRefusals(supabase, companyId, fortnoxAccountKey, now())
+      knownCopyRefusals = await readCopyRefusals(supabase, companyId, migrationAccountKey, now())
     } catch (error) {
       log.warn('customer invoice copy refusals not read: every copy is asked', {
         reason: error instanceof Error ? error.message : 'unknown',
@@ -1331,6 +1414,10 @@ export async function importProviderDocuments(
     let invoiceOnlyReason: InvoiceOnlyReason | null = null
     if (copy.journalEntryId && liveEntryIds.has(copy.journalEntryId)) {
       journalEntryId = copy.journalEntryId
+    } else if (!source().resolveRef) {
+      // The provider names no verifikat the import may trust on its own
+      // (Visma): without the migration's link the copy goes on the invoice.
+      invoiceOnlyReason = 'no_voucher_ref'
     } else {
       // The dry run spends no provider calls past the listing.
       if (dryRun) return
@@ -1340,7 +1427,7 @@ export async function importProviderDocuments(
       } catch (error) {
         if (cut(error)) return 'cut'
         if (stopsTheSweep(error)) throw error
-        if (isFortnoxPermissionError(error)) {
+        if (customerInvoiceRegisterRefused(error)) {
           refuseCustomerInvoiceCopies(error)
           return
         }
@@ -1419,7 +1506,7 @@ export async function importProviderDocuments(
         companyId,
         userId,
         invoiceId: copy.invoiceId,
-        provider: 'fortnox',
+        provider,
         providerMessageId: importedCopyReference(copy),
         documentId,
       })
@@ -1466,7 +1553,7 @@ export async function importProviderDocuments(
       if (unheldCopyId) await discardUnheldCopy(unheldCopyId)
       if (cut(error)) return 'cut'
       if (stopsTheSweep(error)) throw error
-      if (isFortnoxPermissionError(error)) {
+      if (customerInvoiceRegisterRefused(error)) {
         refuseCustomerInvoiceCopies(error)
         return
       }

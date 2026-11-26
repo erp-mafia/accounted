@@ -298,7 +298,7 @@ export default function BooksJourney(props: BooksJourneyProps) {
           {/* Never disabled by running work: an import is the server's job, so
               the act must not hold anyone (lib/onboarding-books/skip). */}
           {skipShown(state.step, sourcesFlow) && (
-            <Button variant="ghost" className="text-muted-foreground" disabled={leaving || !navigation.ready} onClick={() => setSkipOpen(true)}>
+            <Button variant="ghost" className="bks-skip text-muted-foreground" disabled={leaving || !navigation.ready} onClick={() => setSkipOpen(true)}>
               {t('skip_all')}
             </Button>
           )}

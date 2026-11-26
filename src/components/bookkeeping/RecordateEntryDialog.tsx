@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { useRouter } from 'next/navigation'
+import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import {
   Dialog,
@@ -43,7 +43,6 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 
 export default function RecordateEntryDialog({ entry, open, onOpenChange, onMoved }: Props) {
   const { toast } = useToast()
-  const router = useRouter()
   const t = useTranslations('journal_detail')
   const [newDate, setNewDate] = useState(entry.entry_date)
   const [preview, setPreview] = useState<PeriodStatus | null>(null)
@@ -142,8 +141,8 @@ export default function RecordateEntryDialog({ entry, open, onOpenChange, onMove
         title: 'Verifikationen flyttad',
         description: 'En storno och en rättelse med rätt datum har bokförts.',
         action: correctedId ? (
-          <Button variant="outline" onClick={() => router.push(`/bookkeeping/${correctedId}`)}>
-            Visa rättelsen
+          <Button variant="outline" asChild>
+            <Link href={`/bookkeeping/${correctedId}`}>Visa rättelsen</Link>
           </Button>
         ) : undefined,
       })

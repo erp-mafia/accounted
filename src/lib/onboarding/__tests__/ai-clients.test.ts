@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   agentChipView,
   aiChatLink,
+  aiClientsBoundTo,
   aiConnection,
   aiConnectionFromWire,
   aiConnectAction,
@@ -49,6 +50,25 @@ describe('connectedAiClients', () => {
     expect(
       connectedAiClients([{ client: null }, { client: 'cursor' }, { client: 'local' }, { client: 'cursor_deeplink' }]),
     ).toEqual([])
+  })
+})
+
+describe('aiClientsBoundTo', () => {
+  it('names the clients whose key is bound to the company, or not bound yet', () => {
+    const rows = [
+      { client: 'claude', company_id: 'company-1' },
+      { client: 'chatgpt', company_id: 'company-2' },
+      { client: 'grok', company_id: null },
+    ]
+    expect(aiClientsBoundTo(rows, 'company-1')).toEqual(['claude', 'grok'])
+    expect(aiClientsBoundTo(rows, 'company-2')).toEqual(['chatgpt', 'grok'])
+    expect(aiClientsBoundTo(rows, 'company-3')).toEqual(['grok'])
+  })
+
+  it('names none when every connection belongs to another company, or names no known client', () => {
+    expect(aiClientsBoundTo([{ client: 'claude', company_id: 'company-2' }], 'company-1')).toEqual([])
+    expect(aiClientsBoundTo([{ client: null, company_id: 'company-1' }, { client: 'cursor', company_id: 'company-1' }], 'company-1')).toEqual([])
+    expect(aiClientsBoundTo([], 'company-1')).toEqual([])
   })
 })
 

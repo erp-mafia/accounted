@@ -49,6 +49,7 @@ import {
 import { checkRateLimit } from '@/lib/auth/rate-limit-http'
 import { getCanonicalBaseUrl, resolveDiscoveryBaseUrl } from '@/lib/api/v1/base-url'
 import { createCompanyCore } from '@/lib/company/create-company'
+import { defaultTeamForNewCompany } from '@/lib/company/default-team'
 import {
   AssetCorrectionBlockedError,
   AssetDeleteBlockedError,
@@ -142,6 +143,7 @@ import {
   type PrintedLineAmount,
 } from '@/lib/bookkeeping/supplier-invoice-line-totals'
 import { getErrorEntry, siCreateInvalidInputMessages } from '@/lib/errors/structured-errors'
+import { registerRefusalMessageSv } from '@/lib/salary/register-locks'
 import type { SIEAppendPlan } from '@/lib/import/sie-append'
 import { ACCOUNTS_NOT_IN_CHART } from '@/lib/bookkeeping/errors'
 import { dbError, errorCauseTag } from '@/lib/errors/db-error'
@@ -259,6 +261,8 @@ import { dimensionFilterPartialView } from '@/lib/reports/dimension-filter'
 import { resolveAgentWorklist, verifikatNextStepKinds, type NextStepKind, type VerifikatErrandRow } from '@/lib/receipt-hunt/agent-worklist'
 import { isSkatteverketEnabled } from '@/lib/skatteverket/enabled'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { chunk } from '@/lib/utils'
+import { ID_READ_CHUNK } from '@/lib/supabase/read-in-slices'
 import { expandParty } from '@/lib/parties/party-api'
 import {
   cashAccountCurrencyMismatch,
@@ -3582,18 +3586,27 @@ async function documentIdsForInboxItems(
   ids: string[],
 ): Promise<Map<string, string>> {
   if (ids.length === 0) return new Map()
-  const { data, error } = await supabase
-    .from('invoice_inbox_items')
-    .select('id, document_id')
-    .eq('company_id', companyId)
-    .in('id', ids)
-    .not('document_id', 'is', null)
-  if (error) {
-    if (isLookupMiss(error)) return new Map()
-    throw dbError(error)
+  // In slices of ID_READ_CHUNK: the ids travel in the GET query string, which
+  // the gateway refuses past its limit, and gnubok_link_documents_to_vouchers
+  // asks about up to 300. A lookup miss in any slice answers as the one read
+  // did: no inbox item resolves.
+  const held = new Map<string, string>()
+  for (const slice of chunk(ids, ID_READ_CHUNK)) {
+    const { data, error } = await supabase
+      .from('invoice_inbox_items')
+      .select('id, document_id')
+      .eq('company_id', companyId)
+      .in('id', slice)
+      .not('document_id', 'is', null)
+    if (error) {
+      if (isLookupMiss(error)) return new Map()
+      throw dbError(error)
+    }
+    for (const r of (data ?? []) as Array<{ id: string; document_id: string }>) {
+      if (r.document_id !== r.id) held.set(r.id, r.document_id)
+    }
   }
-  const rows = (data ?? []) as Array<{ id: string; document_id: string }>
-  return new Map(rows.filter((r) => r.document_id !== r.id).map((r) => [r.id, r.document_id]))
+  return held
 }
 
 /** NOT_FOUND for the operation id sent to approve or reject. */
@@ -4511,34 +4524,6 @@ async function newCompanyReach(
   } catch {
     return 'explicit'
   }
-}
-
-/**
- * The team a company created through the API/MCP path attaches to when the
- * caller does not name one: the user's PERSONAL team only (WL-08: companies
- * created through the normal flow always attach to the personal team; cockpit
- * flows pass the byrå team id explicitly). Picking the first membership
- * regardless of kind attached a consultant's private company to their byrå
- * team, exposing their books to the whole byrå and suppressing the trial.
- * Mirrors ensure_user_team: earliest teams row with kind='personal'. null
- * when the user has no personal team; create_company_for_user then leaves
- * team_id NULL. Explicit team_id args are authorized by the DB gate instead.
- */
-async function defaultTeamForUser(supabase: SupabaseClient, userId: string): Promise<string | null> {
-  const { data, error } = await supabase
-    .from('team_members')
-    .select('team_id, teams!inner(kind, created_at)')
-    .eq('user_id', userId)
-    .eq('teams.kind', 'personal')
-    .order('teams(created_at)', { ascending: true })
-    .order('teams(id)', { ascending: true })
-    .limit(1)
-    .maybeSingle()
-  if (error) {
-    log.warn('default team lookup failed', { error: error.message })
-    return null
-  }
-  return (data?.team_id as string | undefined) ?? null
 }
 
 function paginatedSchema(
@@ -7357,7 +7342,8 @@ export const tools: McpTool[] = [
         throw codedError('VALIDATION_ERROR', `Invalid fiscal period: ${plan.error}`)
       }
 
-      const teamId = parsed.data.team_id ?? (await defaultTeamForUser(supabase, userId))
+      // A failed lookup throws COMPANY_CREATE_FAILED: no preview, nothing created.
+      const teamId = parsed.data.team_id ?? (await defaultTeamForNewCompany(supabase, userId))
       const preview = {
         name: parsed.data.name,
         entity_type: parsed.data.entity_type,
@@ -7462,7 +7448,7 @@ export const tools: McpTool[] = [
   ...createFormationTools({
     annotations: annotationsForEffect('additive', { idempotentHint: true, openWorldHint: true }),
     appOrigin: connectLinkBaseUrl,
-    defaultTeamForUser,
+    defaultTeamForUser: defaultTeamForNewCompany,
     newCompanyReach,
   }),
 
@@ -7871,7 +7857,7 @@ export const tools: McpTool[] = [
       // state and its records per resource. Undeclared like underlag.
       const job = await migrationJobStatus(supabase, companyId, provider)
       const underlagStep = underlag
-        ? ` Underlag are a separate step on the same page, after the bookkeeping import: the user clicks "Hämta underlag" on the ${info.name} row${provider === 'fortnox' ? ' and approves Fortnox file access once' : ''}; files already there are skipped. underlag.status says where that step stands (not_fetched, incomplete, needs_reconnect or complete); call this tool again to check.`
+        ? ` Underlag are a separate step on the same page, after the bookkeeping import: the user clicks "Hämta underlag" on the ${info.name} row${provider === 'fortnox' ? ' and approves Fortnox file access once' : ''}; files already there are skipped.${provider === 'visma' ? ' From Visma that step fetches the PDF of each customer invoice the import brought in, nothing else: other underlag the user uploads ("Ladda upp underlag").' : ''} underlag.status says where that step stands (not_fetched, incomplete, needs_reconnect or complete); call this tool again to check.`
         : ` ${info.name} underlag are not fetched: the user uploads them ("Ladda upp underlag").`
       return {
         provider,
@@ -11655,6 +11641,7 @@ export const tools: McpTool[] = [
         source_invoice_id: { type: ['string', 'null'], description: 'Proforma or offert the order was converted from, if any' },
         your_reference: { type: ['string', 'null'] },
         our_reference: { type: ['string', 'null'] },
+        invoice_marking: { type: ['string', 'null'], description: "Märkning for the order's invoices; null: each takes the customer card's" },
         notes: { type: ['string', 'null'] },
         default_dimensions: { type: 'object', additionalProperties: { type: 'string' } },
         confirmed_at: { type: ['string', 'null'] },
@@ -11705,6 +11692,7 @@ export const tools: McpTool[] = [
         source_invoice_id: order.source_invoice_id ?? null,
         your_reference: order.your_reference ?? null,
         our_reference: order.our_reference ?? null,
+        invoice_marking: order.invoice_marking ?? null,
         notes: order.notes ?? null,
         default_dimensions: order.default_dimensions ?? {},
         confirmed_at: order.confirmed_at ?? null,
@@ -11746,6 +11734,7 @@ export const tools: McpTool[] = [
         currency: { type: 'string', enum: [...CURRENCIES] },
         our_reference: { type: 'string' },
         your_reference: { type: 'string' },
+        invoice_marking: { type: 'string', description: "Märkning (buyer marking/PO) for the order's invoices; omitted: the customer card's." },
         notes: { type: 'string' },
         ...STAGING_ARGS_PROPERTIES,
       },
@@ -11837,6 +11826,8 @@ export const tools: McpTool[] = [
         currency,
         ...(args.your_reference ? { your_reference: args.your_reference } : {}),
         ...(args.our_reference ? { our_reference: args.our_reference } : {}),
+        // Any value given reaches the schema: a wrong type is refused, not dropped.
+        ...(args.invoice_marking !== undefined ? { invoice_marking: args.invoice_marking } : {}),
         ...(args.notes ? { notes: args.notes } : {}),
         ...(resolvedDefaultDimensions && Object.keys(resolvedDefaultDimensions).length > 0
           ? { default_dimensions: resolvedDefaultDimensions }
@@ -11880,6 +11871,8 @@ export const tools: McpTool[] = [
           currency,
           order_date: params.order_date,
           requested_delivery_date: params.requested_delivery_date ?? null,
+          // Shown on the approval card: the Märkning the order's invoices carry.
+          ...(params.invoice_marking?.trim() ? { invoice_marking: params.invoice_marking.trim() } : {}),
           // Informational: an order is not a verifikat, so no period check.
           writes_verifikat: false,
           ...(dimensionResolutions.length > 0 ? { dimension_resolutions: dimensionResolutions } : {}),
@@ -20727,16 +20720,22 @@ export const tools: McpTool[] = [
         periodsByYear.set(year, bucket)
       }
 
-      // ── Batch-fetch documents.
+      // ── Batch-fetch documents, in slices of ID_READ_CHUNK: the ids travel
+      //    in the GET query string, which the gateway refuses past its
+      //    limit, and one call names up to 300 documents.
       type LinkDoc = { id: string; file_name: string; mime_type: string; journal_entry_id: string | null }
       const fetchDocs = async (ids: string[]) => {
-        const { data, error } = await supabase
-          .from('document_attachments')
-          .select('id, file_name, mime_type, journal_entry_id')
-          .in('id', ids)
-          .eq('company_id', companyId)
-        if (error) throw dbError(error)
-        return (data ?? []) as LinkDoc[]
+        const docs: LinkDoc[] = []
+        for (const slice of chunk(ids, ID_READ_CHUNK)) {
+          const { data, error } = await supabase
+            .from('document_attachments')
+            .select('id, file_name, mime_type, journal_entry_id')
+            .in('id', slice)
+            .eq('company_id', companyId)
+          if (error) throw dbError(error)
+          docs.push(...((data ?? []) as LinkDoc[]))
+        }
+        return docs
       }
       let documentIds = [...new Set(rawLinks.map((l) => l.document_id))]
       const docsById = new Map((await fetchDocs(documentIds)).map((d) => [d.id, d]))
@@ -20804,17 +20803,19 @@ export const tools: McpTool[] = [
           je,
         ]))
       }
-      // By id: at most 300 per call, under the 1000-row cap.
+      // By id: at most 300 per call, under the 1000-row cap. In slices of
+      // ID_READ_CHUNK: the ids travel in the GET query string, which the
+      // gateway refuses past its limit.
       const entryIds = [...new Set(rawLinks.flatMap((l) => (l.journal_entry_id ? [l.journal_entry_id] : [])))]
-      let jesById = new Map<string, CandidateJe>()
-      if (entryIds.length > 0) {
+      const jesById = new Map<string, CandidateJe>()
+      for (const ids of chunk(entryIds, ID_READ_CHUNK)) {
         const { data: byId, error: byIdError } = await supabase
           .from('journal_entries')
           .select('id, entry_date, description, voucher_series, voucher_number, status, fiscal_period_id')
           .eq('company_id', companyId)
-          .in('id', entryIds)
+          .in('id', ids)
         if (byIdError) throw dbError(byIdError)
-        jesById = new Map(((byId ?? []) as CandidateJe[]).map((je) => [je.id, je]))
+        for (const je of (byId ?? []) as CandidateJe[]) jesById.set(je.id, je)
       }
       const periodsById = new Map((periods ?? []).map((p) => [p.id as string, p as LinkPeriod]))
 
@@ -22834,7 +22835,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_register_absence',
     keywords: ['frånvaro', 'sjukanmälan', 'semester', 'vab'],
     title: 'Register Absence (Frånvaro)',
-    description: 'Stage absence registration (sick, vab, parental, ...) for an employee over a date range, max 92 days, weekends skipped unless included. Commit via gnubok_approve_pending_operation; recalculate any open salary run afterwards.',
+    description: 'Stage absence (sick, vab, parental, ...) for an employee over a date range, max 92 days, weekends skipped unless included. A day a paid or declared run already read goes to the next draft run via carried_to_run_id. Commit via gnubok_approve_pending_operation; recalculate after.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -22850,15 +22851,20 @@ export const tools: McpTool[] = [
         hours_per_day: { type: 'number', description: 'Hours per day. Omitted: one scheduled day of the employee (use e.g. half that for half days)' },
         notes: { type: 'string', description: 'Optional note' },
         include_weekends: { type: 'boolean', description: 'Also register Saturday/Sunday (default false)' },
+        carried_to_run_id: {
+          type: 'string',
+          description:
+            'For days on dates a paid, booked or declared salary run already read (late days): the next ordinary salary run that is neither paid nor declared, a draft with the employee on it (a correction draft only when named and its AGI is not filed). It deducts them, shows the dates on the payslip and reports them in its AGI. A refusal SALARY_REGISTER_DATES_LOCKED_BY_RUN with reason late_day_needs_later_run names it in later_salary_run. Days no paid or declared run read ignore it.',
+        },
       },
       required: ['employee_id', 'from', 'to', 'absence_type'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
     annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
-      const { employee_id, from, to, absence_type, hours_per_day, notes, include_weekends } = args as {
+      const { employee_id, from, to, absence_type, hours_per_day, notes, include_weekends, carried_to_run_id } = args as {
         employee_id: string; from: string; to: string; absence_type: string
-        hours_per_day?: number; notes?: string; include_weekends?: boolean
+        hours_per_day?: number; notes?: string; include_weekends?: boolean; carried_to_run_id?: string
       }
       if (!employee_id) throw badArgument('employee_id', 'employee_id is required')
       if (!from) throw badArgument('from', 'from is required')
@@ -22879,9 +22885,21 @@ export const tools: McpTool[] = [
         hoursPerDay: hours_per_day,
         notes: notes ?? null,
         includeWeekends: include_weekends,
+        carriedToRunId: carried_to_run_id ?? null,
         dryRun: true,
       })
       if (!preflight.ok) {
+        // A register refusal names the run, the dates and the way out (for a
+        // late day, the run to pass as carried_to_run_id).
+        const refusal = registerRefusalMessageSv(preflight.code, preflight.details, 'api')
+        if (refusal) {
+          throw codedRefusal(
+            preflight.code,
+            [`Cannot register absence: ${preflight.code}.`, getErrorEntry(preflight.code)?.message_en, refusal, JSON.stringify(preflight.details)]
+              .filter(Boolean)
+              .join(' '),
+          )
+        }
         throw serviceRefusal('Cannot register absence', preflight)
       }
 
@@ -22899,7 +22917,16 @@ export const tools: McpTool[] = [
         userId,
         type: 'register_absence',
         title: `Registrera frånvaro: ${employeeName}, ${absence_type} ${from}${to !== from ? ` till ${to}` : ''}`,
-        params: { employee_id, from, to, absence_type, hours_per_day: hours_per_day ?? null, notes: notes ?? null, include_weekends: include_weekends ?? false },
+        params: {
+          employee_id,
+          from,
+          to,
+          absence_type,
+          hours_per_day: hours_per_day ?? null,
+          notes: notes ?? null,
+          include_weekends: include_weekends ?? false,
+          carried_to_run_id: carried_to_run_id ?? null,
+        },
         preview: {
           employee_id,
           employee_name: employeeName,
@@ -22909,6 +22936,11 @@ export const tools: McpTool[] = [
           day_count: preflight.data.count,
           hours_per_day: preflight.data.hours_per_day,
           dates_sample: preflight.data.days.slice(0, 10).map((d) => (d as { absence_date: string }).absence_date),
+          // The late days among them and the run that deducts them.
+          late_days: preflight.data.days
+            .filter((d) => (d as { carried_to_run_id?: string | null }).carried_to_run_id)
+            .map((d) => (d as { absence_date: string }).absence_date),
+          carried_to_run_id: carried_to_run_id ?? null,
         },
         actor,
         next: {
@@ -22970,6 +23002,15 @@ export const tools: McpTool[] = [
         dryRun: true,
       })
       if (!preflight.ok) {
+        const refusal = registerRefusalMessageSv(preflight.code, preflight.details, 'api')
+        if (refusal) {
+          throw codedRefusal(
+            preflight.code,
+            [`Cannot delete absence: ${preflight.code}.`, getErrorEntry(preflight.code)?.message_en, refusal, JSON.stringify(preflight.details)]
+              .filter(Boolean)
+              .join(' '),
+          )
+        }
         throw serviceRefusal('Cannot delete absence', preflight)
       }
       if (preflight.data.deleted_count === 0) {

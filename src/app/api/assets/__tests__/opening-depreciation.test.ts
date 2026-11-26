@@ -12,6 +12,9 @@ import { NextResponse } from 'next/server'
 import { createQueuedMockSupabase, createMockRequest, parseJsonResponse } from '@/tests/helpers'
 import { AssetOpeningDepreciationInvalidError } from '@/lib/bokslut/assets/opening-depreciation'
 
+// Route path ids are uuids: the route answers its 404 to anything else before it reads.
+const ASSET_1 = '050c55e7-6819-5316-bf30-fea729a331a0'
+
 const { supabase, enqueue, reset } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
@@ -57,7 +60,7 @@ import { POST } from '../route'
 
 const mockCreateAsset = vi.mocked(createAsset)
 const mockUpdateAsset = vi.mocked(updateAsset)
-const routeParams = { params: Promise.resolve({ id: 'asset-1' }) }
+const routeParams = { params: Promise.resolve({ id: ASSET_1 }) }
 
 const BASE_BODY = {
   name: 'Maskin från Bokio',
@@ -183,7 +186,7 @@ describe('PATCH /api/assets/[id]: opening accumulated depreciation', () => {
       error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
     })
     const res = await PATCH(
-      createMockRequest('/api/assets/asset-1', {
+      createMockRequest(`/api/assets/${ASSET_1}`, {
         method: 'PATCH',
         body: { opening_accumulated_depreciation: 1_000, opening_depreciation_date: '2024-12-31' },
       }),
@@ -194,7 +197,7 @@ describe('PATCH /api/assets/[id]: opening accumulated depreciation', () => {
 
   it('rejects a negative amount at the schema with 400', async () => {
     const res = await PATCH(
-      createMockRequest('/api/assets/asset-1', {
+      createMockRequest(`/api/assets/${ASSET_1}`, {
         method: 'PATCH',
         body: { opening_accumulated_depreciation: -5 },
       }),
@@ -216,7 +219,7 @@ describe('PATCH /api/assets/[id]: opening accumulated depreciation', () => {
     )
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
       await PATCH(
-        createMockRequest('/api/assets/asset-1', {
+        createMockRequest(`/api/assets/${ASSET_1}`, {
           method: 'PATCH',
           body: { opening_accumulated_depreciation: 999_999, opening_depreciation_date: '2024-12-31' },
         }),
@@ -228,9 +231,9 @@ describe('PATCH /api/assets/[id]: opening accumulated depreciation', () => {
   })
 
   it('passes a valid opening patch through to updateAsset', async () => {
-    mockUpdateAsset.mockResolvedValue({ id: 'asset-1' } as never)
+    mockUpdateAsset.mockResolvedValue({ id: ASSET_1 } as never)
     const res = await PATCH(
-      createMockRequest('/api/assets/asset-1', {
+      createMockRequest(`/api/assets/${ASSET_1}`, {
         method: 'PATCH',
         body: { opening_accumulated_depreciation: 40_000, opening_depreciation_date: '2024-12-31' },
       }),
@@ -240,7 +243,7 @@ describe('PATCH /api/assets/[id]: opening accumulated depreciation', () => {
     expect(mockUpdateAsset).toHaveBeenCalledWith(
       supabase,
       'company-1',
-      'asset-1',
+      ASSET_1,
       expect.objectContaining({
         opening_accumulated_depreciation: 40_000,
         opening_depreciation_date: '2024-12-31',

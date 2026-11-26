@@ -11,6 +11,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import { createMockRequest, parseJsonResponse } from '@/tests/helpers'
 
+// Route path ids are uuids: the route answers its 404 to anything else before it reads.
+const TPL_1 = '3c380973-6ccf-51a3-b257-7056cfd8f618'
+
 const requireAuthMock = vi.fn()
 vi.mock('@/lib/auth/require-auth', () => ({
   requireAuth: (...args: unknown[]) => requireAuthMock(...args),
@@ -62,7 +65,7 @@ function createCapturingSupabase(results: { data?: unknown; error?: unknown }[])
   }
 }
 
-const idParams = { params: Promise.resolve({ id: 'tpl-1' }) }
+const idParams = { params: Promise.resolve({ id: TPL_1 }) }
 
 const validLines = [
   { account: '5010', label: 'Hyra', side: 'debit', type: 'business' },
@@ -71,7 +74,7 @@ const validLines = [
 
 /** The pre-update fetch result for a template owned by the active company. */
 const OWN_TEMPLATE = {
-  data: { id: 'tpl-1', company_id: 'company-1', team_id: null, is_system: false },
+  data: { id: TPL_1, company_id: 'company-1', team_id: null, is_system: false },
 }
 
 beforeEach(() => {
@@ -94,7 +97,7 @@ describe('PUT /api/settings/booking-templates/[id]', () => {
       supabase: {},
       error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
     })
-    const req = createMockRequest('/api/settings/booking-templates/tpl-1', {
+    const req = createMockRequest(`/api/settings/booking-templates/${TPL_1}`, {
       method: 'PUT',
       body: { name: 'Nytt namn' },
     })
@@ -108,7 +111,7 @@ describe('PUT /api/settings/booking-templates/[id]', () => {
       ok: false,
       response: NextResponse.json({ error: 'Forbidden' }, { status: 403 }),
     })
-    const req = createMockRequest('/api/settings/booking-templates/tpl-1', {
+    const req = createMockRequest(`/api/settings/booking-templates/${TPL_1}`, {
       method: 'PUT',
       body: { name: 'Nytt namn' },
     })
@@ -118,7 +121,7 @@ describe('PUT /api/settings/booking-templates/[id]', () => {
   it('returns 400 for an invalid body', async () => {
     const { supabase } = createCapturingSupabase([])
     auth(supabase)
-    const req = createMockRequest('/api/settings/booking-templates/tpl-1', {
+    const req = createMockRequest(`/api/settings/booking-templates/${TPL_1}`, {
       method: 'PUT',
       // A template needs at least two lines (double entry).
       body: { lines: [validLines[0]] },
@@ -130,7 +133,7 @@ describe('PUT /api/settings/booking-templates/[id]', () => {
   it('returns 500 when the update fails', async () => {
     const { supabase } = createCapturingSupabase([OWN_TEMPLATE, { error: { message: 'boom' } }])
     auth(supabase)
-    const req = createMockRequest('/api/settings/booking-templates/tpl-1', {
+    const req = createMockRequest(`/api/settings/booking-templates/${TPL_1}`, {
       method: 'PUT',
       body: { name: 'Nytt namn' },
     })
@@ -143,7 +146,7 @@ describe('PUT /api/settings/booking-templates/[id]', () => {
     // surfaced as 500 and the 404 branch was dead.
     const { supabase, calls } = createCapturingSupabase([{ data: null }])
     auth(supabase)
-    const req = createMockRequest('/api/settings/booking-templates/tpl-1', {
+    const req = createMockRequest(`/api/settings/booking-templates/${TPL_1}`, {
       method: 'PUT',
       body: { name: 'Nytt namn' },
     })
@@ -158,10 +161,10 @@ describe('PUT /api/settings/booking-templates/[id]', () => {
     // B's templates while acting in A. The route must scope to the ACTIVE
     // company, so B's template reads as not-found here and no update runs.
     const { supabase, calls } = createCapturingSupabase([
-      { data: { id: 'tpl-1', company_id: 'company-2', team_id: null, is_system: false } },
+      { data: { id: TPL_1, company_id: 'company-2', team_id: null, is_system: false } },
     ])
     auth(supabase)
-    const req = createMockRequest('/api/settings/booking-templates/tpl-1', {
+    const req = createMockRequest(`/api/settings/booking-templates/${TPL_1}`, {
       method: 'PUT',
       body: { name: 'Nytt namn' },
     })
@@ -173,10 +176,10 @@ describe('PUT /api/settings/booking-templates/[id]', () => {
 
   it('returns 404 for a system template', async () => {
     const { supabase, calls } = createCapturingSupabase([
-      { data: { id: 'tpl-1', company_id: null, team_id: null, is_system: true } },
+      { data: { id: TPL_1, company_id: null, team_id: null, is_system: true } },
     ])
     auth(supabase)
-    const req = createMockRequest('/api/settings/booking-templates/tpl-1', {
+    const req = createMockRequest(`/api/settings/booking-templates/${TPL_1}`, {
       method: 'PUT',
       body: { name: 'Nytt namn' },
     })
@@ -189,12 +192,12 @@ describe('PUT /api/settings/booking-templates/[id]', () => {
     // Team templates carry company_id NULL: a blind company_id filter would
     // have broken them. The scope check goes through the company's team_id.
     const { supabase, calls } = createCapturingSupabase([
-      { data: { id: 'tpl-1', company_id: null, team_id: 'team-1', is_system: false } },
+      { data: { id: TPL_1, company_id: null, team_id: 'team-1', is_system: false } },
       { data: { team_id: 'team-1' } }, // companies lookup
-      { data: { id: 'tpl-1', name: 'Nytt namn' } }, // update
+      { data: { id: TPL_1, name: 'Nytt namn' } }, // update
     ])
     auth(supabase)
-    const req = createMockRequest('/api/settings/booking-templates/tpl-1', {
+    const req = createMockRequest(`/api/settings/booking-templates/${TPL_1}`, {
       method: 'PUT',
       body: { name: 'Nytt namn' },
     })
@@ -205,11 +208,11 @@ describe('PUT /api/settings/booking-templates/[id]', () => {
 
   it("returns 404 for another team's template", async () => {
     const { supabase, calls } = createCapturingSupabase([
-      { data: { id: 'tpl-1', company_id: null, team_id: 'team-other', is_system: false } },
+      { data: { id: TPL_1, company_id: null, team_id: 'team-other', is_system: false } },
       { data: { team_id: 'team-1' } }, // companies lookup
     ])
     auth(supabase)
-    const req = createMockRequest('/api/settings/booking-templates/tpl-1', {
+    const req = createMockRequest(`/api/settings/booking-templates/${TPL_1}`, {
       method: 'PUT',
       body: { name: 'Nytt namn' },
     })
@@ -221,10 +224,10 @@ describe('PUT /api/settings/booking-templates/[id]', () => {
   it('updates the template on the happy path', async () => {
     const { supabase } = createCapturingSupabase([
       OWN_TEMPLATE,
-      { data: { id: 'tpl-1', name: 'Nytt namn' } },
+      { data: { id: TPL_1, name: 'Nytt namn' } },
     ])
     auth(supabase)
-    const req = createMockRequest('/api/settings/booking-templates/tpl-1', {
+    const req = createMockRequest(`/api/settings/booking-templates/${TPL_1}`, {
       method: 'PUT',
       body: { name: 'Nytt namn' },
     })
@@ -236,9 +239,9 @@ describe('PUT /api/settings/booking-templates/[id]', () => {
   })
 
   it('writes only the field the caller named', async () => {
-    const { supabase, calls } = createCapturingSupabase([OWN_TEMPLATE, { data: { id: 'tpl-1' } }])
+    const { supabase, calls } = createCapturingSupabase([OWN_TEMPLATE, { data: { id: TPL_1 } }])
     auth(supabase)
-    const req = createMockRequest('/api/settings/booking-templates/tpl-1', {
+    const req = createMockRequest(`/api/settings/booking-templates/${TPL_1}`, {
       method: 'PUT',
       body: { name: 'Nytt namn' },
     })
@@ -247,9 +250,9 @@ describe('PUT /api/settings/booking-templates/[id]', () => {
   })
 
   it('leaves lines, category and entity_type alone on a name-only update', async () => {
-    const { supabase, calls } = createCapturingSupabase([OWN_TEMPLATE, { data: { id: 'tpl-1' } }])
+    const { supabase, calls } = createCapturingSupabase([OWN_TEMPLATE, { data: { id: TPL_1 } }])
     auth(supabase)
-    const req = createMockRequest('/api/settings/booking-templates/tpl-1', {
+    const req = createMockRequest(`/api/settings/booking-templates/${TPL_1}`, {
       method: 'PUT',
       body: { name: 'Nytt namn' },
     })
@@ -261,9 +264,9 @@ describe('PUT /api/settings/booking-templates/[id]', () => {
   })
 
   it('takes a supplied lines array wholesale', async () => {
-    const { supabase, calls } = createCapturingSupabase([OWN_TEMPLATE, { data: { id: 'tpl-1' } }])
+    const { supabase, calls } = createCapturingSupabase([OWN_TEMPLATE, { data: { id: TPL_1 } }])
     auth(supabase)
-    const req = createMockRequest('/api/settings/booking-templates/tpl-1', {
+    const req = createMockRequest(`/api/settings/booking-templates/${TPL_1}`, {
       method: 'PUT',
       body: { lines: validLines },
     })
@@ -272,10 +275,10 @@ describe('PUT /api/settings/booking-templates/[id]', () => {
   })
 
   it('stores the dimensions a line carries', async () => {
-    const { supabase, calls } = createCapturingSupabase([OWN_TEMPLATE, { data: { id: 'tpl-1' } }])
+    const { supabase, calls } = createCapturingSupabase([OWN_TEMPLATE, { data: { id: TPL_1 } }])
     auth(supabase)
     const lines = [{ ...validLines[0], dimensions: { '1': 'KS01', '6': 'P001' } }, validLines[1]]
-    const req = createMockRequest('/api/settings/booking-templates/tpl-1', {
+    const req = createMockRequest(`/api/settings/booking-templates/${TPL_1}`, {
       method: 'PUT',
       body: { lines },
     })
@@ -287,12 +290,12 @@ describe('PUT /api/settings/booking-templates/[id]', () => {
     // A tag is one company's own code; a team template is booked by every
     // company of the team, so it never carries one, whoever sends the lines.
     const { supabase, calls } = createCapturingSupabase([
-      { data: { id: 'tpl-1', company_id: null, team_id: 'team-1', is_system: false } },
+      { data: { id: TPL_1, company_id: null, team_id: 'team-1', is_system: false } },
       { data: { team_id: 'team-1' } }, // companies lookup
-      { data: { id: 'tpl-1' } }, // update
+      { data: { id: TPL_1 } }, // update
     ])
     auth(supabase)
-    const req = createMockRequest('/api/settings/booking-templates/tpl-1', {
+    const req = createMockRequest(`/api/settings/booking-templates/${TPL_1}`, {
       method: 'PUT',
       body: {
         name: 'Hyra',
@@ -305,12 +308,12 @@ describe('PUT /api/settings/booking-templates/[id]', () => {
 
   it('leaves a team template update without lines as the caller sent it', async () => {
     const { supabase, calls } = createCapturingSupabase([
-      { data: { id: 'tpl-1', company_id: null, team_id: 'team-1', is_system: false } },
+      { data: { id: TPL_1, company_id: null, team_id: 'team-1', is_system: false } },
       { data: { team_id: 'team-1' } }, // companies lookup
-      { data: { id: 'tpl-1' } }, // update
+      { data: { id: TPL_1 } }, // update
     ])
     auth(supabase)
-    const req = createMockRequest('/api/settings/booking-templates/tpl-1', {
+    const req = createMockRequest(`/api/settings/booking-templates/${TPL_1}`, {
       method: 'PUT',
       body: { description: 'Delad mall' },
     })
@@ -319,9 +322,9 @@ describe('PUT /api/settings/booking-templates/[id]', () => {
   })
 
   it('returns 400 for a dimensions bag a journal line could not carry', async () => {
-    const { supabase, calls } = createCapturingSupabase([OWN_TEMPLATE, { data: { id: 'tpl-1' } }])
+    const { supabase, calls } = createCapturingSupabase([OWN_TEMPLATE, { data: { id: TPL_1 } }])
     auth(supabase)
-    const req = createMockRequest('/api/settings/booking-templates/tpl-1', {
+    const req = createMockRequest(`/api/settings/booking-templates/${TPL_1}`, {
       method: 'PUT',
       body: { lines: [{ ...validLines[0], dimensions: { projekt: 'P001' } }, validLines[1]] },
     })
@@ -331,9 +334,9 @@ describe('PUT /api/settings/booking-templates/[id]', () => {
   })
 
   it('drops unknown keys instead of forwarding them to the update', async () => {
-    const { supabase, calls } = createCapturingSupabase([OWN_TEMPLATE, { data: { id: 'tpl-1' } }])
+    const { supabase, calls } = createCapturingSupabase([OWN_TEMPLATE, { data: { id: TPL_1 } }])
     auth(supabase)
-    const req = createMockRequest('/api/settings/booking-templates/tpl-1', {
+    const req = createMockRequest(`/api/settings/booking-templates/${TPL_1}`, {
       method: 'PUT',
       body: { name: 'Nytt namn', is_system: false, company_id: 'other' },
     })

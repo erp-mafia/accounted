@@ -5,7 +5,8 @@ import { BatchUpsertWorkedDaysSchema } from '@/lib/api/schemas'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { invalidateRunCalculation } from '@/lib/salary/invalidate-calculation'
-import { findRunLockingDates } from '@/lib/salary/register-locks'
+import { runOfPayslip } from '@/lib/salary/late-days'
+import { planRegisterUpsert, registerRefusalMessageSv } from '@/lib/salary/register-locks'
 import { defaultDayHours } from '@/lib/salary/work-schedule'
 import { assertWorkedDaysEmployee, mapWorkedDaysWriteError } from '@/lib/salary/worked-days'
 
@@ -45,21 +46,32 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     // This route keeps its own write algorithm, so it asks the register lock
     // itself: dates a run in review, approved, paid or booked has already
     // read are refused as one 409 before anything is prefetched or written.
-    const lock = await findRunLockingDates(supabase, companyId, uniqueDates)
-    if (!lock.ok) {
-      return NextResponse.json({ error: getUserErrorMessage(lock.details) }, { status: 500 })
-    }
-    if (lock.lock) {
-      const entry = getErrorEntry('SALARY_REGISTER_DATES_LOCKED_BY_RUN')
+    // A day on a date a paid or declared run read, registered from a
+    // payslip's calendar, is a late day that payslip's run takes.
+    const planned = await planRegisterUpsert(supabase, companyId, {
+      kind: 'worked',
+      employeeId,
+      dates: uniqueDates,
+      carriedToRunId: await runOfPayslip(supabase, companyId, body.salary_run_employee_id),
+    })
+    if (!planned.ok) {
+      if (planned.code === 'INTERNAL_ERROR') {
+        return NextResponse.json({ error: getUserErrorMessage(planned.details) }, { status: 500 })
+      }
+      const entry = getErrorEntry(planned.code)
       return NextResponse.json(
         {
-          error: entry?.message_sv ?? 'Datumen är låsta av en lönekörning',
-          code: 'SALARY_REGISTER_DATES_LOCKED_BY_RUN',
-          details: lock.lock,
+          error:
+            registerRefusalMessageSv(planned.code, planned.details as unknown as Record<string, unknown>, 'dashboard') ??
+            entry?.message_sv ??
+            'Datumen är låsta av en lönekörning',
+          code: planned.code,
+          details: planned.details,
         },
         { status: entry?.httpStatus ?? 409 },
       )
     }
+    const { plan } = planned
 
     // Read the rows the batch overwrites. The batch carries one shared value
     // for N dates, so it cannot express per-day notes, per-day shift windows or
@@ -82,10 +94,15 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     )
 
     const sortedDates = [...uniqueDates].sort()
-    const invalidated = await invalidateRunCalculation(supabase, companyId, {
-      employeeId,
-      workedDays: { from: sortedDates[0], to: sortedDates[sortedDates.length - 1] },
-    })
+    const invalidated =
+      (await invalidateRunCalculation(supabase, companyId, {
+        employeeId,
+        workedDays: { from: sortedDates[0], to: sortedDates[sortedDates.length - 1] },
+      })) ??
+      (await invalidateRunCalculation(supabase, companyId, {
+        employeeId,
+        salaryRunIds: plan.carriedReaderRunIds,
+      }))
     if (invalidated) {
       return NextResponse.json({ error: getUserErrorMessage(invalidated.details) }, { status: 500 })
     }
@@ -131,6 +148,9 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
               body.salary_run_employee_id ?? existing?.salary_run_employee_id ?? null,
             start_time: shiftWindow.start_time,
             end_time: shiftWindow.end_time,
+            // The carry the register lock decided: kept for a registered
+            // day, the payslip's run for a late one, none otherwise.
+            carried_to_run_id: plan.carriedTo.get(date) ?? null,
           },
           { onConflict: 'employee_id,work_date' },
         )

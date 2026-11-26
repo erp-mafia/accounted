@@ -1,5 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
+import { chunk } from '@/lib/utils'
+import { ID_READ_CHUNK } from '@/lib/supabase/read-in-slices'
 
 const log = createLogger('documents/locked-period')
 
@@ -43,12 +45,17 @@ export async function fillTypeFromClassification<T extends { id: string; doc_typ
 ): Promise<T[]> {
   const ids = rows.filter((r) => r.doc_type == null && isBookedRow(r)).map((r) => r.id)
   if (ids.length === 0) return rows
-  const { data, error } = await supabase.from('document_classifications').select('document_id, doc_type').in('document_id', ids).eq('is_current', true)
-  if (error) {
-    log.warn('classification lookup failed', { documents: ids.length, reason: error.message })
-    return rows
+  // In slices of ID_READ_CHUNK: the ids travel in the GET query string, and a
+  // list of up to 500 documents is more than the gateway takes in one URL.
+  const typeOf = new Map<string, string | null>()
+  for (const slice of chunk(ids, ID_READ_CHUNK)) {
+    const { data, error } = await supabase.from('document_classifications').select('document_id, doc_type').in('document_id', slice).eq('is_current', true)
+    if (error) {
+      log.warn('classification lookup failed', { documents: ids.length, reason: error.message })
+      return rows
+    }
+    for (const c of (data ?? []) as Array<{ document_id: string; doc_type: string | null }>) typeOf.set(c.document_id, c.doc_type)
   }
-  const typeOf = new Map(((data ?? []) as Array<{ document_id: string; doc_type: string | null }>).map((c) => [c.document_id, c.doc_type]))
   for (const r of rows) if (r.doc_type == null && typeOf.has(r.id)) r.doc_type = typeOf.get(r.id) ?? null
   return rows
 }
