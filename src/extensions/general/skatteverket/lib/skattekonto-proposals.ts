@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { SkattekontoLedgerAccount } from '@/lib/skatteverket/skattekonto-account'
-import { findMatchSuggestionsBulk } from './skattekonto-match'
+import { findMatchSuggestionsBulkOrNull } from './skattekonto-match'
 
 const log = createLogger('skattekonto-proposals')
 
@@ -67,7 +67,7 @@ export async function refreshSkattekontoProposals(
   }
   if (rows.length === 0) return zero
 
-  const suggestions = await findMatchSuggestionsBulk(
+  const suggestions = await findMatchSuggestionsBulkOrNull(
     supabase,
     companyId,
     rows.map((r) => ({
@@ -79,6 +79,12 @@ export async function refreshSkattekontoProposals(
     })),
     account,
   )
+  // A read the matcher needs failed: every stored proposal stays as it is.
+  // Read as "no candidates", the loop below would clear them all.
+  if (!suggestions) {
+    log.warn('proposal refresh: candidates unreadable, stored proposals kept', { companyId })
+    return zero
+  }
 
   const now = new Date().toISOString()
   let proposed = 0
