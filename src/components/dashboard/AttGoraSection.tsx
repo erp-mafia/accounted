@@ -22,8 +22,7 @@ import { formatCurrency, formatDate } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { useFormat } from '@/lib/hooks/use-format'
 import { switchDeepLink } from '@/lib/bank-feed/switch-link'
-import { useBookingScreenEnabled, useCapability, useCompany } from '@/contexts/CompanyContext'
-import { CAPABILITY } from '@/lib/entitlements/keys'
+import { useBookingScreenEnabled, useCompany } from '@/contexts/CompanyContext'
 import type { AiTaskCategory } from '@/lib/worklist/ai-task'
 import type { DocumentToSignDue, PaymentFailedDue, PaymentsVerificationDue, SuggestedMatch, SupplierPayeeChangeDue } from '@/lib/worklist/types'
 import type { AllocationTransaction } from '@/components/transactions/MatchAllocationDialog'
@@ -384,10 +383,6 @@ export default function AttGoraSection({
   const tBankPayments = useTranslations('bank_payments')
   const router = useRouter()
   const { formatDateLong } = useFormat()
-  // The Dokumentinkorg is a paid (AI) surface: a non-payer's home to-do list
-  // must not offer a row that jumps to the gated workspace. Mirrors the sidebar
-  // + command palette gate; the page itself enforces it server-side.
-  const hasAi = useCapability(CAPABILITY.ai)
   const bookingScreen = useBookingScreenEnabled()
   const { canWrite } = useViewerLock()
 
@@ -577,7 +572,6 @@ export default function AttGoraSection({
   const specs = new Map(
     countRowSpecs({
       counts,
-      hasAi,
       inboxHref: worklist.inboxHref ?? LEGACY_INBOX_HREF,
       invoiceSetRows: invoiceSetRows.length,
       personAttestRows: attestSteps.length,

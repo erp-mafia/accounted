@@ -274,7 +274,8 @@ export default function ExpenseClaimsPage() {
   }, [])
 
   const loadInbox = useCallback(async () => {
-    // No inbox to pick from without the AI capability: the request is refused.
+    // Without the AI capability the screen uploads plainly (underlagUploadRoute) and
+    // offers no inbox items: none of them is read, so none has a name to pick it by.
     if (receiptRoute !== 'inbox') {
       setInboxLoaded(true)
       return

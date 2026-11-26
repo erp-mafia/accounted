@@ -9,12 +9,12 @@ function counts(overrides: Partial<Record<WorklistCategory, number>> = {}): Reco
 
 describe('listAiTasks', () => {
   it('returns nothing when nothing is pending', () => {
-    expect(listAiTasks(counts(), { hasAi: true })).toEqual([])
+    expect(listAiTasks(counts())).toEqual([])
   })
 
   it('lists rows in render order: bank rows before anything in Granska or Bevaka', () => {
     const c = counts({ overdue_invoice: 3, verifikat_missing_document: 2, book_transaction: 7 })
-    expect(listAiTasks(c, { hasAi: true })).toEqual([
+    expect(listAiTasks(c)).toEqual([
       { category: 'book_transaction', count: 7 },
       { category: 'verifikat_missing_document', count: 2 },
       { category: 'overdue_invoice', count: 3 },
@@ -23,13 +23,12 @@ describe('listAiTasks', () => {
 
   it('skips rows no agent can clear: staged operations and the two Betala rows', () => {
     const c = counts({ pending_operations: 4, expense_payout: 2, skattekonto_payment_due: 1, overdue_invoice: 1 })
-    expect(listAiTasks(c, { hasAi: true })).toEqual([{ category: 'overdue_invoice', count: 1 }])
+    expect(listAiTasks(c)).toEqual([{ category: 'overdue_invoice', count: 1 }])
   })
 
-  it('hides the Dokumentinkorg row for non-payers, like the section does', () => {
+  it('lists the inbox row, the inbox being open on every plan', () => {
     const c = counts({ inbox_document: 5, verifikat_missing_document: 1 })
-    expect(listAiTasks(c, { hasAi: false })).toEqual([{ category: 'verifikat_missing_document', count: 1 }])
-    expect(listAiTasks(c, { hasAi: true })).toEqual([
+    expect(listAiTasks(c)).toEqual([
       { category: 'inbox_document', count: 5 },
       { category: 'verifikat_missing_document', count: 1 },
     ])

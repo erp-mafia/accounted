@@ -123,11 +123,13 @@ function arrange({ inRollout, extensionExists, sandbox, capability }: Case) {
   state.capability = capability
 }
 
-/** What a company in this case sees as its inbox, by the rule as it stood before the two routes shared it. */
-function inboxOf({ inRollout, extensionExists, sandbox, capability }: Case): { address: string; shown: Shown } {
+/**
+ * What a company in this case sees as its inbox. The inbox is open on every
+ * plan, so the capability never changes the answer; the sandbox stays locked.
+ */
+function inboxOf({ inRollout, extensionExists, sandbox }: Case): { address: string; shown: Shown } {
   if (!extensionExists) return { address: inRollout ? 'either' : WORKSPACE, shown: 'not found' }
   if (sandbox) return { address: WORKSPACE, shown: 'sandbox lock' }
-  if (!capability) return { address: WORKSPACE, shown: 'paywall' }
   return inRollout ? { address: NEW_PAGE, shown: 'new inbox' } : { address: WORKSPACE, shown: 'workspace' }
 }
 
@@ -217,16 +219,17 @@ describe('a company whose inbox is the workspace: both routes as before', () => 
     expect(reads.loadCompanyCapabilities).not.toHaveBeenCalled()
   })
 
-  it('the workspace opens with the one capability read it always made, whatever its address carries', async () => {
+  it('the workspace opens without a capability read, on any plan, whatever its address carries', async () => {
+    state.capability = false
     expect(await request(`${WORKSPACE}?fokus=item-1`)).toEqual({ shown: 'workspace' })
-    expect(reads.hasCapability).toHaveBeenCalledTimes(1)
+    expect(reads.hasCapability).not.toHaveBeenCalled()
   })
 
-  it('no company is no rollout: /inkorg redirects and the workspace shows its paywall', async () => {
+  it('no company is no rollout: /inkorg redirects to the workspace', async () => {
     vi.stubEnv('INKORG_V2_COMPANY_IDS', '*')
     state.companyId = null
     expect(await request(NEW_PAGE)).toEqual({ to: WORKSPACE })
-    expect(await request(WORKSPACE)).toEqual({ shown: 'paywall' })
+    expect(await request(WORKSPACE)).toEqual({ shown: 'workspace' })
     expect(reads.hasCapability).not.toHaveBeenCalled()
   })
 
@@ -235,9 +238,12 @@ describe('a company whose inbox is the workspace: both routes as before', () => 
     state.sandbox = true
     expect(await follow(NEW_PAGE)).toEqual({ trail: [NEW_PAGE, WORKSPACE], shown: 'sandbox lock' })
     expect(await follow(WORKSPACE)).toEqual({ trail: [WORKSPACE], shown: 'sandbox lock' })
-    state.sandbox = false
+  })
+
+  it('a company in the rollout without the AI capability opens the new page', async () => {
+    vi.stubEnv('INKORG_V2_COMPANY_IDS', 'company-1')
     state.capability = false
-    expect(await follow(NEW_PAGE)).toEqual({ trail: [NEW_PAGE, WORKSPACE], shown: 'paywall' })
-    expect(await follow(WORKSPACE)).toEqual({ trail: [WORKSPACE], shown: 'paywall' })
+    expect(await follow(NEW_PAGE)).toEqual({ trail: [NEW_PAGE], shown: 'new inbox' })
+    expect(await follow(WORKSPACE)).toEqual({ trail: [WORKSPACE, NEW_PAGE], shown: 'new inbox' })
   })
 })

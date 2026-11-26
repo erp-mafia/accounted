@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { TO_BOOK_RETURN_PARAM } from '@/lib/bookkeeping/to-book'
 import { hasCapability } from '@/lib/entitlements/has-capability'
-import { requiredCapabilityForExtension } from '@/lib/entitlements/keys'
+import { extensionLockedInSandbox, requiredCapabilityForExtension } from '@/lib/entitlements/keys'
 import { getExtensionDefinition } from '@/lib/extensions/sectors'
 import { INKORG_FOCUS_QUERY, INKORG_HREF, INKORG_VIEW_QUERY, isInkorgV2Enabled } from './flag'
 
@@ -26,7 +26,7 @@ export type NotNewInboxReason =
   | 'outside_rollout'
   /** The installation has no invoice-inbox extension: neither page exists. */
   | 'no_extension'
-  /** A sandbox company, where the extension needs a capability: the workspace shows its lock. */
+  /** A sandbox company, where the extension is locked in the sandbox: the workspace shows its lock. */
   | 'sandbox_lock'
   /** The company does not hold the capability the extension needs: the workspace shows the paywall. */
   | 'no_capability'
@@ -37,7 +37,7 @@ export interface InboxPageReads {
   inRollout: boolean
   /** The installation has the invoice-inbox extension. */
   extensionExists: boolean
-  /** The workspace would show its sandbox lock: the extension needs a capability and the company is a sandbox. */
+  /** The workspace would show its sandbox lock: the extension is locked in the sandbox (extensionLockedInSandbox) and the company is a sandbox. */
   sandboxLocked: () => boolean | Promise<boolean>
   /** The company holds the capability the extension needs; true when it needs none. */
   hasCapability: () => boolean | Promise<boolean>
@@ -76,8 +76,8 @@ export function companyInboxReads(
   return {
     inRollout: isInkorgV2Enabled(companyId),
     extensionExists: getExtensionDefinition(INBOX_EXTENSION.sector, INBOX_EXTENSION.slug) !== undefined,
-    // An extension that needs no capability has neither a lock nor a paywall.
-    sandboxLocked: async () => required !== undefined && (await isSandbox()),
+    sandboxLocked: async () => extensionLockedInSandbox(INBOX_EXTENSION.sector, INBOX_EXTENSION.slug) && (await isSandbox()),
+    // An extension that needs no capability has no paywall.
     hasCapability: async () => required === undefined || (!!companyId && (await hasCapability(supabase, companyId, required))),
   }
 }
