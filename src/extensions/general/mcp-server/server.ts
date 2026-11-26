@@ -21,10 +21,12 @@ import {
   isTaskCapableClient,
   abandonMcpTaskIfStale,
   createMcpTask,
+  createTaskResult,
   resolveMcpTask,
   taskToWire,
   type McpTaskRow,
 } from './tasks'
+import { SKILLS_EXTENSION_ID, buildSkillFiles, skillEntry, slugFromSkillFileUri } from './skills/extension'
 import {
   clientInfoNameFromMeta,
   clientTelemetryFields,
@@ -47,6 +49,7 @@ import {
 import { checkRateLimit } from '@/lib/auth/rate-limit-http'
 import { getCanonicalBaseUrl, resolveDiscoveryBaseUrl } from '@/lib/api/v1/base-url'
 import { createCompanyCore } from '@/lib/company/create-company'
+import { defaultTeamForNewCompany } from '@/lib/company/default-team'
 import {
   AssetCorrectionBlockedError,
   AssetDeleteBlockedError,
@@ -140,6 +143,7 @@ import {
   type PrintedLineAmount,
 } from '@/lib/bookkeeping/supplier-invoice-line-totals'
 import { getErrorEntry, siCreateInvalidInputMessages } from '@/lib/errors/structured-errors'
+import { registerRefusalMessageSv } from '@/lib/salary/register-locks'
 import type { SIEAppendPlan } from '@/lib/import/sie-append'
 import { ACCOUNTS_NOT_IN_CHART } from '@/lib/bookkeeping/errors'
 import { dbError, errorCauseTag } from '@/lib/errors/db-error'
@@ -188,6 +192,8 @@ import { resolveInvoicePaymentAccount, resolveInvoiceSettlementAccount } from '@
 import { isPaidAtIssueAccount } from '@/lib/invoices/paid-at-issue'
 import { supplierInvoiceReference } from '@/lib/bookkeeping/supplier-invoice-description'
 import { contradictsLearnedDirection, findCounterpartyTemplatesBatch, formatCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
+import { counterpartyTemplateKey } from '@/lib/rules/service'
+import { escapeLikePattern } from '@/lib/supabase/like-pattern'
 import { bankRowRefusalCode, decideBankRowRebooking } from '@/lib/transactions/is-booked'
 import { setTransactionIgnored } from '@/lib/transactions/ignore'
 import { BULK_IGNORE_MAX_ROWS, findBulkIgnoreCandidates } from '@/lib/transactions/bulk-ignore'
@@ -566,7 +572,7 @@ import {
   listVoucherGaps,
   voucherGapExplanationFromParams,
 } from '@/lib/core/bookkeeping/voucher-gaps'
-import { generateGeneralLedger } from '@/lib/reports/general-ledger'
+import { generateGeneralLedger, type GeneralLedgerAccount } from '@/lib/reports/general-ledger'
 // Account-keyed reconciliation (one engine, three doors): the same service
 // the dashboard routes and the v1 API call.
 import { getAccountStatus } from '@/lib/reconciliation/service'
@@ -4509,34 +4515,6 @@ async function newCompanyReach(
   }
 }
 
-/**
- * The team a company created through the API/MCP path attaches to when the
- * caller does not name one: the user's PERSONAL team only (WL-08: companies
- * created through the normal flow always attach to the personal team; cockpit
- * flows pass the byrå team id explicitly). Picking the first membership
- * regardless of kind attached a consultant's private company to their byrå
- * team, exposing their books to the whole byrå and suppressing the trial.
- * Mirrors ensure_user_team: earliest teams row with kind='personal'. null
- * when the user has no personal team; create_company_for_user then leaves
- * team_id NULL. Explicit team_id args are authorized by the DB gate instead.
- */
-async function defaultTeamForUser(supabase: SupabaseClient, userId: string): Promise<string | null> {
-  const { data, error } = await supabase
-    .from('team_members')
-    .select('team_id, teams!inner(kind, created_at)')
-    .eq('user_id', userId)
-    .eq('teams.kind', 'personal')
-    .order('teams(created_at)', { ascending: true })
-    .order('teams(id)', { ascending: true })
-    .limit(1)
-    .maybeSingle()
-  if (error) {
-    log.warn('default team lookup failed', { error: error.message })
-    return null
-  }
-  return (data?.team_id as string | undefined) ?? null
-}
-
 function paginatedSchema(
   itemsKey: string,
   itemSchema: Record<string, unknown> = { type: 'object' },
@@ -5097,10 +5075,66 @@ function registerAnswer<Row, Out>(
       return { [key]: rows, ...pageTail(rows, rows.length, 0) }
     }
   }
-  const limit = Math.min(Math.max(1, Math.floor(Number(args.limit)) || REGISTER_PAGE_SIZE), REGISTER_PAGE_SIZE)
-  const offset = Math.max(0, Math.floor(Number(args.offset)) || 0)
+  const { limit, offset } = pageWindow(args, REGISTER_PAGE_SIZE)
   const rows = present(sorted.slice(offset, offset + limit))
   return { [key]: rows, ...pageTail(rows, sorted.length, offset) }
+}
+
+/** The page limit and offset ask for: at most `max` rows (the default too), from the start by default. */
+function pageWindow(args: Record<string, unknown>, max: number): { limit: number; offset: number } {
+  return {
+    limit: Math.min(Math.max(1, Math.floor(Number(args.limit)) || max), max),
+    offset: Math.max(0, Math.floor(Number(args.offset)) || 0),
+  }
+}
+
+// A page of 100 ledger lines is about 40 000 characters of text, as a page of
+// the register lists is.
+const LEDGER_PAGE_LINES = 100
+
+/**
+ * The huvudbok tool's answer, cut by line: the ledger's lines in report order
+ * (account by account, each account's lines by date and voucher). With limit
+ * or offset: that page, at most 100 lines. Without either: the whole ledger,
+ * as the tool has always answered, when it fits one answer; a ledger too
+ * large for one answer gets its first page, with has_more, next_offset and
+ * total_count (lines) saying there is more.
+ *
+ * Every account on a page is the account of the whole answer, with its
+ * opening and closing balance and totals for the whole range and each line's
+ * running balance, and only the page's share of its lines; line_count says
+ * how many it has in all. An account with no lines in the range (a balance
+ * carried in) is on the page that holds the line after it, the last page if
+ * no line follows. So the pages together give every account once and every
+ * line once, in the whole answer's order.
+ */
+function ledgerAnswer<Answer extends { accounts: GeneralLedgerAccount[] }>(
+  answer: Answer,
+  args: Record<string, unknown>,
+): Record<string, unknown> {
+  const total = answer.accounts.reduce((sum, account) => sum + account.lines.length, 0)
+  if (args.limit == null && args.offset == null) {
+    const whole = { ...answer, count: total, total_count: total, has_more: false }
+    if (fitsOneAnswer(whole)) return whole
+  }
+  const { limit, offset } = pageWindow(args, LEDGER_PAGE_LINES)
+  const end = offset + limit
+  const accounts: Array<GeneralLedgerAccount & { line_count: number }> = []
+  let start = 0
+  for (const account of answer.accounts) {
+    const lineCount = account.lines.length
+    const anchor = Math.min(start, Math.max(total - 1, 0))
+    const onPage = lineCount > 0 ? start < end && start + lineCount > offset : anchor >= offset && anchor < end
+    if (onPage) {
+      accounts.push({
+        ...account,
+        lines: account.lines.slice(Math.max(0, offset - start), Math.max(0, end - start)),
+        line_count: lineCount,
+      })
+    }
+    start += lineCount
+  }
+  return { ...answer, accounts, ...pageTail(accounts.flatMap((account) => account.lines), total, offset) }
 }
 
 // Shared by the report tools' optional `dimensions` filter arg: parse the raw
@@ -7297,7 +7331,8 @@ export const tools: McpTool[] = [
         throw codedError('VALIDATION_ERROR', `Invalid fiscal period: ${plan.error}`)
       }
 
-      const teamId = parsed.data.team_id ?? (await defaultTeamForUser(supabase, userId))
+      // A failed lookup throws COMPANY_CREATE_FAILED: no preview, nothing created.
+      const teamId = parsed.data.team_id ?? (await defaultTeamForNewCompany(supabase, userId))
       const preview = {
         name: parsed.data.name,
         entity_type: parsed.data.entity_type,
@@ -7402,7 +7437,7 @@ export const tools: McpTool[] = [
   ...createFormationTools({
     annotations: annotationsForEffect('additive', { idempotentHint: true, openWorldHint: true }),
     appOrigin: connectLinkBaseUrl,
-    defaultTeamForUser,
+    defaultTeamForUser: defaultTeamForNewCompany,
     newCompanyReach,
   }),
 
@@ -7811,7 +7846,7 @@ export const tools: McpTool[] = [
       // state and its records per resource. Undeclared like underlag.
       const job = await migrationJobStatus(supabase, companyId, provider)
       const underlagStep = underlag
-        ? ` Underlag are a separate step on the same page, after the bookkeeping import: the user clicks "Hämta underlag" on the ${info.name} row${provider === 'fortnox' ? ' and approves Fortnox file access once' : ''}; files already there are skipped. underlag.status says where that step stands (not_fetched, incomplete, needs_reconnect or complete); call this tool again to check.`
+        ? ` Underlag are a separate step on the same page, after the bookkeeping import: the user clicks "Hämta underlag" on the ${info.name} row${provider === 'fortnox' ? ' and approves Fortnox file access once' : ''}; files already there are skipped.${provider === 'visma' ? ' From Visma that step fetches the PDF of each customer invoice the import brought in, nothing else: other underlag the user uploads ("Ladda upp underlag").' : ''} underlag.status says where that step stands (not_fetched, incomplete, needs_reconnect or complete); call this tool again to check.`
         : ` ${info.name} underlag are not fetched: the user uploads them ("Ladda upp underlag").`
       return {
         provider,
@@ -8680,7 +8715,7 @@ export const tools: McpTool[] = [
         skatteverket_connection: {
           type: 'object',
           description:
-            'Connection status and grant detail, if connected. needs_reconsent requires a person using BankID in Settings > Skatteverket; warn before SKV work. filing.ready: can THIS user file.',
+            'Connection status and grant detail, if connected. needs_reconsent requires a person using BankID in Settings → Connections → Skatteverket; warn before SKV work. filing.ready: can THIS user file.',
         },
       },
       required: ['company', 'user_name', 'atoms', 'memory', 'recommended_tools'],
@@ -11595,6 +11630,7 @@ export const tools: McpTool[] = [
         source_invoice_id: { type: ['string', 'null'], description: 'Proforma or offert the order was converted from, if any' },
         your_reference: { type: ['string', 'null'] },
         our_reference: { type: ['string', 'null'] },
+        invoice_marking: { type: ['string', 'null'], description: "Märkning for the order's invoices; null: each takes the customer card's" },
         notes: { type: ['string', 'null'] },
         default_dimensions: { type: 'object', additionalProperties: { type: 'string' } },
         confirmed_at: { type: ['string', 'null'] },
@@ -11645,6 +11681,7 @@ export const tools: McpTool[] = [
         source_invoice_id: order.source_invoice_id ?? null,
         your_reference: order.your_reference ?? null,
         our_reference: order.our_reference ?? null,
+        invoice_marking: order.invoice_marking ?? null,
         notes: order.notes ?? null,
         default_dimensions: order.default_dimensions ?? {},
         confirmed_at: order.confirmed_at ?? null,
@@ -11686,6 +11723,7 @@ export const tools: McpTool[] = [
         currency: { type: 'string', enum: [...CURRENCIES] },
         our_reference: { type: 'string' },
         your_reference: { type: 'string' },
+        invoice_marking: { type: 'string', description: "Märkning (buyer marking/PO) for the order's invoices; omitted: the customer card's." },
         notes: { type: 'string' },
         ...STAGING_ARGS_PROPERTIES,
       },
@@ -11777,6 +11815,8 @@ export const tools: McpTool[] = [
         currency,
         ...(args.your_reference ? { your_reference: args.your_reference } : {}),
         ...(args.our_reference ? { our_reference: args.our_reference } : {}),
+        // Any value given reaches the schema: a wrong type is refused, not dropped.
+        ...(args.invoice_marking !== undefined ? { invoice_marking: args.invoice_marking } : {}),
         ...(args.notes ? { notes: args.notes } : {}),
         ...(resolvedDefaultDimensions && Object.keys(resolvedDefaultDimensions).length > 0
           ? { default_dimensions: resolvedDefaultDimensions }
@@ -11820,6 +11860,8 @@ export const tools: McpTool[] = [
           currency,
           order_date: params.order_date,
           requested_delivery_date: params.requested_delivery_date ?? null,
+          // Shown on the approval card: the Märkning the order's invoices carry.
+          ...(params.invoice_marking?.trim() ? { invoice_marking: params.invoice_marking.trim() } : {}),
           // Informational: an order is not a verifikat, so no period check.
           writes_verifikat: false,
           ...(dimensionResolutions.length > 0 ? { dimension_resolutions: dimensionResolutions } : {}),
@@ -13978,12 +14020,14 @@ export const tools: McpTool[] = [
     catalogVisibility: 'search',
     keywords: ['motpart', 'konteringsmall', 'mallar'],
     title: 'List Counterparty Templates',
-    description: 'List active counterparty categorization templates: learned patterns from prior categorizations used for auto-matching new transactions.',
+    description: 'List counterparty categorization templates (learned booking rules) used for matching new transactions: active ones, or paused too with include_paused; query narrows by name. Change one with gnubok_update_counterparty_template or gnubok_rename_counterparty_template.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
         limit: { type: 'number', description: 'Max results 1-200 (default 100)' },
+        include_paused: { type: 'boolean', description: 'Also list paused templates (mode paused), e.g. to resume one. Default false.' },
+        query: { type: 'string', maxLength: 100, description: 'Case-insensitive substring of the counterparty name, to find one rule beyond the limit.' },
       },
     },
     outputSchema: {
@@ -13998,11 +14042,16 @@ export const tools: McpTool[] = [
     async execute(args, companyId, userId, supabase) {
       const limit = Math.min(Math.max(1, Number(args.limit) || 100), 200)
 
-      const { data, error } = await supabase
+      let query = supabase
         .from('categorization_templates')
-        .select('id, counterparty_name, counterparty_aliases, debit_account, credit_account, vat_treatment, vat_account, category, line_pattern, occurrence_count, confidence, last_seen_date, source')
+        .select('id, counterparty_name, counterparty_aliases, debit_account, credit_account, vat_treatment, vat_account, category, line_pattern, occurrence_count, confidence, last_seen_date, source, mode, always_review')
         .eq('company_id', companyId)
-        .eq('is_active', true)
+      if (args.include_paused !== true) query = query.eq('is_active', true)
+      // Ranked by occurrence and capped at 200, a rare rule (often a paused
+      // one) can sit past the limit: the name filter reaches it.
+      const needle = typeof args.query === 'string' ? counterpartyTemplateKey(args.query) : ''
+      if (needle) query = query.ilike('counterparty_name', `%${escapeLikePattern(needle)}%`)
+      const { data, error } = await query
         .order('occurrence_count', { ascending: false })
         .limit(limit)
 
@@ -15284,7 +15333,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_get_general_ledger',
     keywords: ['huvudbok', 'huvudboken'],
     title: 'General Ledger (Huvudbok)',
-    description: 'General ledger (huvudbok) for a fiscal period: per-account opening, entries, closing balances. Filters: account and date range, dimensions. For ad-hoc cross-account/amount/free-text queries use gnubok_query_journal.',
+    description: 'General ledger (huvudbok) for a fiscal period: per-account opening, entries, closing balances. Filters: account and date range, dimensions; narrow a large ledger with them, or page it (100 lines, next_offset). Ad-hoc cross-account/amount/free-text: gnubok_query_journal.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -15295,11 +15344,19 @@ export const tools: McpTool[] = [
         from_date: { type: 'string' },
         to_date: { type: 'string' },
         dimensions: REPORT_DIMENSIONS_FILTER_SCHEMA,
+        limit: { type: 'integer' },
+        offset: { type: 'integer' },
       },
     },
     outputSchema: {
       type: 'object',
-      properties: { ...DIMENSION_FILTER_OUTPUT_PROPS },
+      properties: {
+        ...DIMENSION_FILTER_OUTPUT_PROPS,
+        count: { type: 'number' },
+        total_count: { type: 'number' },
+        has_more: { type: 'boolean' },
+        next_offset: { type: 'number' },
+      },
     },
     annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, userId, supabase) {
@@ -15333,12 +15390,15 @@ export const tools: McpTool[] = [
         ),
         buildReportDataStatus(supabase, companyId, { periodId: period.id, ...range }),
       ])
-      return {
-        ...report,
-        ...(dimFilter.filter ? { dimension_filter: dimFilter.filter } : {}),
-        ...(dimFilter.resolutions.length > 0 ? { dimension_resolutions: dimFilter.resolutions } : {}),
-        data_status: dataStatus,
-      }
+      return ledgerAnswer(
+        {
+          ...report,
+          ...(dimFilter.filter ? { dimension_filter: dimFilter.filter } : {}),
+          ...(dimFilter.resolutions.length > 0 ? { dimension_resolutions: dimFilter.resolutions } : {}),
+          data_status: dataStatus,
+        },
+        args,
+      )
     },
   },
 
@@ -22756,7 +22816,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_register_absence',
     keywords: ['frånvaro', 'sjukanmälan', 'semester', 'vab'],
     title: 'Register Absence (Frånvaro)',
-    description: 'Stage absence registration (sick, vab, parental, ...) for an employee over a date range, max 92 days, weekends skipped unless included. Commit via gnubok_approve_pending_operation; recalculate any open salary run afterwards.',
+    description: 'Stage absence (sick, vab, parental, ...) for an employee over a date range, max 92 days, weekends skipped unless included. A day a paid or declared run already read goes to the next draft run via carried_to_run_id. Commit via gnubok_approve_pending_operation; recalculate after.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -22772,15 +22832,20 @@ export const tools: McpTool[] = [
         hours_per_day: { type: 'number', description: 'Hours per day. Omitted: one scheduled day of the employee (use e.g. half that for half days)' },
         notes: { type: 'string', description: 'Optional note' },
         include_weekends: { type: 'boolean', description: 'Also register Saturday/Sunday (default false)' },
+        carried_to_run_id: {
+          type: 'string',
+          description:
+            'For days on dates a paid, booked or declared salary run already read (late days): the next ordinary salary run that is neither paid nor declared, a draft with the employee on it (a correction draft only when named and its AGI is not filed). It deducts them, shows the dates on the payslip and reports them in its AGI. A refusal SALARY_REGISTER_DATES_LOCKED_BY_RUN with reason late_day_needs_later_run names it in later_salary_run. Days no paid or declared run read ignore it.',
+        },
       },
       required: ['employee_id', 'from', 'to', 'absence_type'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
     annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
-      const { employee_id, from, to, absence_type, hours_per_day, notes, include_weekends } = args as {
+      const { employee_id, from, to, absence_type, hours_per_day, notes, include_weekends, carried_to_run_id } = args as {
         employee_id: string; from: string; to: string; absence_type: string
-        hours_per_day?: number; notes?: string; include_weekends?: boolean
+        hours_per_day?: number; notes?: string; include_weekends?: boolean; carried_to_run_id?: string
       }
       if (!employee_id) throw badArgument('employee_id', 'employee_id is required')
       if (!from) throw badArgument('from', 'from is required')
@@ -22801,9 +22866,21 @@ export const tools: McpTool[] = [
         hoursPerDay: hours_per_day,
         notes: notes ?? null,
         includeWeekends: include_weekends,
+        carriedToRunId: carried_to_run_id ?? null,
         dryRun: true,
       })
       if (!preflight.ok) {
+        // A register refusal names the run, the dates and the way out (for a
+        // late day, the run to pass as carried_to_run_id).
+        const refusal = registerRefusalMessageSv(preflight.code, preflight.details, 'api')
+        if (refusal) {
+          throw codedRefusal(
+            preflight.code,
+            [`Cannot register absence: ${preflight.code}.`, getErrorEntry(preflight.code)?.message_en, refusal, JSON.stringify(preflight.details)]
+              .filter(Boolean)
+              .join(' '),
+          )
+        }
         throw serviceRefusal('Cannot register absence', preflight)
       }
 
@@ -22821,7 +22898,16 @@ export const tools: McpTool[] = [
         userId,
         type: 'register_absence',
         title: `Registrera frånvaro: ${employeeName}, ${absence_type} ${from}${to !== from ? ` till ${to}` : ''}`,
-        params: { employee_id, from, to, absence_type, hours_per_day: hours_per_day ?? null, notes: notes ?? null, include_weekends: include_weekends ?? false },
+        params: {
+          employee_id,
+          from,
+          to,
+          absence_type,
+          hours_per_day: hours_per_day ?? null,
+          notes: notes ?? null,
+          include_weekends: include_weekends ?? false,
+          carried_to_run_id: carried_to_run_id ?? null,
+        },
         preview: {
           employee_id,
           employee_name: employeeName,
@@ -22831,6 +22917,11 @@ export const tools: McpTool[] = [
           day_count: preflight.data.count,
           hours_per_day: preflight.data.hours_per_day,
           dates_sample: preflight.data.days.slice(0, 10).map((d) => (d as { absence_date: string }).absence_date),
+          // The late days among them and the run that deducts them.
+          late_days: preflight.data.days
+            .filter((d) => (d as { carried_to_run_id?: string | null }).carried_to_run_id)
+            .map((d) => (d as { absence_date: string }).absence_date),
+          carried_to_run_id: carried_to_run_id ?? null,
         },
         actor,
         next: {
@@ -22892,6 +22983,15 @@ export const tools: McpTool[] = [
         dryRun: true,
       })
       if (!preflight.ok) {
+        const refusal = registerRefusalMessageSv(preflight.code, preflight.details, 'api')
+        if (refusal) {
+          throw codedRefusal(
+            preflight.code,
+            [`Cannot delete absence: ${preflight.code}.`, getErrorEntry(preflight.code)?.message_en, refusal, JSON.stringify(preflight.details)]
+              .filter(Boolean)
+              .join(' '),
+          )
+        }
         throw serviceRefusal('Cannot delete absence', preflight)
       }
       if (preflight.data.deleted_count === 0) {
@@ -30975,6 +31075,10 @@ const SERVER_CAPABILITIES = {
     'io.modelcontextprotocol/ui': {},
     // MCP Tasks: durable handles for long-running tool calls (see tasks.ts).
     [TASKS_EXTENSION_ID]: {},
+    // MCP Skills: the skill catalog as native skills, skills/list and
+    // skills/get plus skill://<slug>/SKILL.md (see skills/extension.ts).
+    // No directoryRead: every skill is one file, so its entry is its tree.
+    [SKILLS_EXTENSION_ID]: {},
   },
 }
 
@@ -32012,6 +32116,14 @@ async function handleMcpMessage(request: Request, parsed: ParsedMcpBody): Promis
     return decorated
   }
 
+  // The skills served under the skills extension: the company-independent
+  // catalog resources/list lists, each SKILL.md built with this connection's
+  // tool names (skills/extension.ts).
+  const loadServedSkillFiles = async () =>
+    buildSkillFiles(await loadAllSkills(supabase), (text) =>
+      projectToolReferencesInText(text, toolNamespace, getCanonicalToolNames())
+    )
+
   // ── Dispatch ──
   const { method, id, params } = body
 
@@ -32823,8 +32935,7 @@ async function handleMcpMessage(request: Request, parsed: ParsedMcpBody): Promis
         })
         return NextResponse.json(
           jsonRpc(id ?? null, {
-            resultType: 'task',
-            task: taskToWire(task),
+            ...createTaskResult(task),
             _meta: { [META_SERVER_INFO]: SERVER_INFO_BY_NAMESPACE[toolNamespace] },
           })
         )
@@ -33134,6 +33245,31 @@ async function handleMcpMessage(request: Request, parsed: ParsedMcpBody): Promis
         )
       }
 
+      // skill://<slug>/SKILL.md: a skill under the skills extension, served
+      // byte for byte as its skills/list entry's digest describes.
+      const servedSkillSlug = slugFromSkillFileUri(uri)
+      if (servedSkillSlug) {
+        const file = (await loadServedSkillFiles()).find((f) => f.slug === servedSkillSlug)
+        if (file) {
+          emitResourceReadTelemetry({
+            uri,
+            kind: 'skill',
+            success: true,
+            errorCode: null,
+            actor,
+            latencyMs: Date.now() - readStartedAt,
+            requestId: id ?? null,
+            userId,
+            companyId,
+          })
+          return NextResponse.json(
+            jsonRpc(id ?? null, decorate({
+              contents: [{ uri, mimeType: SKILL_MIME_TYPE, text: file.text }],
+            }, CACHE_SKILLS))
+          )
+        }
+      }
+
       // Skills exposed at Accounted://skill/<slug>: Markdown bodies, forward-compatible
       // with a future native MCP skills/list primitive. Atom slugs (slash-bearing
       // registry ids) are URL-encoded in the URI; skillSlugFromUri decodes.
@@ -33255,6 +33391,29 @@ async function handleMcpMessage(request: Request, parsed: ParsedMcpBody): Promis
       })
       return NextResponse.json(
         jsonRpcError(id ?? null, -32602, `Resource not found: "${uri}"`)
+      )
+    }
+
+    // Skills extension (io.modelcontextprotocol/skills): one page holds the
+    // whole catalog, so no cursor is ever returned.
+    case 'skills/list': {
+      const files = await loadServedSkillFiles()
+      return NextResponse.json(
+        jsonRpc(id ?? null, decorate({ skills: files.map(skillEntry) }, CACHE_SKILLS))
+      )
+    }
+
+    case 'skills/get': {
+      const uri = (params as Record<string, unknown> | undefined)?.uri
+      const slug = slugFromSkillFileUri(uri)
+      const file = slug ? (await loadServedSkillFiles()).find((f) => f.slug === slug) : undefined
+      if (!file) {
+        return NextResponse.json(
+          jsonRpcError(id ?? null, -32602, `No skill is served at ${typeof uri === 'string' ? uri : '(no uri)'}`)
+        )
+      }
+      return NextResponse.json(
+        jsonRpc(id ?? null, decorate({ skill: skillEntry(file) }, CACHE_SKILLS))
       )
     }
 

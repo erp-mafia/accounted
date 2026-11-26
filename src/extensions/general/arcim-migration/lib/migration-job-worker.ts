@@ -6,7 +6,7 @@ import { ExecutionBudgetExceeded, withExecutionDeadline } from '@/lib/http/execu
 import { resolveConsent, type ResolvedConsent } from '@/lib/providers/resolve-consent'
 import { classifyProviderError, providerRefusalReason } from '@/lib/providers/with-provider-call'
 import { readProviderRefusal } from '@/lib/providers/read-refusal'
-import { fortnoxApiErrorCode } from '@/lib/providers/fortnox/client'
+import { FortnoxApiError, fortnoxApiErrorCode } from '@/lib/providers/fortnox/client'
 import { fetchMigrationPage, hydrateCustomers, hydrateSalesInvoices, hydrateSupplierInvoices, hydrateSuppliers, type HydrationReport, type MigrationDto } from '@/lib/providers/provider-data-fetcher'
 import { migrationRetrySeconds, type MigrationJobScope, type ProviderMigrationJob, type MigrationResource } from '@/lib/providers/migration-contract'
 import { sealMigrationPayload, openMigrationPayload } from '@/lib/providers/migration-payload'
@@ -749,6 +749,25 @@ async function fetchRegisterPage(supabase: SupabaseClient, job: ProviderMigratio
   }
 }
 
+/** A connection the job may import through: its consent still names the job's provider and account. */
+function sameSource(job: ProviderMigrationJob, connection: ResolvedConsent): ResolvedConsent {
+  const sourceAccount = String(connection.consent.org_number ?? '').replace(/[^a-z0-9]/gi, '') || connection.providerCompanyId
+  if (connection.consent.provider !== job.provider || sourceAccount !== job.account_key) {
+    throw new Error('MIGRATION_SOURCE_IDENTITY_CHANGED')
+  }
+  return connection
+}
+
+/**
+ * Did Fortnox refuse the access token itself? Its 401 ends the token, which a
+ * refresh may cure, as import-documents.ts and repair-imported-registers.ts
+ * read it. A refused register or licence, or a consent the database no
+ * longer accepts, is not the token's age (classifyProviderError says which).
+ */
+function fortnoxRefusedToken(error: unknown): boolean {
+  return error instanceof FortnoxApiError && error.statusCode === 401 && failureCode(error) === 'PROVIDER_AUTH_EXPIRED'
+}
+
 /** Cron owns recovery. A browser nudge only reduces latency, including in local dev. */
 export async function runProviderMigrationWorker(options: {
   jobId?: string; budgetMs?: number; supabase?: SupabaseClient
@@ -786,53 +805,75 @@ export async function runProviderMigrationWorker(options: {
     // deferral only then (see the catch).
     let moved = false
     try {
-      if (!job.consent_id) throw new Error('PROVIDER_AUTH_EXPIRED')
-      const connection = await withinMigrationDeadline(resolveConsent(job.company_id, job.consent_id), deadline - 5000)
-      const sourceAccount = String(connection.consent.org_number ?? '').replace(/[^a-z0-9]/gi, '') || connection.providerCompanyId
-      if (connection.consent.provider !== job.provider || sourceAccount !== job.account_key) {
-        throw new Error('MIGRATION_SOURCE_IDENTITY_CHANGED')
-      }
+      const consentId = job.consent_id
+      if (!consentId) throw new Error('PROVIDER_AUTH_EXPIRED')
+      let connection = sameSource(job, await withinMigrationDeadline(resolveConsent(job.company_id, consentId), deadline - 5000))
+      // Whether this claim has traded a refused token for a new one (see the catch below).
+      let tokenReplaced = false
       while (Date.now() < deadline - 10_000 && job.state === 'running') {
         started = Date.now()
         log.info('migration phase started', { jobId: job.id, phase: job.phase, resource: job.resources[job.resource_index - 1], page: job.next_page })
-        if (job.phase === 'discover') {
-          const resource = job.resources[job.resource_index - 1]
-          const page = await fetchRegisterPage(supabase, job, connection, resource, deadline - 5000)
-          if (page) {
-            const records = page.items.map((dto, i) => ({ source_id: dto.id || `missing:${job.next_page}:${i}`,
-              ...sealMigrationPayload(Buffer.byteLength(JSON.stringify(dto)) > MAX_BATCH_BYTES / 2
-                ? { id: dto.id, migrationError: 'MIGRATION_INVOICE_TOO_LARGE' } : dto) }))
-            // Persist bounded segments even when an unpaged upstream returns its
-            // entire register. Only the final segment advances the page cursor.
-            let segment: typeof records = []; let bytes = 0
-            for (const record of records) {
-              const size = Buffer.byteLength(JSON.stringify(record))
-              if (segment.length >= 250 || bytes + size > MAX_BATCH_BYTES) {
-                if (Date.now() >= deadline - 5000) throw new Error('MIGRATION_DEADLINE')
-                await migrationRpc(supabase, job, 'save_provider_migration_page', { p_resource: resource, p_page: job.next_page,
-                  p_records: segment, p_next_page: 0 }, deadline - 5000)
-                segment = []; bytes = 0
+        try {
+          if (job.phase === 'discover') {
+            const resource = job.resources[job.resource_index - 1]
+            const page = await fetchRegisterPage(supabase, job, connection, resource, deadline - 5000)
+            if (page) {
+              const records = page.items.map((dto, i) => ({ source_id: dto.id || `missing:${job.next_page}:${i}`,
+                ...sealMigrationPayload(Buffer.byteLength(JSON.stringify(dto)) > MAX_BATCH_BYTES / 2
+                  ? { id: dto.id, migrationError: 'MIGRATION_INVOICE_TOO_LARGE' } : dto) }))
+              // Persist bounded segments even when an unpaged upstream returns its
+              // entire register. Only the final segment advances the page cursor.
+              let segment: typeof records = []; let bytes = 0
+              for (const record of records) {
+                const size = Buffer.byteLength(JSON.stringify(record))
+                if (segment.length >= 250 || bytes + size > MAX_BATCH_BYTES) {
+                  if (Date.now() >= deadline - 5000) throw new Error('MIGRATION_DEADLINE')
+                  await migrationRpc(supabase, job, 'save_provider_migration_page', { p_resource: resource, p_page: job.next_page,
+                    p_records: segment, p_next_page: 0 }, deadline - 5000)
+                  segment = []; bytes = 0
+                }
+                segment.push(record); bytes += size
               }
-              segment.push(record); bytes += size
+              if (Date.now() >= deadline - 5000) throw new Error('MIGRATION_DEADLINE')
+              await migrationRpc(supabase, job, 'save_provider_migration_page', { p_resource: resource, p_page: job.next_page,
+                p_records: segment, p_next_page: page.nextPage }, deadline - 5000)
+              log.info('migration page persisted', { jobId: job.id, resource, page: job.next_page, rows: records.length, total: page.total,
+                ...(page.declined ? { declined: page.declined } : {}) })
             }
-            if (Date.now() >= deadline - 5000) throw new Error('MIGRATION_DEADLINE')
-            await migrationRpc(supabase, job, 'save_provider_migration_page', { p_resource: resource, p_page: job.next_page,
-              p_records: segment, p_next_page: page.nextPage }, deadline - 5000)
-            log.info('migration page persisted', { jobId: job.id, resource, page: job.next_page, rows: records.length, total: page.total,
-              ...(page.declined ? { declined: page.declined } : {}) })
+          } else {
+            const state = { import: 'pending', link: 'imported', reconcile: 'linked', settle: 'planned', completed: 'done' }[job.phase]
+            const { data: rows, error: readError } = await withinMigrationDeadline(supabase.from('migration_job_chunks')
+              .select('id,resource,source_id,payload,target_id,receipt').eq('company_id', job.company_id).eq('job_id', job.id)
+              .eq('state', state).order('resource_order').order('id').limit(BATCH_SIZE), deadline - 5000)
+            if (readError) throw new Error(readError.message)
+            const chunks = (rows ?? []) as MigrationChunk[]
+            if (!chunks.length) {
+              await migrationRpc(supabase, job, 'advance_provider_migration_job', {}, deadline - 5000)
+            }
+            else if (job.phase === 'import') await importBatch(supabase, job, chunks, connection, deadline - 5000, () => { moved = true })
+            else await withinMigrationDeadline(followupBatch(supabase, job, chunks, deadline - 5000), deadline - 5000)
           }
-        } else {
-          const state = { import: 'pending', link: 'imported', reconcile: 'linked', settle: 'planned', completed: 'done' }[job.phase]
-          const { data: rows, error: readError } = await withinMigrationDeadline(supabase.from('migration_job_chunks')
-            .select('id,resource,source_id,payload,target_id,receipt').eq('company_id', job.company_id).eq('job_id', job.id)
-            .eq('state', state).order('resource_order').order('id').limit(BATCH_SIZE), deadline - 5000)
-          if (readError) throw new Error(readError.message)
-          const chunks = (rows ?? []) as MigrationChunk[]
-          if (!chunks.length) {
-            await migrationRpc(supabase, job, 'advance_provider_migration_job', {}, deadline - 5000)
-          }
-          else if (job.phase === 'import') await importBatch(supabase, job, chunks, connection, deadline - 5000, () => { moved = true })
-          else await withinMigrationDeadline(followupBatch(supabase, job, chunks, deadline - 5000), deadline - 5000)
+        } catch (error) {
+          // A Fortnox access token lasts an hour and a run minutes, and the
+          // token is read once per run. A run that starts near the end of the
+          // hour meets Fortnox's 401 midway, a moment before the expiry we
+          // stamped (resolveConsent's B11): the token has ended, not the
+          // grant. So the run asks once for a token in place of the refused
+          // one and repeats the step, which every phase can replay: an import
+          // commits what it prepared before the refusal. Inside the budget a
+          // refresh starts only with time left to save the pair Fortnox
+          // rotates; later than that the step waits for the next run, which
+          // refreshes. A refresh Fortnox refuses, or a refusal of the new
+          // token, is the connection's answer, as before.
+          if (tokenReplaced || !fortnoxRefusedToken(error)) throw error
+          const replacement = sameSource(job, await withinMigrationDeadline(withExecutionDeadline(deadline - 5000,
+            'migration-credentials', () => resolveConsent(job.company_id, consentId, { rejectedAccessToken: connection.accessToken })),
+            deadline - 5000))
+          if (replacement.accessToken === connection.accessToken) throw error
+          connection = replacement
+          tokenReplaced = true
+          log.info('migration token replaced after a refusal', { jobId: job.id, phase: job.phase })
+          continue
         }
         batches++
         moved = true

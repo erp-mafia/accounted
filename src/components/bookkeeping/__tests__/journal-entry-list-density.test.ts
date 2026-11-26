@@ -35,9 +35,34 @@ describe('JournalEntryList compact rows', () => {
     expect(button).not.toContain('size="icon-sm"')
   })
 
-  it('persists the choice per company', () => {
-    expect(SRC).toContain("DENSITY_STORAGE_KEY_PREFIX = 'Accounted:journal-density:'")
-    expect(SRC).toContain("DENSITY_STORAGE_KEY_PREFIX + (company?.id ?? 'default')")
+  it('keeps the choice on the person, so a sign-out does not drop it', () => {
+    // A key in localStorage named after the company was emptied by every
+    // sign-out (lib/auth/clear-browser-storage.ts) and held for one company
+    // and one browser only. The choice is the person's: ui_state.
+    expect(SRC).toContain("uiState?.journal_density === 'compact'")
+    expect(SRC).toContain("saveDensity(next ? 'compact' : 'comfortable'")
+    expect(SRC).not.toContain('journal-density')
+  })
+
+  it('puts a press in the shared ui_state cache only once the first read has landed', () => {
+    // A press before the first read lands would put the density alone in
+    // the cache and drop the read: the page's create button would lose its
+    // saved mode, and the bank list its hidden columns, until a refresh.
+    // Keyed on the load too, so a read that left before the save cannot
+    // keep the older choice in the cache.
+    const start = SRC.indexOf('if (!uiStateLoaded || densityPressed === null) return')
+    expect(start).toBeGreaterThan(-1)
+    const effect = SRC.slice(start, SRC.indexOf('}, [', start) + 60)
+    expect(effect).toContain('mutateUiState(')
+    expect(effect).toContain('[uiStateLoaded, densityPressed, mutateUiState]')
+  })
+
+  it('stores the presses one at a time, in the order they were made', () => {
+    // Two saves in flight could land in either order and leave the older
+    // choice stored for the next session.
+    expect(SRC).toContain('createOrderedSave<')
+    expect(SRC).toContain('saveUiState({ journal_density })')
+    expect(SRC).not.toContain('persistUiState(')
   })
 
   it('has the label in both locales', () => {

@@ -67,6 +67,14 @@ interface PaymentBookingDialogProps {
 
 const BLANK_LINE: FormLine = { account_number: '', debit_amount: '', credit_amount: '', line_description: '' }
 
+/** What the payment clears on 1510 as the server plans it (GET mark-paid); null when it cannot say. */
+async function plannedCarriedSek(invoiceId: string): Promise<number | null> {
+  const response = await fetch(`/api/invoices/${invoiceId}/mark-paid`)
+  if (!response.ok) return null
+  const json = (await response.json()) as { data?: { carried_sek?: number | null } }
+  return json.data?.carried_sek ?? null
+}
+
 export default function PaymentBookingDialog({
   open,
   onOpenChange,
@@ -176,8 +184,16 @@ export default function PaymentBookingDialog({
           }),
         )
 
-        // A foreign invoice clears what 1510 carries.
-        const carried = await carriedSekOf(createClient(), company.id, 'customer', invoice).catch(() => {
+        // A foreign invoice clears what 1510 carries. An invoice with no
+        // verifikat under faktureringsmetoden may get its sale booked first
+        // (defer_invoice_booking): the payment then clears what that sale
+        // will leave on 1510, which is not on the ledger yet, so the server
+        // plans it (GET mark-paid).
+        const carried = await (
+          !invoice.journal_entry_id && proposalMethod === 'accrual'
+            ? plannedCarriedSek(invoice.id)
+            : carriedSekOf(createClient(), company.id, 'customer', invoice)
+        ).catch(() => {
           // Safe: the proposal falls back to the invoice's rate, and the rows are the person's to edit.
           return null
         })

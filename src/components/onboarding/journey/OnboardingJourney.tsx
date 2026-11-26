@@ -47,6 +47,7 @@ import type { EntityType } from '@/types'
 import {
   ENTITY_TYPE_LABELS_SV,
   creatableEntityTypes,
+  defaultAccountingMethod,
   fiscalYearLockedToCalendar,
   isEntityType,
   plannedLegalForms,
@@ -280,6 +281,7 @@ export default function OnboardingJourney({
   // calendar year, so the fiscal-year questions collapse to first-year-or-not.
   const personOwned = isEntityType(entity) && usesPersonnummerAsOrgNumber(entity)
   const calendarOnly = isEntityType(entity) && fiscalYearLockedToCalendar(entity)
+  const usualMethod = isEntityType(entity) ? defaultAccountingMethod(entity) : null
 
   const monthLong = useMemo(() => {
     const fmt = new Intl.DateTimeFormat(locale === 'en' ? 'en' : 'sv', { month: 'long' })
@@ -920,14 +922,6 @@ export default function OnboardingJourney({
                 .
               </p>
             )}
-            {/* Someone who has not formed the company yet: the formation
-                flow prepares it and sets it up here once registered. */}
-            <p className="jny-more">
-              {t('journey_start_ab_pre')}{' '}
-              <Link className="jny-link" href={FORMATION_PATH}>
-                {t('journey_start_ab_link')}
-              </Link>
-            </p>
           </Question>
         )
 
@@ -951,6 +945,16 @@ export default function OnboardingJourney({
               }
               {...flyProps}
             />
+            {/* A company that is not registered yet: the formation flow
+                prepares it and sets it up here once registered. */}
+            {firmByPersonnummer ? null : (
+              <p className="jny-more">
+                {t('journey_start_ab_pre')}{' '}
+                <Link className="jny-link" href={FORMATION_PATH}>
+                  {t('journey_start_ab_link')}
+                </Link>
+              </p>
+            )}
           </Question>
         )
       }
@@ -1205,7 +1209,13 @@ export default function OnboardingJourney({
               regIso
                 ? t('journey_fystart_reg_sub', { date: formatDayMonthYear(regIso) })
                 : personOwned
-                  ? t('journey_fystart_ef_sub')
+                  // Someone who has not registered yet has no registration
+                  // day to give: a sole trader's bookkeeping duty begins
+                  // with the first business event (BFL 2 kap.), said here
+                  // in plain words.
+                  ? state.settings.f_skatt === false
+                    ? t('journey_fystart_ef_sub_unregistered')
+                    : t('journey_fystart_ef_sub')
                   : t('journey_fystart_ab_sub')
             }
           >
@@ -1290,10 +1300,15 @@ export default function OnboardingJourney({
             attn={state.serverError === 'generic' ? (submitErrorText ?? t('journey_err_generic')) : undefined}
           >
             <ChipRow
-              options={[
-                { key: 'accrual', label: t('journey_method_accrual') },
-                { key: 'cash', label: t('journey_method_cash') },
-              ]}
+              // The method the legal form usually keeps its books by
+              // (its profile's default) is marked, as the first-year
+              // question marks its suggestion: neither name says which
+              // one a new company is expected to take.
+              options={(['accrual', 'cash'] as const).map((method) => ({
+                key: method,
+                label: method === 'accrual' ? t('journey_method_accrual') : t('journey_method_cash'),
+                rec: usualMethod === method ? t('journey_suggested') : undefined,
+              }))}
               onPick={(k) => dispatch({ type: 'METHOD_PICKED', method: k as 'accrual' | 'cash' })}
               disabled={state.submitting}
               {...flyProps}

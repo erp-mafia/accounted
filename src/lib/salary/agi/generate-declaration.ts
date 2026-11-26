@@ -28,6 +28,7 @@ import { z } from 'zod'
 import {
   generateAGIXml,
   buildIndividuppgifterSnapshot,
+  franvarouppgiftCount,
   AGIIncompleteDataError,
   AGIPayloadTooLargeError,
   findMissingCompanyData,
@@ -36,6 +37,7 @@ import type { AGIEmployeeData, AGICompanyData, AGITotals, AGIUnderlag } from './
 import { agiReportingPeriod, formatAgiPeriodDashed } from './reporting-period'
 import { runCalculationState } from '../calculation-state'
 import { runDeviationWindow } from '../deviation-period'
+import { FRANVARO_ABSENCE_TYPES, lateDayReaderRunIds, registerRowReadByRun } from '../late-days'
 import { VAXA_STOD_AGI_FIELDS_RETIRED_FROM } from '../vaxa-stod'
 import {
   resolveTaxableBenefits,
@@ -50,6 +52,7 @@ import { regionalSupportForRun } from '../regional-support'
 import { agiFiledForRun } from '../agi-submission-state'
 import type { Logger } from '@/lib/logger'
 import { stockholmYearMonth } from '@/lib/dates/iso'
+import { agiPeriodFiled } from '@/lib/deadlines/agi-period-filed'
 import { effectiveOrgNumber } from '@/lib/company/org-number'
 import { parseEntityType } from '@/lib/company/entity-type'
 import {
@@ -611,9 +614,12 @@ export async function generateAgiDeclaration(
   }
 
   // Load per-day absence (VAB + parental only: sick days go to FK separately).
-  // Read from the run's avvikelseperiod, the same window the calculation
-  // deducted from, so the frånvarouppgifter match the payslip: a company on
-  // "föregående månads avvikelser" reports August's VAB on the September run.
+  // Read the days the calculation deducted, so the frånvarouppgifter match the
+  // payslip: the run's avvikelseperiod (a company on "föregående månads
+  // avvikelser" reports August's VAB on the September run) and the late days
+  // carried to it from an earlier, already paid or declared period, which
+  // belong to the period whose pay they reduce (TB 1.1.18.2, 5.6;
+  // lib/salary/late-days.ts). A day carried to another run is that run's.
   const { start: periodStart, end: periodEnd } = runDeviationWindow(run)
   const employeeIds = (runEmployees as Array<{ employee_id: string }>)
     .map((sre) => sre.employee_id)
@@ -629,26 +635,52 @@ export async function generateAgiDeclaration(
     }>
   >()
   if (employeeIds.length > 0) {
-    const { data: absenceRows, error: absenceError } = await supabase
-      .from('salary_absence_days')
-      .select('employee_id, absence_date, absence_type, hours, franvaro_specifikationsnummer')
-      .eq('company_id', companyId)
-      .in('absence_type', ['vab', 'parental'])
-      .gte('absence_date', periodStart)
-      .lte('absence_date', periodEnd)
-      .in('employee_id', employeeIds)
+    let readerRunIds: string[]
+    try {
+      readerRunIds = await lateDayReaderRunIds(supabase, companyId, run as { id: string; corrects_run_id?: string | null })
+    } catch (err) {
+      return { ok: false, code: 'DATABASE_ERROR', details: { message: err instanceof Error ? err.message : String(err) } }
+    }
+    const [windowRead, lateRead] = await Promise.all([
+      supabase
+        .from('salary_absence_days')
+        .select('employee_id, absence_date, absence_type, hours, franvaro_specifikationsnummer, carried_to_run_id')
+        .eq('company_id', companyId)
+        .in('absence_type', [...FRANVARO_ABSENCE_TYPES])
+        .gte('absence_date', periodStart)
+        .lte('absence_date', periodEnd)
+        .in('employee_id', employeeIds),
+      supabase
+        .from('salary_absence_days')
+        .select('employee_id, absence_date, absence_type, hours, franvaro_specifikationsnummer, carried_to_run_id')
+        .eq('company_id', companyId)
+        .in('absence_type', [...FRANVARO_ABSENCE_TYPES])
+        .in('carried_to_run_id', readerRunIds)
+        .in('employee_id', employeeIds),
+    ])
     // An unread absence list is not an empty one: filing on it would drop
     // the frånvarouppgifter (FK821-FK827) Försäkringskassan reads.
+    const absenceError = windowRead.error ?? lateRead.error
     if (absenceError) {
       return { ok: false, code: 'DATABASE_ERROR', details: absenceError }
     }
-    for (const row of (absenceRows ?? []) as Array<{
+    type AbsenceRow = {
       employee_id: string
       absence_date: string
       absence_type: 'vab' | 'parental'
       hours: number
       franvaro_specifikationsnummer: number | null
-    }>) {
+      carried_to_run_id?: string | null
+    }
+    const absenceRows = [
+      ...((windowRead.data ?? []) as AbsenceRow[]).filter((row) =>
+        registerRowReadByRun(row, readerRunIds, true),
+      ),
+      ...((lateRead.data ?? []) as AbsenceRow[]).filter(
+        (row) => row.absence_date < periodStart || row.absence_date > periodEnd,
+      ),
+    ]
+    for (const row of absenceRows) {
       // Row should always have a number for vab/parental (trigger assigns
       // on insert + backfill migration covers existing data). Defensive
       // fallback: skip rows missing the number rather than emit a bogus 0,
@@ -1082,10 +1114,29 @@ export async function generateAgiDeclaration(
   if ('answer' in target) return target.answer
   let isCorrection = target.row !== null
 
+  // A month whose first declaration is filed takes no frånvarouppgift: this
+  // declaration is a rättelse (agiPeriodFiled, Kontroller ba_824). Read only
+  // when the XML would carry one: none before 202501 or for a removed IU.
+  const franvarouppgifter = franvarouppgiftCount(agiPeriod, employeeData)
+  let periodFiled = false
+  if (franvarouppgifter > 0) {
+    const filing = await agiPeriodFiled(supabase, companyId, agiPeriod, target.row)
+    if (!filing.ok) return { ok: false, code: 'DATABASE_ERROR', details: filing.error }
+    periodFiled = filing.filed
+    if (periodFiled) {
+      opLog.info('AGI rättelse leaves out frånvarouppgifter: the month is filed (Kontroller ba_824)', {
+        companyId,
+        periodYear: agiPeriod.periodYear,
+        periodMonth: agiPeriod.periodMonth,
+        leftOut: franvarouppgifter,
+      })
+    }
+  }
+
   // 7. Generate XML.
   let xml: string
   try {
-    xml = generateAGIXml(companyData, employeeData, totals, isCorrection)
+    xml = generateAGIXml(companyData, employeeData, totals, periodFiled)
   } catch (err) {
     if (err instanceof AGIIncompleteDataError) {
       return {
@@ -1142,7 +1193,7 @@ export async function generateAgiDeclaration(
       if ('answer' in target) return target.answer
       // The re-read can turn a lost insert into an update of the row the
       // winner wrote: the caller is told what this write is. The XML does
-      // not depend on it (generateAGIXml ignores the flag).
+      // not depend on the write decision, only on the month's filing.
       isCorrection = target.row !== null
     }
 

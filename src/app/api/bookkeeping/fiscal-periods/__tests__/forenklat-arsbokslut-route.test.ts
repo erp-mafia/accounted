@@ -8,6 +8,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import { createQueuedMockSupabase, createMockRequest, parseJsonResponse } from '@/tests/helpers'
 
+// Route path ids are uuids: the route answers its 404 to anything else before it reads.
+const NOPE_ID = 'de4ba771-91d4-59ed-8f99-a25a38e6dbeb'
+
 const { supabase, reset } = createQueuedMockSupabase()
 
 vi.mock('@/lib/supabase/server', () => ({ createClient: vi.fn(async () => supabase) }))
@@ -75,7 +78,7 @@ describe('förenklat årsbokslut routes', () => {
     expect(getMock).toHaveBeenCalledWith(expect.objectContaining({ companyId: 'company-1', userId: 'user-1' }), PERIOD)
 
     getMock.mockResolvedValue({ ok: false, code: 'FISCAL_PERIOD_NOT_FOUND' })
-    expect((await GET(createMockRequest('http://localhost/x'), p('nope'))).status).toBe(404)
+    expect((await GET(createMockRequest('http://localhost/x'), p(NOPE_ID))).status).toBe(404)
 
     getMock.mockResolvedValue({ ok: false, code: 'FORENKLAT_ARSBOKSLUT_WRONG_LEGAL_FORM' })
     const wrong = await GET(createMockRequest('http://localhost/x'), p(PERIOD))
@@ -106,7 +109,7 @@ describe('förenklat årsbokslut routes', () => {
 
   it('PATCH answers 404 for a foreign period and needs write permission', async () => {
     updateMock.mockResolvedValue({ ok: false, code: 'FISCAL_PERIOD_NOT_FOUND' })
-    const missing = await PATCH(createMockRequest('http://localhost/x', { method: 'PATCH', body: { notes: 'x' } }), p('nope'))
+    const missing = await PATCH(createMockRequest('http://localhost/x', { method: 'PATCH', body: { notes: 'x' } }), p(NOPE_ID))
     expect(missing.status).toBe(404)
 
     requireWriteMock.mockResolvedValue({ ok: false, response: NextResponse.json({ error: 'Läsbehörighet' }, { status: 403 }) })

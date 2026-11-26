@@ -67,6 +67,10 @@ describe('BankPickStep: the office or sparbank picker (for #158)', () => {
     const picker = html.split('aria-labelledby="bank-connect-affiliate-label"')[1] ?? ''
     return [...picker.matchAll(/role="option"[^>]*>(?:<[^>]*>)*([^<]*)</g)].map((m) => m[1])
   }
+  const selected = (html: string) => {
+    const picker = html.split('aria-labelledby="bank-connect-affiliate-label"')[1] ?? ''
+    return [...picker.matchAll(/role="option" aria-selected="(true|false)"/g)].map((m) => m[1] === 'true')
+  }
   const continueDisabled = (html: string) => /<button[^>]*disabled=""[^>]*>(?:<[^>]*>)*Fortsätt</.test(html)
 
   it('lists only the offices of a bank that needs one, under "Vilket kontor?", and waits for a choice', () => {
@@ -82,11 +86,13 @@ describe('BankPickStep: the office or sparbank picker (for #158)', () => {
   })
 
   it('keeps Swedbank as the first row and the default under "Vilken sparbank?"', () => {
-    const loaded = flow(SWEDBANK, { type: 'bank_details_loaded', details: details(SWEDBANK, [{ id: '08999', name: 'Sparbanken Nord' }]) })
+    // As the provider answers: Swedbank itself is among the banks behind its BIC (08999).
+    const loaded = flow(SWEDBANK, { type: 'bank_details_loaded', details: details(SWEDBANK, [{ id: '08111', name: 'Sparbanken Nord' }, { id: '08999', name: 'Swedbank' }]) })
     const html = render({ state: loaded, banks: [SWEDBANK], banksFailed: false })
     expect(html).toContain(sv.bank_connect.affiliate_label)
     expect(html).not.toContain(sv.bank_connect.office_label)
-    expect(options(html)).toEqual(['Swedbank', 'Sparbanken Nord'])
+    expect(options(html)).toEqual(['Swedbank', 'Sparbanken Nord', 'Swedbank'])
+    expect(selected(html)).toEqual([true, false, false])
     expect(continueDisabled(html)).toBe(false)
   })
 })

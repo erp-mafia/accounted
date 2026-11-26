@@ -107,7 +107,7 @@ export async function buildAssistantSnapshot(
       // So the model can point the user at the right page instead of
       // "inställningarna" in general when a value here is wrong.
       lines.push(
-        'Grunduppgifterna ovan ändras under Inställningar > Skatt (moms, löner) och Inställningar > Bokföring (bokföringsmetod).',
+        'Grunduppgifterna ovan ändras under Inställningar → Bokföring → Moms och skatt (moms), Inställningar → Bokföring → Löner (löner) och Inställningar → Bokföring (bokföringsmetod).',
       )
     }
   } catch {

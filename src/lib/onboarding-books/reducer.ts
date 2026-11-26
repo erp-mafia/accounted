@@ -1,13 +1,14 @@
 /**
  * Act two of the onboarding journey (issue #2438): the step machine for
- * Böckerna, Banken, Skatteverket, Klart. Pure and tested; the component
+ * Böckerna, Banken, Skatteverket, Klart (with `sourcesFlow`, the AI and the
+ * receipts get a station each between the bank and Skatteverket). Pure and tested; the component
  * only dispatches. Sub-phases inside a step (the bank round trip, the
  * Skatteverket handshake) live here too so a redirect return can mount
  * straight into the right phase from the URL.
  */
 
-export type BooksStep = 'source' | 'sie' | 'provider' | 'resume' | 'insight' | 'bank' | 'skv' | 'done'
-export type BooksStation = 0 | 1 | 2 | 3
+export type BooksStep = 'source' | 'sie' | 'provider' | 'resume' | 'insight' | 'bank' | 'ai' | 'docs' | 'skv' | 'done'
+export type BooksStation = 0 | 1 | 2 | 3 | 4 | 5
 export type SourcePath = 'migration' | 'fresh' | null
 export type BankPhase = 'pick' | 'connecting' | 'authed' | 'fetching' | 'connected'
 export type SkvPhase = 'open' | 'leaving' | 'away' | 'back' | 'done'
@@ -21,6 +22,8 @@ export interface BooksFlags {
   hasSkatteverket: boolean
   /** Accounted can be appointed as ombud (system auth on): the step appoints instead of a BankID login. */
   skvOmbud?: boolean
+  /** The arrangement with the AI and the receipts as steps of their own (after the bank, before Skatteverket). */
+  sourcesFlow?: boolean
 }
 
 export interface BooksState {
@@ -65,6 +68,8 @@ export type BooksAction =
   | { type: 'BANK_CONNECTED' }
   | { type: 'BANK_SKIP'; flags: BooksFlags }
   | { type: 'AFTER_BANK'; flags: BooksFlags }
+  | { type: 'AFTER_AI'; flags: BooksFlags }
+  | { type: 'AFTER_DOCS'; flags: BooksFlags }
   | { type: 'SKV_PHASE'; phase: SkvPhase }
   | { type: 'SKV_SKIP' }
   | { type: 'TO_DONE' }
@@ -77,21 +82,66 @@ const STATION_OF: Record<BooksStep, BooksStation> = {
   resume: 0,
   insight: 0,
   bank: 1,
+  ai: 1,
+  docs: 1,
   skv: 2,
   done: 3,
 }
 
-export function stationOf(step: BooksStep): BooksStation {
-  return STATION_OF[step]
+const SOURCES_STATION_OF: Record<BooksStep, BooksStation> = {
+  source: 0,
+  sie: 0,
+  provider: 0,
+  resume: 0,
+  insight: 0,
+  bank: 1,
+  ai: 2,
+  docs: 3,
+  skv: 4,
+  done: 5,
 }
 
-/** The step after the books: the bank if it exists, else Skatteverket, else done. */
+/** How many stations the rail lists: always all of them, whether or not the deployment has the step. */
+export function stationCount(flags?: BooksFlags): number {
+  return flags?.sourcesFlow ? 6 : 4
+}
+
+export function stationOf(step: BooksStep, flags?: BooksFlags): BooksStation {
+  return (flags?.sourcesFlow ? SOURCES_STATION_OF : STATION_OF)[step]
+}
+
+/** The steps after the books, in order: the one list "next" and "one step back" both read. */
+export function stepsAfterBooks(flags: BooksFlags): BooksStep[] {
+  const steps: BooksStep[] = []
+  if (flags.hasBanking) steps.push('bank')
+  if (flags.sourcesFlow) steps.push('ai', 'docs')
+  if (flags.hasSkatteverket) steps.push('skv')
+  steps.push('done')
+  return steps
+}
+
+function stepAfter(step: BooksStep, flags: BooksFlags): BooksStep {
+  const steps = stepsAfterBooks(flags)
+  const at = steps.indexOf(step)
+  // A step this deployment does not list (a restored draft): the first step after the books.
+  return at < 0 ? steps[0] : steps[Math.min(at + 1, steps.length - 1)]
+}
+
+/** One step back from a step after the books; before the first one, the books themselves. */
+function stepBefore(step: BooksStep, flags: BooksFlags, imported: boolean): BooksStep {
+  const steps = stepsAfterBooks(flags)
+  const at = steps.indexOf(step)
+  if (at > 0) return steps[at - 1]
+  return imported ? 'insight' : 'source'
+}
+
+/** The step after the books: the bank if it exists, else the next one on the list. */
 export function stepAfterBooks(flags: BooksFlags): BooksStep {
-  return flags.hasBanking ? 'bank' : flags.hasSkatteverket ? 'skv' : 'done'
+  return stepsAfterBooks(flags)[0]
 }
 
 export function stepAfterBank(flags: BooksFlags): BooksStep {
-  return flags.hasSkatteverket ? 'skv' : 'done'
+  return stepAfter('bank', flags)
 }
 
 /**
@@ -222,6 +272,10 @@ export function booksReducer(state: BooksState, action: BooksAction): BooksState
       return { ...state, bankSkipped: true, step: stepAfterBank(action.flags), working: false }
     case 'AFTER_BANK':
       return { ...state, step: stepAfterBank(action.flags) }
+    case 'AFTER_AI':
+      return { ...state, step: stepAfter('ai', action.flags), working: false }
+    case 'AFTER_DOCS':
+      return { ...state, step: stepAfter('docs', action.flags), working: false }
     case 'SKV_PHASE':
       return {
         ...state,
@@ -245,10 +299,12 @@ export function booksReducer(state: BooksState, action: BooksAction): BooksState
           if (state.bankPhase === 'authed') return { ...state, bankPhase: 'pick', bankConnectionId: null, working: false }
           // Past the fetch the connection is real: the step re-enters on its verdict, never on the pour.
           return { ...state, step: state.imported ? 'insight' : 'source', bankPhase: 'pick', bankConnectionId: null, bankSkipped: false, working: false }
+        case 'ai':
+        case 'docs':
         case 'skv':
-          return { ...state, step: !action.flags.hasBanking ? state.imported ? 'insight' : 'source' : 'bank', bankPhase: 'pick', skvSkipped: false, skvPhase: 'open', working: false }
+          return { ...state, step: stepBefore(state.step, action.flags, state.imported), bankPhase: 'pick', skvSkipped: false, skvPhase: 'open', working: false }
         case 'done':
-          return { ...state, step: !action.flags.hasSkatteverket ? action.flags.hasBanking ? 'bank' : state.imported ? 'insight' : 'source' : 'skv', working: false }
+          return { ...state, step: stepBefore('done', action.flags, state.imported), working: false }
         default:
           return state
       }

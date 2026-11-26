@@ -7,6 +7,7 @@ vi.mock('../dropbox-client', async (importOriginal) => {
 
 import { dropboxProvider } from '../dropbox-provider'
 import { uploadDropboxFile } from '../dropbox-client'
+import type { FileBytes } from '../cloud-provider'
 import type { CloudConnection } from '../../types'
 
 const mockUpload = vi.mocked(uploadDropboxFile)
@@ -109,6 +110,13 @@ describe('dropboxProvider.prepareTarget', () => {
   })
 })
 
+/** A file of `size` bytes, as putFile is handed it. */
+function fileOf(size: number): FileBytes {
+  return async function* () {
+    yield new Uint8Array(size)
+  }
+}
+
 describe('dropboxProvider.putFile', () => {
   it('writes under the company folder and returns the path as the handle', async () => {
     mockUpload.mockResolvedValue({
@@ -124,14 +132,14 @@ describe('dropboxProvider.putFile', () => {
         webViewLink: 'https://www.dropbox.com/home/Apps',
       },
       name: 'Arkiv 2024.zip',
-      data: new ArrayBuffer(42),
+      data: fileOf(42),
       contentType: 'application/zip',
     })
 
     expect(mockUpload).toHaveBeenCalledWith(
       'token',
       '/Testbolag AB/Arkiv 2024.zip',
-      expect.any(ArrayBuffer)
+      expect.any(Function)
     )
     expect(result).toEqual({
       id: '/Testbolag AB/Arkiv 2024.zip',
@@ -152,7 +160,7 @@ describe('dropboxProvider.putFile', () => {
       target: { folderId: '/Bolag', webViewLink: 'https://www.dropbox.com/home/Apps' },
       name: 'Grunddata.zip',
       previousId: '/somewhere/else/Grunddata.zip',
-      data: new ArrayBuffer(8),
+      data: fileOf(8),
       contentType: 'application/zip',
     })
 
@@ -170,7 +178,7 @@ describe('dropboxProvider.putFile', () => {
       accessToken: 'token',
       target: { folderId: '/Bolag', webViewLink: 'https://www.dropbox.com/home/Apps' },
       name: 'LÄSMIG.txt',
-      data: new ArrayBuffer(11),
+      data: fileOf(11),
       contentType: 'text/plain',
     })
 

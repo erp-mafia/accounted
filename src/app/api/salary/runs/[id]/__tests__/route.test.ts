@@ -7,6 +7,10 @@ import {
   createMockRouteParams,
 } from '@/tests/helpers'
 
+// Route path ids are uuids: the route answers its 404 to anything else before it reads.
+const RUN_1 = 'ebdc9458-7643-58fb-bdd9-6b0e8334baa0'
+const RUN_2 = 'd211a30e-75ab-58d3-a8a2-58f40b10f871'
+
 // ── Mocks ────────────────────────────────────────────────────
 // The route is wrapped in withRouteContext, which resolves auth via
 // requireAuth() (the only path that enforces MFA/AAL2 on hosted) and the active
@@ -57,8 +61,8 @@ describe('DELETE /api/salary/runs/[id]', () => {
       error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
     })
 
-    const request = createMockRequest('/api/salary/runs/run-1', { method: 'DELETE' })
-    const response = await DELETE(request, createMockRouteParams({ id: 'run-1' }))
+    const request = createMockRequest(`/api/salary/runs/${RUN_1}`, { method: 'DELETE' })
+    const response = await DELETE(request, createMockRouteParams({ id: RUN_1 }))
     const { status, body } = await parseJsonResponse(response)
 
     expect(status).toBe(401)
@@ -77,8 +81,8 @@ describe('DELETE /api/salary/runs/[id]', () => {
       { data: null }, // salary_runs lookup: no row
     ])
 
-    const request = createMockRequest('/api/salary/runs/run-1', { method: 'DELETE' })
-    const response = await DELETE(request, createMockRouteParams({ id: 'run-1' }))
+    const request = createMockRequest(`/api/salary/runs/${RUN_1}`, { method: 'DELETE' })
+    const response = await DELETE(request, createMockRouteParams({ id: RUN_1 }))
     const { status, body } = await parseJsonResponse<{ error: string }>(response)
 
     expect(status).toBe(404)
@@ -94,11 +98,11 @@ describe('DELETE /api/salary/runs/[id]', () => {
     })
 
     enqueueMany([
-      { data: { id: 'run-1', status: 'booked' } }, // salary_runs lookup
+      { data: { id: RUN_1, status: 'booked' } }, // salary_runs lookup
     ])
 
-    const request = createMockRequest('/api/salary/runs/run-1', { method: 'DELETE' })
-    const response = await DELETE(request, createMockRouteParams({ id: 'run-1' }))
+    const request = createMockRequest(`/api/salary/runs/${RUN_1}`, { method: 'DELETE' })
+    const response = await DELETE(request, createMockRouteParams({ id: RUN_1 }))
     const { status, body } = await parseJsonResponse<{ error: string }>(response)
 
     expect(status).toBe(400)
@@ -114,12 +118,12 @@ describe('DELETE /api/salary/runs/[id]', () => {
     })
 
     enqueueMany([
-      { data: { id: 'run-1', status: 'draft' } }, // salary_runs lookup sees a draft
+      { data: { id: RUN_1, status: 'draft' } }, // salary_runs lookup sees a draft
       { data: null, count: 0 },                    // the locked delete matches no row
     ])
 
-    const request = createMockRequest('/api/salary/runs/run-1', { method: 'DELETE' })
-    const response = await DELETE(request, createMockRouteParams({ id: 'run-1' }))
+    const request = createMockRequest(`/api/salary/runs/${RUN_1}`, { method: 'DELETE' })
+    const response = await DELETE(request, createMockRouteParams({ id: RUN_1 }))
     const { status, body } = await parseJsonResponse<{ error: string }>(response)
 
     expect(status).toBe(400)
@@ -142,16 +146,16 @@ describe('DELETE /api/salary/runs/[id]', () => {
     })
 
     enqueueMany([
-      { data: { id: 'run-1', status: 'draft' } }, // salary_runs lookup
+      { data: { id: RUN_1, status: 'draft' } }, // salary_runs lookup
       { data: null, count: 1 },                    // salary_runs delete (cascade handles children)
     ])
 
-    const request = createMockRequest('/api/salary/runs/run-1', { method: 'DELETE' })
-    const response = await DELETE(request, createMockRouteParams({ id: 'run-1' }))
+    const request = createMockRequest(`/api/salary/runs/${RUN_1}`, { method: 'DELETE' })
+    const response = await DELETE(request, createMockRouteParams({ id: RUN_1 }))
     const { status, body } = await parseJsonResponse<{ data: { id: string; deleted: boolean } }>(response)
 
     expect(status).toBe(200)
-    expect(body.data).toEqual({ id: 'run-1', deleted: true })
+    expect(body.data).toEqual({ id: RUN_1, deleted: true })
   })
 })
 
@@ -171,7 +175,7 @@ describe('PATCH /api/salary/runs/[id]', () => {
   }
 
   const DRAFT_RUN = {
-    id: 'run-1',
+    id: RUN_1,
     status: 'draft',
     payment_date: '2026-07-25',
     period_year: 2026,
@@ -186,11 +190,11 @@ describe('PATCH /api/salary/runs/[id]', () => {
       { data: { ...DRAFT_RUN, status: 'review' } }, // lookup
     ])
 
-    const request = createMockRequest('/api/salary/runs/run-1', {
+    const request = createMockRequest(`/api/salary/runs/${RUN_1}`, {
       method: 'PATCH',
       body: { payment_date: '2026-07-23' },
     })
-    const response = await PATCH(request, createMockRouteParams({ id: 'run-1' }))
+    const response = await PATCH(request, createMockRouteParams({ id: RUN_1 }))
     const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(response)
 
     expect(status).toBe(400)
@@ -205,11 +209,11 @@ describe('PATCH /api/salary/runs/[id]', () => {
     authorize(supabase)
     enqueueMany([{ data: null }])
 
-    const request = createMockRequest('/api/salary/runs/run-1', {
+    const request = createMockRequest(`/api/salary/runs/${RUN_1}`, {
       method: 'PATCH',
       body: { notes: 'x' },
     })
-    const response = await PATCH(request, createMockRouteParams({ id: 'run-1' }))
+    const response = await PATCH(request, createMockRouteParams({ id: RUN_1 }))
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
 
     expect(status).toBe(404)
@@ -221,11 +225,11 @@ describe('PATCH /api/salary/runs/[id]', () => {
     authorize(supabase)
     enqueueMany([{ data: DRAFT_RUN }])
 
-    const request = createMockRequest('/api/salary/runs/run-1', {
+    const request = createMockRequest(`/api/salary/runs/${RUN_1}`, {
       method: 'PATCH',
       body: { status: 'booked' },
     })
-    const response = await PATCH(request, createMockRouteParams({ id: 'run-1' }))
+    const response = await PATCH(request, createMockRouteParams({ id: RUN_1 }))
     const { status, body } = await parseJsonResponse<{ data: { status: string } }>(response)
 
     expect(status).toBe(200)
@@ -242,11 +246,11 @@ describe('PATCH /api/salary/runs/[id]', () => {
       { data: { ...DRAFT_RUN, payment_date: '2026-07-23' } }, // update
     ])
 
-    const request = createMockRequest('/api/salary/runs/run-1', {
+    const request = createMockRequest(`/api/salary/runs/${RUN_1}`, {
       method: 'PATCH',
       body: { payment_date: '2026-07-23' },
     })
-    const response = await PATCH(request, createMockRouteParams({ id: 'run-1' }))
+    const response = await PATCH(request, createMockRouteParams({ id: RUN_1 }))
     const { status, body } = await parseJsonResponse<{ data: { payment_date: string } }>(response)
 
     expect(status).toBe(200)
@@ -254,7 +258,7 @@ describe('PATCH /api/salary/runs/[id]', () => {
     // The new date invalidates any existing calculation: skatteavdrag and the
     // AGI redovisningsperiod follow the payment month, and the book preflights
     // refuse roster rows without a breakdown until a recalculation runs.
-    expect(invalidateRunCalculation).toHaveBeenCalledWith(supabase, expect.anything(), { salaryRunId: 'run-1' })
+    expect(invalidateRunCalculation).toHaveBeenCalledWith(supabase, expect.anything(), { salaryRunId: RUN_1 })
   })
 
   it('does not clear calculations when only notes change', async () => {
@@ -266,11 +270,11 @@ describe('PATCH /api/salary/runs/[id]', () => {
       { data: { ...DRAFT_RUN, notes: 'Julbonus' } }, // update
     ])
 
-    const request = createMockRequest('/api/salary/runs/run-1', {
+    const request = createMockRequest(`/api/salary/runs/${RUN_1}`, {
       method: 'PATCH',
       body: { notes: 'Julbonus' },
     })
-    const response = await PATCH(request, createMockRouteParams({ id: 'run-1' }))
+    const response = await PATCH(request, createMockRouteParams({ id: RUN_1 }))
     const { status } = await parseJsonResponse(response)
 
     expect(status).toBe(200)
@@ -288,11 +292,11 @@ describe('PATCH /api/salary/runs/[id]', () => {
       { data: { ...DRAFT_RUN, payment_date: '2026-08-25' } }, // update
     ])
 
-    const request = createMockRequest('/api/salary/runs/run-1', {
+    const request = createMockRequest(`/api/salary/runs/${RUN_1}`, {
       method: 'PATCH',
       body: { payment_date: '2026-08-25' },
     })
-    const response = await PATCH(request, createMockRouteParams({ id: 'run-1' }))
+    const response = await PATCH(request, createMockRouteParams({ id: RUN_1 }))
     const { status } = await parseJsonResponse(response)
 
     expect(status).toBe(200)
@@ -310,11 +314,11 @@ describe('PATCH /api/salary/runs/[id]', () => {
       { data: { ...DRAFT_RUN, payment_date: '2026-08-07' } }, // update
     ])
 
-    const request = createMockRequest('/api/salary/runs/run-1', {
+    const request = createMockRequest(`/api/salary/runs/${RUN_1}`, {
       method: 'PATCH',
       body: { payment_date: '2026-08-07' },
     })
-    const response = await PATCH(request, createMockRouteParams({ id: 'run-1' }))
+    const response = await PATCH(request, createMockRouteParams({ id: RUN_1 }))
     const { status } = await parseJsonResponse(response)
 
     expect(status).toBe(200)
@@ -329,11 +333,11 @@ describe('PATCH /api/salary/runs/[id]', () => {
       { data: DRAFT_RUN }, // lookup
     ])
 
-    const request = createMockRequest('/api/salary/runs/run-1', {
+    const request = createMockRequest(`/api/salary/runs/${RUN_1}`, {
       method: 'PATCH',
       body: { voucher_series: 'AB' },
     })
-    const response = await PATCH(request, createMockRouteParams({ id: 'run-1' }))
+    const response = await PATCH(request, createMockRouteParams({ id: RUN_1 }))
     const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(response)
 
     expect(status).toBe(400)
@@ -351,11 +355,11 @@ describe('PATCH /api/salary/runs/[id]', () => {
       { data: null }, // status-locked update matches no row
     ])
 
-    const request = createMockRequest('/api/salary/runs/run-1', {
+    const request = createMockRequest(`/api/salary/runs/${RUN_1}`, {
       method: 'PATCH',
       body: { payment_date: '2026-07-23' },
     })
-    const response = await PATCH(request, createMockRouteParams({ id: 'run-1' }))
+    const response = await PATCH(request, createMockRouteParams({ id: RUN_1 }))
     const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(response)
 
     expect(status).toBe(400)
@@ -376,7 +380,7 @@ describe('PATCH /api/salary/runs/[id]', () => {
 //   it lands last].
 
 const GET_RUN = {
-  id: 'run-2',
+  id: RUN_2,
   company_id: 'company-1',
   status: 'draft',
   period_year: 2026,
@@ -405,7 +409,7 @@ describe('GET /api/salary/runs/[id] — additive detail fields', () => {
       { data: GET_RUN },
       { data: [] }, // employees in this run
       { data: { org_number: '5566778899', entity_type: 'aktiebolag' } },
-      { data: { id: 'run-1', period_year: 2026, period_month: 6 } }, // previous-run lookup
+      { data: { id: RUN_1, period_year: 2026, period_month: 6 } }, // previous-run lookup
       { data: [] }, // deliveries
       {
         // previous-run employees - nested after the lookup's await, resolves last
@@ -422,8 +426,8 @@ describe('GET /api/salary/runs/[id] — additive detail fields', () => {
     ])
 
     const response = await GET(
-      createMockRequest('/api/salary/runs/run-2'),
-      createMockRouteParams({ id: 'run-2' }),
+      createMockRequest(`/api/salary/runs/${RUN_2}`),
+      createMockRouteParams({ id: RUN_2 }),
     )
     const { status, body } = await parseJsonResponse<{
       data: {
@@ -437,7 +441,7 @@ describe('GET /api/salary/runs/[id] — additive detail fields', () => {
     }>(response)
 
     expect(status).toBe(200)
-    expect(body.data.previous_run?.id).toBe('run-1')
+    expect(body.data.previous_run?.id).toBe(RUN_1)
     // Override coalesced: tax 7000, net compensated +1000
     expect(body.data.previous_run?.by_employee['emp-1']).toEqual({
       gross: 35000,
@@ -461,8 +465,8 @@ describe('GET /api/salary/runs/[id] — additive detail fields', () => {
     ])
 
     const response = await GET(
-      createMockRequest('/api/salary/runs/run-2'),
-      createMockRouteParams({ id: 'run-2' }),
+      createMockRequest(`/api/salary/runs/${RUN_2}`),
+      createMockRouteParams({ id: RUN_2 }),
     )
     const { status, body } = await parseJsonResponse<{ data: { previous_run: unknown } }>(response)
 
@@ -483,8 +487,8 @@ describe('GET /api/salary/runs/[id] — additive detail fields', () => {
     ])
 
     const response = await GET(
-      createMockRequest('/api/salary/runs/run-2'),
-      createMockRouteParams({ id: 'run-2' }),
+      createMockRequest(`/api/salary/runs/${RUN_2}`),
+      createMockRouteParams({ id: RUN_2 }),
     )
     const { status, body } = await parseJsonResponse<{ data: { arbetsgivare: string | null } }>(response)
 
@@ -506,8 +510,8 @@ describe('GET /api/salary/runs/[id] — additive detail fields', () => {
     ])
 
     const response = await GET(
-      createMockRequest('/api/salary/runs/run-2'),
-      createMockRouteParams({ id: 'run-2' }),
+      createMockRequest(`/api/salary/runs/${RUN_2}`),
+      createMockRouteParams({ id: RUN_2 }),
     )
     const { status, body } = await parseJsonResponse<{ data: { arbetsgivare: string | null } }>(response)
 
@@ -548,8 +552,8 @@ describe('GET /api/salary/runs/[id] — additive detail fields', () => {
     ])
 
     const response = await GET(
-      createMockRequest('/api/salary/runs/run-2'),
-      createMockRouteParams({ id: 'run-2' }),
+      createMockRequest(`/api/salary/runs/${RUN_2}`),
+      createMockRouteParams({ id: RUN_2 }),
     )
     const { status, body } = await parseJsonResponse<{
       data: { employees: Array<{ employee: Record<string, unknown> }> }
@@ -585,8 +589,8 @@ describe('GET /api/salary/runs/[id] — additive detail fields', () => {
     ])
 
     const response = await GET(
-      createMockRequest('/api/salary/runs/run-2'),
-      createMockRouteParams({ id: 'run-2' }),
+      createMockRequest(`/api/salary/runs/${RUN_2}`),
+      createMockRouteParams({ id: RUN_2 }),
     )
     const { status, body } = await parseJsonResponse<{
       data: {

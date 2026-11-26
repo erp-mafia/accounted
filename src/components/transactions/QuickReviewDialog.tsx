@@ -6,7 +6,7 @@ import { useAssistantReadsAvailable } from '@/contexts/CompanyContext'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { activateBasAccounts, pickNeedsActivation } from '@/lib/bookkeeping/bas-catalog-client'
 import { useBasCatalog } from '@/lib/hooks/use-bas-catalog'
-import { useRouter } from 'next/navigation'
+import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
@@ -152,7 +152,6 @@ export default function QuickReviewDialog({
   const tDetach = useTranslations('tx_detach')
   const whyFor = useProposalWhy()
   const { toast } = useToast()
-  const router = useRouter()
   // A proposal the assistant's read puts in another reverse-charge box
   // (ruta 21 against ruta 22, accounted#37): the review opens on the read's
   // box, on the proposal's own cost account, with the proposal's box one
@@ -798,11 +797,8 @@ export default function QuickReviewDialog({
             }),
             variant: 'destructive',
             action: (
-              <ToastAction
-                altText={t('doc_link_open_entry')}
-                onClick={() => router.push(`/bookkeeping/${journalEntryId}`)}
-              >
-                {t('doc_link_open_entry')}
+              <ToastAction altText={t('doc_link_open_entry')} asChild>
+                <Link href={`/bookkeeping/${journalEntryId}`}>{t('doc_link_open_entry')}</Link>
               </ToastAction>
             ),
           })

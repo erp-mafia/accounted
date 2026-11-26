@@ -36,7 +36,7 @@ export const PATCH = withRouteContext(
     if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
     return NextResponse.json({ data: outcome.data })
   },
-  { requireWrite: true },
+  { requireWrite: true, uuidParams: { id: 'PERIOD_NOT_FOUND', signatureId: 'NOT_FOUND' } },
 )
 
 export const DELETE = withRouteContext(
@@ -57,5 +57,5 @@ export const DELETE = withRouteContext(
     if (!outcome.ok) return sessionFailureResponse(outcome, log, requestId)
     return new NextResponse(null, { status: 204 })
   },
-  { requireWrite: true },
+  { requireWrite: true, uuidParams: { id: 'PERIOD_NOT_FOUND', signatureId: 'NOT_FOUND' } },
 )

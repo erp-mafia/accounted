@@ -36,4 +36,5 @@ export const GET = withRouteContext(
       return errorResponse(err, log, { requestId })
     }
   },
+  { uuidParams: { id: 'PERIOD_NOT_FOUND' } },
 )

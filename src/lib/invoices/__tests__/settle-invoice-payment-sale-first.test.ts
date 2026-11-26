@@ -45,6 +45,8 @@ import {
 } from '@/lib/bookkeeping/invoice-entries'
 import { createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { settleInvoicePayment } from '@/lib/invoices/settle-invoice-payment'
+import { saleReceivableSek } from '@/lib/invoices/sale-first'
+import { proposePaymentLines } from '@/lib/bookkeeping/propose-payment-lines'
 import { eventBus } from '@/lib/events'
 
 const DEFERRING = { accounting_method: 'accrual', defer_invoice_booking: true }
@@ -324,5 +326,198 @@ describe('settleInvoicePayment: the sale first for a deferring company', () => {
 
     expect(result).toMatchObject({ ok: true, journalEntryId: null, saleJournalEntryId: null })
     expect(bookInvoice).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * A sale booked first that books the öresavrundning (1510 at the rounded "Att
+ * betala" 1 000, the 0,25 on 3740, as the issue of an öre invoice books it)
+ * leaves 1 000 on 1510 while the reskontra owes 999,75. The payment clears
+ * what that sale left there, as the bank-match doors do (salePlan.receivableSek):
+ * otherwise 0,25 stays on 1510 of a paid invoice, or 3740 takes the öre twice.
+ */
+describe('settleInvoicePayment: the payment clears what the sale booked first leaves on 1510', () => {
+  const ORE_SALE_ENTRY = {
+    entry_date: '2026-09-10',
+    description: 'Kundfaktura F-1043',
+    lines: [
+      { account_number: '1510', debit_amount: 1000, credit_amount: 0, line_description: null },
+      { account_number: '3001', debit_amount: 0, credit_amount: 799.8, line_description: null },
+      { account_number: '2611', debit_amount: 0, credit_amount: 199.95, line_description: null },
+      { account_number: '3740', debit_amount: 0, credit_amount: 0.25, line_description: 'Öresavrundning' },
+    ],
+    total_debit: 1000,
+    total_credit: 1000,
+    balanced: true,
+    note: 'preview',
+  }
+  const oreInvoice = () => unbookedInvoice({ total: 999.75, remaining_amount: 999.75 } as Partial<Invoice>)
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    eventBus.clear()
+    vi.mocked(checkPeriodLock).mockResolvedValue({ locked: false, fiscal_period_id: 'fp-pay' })
+    vi.mocked(createInvoicePaymentJournalEntry).mockResolvedValue({ id: 'je-pay' } as never)
+    vi.mocked(createJournalEntry).mockResolvedValue({ id: 'je-custom' } as never)
+    vi.mocked(findFiscalPeriod).mockResolvedValue('fp-pay')
+    vi.mocked(bookInvoice).mockImplementation(async (_ctx, invoiceId, options) => {
+      if (options?.dryRun) {
+        return { ok: true, dryRun: true, preview: { invoice_id: invoiceId, journal_entry: ORE_SALE_ENTRY } }
+      }
+      return { ok: true, data: { invoice: { id: invoiceId } as Invoice, journal_entry_id: 'je-sale' }, warnings: [] }
+    })
+  })
+
+  it('the generated payment clears the 1 000 the sale debited, not the 999,75 the reskontra owes', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: DEFERRING, error: null }) // company_settings (the plan)
+    enqueue({ data: { ok: true, sek: 1000 } }) // what 1510 carries once the sale is booked
+    enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
+    enqueue({ data: [{ id: 'inv-1' }] }) // CAS update matched
+
+    const result = await settleInvoicePayment(supabase as unknown as SupabaseClient, 'company-1', 'user-1', {
+      ...BASE_PARAMS,
+      invoice: oreInvoice(),
+      paymentAmountInInvoiceCurrency: 999.75,
+    })
+
+    expect(result).toMatchObject({ ok: true, newStatus: 'paid', journalEntryId: 'je-pay', saleJournalEntryId: 'je-sale' })
+    // The ledger is read after the sale is booked, though the row named no verifikat.
+    const realBook = vi.mocked(bookInvoice).mock.invocationCallOrder[1]!
+    const ledgerRead = vi.mocked(supabase.rpc).mock.invocationCallOrder[0]!
+    expect(realBook).toBeLessThan(ledgerRead)
+    expect(supabase.rpc).toHaveBeenCalledWith('document_carried_sek', expect.objectContaining({ p_document_id: 'inv-1' }))
+    expect(vi.mocked(createInvoicePaymentJournalEntry).mock.calls[0]![3]).toMatchObject({ carried_sek: 1000 })
+  })
+
+  it('plans lines against the ledger when a concurrent Bokför booked the sale since the row was read', async () => {
+    vi.mocked(bookInvoice).mockResolvedValue({ ok: false, code: 'INVOICE_BOOK_ALREADY_BOOKED' })
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: DEFERRING, error: null }) // company_settings (the plan: not required any more)
+    enqueue({ data: { ok: true, sek: 1000 } }) // what 1510 carries: the concurrent sale
+    enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
+    enqueue({ data: [{ id: 'inv-1' }] }) // CAS update matched
+
+    const result = await settleInvoicePayment(supabase as unknown as SupabaseClient, 'company-1', 'user-1', {
+      ...BASE_PARAMS,
+      invoice: oreInvoice(),
+      paymentAmountInInvoiceCurrency: 1000,
+      customLines: [
+        { account_number: '1930', debit_amount: 1000, credit_amount: 0 },
+        { account_number: '1510', debit_amount: 0, credit_amount: 1000 },
+      ],
+    })
+
+    expect(result).toMatchObject({ ok: true, newStatus: 'paid', newRemaining: 0, saleJournalEntryId: null })
+    expect(realBookCalls()).toHaveLength(0)
+  })
+
+  it('accepts lines that clear the 1 000 with no 3740 of their own', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: DEFERRING, error: null }) // company_settings (the plan)
+    enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
+    enqueue({ data: [{ id: 'inv-1' }] }) // CAS update matched
+
+    const result = await settleInvoicePayment(supabase as unknown as SupabaseClient, 'company-1', 'user-1', {
+      ...BASE_PARAMS,
+      invoice: oreInvoice(),
+      paymentAmountInInvoiceCurrency: 1000,
+      customLines: [
+        { account_number: '1930', debit_amount: 1000, credit_amount: 0 },
+        { account_number: '1510', debit_amount: 0, credit_amount: 1000 },
+      ],
+    })
+
+    expect(result).toMatchObject({ ok: true, newStatus: 'paid', newRemaining: 0, saleJournalEntryId: 'je-sale' })
+    expect(realBookCalls()).toHaveLength(1)
+  })
+
+  /**
+   * The rows PaymentBookingDialog proposes and submits, from the figure it
+   * gives the proposal as what the payment clears on 1510: for an invoice
+   * with no verifikat, GET mark-paid answers what the sale will leave there.
+   * It used to read the ledger, which answers null for such an invoice.
+   */
+  function dialogRows(carriedSek: number | null) {
+    const invoice = oreInvoice()
+    return proposePaymentLines({
+      invoice: { ...invoice, invoice_number: invoice.invoice_number ?? null, carried_sek: carriedSek },
+      accountingMethod: 'accrual',
+      entityType: 'aktiebolag',
+      paymentAccount: '1930',
+      companyOreRounding: true,
+    }).map((line) => ({
+      account_number: line.account_number,
+      debit_amount: parseFloat(line.debit_amount) || 0,
+      credit_amount: parseFloat(line.credit_amount) || 0,
+    }))
+  }
+
+  it('settles the rows the payment dialog proposes from what the sale will leave on 1510', async () => {
+    const rows = dialogRows(saleReceivableSek(ORE_SALE_ENTRY))
+    expect(rows).toEqual([
+      { account_number: '1930', debit_amount: 1000, credit_amount: 0 },
+      { account_number: '1510', debit_amount: 0, credit_amount: 1000 },
+    ])
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: DEFERRING, error: null }) // company_settings (the plan)
+    enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
+    enqueue({ data: [{ id: 'inv-1' }] }) // CAS update matched
+
+    const result = await settleInvoicePayment(supabase as unknown as SupabaseClient, 'company-1', 'user-1', {
+      ...BASE_PARAMS,
+      invoice: oreInvoice(),
+      paymentAmountInInvoiceCurrency: 1000,
+      customLines: rows,
+    })
+
+    expect(result).toMatchObject({ ok: true, newStatus: 'paid', newRemaining: 0, saleJournalEntryId: 'je-sale' })
+  })
+
+  it('refuses the rows the dialog proposed from the ledger, which has no sale yet', async () => {
+    const rows = dialogRows(null)
+    expect(rows).toEqual([
+      { account_number: '1930', debit_amount: 1000, credit_amount: 0 },
+      { account_number: '1510', debit_amount: 0, credit_amount: 999.75 },
+      { account_number: '3740', debit_amount: 0, credit_amount: 0.25 },
+    ])
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: DEFERRING, error: null }) // company_settings (the plan)
+
+    const result = await settleInvoicePayment(supabase as unknown as SupabaseClient, 'company-1', 'user-1', {
+      ...BASE_PARAMS,
+      invoice: oreInvoice(),
+      paymentAmountInInvoiceCurrency: 1000,
+      customLines: rows,
+    })
+
+    expect(result).toMatchObject({ ok: false, code: 'MATCH_AMOUNT_EXCEEDS_REMAINING' })
+  })
+
+  it('proposes the same rows as before for a sale that leaves the reskontra on 1510', () => {
+    // A sale booked at the öre total (no öresavrundning on 1510) leaves 999,75:
+    // the bank takes 1 000, 1510 gives up 999,75 and 3740 the 0,25, as before.
+    expect(dialogRows(999.75)).toEqual(dialogRows(null))
+  })
+
+  it('refuses lines that book the öre on 3740 again, before the sale is written', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: DEFERRING, error: null }) // company_settings (the plan)
+
+    const result = await settleInvoicePayment(supabase as unknown as SupabaseClient, 'company-1', 'user-1', {
+      ...BASE_PARAMS,
+      invoice: oreInvoice(),
+      paymentAmountInInvoiceCurrency: 1000,
+      customLines: [
+        { account_number: '1930', debit_amount: 1000, credit_amount: 0 },
+        { account_number: '1510', debit_amount: 0, credit_amount: 999.75 },
+        { account_number: '3740', debit_amount: 0, credit_amount: 0.25 },
+      ],
+    })
+
+    expect(result).toMatchObject({ ok: false, code: 'MATCH_AMOUNT_EXCEEDS_REMAINING' })
+    expect(realBookCalls()).toHaveLength(0)
+    expect(createJournalEntry).not.toHaveBeenCalled()
+    expect(findCalls('invoice_payments', 'insert')).toHaveLength(0)
   })
 })

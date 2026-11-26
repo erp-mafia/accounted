@@ -19,7 +19,7 @@ import type { PaymentPreviewLine } from '@/components/bookkeeping/payment-previe
 import { useAccounts, usePaymentBankLedger } from '@/lib/reference-data/hooks'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatAmount, formatCurrency, formatDate } from '@/lib/utils'
-import { parseAmountInput } from '@/lib/money'
+import { formatAmountInput, parseAmountInput } from '@/lib/money'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import type { SupplierInvoice } from '@/types'
 
@@ -81,7 +81,7 @@ export function SupplierPaymentDialog({
   const t = useTranslations('supplier_invoice_detail')
   const tMatch = useTranslations('tx_invoice_match')
   const [payTab, setPayTab] = useState<'new' | 'existing'>('new')
-  const [payAmount, setPayAmount] = useState(() => String(invoice.remaining_amount))
+  const [payAmount, setPayAmount] = useState(() => formatAmountInput(invoice.remaining_amount))
   // Foreign-currency invoice: the SEK that left the account. Empty means the
   // SEK the preview shows (paid_sek), i.e. no kursdifferens.
   const [paySek, setPaySek] = useState('')
@@ -113,7 +113,7 @@ export function SupplierPaymentDialog({
   const [wasOpen, setWasOpen] = useState(false)
   if (open && !wasOpen) {
     setWasOpen(true)
-    setPayAmount(String(invoice.remaining_amount))
+    setPayAmount(formatAmountInput(invoice.remaining_amount))
     setPaySek('')
     setPaymentDate(todayIsoStockholm())
     if (defaultPaymentAccount) setPaymentAccount(defaultPaymentAccount)
@@ -124,6 +124,8 @@ export function SupplierPaymentDialog({
     stopEditing()
   }
 
+  // "174,50" and "174.50" both read 174.5; null when the text is not an amount.
+  const payAmountNum = parseAmountInput(payAmount)
   const isForeignInvoice = invoice.currency !== 'SEK'
   const paySekNum = isForeignInvoice ? parseAmountInput(paySek) : null
   const paySekOverride = paySekNum !== null && paySekNum > 0 ? paySekNum : undefined
@@ -138,8 +140,7 @@ export function SupplierPaymentDialog({
       setMarkPaidPreviewError(null)
       return
     }
-    const amountNum = Number(payAmount)
-    if (!Number.isFinite(amountNum) || amountNum <= 0) {
+    if (payAmountNum === null || payAmountNum <= 0) {
       setMarkPaidPreview(null)
       return
     }
@@ -150,7 +151,7 @@ export function SupplierPaymentDialog({
       setMarkPaidPreviewError(null)
       try {
         const qs = new URLSearchParams({
-          amount: String(amountNum),
+          amount: String(payAmountNum),
           payment_account: paymentAccount,
           payment_date: paymentDate,
           ...(paySekOverride !== undefined ? { amount_sek: String(paySekOverride) } : {}),
@@ -183,7 +184,7 @@ export function SupplierPaymentDialog({
       cancelled = true
       ctrl.abort()
     }
-  }, [open, invoice.id, payAmount, paymentAccount, paySekOverride, paymentDate])
+  }, [open, invoice.id, payAmountNum, paymentAccount, paySekOverride, paymentDate])
 
   async function handleMarkPaid(force: boolean = false) {
     setIsProcessing(true)
@@ -197,7 +198,7 @@ export function SupplierPaymentDialog({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          amount: parseFloat(payAmount),
+          amount: payAmountNum,
           payment_date: paymentDate,
           payment_account: paymentAccount,
           // Edited rows already state every SEK amount.
@@ -220,7 +221,7 @@ export function SupplierPaymentDialog({
           // The paid amount is in the invoice's currency (the dialog's helper
           // text says so): the toast must not relabel it as kr.
           description: t('amount_registered_description', {
-            amount: formatCurrency(parseFloat(payAmount), invoice.currency || 'SEK'),
+            amount: formatCurrency(payAmountNum ?? 0, invoice.currency || 'SEK'),
           }),
         })
         onOpenChange(false)
@@ -263,8 +264,7 @@ export function SupplierPaymentDialog({
                   <Label htmlFor="payment-amount">{t('payment_amount_label')}</Label>
                   <Input
                     id="payment-amount"
-                    type="number"
-                    step="0.01"
+                    inputMode="decimal"
                     value={payAmount}
                     onChange={(e) => {
                       setPayAmount(e.target.value)

@@ -26,5 +26,5 @@ export const GET = withRouteContext(
       headers: { Pragma: 'no-cache' },
     })
   },
-  { requireCompleteLedger: true },
+  { requireCompleteLedger: true, uuidParams: { id: 'FISCAL_PERIOD_NOT_FOUND' } },
 )

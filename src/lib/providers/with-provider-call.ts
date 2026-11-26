@@ -16,6 +16,7 @@
 import { fortnoxRefusal } from './fortnox/client'
 import { FortnoxOAuthError } from './fortnox/oauth-error'
 import { isBokioPricePlanError } from './bokio/client'
+import { isTimeoutError } from '@/lib/http/fetch-with-timeout'
 
 export type ProviderCallErrorCode =
   | 'PROVIDER_AUTH_EXPIRED'
@@ -25,6 +26,7 @@ export type ProviderCallErrorCode =
   | 'BOKIO_PLAN_NO_API'
   | 'PROVIDER_RATE_LIMITED'
   | 'PROVIDER_UNREACHABLE'
+  | 'PROVIDER_TIMEOUT'
   | 'PROVIDER_UPSTREAM_ERROR'
   | 'PROVIDER_CONFIGURATION_ERROR'
 
@@ -56,7 +58,6 @@ export class ProviderCallError extends Error {
 function isNetworkError(err: Error): boolean {
   // node-undici throws TypeError('fetch failed') with a `cause` for DNS/TCP issues.
   if (err.name === 'TypeError' && /fetch failed/i.test(err.message)) return true
-  if (err.name === 'AbortError') return true
   // Known undici error codes
   const cause = (err as Error & { cause?: { code?: string } }).cause
   if (cause?.code && ['ENOTFOUND', 'ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'EAI_AGAIN'].includes(cause.code)) {
@@ -97,6 +98,9 @@ export interface ClassifyProviderErrorOptions {
  *             otherwise PROVIDER_AUTH_EXPIRED
  *   429     → PROVIDER_RATE_LIMITED
  *   5xx     → PROVIDER_UPSTREAM_ERROR
+ *   timeout → PROVIDER_TIMEOUT: no answer before the request's time limit
+ *             (isTimeoutError: the TimeoutError of AbortSignal.timeout and
+ *             fetchWithTimeout, or an AbortError)
  *   network → PROVIDER_UNREACHABLE
  *   other   → null (caller falls back to its domain-specific code, e.g.
  *             `PROVIDER_SIE_FETCH_FAILED`)
@@ -160,6 +164,10 @@ export function classifyProviderError(
     if (status === 429) return 'PROVIDER_RATE_LIMITED'
     if (status >= 500) return 'PROVIDER_UPSTREAM_ERROR'
   }
+  // Before the network check: a provider too slow to answer is not one that
+  // cannot be reached, and its own code lets the migration job say so
+  // instead of "the record could not be completed" (#3137).
+  if (isTimeoutError(error)) return 'PROVIDER_TIMEOUT'
   if (isNetworkError(error)) return 'PROVIDER_UNREACHABLE'
 
   return null

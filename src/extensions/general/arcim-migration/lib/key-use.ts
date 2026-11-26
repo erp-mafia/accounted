@@ -17,12 +17,14 @@ import type { SupabaseClient } from '@supabase/supabase-js'
  *   without them (invoice-completion-worker); it reads with the company's
  *   newest connection, and only while such an invoice exists;
  * - the opt-in Bokio supplier-invoice completion, for the connection it
- *   enrolled.
+ *   enrolled;
+ * - the opt-in nightly top-up from Fortnox (lib/fortnox-topup.ts), for the
+ *   connection it is on for.
  * The underlag import and "Kör migreringen igen" also read with it, but only
  * when the customer clicks them; removing the key and connecting again
  * serves both.
  */
-export type ProviderKeyUse = 'migration' | 'invoice_rows' | 'supplier_rows' | 'idle'
+export type ProviderKeyUse = 'migration' | 'invoice_rows' | 'supplier_rows' | 'topup' | 'idle'
 
 export interface ProviderKeyUseFacts {
   /** The states of the company's migration jobs. */
@@ -38,6 +40,8 @@ export interface ProviderKeyUseFacts {
   supplierCompletionConsentIds: ReadonlySet<string>
   /** The connection the invoice-row pass reads with: the company's newest. */
   newestConsentId: string | null
+  /** The connection the nightly top-up from Fortnox is on for, if any. */
+  topupConsentId?: string | null
 }
 
 export function providerKeyUse(consentId: string, facts: ProviderKeyUseFacts): ProviderKeyUse {
@@ -45,6 +49,7 @@ export function providerKeyUse(consentId: string, facts: ProviderKeyUseFacts): P
   if (!facts.jobStates.includes('completed') && !facts.importedWithoutJob) return 'migration'
   if (facts.supplierCompletionConsentIds.has(consentId)) return 'supplier_rows'
   if (facts.invoicesAwaitingRows && consentId === facts.newestConsentId) return 'invoice_rows'
+  if (consentId === facts.topupConsentId) return 'topup'
   return 'idle'
 }
 

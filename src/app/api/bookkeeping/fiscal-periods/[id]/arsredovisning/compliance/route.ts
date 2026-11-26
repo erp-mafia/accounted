@@ -35,6 +35,7 @@ export const GET = withRouteContext(
       return errorResponse(err, log, { requestId })
     }
   },
+  { uuidParams: { id: 'PERIOD_NOT_FOUND' } },
 )
 
 /** Rules in workflow-service.ts, shared with operation arsredovisning.update-compliance. */
@@ -55,5 +56,5 @@ export const PATCH = withRouteContext(
     if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
     return NextResponse.json({ data: outcome.data })
   },
-  { requireWrite: true },
+  { requireWrite: true, uuidParams: { id: 'PERIOD_NOT_FOUND' } },
 )

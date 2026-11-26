@@ -41,7 +41,7 @@ export const PATCH = withRouteContext(
     if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
     return NextResponse.json({ data: outcome.data })
   },
-  { requireWrite: true },
+  { requireWrite: true, uuidParams: { id: 'DIMENSION_VALUE_NOT_FOUND', valueId: 'DIMENSION_VALUE_NOT_FOUND' } },
 )
 
 export const DELETE = withRouteContext(
@@ -81,5 +81,5 @@ export const DELETE = withRouteContext(
 
     return NextResponse.json({ success: true })
   },
-  { requireWrite: true },
+  { requireWrite: true, uuidParams: { id: 'DIMENSION_VALUE_NOT_FOUND', valueId: 'DIMENSION_VALUE_NOT_FOUND' } },
 )

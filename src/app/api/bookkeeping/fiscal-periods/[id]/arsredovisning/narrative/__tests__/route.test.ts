@@ -11,6 +11,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import { createMockRequest, createQueuedMockSupabase, parseJsonResponse } from '@/tests/helpers'
 
+// Route path ids are uuids: the route answers its 404 to anything else before it reads.
+const PERIOD_1 = '967b285e-2dcb-5661-91f6-68a799845858'
+
 const requireAuthMock = vi.fn()
 vi.mock('@/lib/auth/require-auth', () => ({
   requireAuth: (...args: unknown[]) => requireAuthMock(...args),
@@ -28,12 +31,12 @@ vi.mock('@/lib/auth/require-write', () => ({
 
 import { GET, POST } from '../route'
 
-const idParams = { params: Promise.resolve({ id: 'period-1' }) }
+const idParams = { params: Promise.resolve({ id: PERIOD_1 }) }
 
 const narrativeRow = {
   id: 'narrative-1',
   company_id: 'company-1',
-  fiscal_period_id: 'period-1',
+  fiscal_period_id: PERIOD_1,
   description: 'Bolaget bedriver konsultverksamhet.',
   important_events: null,
   resultatdisposition: null,
@@ -82,7 +85,7 @@ describe('GET /api/bookkeeping/fiscal-periods/[id]/arsredovisning/narrative', ()
 
   it('returns the persisted narrative', async () => {
     const { enqueue } = setupSupabase()
-    enqueue({ data: { id: 'period-1' } }) // fiscal_periods ownership check
+    enqueue({ data: { id: PERIOD_1 } }) // fiscal_periods ownership check
     enqueue({ data: narrativeRow }) // getNarrative
     const { status, body } = await parseJsonResponse<{ data: typeof narrativeRow }>(
       await GET(createMockRequest('/x'), idParams),
@@ -129,7 +132,7 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/arsredovisning/narrative', (
 
   it('accepts a foreign parent company registration identifier', async () => {
     const { enqueue } = setupSupabase()
-    enqueue({ data: { id: 'period-1' } }) // fiscal_periods ownership check
+    enqueue({ data: { id: PERIOD_1 } }) // fiscal_periods ownership check
     enqueue({ data: null }) // no registrerad submission
     enqueue({ data: { ...narrativeRow, parent_company_org_number: 'CHE-123.456.789' } }) // upsert
     enqueue({ data: null }) // clear narrative confirmation
@@ -142,7 +145,7 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/arsredovisning/narrative', (
 
   it('saves the ÅRL 6 kap. 3 § member disclosures and rejects a negative amount', async () => {
     const { enqueue } = setupSupabase()
-    enqueue({ data: { id: 'period-1' } }) // fiscal_periods ownership check
+    enqueue({ data: { id: PERIOD_1 } }) // fiscal_periods ownership check
     enqueue({ data: null }) // no registrerad submission
     enqueue({
       data: {
@@ -177,7 +180,7 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/arsredovisning/narrative', (
 
   it('saves a whole-number medelantal anställda override and lets null clear it', async () => {
     const { enqueue } = setupSupabase()
-    enqueue({ data: { id: 'period-1' } }) // fiscal_periods ownership check
+    enqueue({ data: { id: PERIOD_1 } }) // fiscal_periods ownership check
     enqueue({ data: null }) // no registrerad submission
     enqueue({ data: { ...narrativeRow, medelantal_anstallda_override: 1 } }) // upsert
     enqueue({ data: null }) // clear narrative confirmation
@@ -188,7 +191,7 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/arsredovisning/narrative', (
     expect(body.data.medelantal_anstallda_override).toBe(1)
 
     const cleared = setupSupabase()
-    cleared.enqueue({ data: { id: 'period-1' } })
+    cleared.enqueue({ data: { id: PERIOD_1 } })
     cleared.enqueue({ data: null })
     cleared.enqueue({ data: { ...narrativeRow, medelantal_anstallda_override: null } })
     cleared.enqueue({ data: null })
@@ -216,7 +219,7 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/arsredovisning/narrative', (
 
   it('saves note overrides with blank or null entries dropped, plus the cash-flow choice', async () => {
     const { enqueue, findCall } = setupSupabase()
-    enqueue({ data: { id: 'period-1' } }) // fiscal_periods ownership check
+    enqueue({ data: { id: PERIOD_1 } }) // fiscal_periods ownership check
     enqueue({ data: null }) // no registrerad submission
     enqueue({
       data: {
@@ -260,7 +263,7 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/arsredovisning/narrative', (
   it('saves the choice to state the flerårsöversikt in tkr, and to state it in kronor again', async () => {
     for (const tkr of [true, false]) {
       const { enqueue, findCall } = setupSupabase()
-      enqueue({ data: { id: 'period-1' } }) // fiscal_periods ownership check
+      enqueue({ data: { id: PERIOD_1 } }) // fiscal_periods ownership check
       enqueue({ data: null }) // no registrerad submission
       enqueue({ data: { ...narrativeRow, flerarsoversikt_tkr: tkr } }) // upsert
       enqueue({ data: null }) // clear narrative confirmation
@@ -277,7 +280,7 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/arsredovisning/narrative', (
     // The editor sends the choice with every save. Off is what a database
     // without the column holds, so the save goes through without it.
     const { enqueue, findCalls } = setupSupabase()
-    enqueue({ data: { id: 'period-1' } }) // fiscal_periods ownership check
+    enqueue({ data: { id: PERIOD_1 } }) // fiscal_periods ownership check
     enqueue({ data: null }) // no registrerad submission
     enqueue({ error: Object.assign(new Error("Could not find the 'flerarsoversikt_tkr' column"), { code: 'PGRST204' }) })
     enqueue({ data: { ...narrativeRow, description: 'Ny text.' } }) // upsert without the column
@@ -313,7 +316,7 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/arsredovisning/narrative', (
     const { enqueue } = setupSupabase()
     // The ownership check no longer selects lock columns: a closed period
     // (Verkställ bokslut done) must still accept narrative saves.
-    enqueue({ data: { id: 'period-1' } }) // fiscal_periods ownership check
+    enqueue({ data: { id: PERIOD_1 } }) // fiscal_periods ownership check
     enqueue({ data: null }) // no registrerad submission
     enqueue({ data: narrativeRow }) // upsert
     enqueue({ data: null }) // clear narrative confirmation
@@ -326,7 +329,7 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/arsredovisning/narrative', (
 
   it('refuses the save once the årsredovisning is registered at Bolagsverket', async () => {
     const { enqueue } = setupSupabase()
-    enqueue({ data: { id: 'period-1' } }) // fiscal_periods ownership check
+    enqueue({ data: { id: PERIOD_1 } }) // fiscal_periods ownership check
     enqueue({ data: { id: 'submission-1' } }) // registrerad submission exists
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
       await POST(postReq({ description: 'x' }), idParams),

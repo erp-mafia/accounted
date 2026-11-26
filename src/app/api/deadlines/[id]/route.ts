@@ -35,6 +35,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     return NextResponse.json({ data })
   },
+  { uuidParams: { id: 'DEADLINE_NOT_FOUND' } },
 )
 
 /**
@@ -86,7 +87,7 @@ export const PUT = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     return NextResponse.json({ data })
   },
-  { requireWrite: true },
+  { requireWrite: true, uuidParams: { id: 'DEADLINE_NOT_FOUND' } },
 )
 
 /**
@@ -156,5 +157,5 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     return NextResponse.json({ success: true })
   },
-  { requireWrite: true },
+  { requireWrite: true, uuidParams: { id: 'DEADLINE_NOT_FOUND' } },
 )

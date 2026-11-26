@@ -45,6 +45,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string; employeeId: 
 
     return NextResponse.json({ data: masked })
   },
+  { uuidParams: { id: 'SALARY_RUN_NOT_FOUND', employeeId: 'SALARY_RUN_EMPLOYEE_NOT_FOUND' } },
 )
 
 /**
@@ -221,7 +222,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string; employeeId
 
     return NextResponse.json({ data: { ...data, run_totals: runTotals } })
   },
-  { requireWrite: true },
+  { requireWrite: true, uuidParams: { id: 'SALARY_RUN_NOT_FOUND', employeeId: 'SALARY_RUN_EMPLOYEE_NOT_FOUND' } },
 )
 
 /** Remove employee from a draft salary run. Cascades to delete their line items. */
@@ -247,5 +248,5 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string; employeeI
 
     return NextResponse.json({ data: { deleted: true } })
   },
-  { requireWrite: true },
+  { requireWrite: true, uuidParams: { id: 'SALARY_RUN_NOT_FOUND', employeeId: 'SALARY_RUN_EMPLOYEE_NOT_FOUND' } },
 )

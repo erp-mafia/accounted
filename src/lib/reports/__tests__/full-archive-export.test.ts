@@ -1,15 +1,15 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest'
 import JSZip from 'jszip'
 import {
   generateFullArchive,
   streamFullArchive,
-  generateBaseDataArchive,
+  streamBaseDataArchive,
   estimateArchiveSize,
   MASTER_DATA_DUMP_TABLES,
 } from '../full-archive-export'
 import { createQueuedMockSupabase } from '@/tests/helpers'
-import { ArchiveTooLargeError } from '../archive-folder'
+import { ArchiveTooLargeError, collectBytes } from '../archive-folder'
 import { getAuditLog } from '@/lib/core/audit/audit-service'
 import { generateTrialBalance } from '../trial-balance'
 import { balanceSheetFromTrialBalance } from '../balance-sheet'
@@ -17,6 +17,7 @@ import { generateSIEExport } from '../sie-export'
 import { generateJournalRegister } from '../journal-register'
 import { generateSystemdokumentation } from '../systemdokumentation'
 import type { AuditLogEntry } from '@/types'
+import { createPagedMockSupabase, manyRows } from '@/tests/helpers'
 
 vi.mock('../sie-export', () => ({
   generateSIEExport: vi.fn().mockResolvedValue('#FLAGGA 0\n#PROGRAM "ERPBase"'),
@@ -98,7 +99,7 @@ vi.mock('@/lib/core/audit/audit-service', () => ({
 
 const mockGetAuditLog = vi.mocked(getAuditLog)
 
-function installArchiveReadLease(supabase: ReturnType<typeof createQueuedMockSupabase>['supabase']) {
+function installArchiveReadLease(supabase: { rpc: Mock<(...args: any[]) => any> }) {
   const queuedRpc = supabase.rpc.getMockImplementation()!
   supabase.rpc.mockImplementation((name: string, ...args: unknown[]) => {
     if (name === 'acquire_sie_period_read') return Promise.resolve({ data: 'archive-lease', error: null })
@@ -1318,7 +1319,7 @@ describe('generateFullArchive', () => {
   })
 })
 
-describe('generateBaseDataArchive', () => {
+describe('streamBaseDataArchive', () => {
   let supabase: ReturnType<typeof createQueuedMockSupabase>['supabase']
   let enqueueMany: ReturnType<typeof createQueuedMockSupabase>['enqueueMany']
 
@@ -1372,7 +1373,7 @@ describe('generateBaseDataArchive', () => {
     ] as unknown as AuditLogEntry[]
     mockGetAuditLog.mockResolvedValueOnce({ data: history, count: 0 })
 
-    const buffer = await generateBaseDataArchive(supabase as any, 'company-1')
+    const buffer = await collectBytes(streamBaseDataArchive(supabase as any, 'company-1'))
     const zip = await JSZip.loadAsync(buffer)
 
     // The same bytes JSON.stringify wrote when the history was one string.
@@ -1469,5 +1470,69 @@ describe('estimateArchiveSize', () => {
 
     expect(result.document_count).toBe(3)
     expect(result.document_bytes).toBe(600)
+  })
+})
+
+// fetchAllRows reads the pages of a long read side by side from the third
+// on. The paged mock answers each read with the range set on its query when
+// it is sent, as PostgREST does, so a query shared between the pages is
+// answered with the last page's range for all of them.
+describe('a year past two pages of posted entries', () => {
+  const ENTRIES = manyRows(2_500, (i) => ({
+    id: `entry-${String(i).padStart(5, '0')}`,
+    fiscal_period_id: PERIOD_2024.id,
+  }))
+  // On the third page of the year's entries, ordered by id.
+  const LATE_ENTRY = ENTRIES[2_100]
+  const LATE_DOCUMENT = {
+    id: 'doc-late',
+    file_name: 'kvitto.pdf',
+    storage_path: 'documents/company-1/user-1/kvitto.pdf',
+    journal_entry_id: LATE_ENTRY.id,
+    journal_entries: { voucher_number: 2_101, voucher_series: 'A', entry_date: '2024-11-29' },
+  }
+
+  function archiveSupabase() {
+    const { supabase } = createPagedMockSupabase({
+      company_settings: [COMPANY_ROW],
+      fiscal_periods: [PERIOD_2024],
+      journal_entries: ENTRIES,
+      document_attachments: [LATE_DOCUMENT],
+    })
+    installArchiveReadLease(supabase)
+    return Object.assign(supabase, {
+      storage: {
+        from: vi.fn().mockReturnValue({
+          download: vi.fn(async (path: string) => ({ data: new Blob([path]), error: null })),
+        }),
+      },
+    })
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockGetAuditLog.mockResolvedValue({ data: [], count: 0 })
+  })
+
+  it('keeps a document on such an entry in the year archive', async () => {
+    const supabase = archiveSupabase()
+
+    const zip = await JSZip.loadAsync(await generateFullArchive(supabase as any, 'company-1', {
+      scope: 'period', period_id: PERIOD_2024.id,
+    }))
+
+    const manifest = JSON.parse(await zip.file('dokument/manifest.json')!.async('text'))
+    expect(manifest.map((m: { document_id: string }) => m.document_id)).toEqual(['doc-late'])
+    expect(await zip.file('dokument/2024/A2101_kvitto.pdf')!.async('text')).toBe(LATE_DOCUMENT.storage_path)
+  })
+
+  it('names the year of a document on such an entry in the full archive', async () => {
+    const supabase = archiveSupabase()
+
+    const zip = await JSZip.loadAsync(await generateFullArchive(supabase as any, 'company-1', { scope: 'all' }))
+
+    const manifest = JSON.parse(await zip.file('dokument/manifest.json')!.async('text'))
+    expect(manifest).toHaveLength(1)
+    expect(manifest[0]).toMatchObject({ document_id: 'doc-late', fiscal_period_id: PERIOD_2024.id })
   })
 })

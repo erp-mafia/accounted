@@ -141,6 +141,18 @@ const GENERIC: Record<string, StructuredErrorEntry> = {
     message_sv: 'Ingen aktiv företagskontext. Välj ett företag och försök igen.',
     message_en: 'No active company context resolved for the request.',
   },
+  // A write from a browser tab that shows another company than the one the
+  // account has active now (x-tab-company-id names the tab's company). The
+  // same code the tab's own guard answers with before a request leaves it.
+  ACTIVE_COMPANY_CHANGED: {
+    httpStatus: 409,
+    message_sv: 'Aktivt företag har bytts i en annan flik.',
+    message_en: 'The active company was switched in another tab.',
+    remediation: {
+      description:
+        'The request named, in x-tab-company-id, a company other than the active one, so nothing was written. Reload the page to work in the active company, or switch back to the company the page shows.',
+    },
+  },
   IDEMPOTENCY_KEY_REUSE: {
     httpStatus: 409,
     message_sv: 'Idempotensnyckeln har redan använts med en annan begäran.',
@@ -2813,10 +2825,10 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
   },
   INVOICE_SEND_PAYMENT_ACCOUNT_INVALID: {
     httpStatus: 400,
-    message_sv: 'Bankkontot som fakturan ska betalas till kan inte längre användas: det är avstängt, borttaget från kundfakturor eller saknar uppgifter för fakturans valuta. Välj ett annat konto på fakturan eller uppdatera kontot under Inställningar → Fakturering.',
-    message_en: 'The bank account this invoice is to be paid to can no longer be used: it is disabled, no longer shown on customer invoices, or lacks details for the invoice currency. Pick another account on the invoice or update the account under Inställningar → Fakturering (Settings → Invoicing).',
+    message_sv: 'Bankkontot som fakturan ska betalas till kan inte längre användas: det är avstängt, borttaget från kundfakturor eller saknar uppgifter för fakturans valuta. Välj ett annat konto på fakturan eller uppdatera kontot under Inställningar → Försäljning → Fakturor.',
+    message_en: 'The bank account this invoice is to be paid to can no longer be used: it is disabled, no longer shown on customer invoices, or lacks details for the invoice currency. Pick another account on the invoice or update the account under Inställningar → Försäljning → Fakturor (Settings → Sales → Invoices).',
     remediation: {
-      description: 'Välj ett annat bankkonto på fakturan, eller återaktivera kontot och fyll i dess betaluppgifter under Inställningar → Fakturering.',
+      description: 'Välj ett annat bankkonto på fakturan, eller återaktivera kontot och fyll i dess betaluppgifter under Inställningar → Försäljning → Fakturor.',
     },
   },
   INVOICE_PAYEE_SNAPSHOT_FAILED: {
@@ -2846,9 +2858,9 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
   CASH_ACCOUNT_DISABLED_PAYEE: {
     httpStatus: 409,
     message_sv:
-      'Bankkontot är avstängt och markerat att visas på fakturor. En ägare eller administratör behöver aktivera det under Inställningar → Bokföring (då visas det på fakturor igen) eller dölja det på fakturor under Inställningar → Fakturering innan transaktioner kan läggas på det.',
+      'Bankkontot är avstängt och markerat att visas på fakturor. En ägare eller administratör behöver aktivera det under Inställningar → Bokföring (då visas det på fakturor igen) eller dölja det på fakturor under Inställningar → Försäljning → Fakturor innan transaktioner kan läggas på det.',
     message_en:
-      'This bank account is turned off and marked to be printed on invoices. An owner or admin needs to turn it on under Inställningar → Bokföring (Settings → Bookkeeping; it is then printed on invoices again) or hide it on invoices under Inställningar → Fakturering (Settings → Invoicing) before transactions can be put on it.',
+      'This bank account is turned off and marked to be printed on invoices. An owner or admin needs to turn it on under Inställningar → Bokföring (Settings → Bookkeeping; it is then printed on invoices again) or hide it on invoices under Inställningar → Försäljning → Fakturor (Settings → Sales → Invoices) before transactions can be put on it.',
     remediation: {
       description:
         'Retrying does not help until an owner or admin turns the account on (it is then printed on invoices again) or hides it on invoices: gnubok_update_cash_account stages either (enabled or invoice_payee). Or send the row with the ledger_account of another bank account (gnubok_list_cash_accounts).',
@@ -2982,18 +2994,18 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     // Currency-neutral by necessity (the registry has no details). Surfaces
     // that know the invoice currency say exactly what is missing through
     // describeMissingInvoicePaymentAccount() (lib/cash-accounts/invoice-payment-accounts.ts).
-    message_sv: 'Fakturan saknar betalningsuppgifter för sin valuta: bankgiro, plusgiro, Swish eller bankkonto för SEK, IBAN för andra valutor. Lägg till dem under Inställningar → Fakturering innan du skapar PDF-filen eller skickar fakturan.',
-    message_en: 'The invoice has no payment details for its currency: bankgiro, plusgiro, Swish or a bank account for SEK, an IBAN for other currencies. Add them under Inställningar → Fakturering (Settings → Invoicing) before generating the PDF or sending the invoice.',
+    message_sv: 'Fakturan saknar betalningsuppgifter för sin valuta: bankgiro, plusgiro, Swish eller bankkonto för SEK, IBAN för andra valutor. Lägg till dem under Inställningar → Försäljning → Fakturor innan du skapar PDF-filen eller skickar fakturan.',
+    message_en: 'The invoice has no payment details for its currency: bankgiro, plusgiro, Swish or a bank account for SEK, an IBAN for other currencies. Add them under Inställningar → Försäljning → Fakturor (Settings → Sales → Invoices) before generating the PDF or sending the invoice.',
     remediation: {
-      description: 'Lägg till betalningsuppgifter för fakturans valuta under Inställningar → Fakturering: bankgiro, plusgiro, Swish eller bankkonto för SEK, IBAN för andra valutor.',
+      description: 'Lägg till betalningsuppgifter för fakturans valuta under Inställningar → Försäljning → Fakturor: bankgiro, plusgiro, Swish eller bankkonto för SEK, IBAN för andra valutor.',
     },
   },
   INVOICE_SEND_VAT_NUMBER_MISSING: {
     httpStatus: 400,
-    message_sv: 'Företaget är momsregistrerat men saknar momsregistreringsnummer, som måste anges på fakturan (ML 17 kap. 24 §). Lägg till det under Inställningar → Skatt innan du skickar fakturan.',
-    message_en: 'The company is VAT-registered but has no VAT number, which is a mandatory invoice element (ML 17 kap. 24 §). Add it under Inställningar → Skatt (Settings → Tax) before issuing the invoice.',
+    message_sv: 'Företaget är momsregistrerat men saknar momsregistreringsnummer, som måste anges på fakturan (ML 17 kap. 24 §). Lägg till det under Inställningar → Bokföring → Moms och skatt innan du skickar fakturan.',
+    message_en: 'The company is VAT-registered but has no VAT number, which is a mandatory invoice element (ML 17 kap. 24 §). Add it under Inställningar → Bokföring → Moms och skatt (Settings → Bookkeeping → VAT and tax) before issuing the invoice.',
     remediation: {
-      description: 'Lägg till företagets momsregistreringsnummer under Inställningar → Skatt.',
+      description: 'Lägg till företagets momsregistreringsnummer under Inställningar → Bokföring → Moms och skatt.',
     },
   },
   // crm#2080: ML 17 kap. 24 § p.5-6 and 26-28 §§, the rule in lib/invoices/invoice-parties.ts.
@@ -5800,8 +5812,8 @@ const BANK_SYNC: Record<string, StructuredErrorEntry> = {
   },
   BANK_SYNC_NO_ACCOUNTS: {
     httpStatus: 409,
-    message_sv: 'Inga konton är valda för synkning. Aktivera minst ett konto under Inställningar, Bank.',
-    message_en: 'No accounts are selected for syncing. The user must enable at least one under Settings, Bank.',
+    message_sv: 'Inga konton är valda för synkning. Aktivera minst ett konto under Inställningar → Kopplingar → Bank.',
+    message_en: 'No accounts are selected for syncing. The user must enable at least one under Settings → Connections → Bank.',
   },
   BANK_SYNC_COOLDOWN: {
     httpStatus: 429,
@@ -6435,6 +6447,17 @@ const PROVIDER_MIGRATION: Record<string, StructuredErrorEntry> = {
       'Den här leverantören stöder inte SIE-hämtning via API. Ladda upp en SIE-fil manuellt istället.',
     message_en:
       'This provider does not support fetching SIE via API. Upload a SIE file manually instead.',
+  },
+  // The nightly top-up from Fortnox (arcim-migration lib/fortnox-topup.ts)
+  // adds vouchers only to a year imported from Fortnox that is neither
+  // closed nor locked: turning it on without one is refused, and a top-up
+  // that has none left stops with the same sentence.
+  PROVIDER_TOPUP_NO_OPEN_YEAR: {
+    httpStatus: 409,
+    message_sv:
+      'Inget räkenskapsår som importerats från Fortnox är öppet. Den nattliga hämtningen lägger bara till verifikationer i importerade år som inte är stängda eller låsta.',
+    message_en:
+      'No fiscal year imported from Fortnox is open. The nightly fetch only adds vouchers to imported years that are neither closed nor locked.',
   },
   PROVIDER_SIE_IMPORT_REQUIRED: {
     httpStatus: 409,
@@ -7995,6 +8018,18 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     message_sv: 'Anställd finns inte i denna lönekörning.',
     message_en: 'Employee is not part of this salary run.',
   },
+  SALARY_RUN_EMPLOYEE_HAS_LATE_DAYS: {
+    httpStatus: 409,
+    message_sv:
+      'Den anställde har sent kända dagar från en tidigare, redan utbetald eller deklarerad period som ska dras i den här lönekörningen. Ta bort de dagarna först, eller låt den anställde vara kvar på körningen.',
+    message_en:
+      'The employee has late days from an earlier, already paid or declared period that are carried to this payroll run. Remove those days first, or keep the employee on the run.',
+    remediation: {
+      description:
+        'Absence or worked days from an earlier, already paid or declared period are carried to this draft run (carried_to_run_id; details.late_dates) and would be settled by no run without the employee on it. Delete those days first (gnubok_delete_absence for absence, gnubok_delete_worked_days for hours), then remove the employee, or keep them on the run.',
+      tool: 'gnubok_delete_absence',
+    },
+  },
   SALARY_LINE_NOT_FOUND: {
     httpStatus: 404,
     message_sv: 'Lönebeskedsraden kunde inte hittas.',
@@ -8031,6 +8066,27 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     remediation: {
       description:
         'Read details.issues (employee, message_en). Either put the amount on the vacation line yourself (gnubok_update_payslip_line with amount, or quantity and unit_price: a line with an amount is paid as entered and never re-derived), change the vacation_category (unpaid or advance) when the days are not paid days, or fix the employee (salary_type, vacation_rule) the message names. Then gnubok_calculate_salary_run. Never estimate a procentregeln base: ask the user for the semesterlön.',
+      tool: 'gnubok_update_payslip_line',
+    },
+    retryable: false,
+    thrown_message_sv: true,
+  },
+  // A payslip row of semesterlön for rörliga lönedelar paid with the salary
+  // under a kollektivavtal (settles_variable_vacation_pay,
+  // lib/salary/variable-vacation-pay.ts) the calculation cannot accept: the
+  // employee is not on sammalöneregeln, the amount is not above 0 kr, or it
+  // is more than the payslip's own variable pay earns. The thrower's
+  // sentences name each employee and the fix; details.issues carries them
+  // per employee in both languages.
+  SALARY_RUN_VARIABLE_VACATION_PAY_WITH_SALARY_INVALID: {
+    httpStatus: 400,
+    message_sv:
+      'En rad med semesterlön för rörliga lönedelar kan inte räknas. Ändra eller ta bort raden som meddelandet för den anställda säger, och beräkna om.',
+    message_en:
+      'A line of vacation pay on variable pay cannot be calculated. Change or remove the line as the message for the employee says, then calculate again.',
+    remediation: {
+      description:
+        'Read details.issues (employee, message_en) and do what each message says to the semesterersattning line with settles_variable_vacation_pay. Employee not on sammalöneregeln: delete the line (gnubok_delete_payslip_line). Amount not above 0 kr: change it (gnubok_update_payslip_line) or delete it. More than the payslip\'s own variable pay earns: change the amount to at most what the message names, or delete it and add it on the payslip that pays the variable pay. Then gnubok_calculate_salary_run.',
       tool: 'gnubok_update_payslip_line',
     },
     retryable: false,
@@ -8279,12 +8335,23 @@ const SALARY: Record<string, StructuredErrorEntry> = {
   SALARY_REGISTER_DATES_LOCKED_BY_RUN: {
     httpStatus: 409,
     message_sv:
-      'Datumen ingår i avvikelseperioden för en lönekörning som redan är beräknad, godkänd eller bokförd. Återställ körningen till utkast, eller gör en rättelsekörning, innan frånvaro eller arbetade timmar ändras.',
+      'Datumen har redan lästs av en lönekörning som är beräknad, godkänd, utbetald eller deklarerad. Är körningen utbetald eller deklarerad registreras en sent känd dag på sitt riktiga datum och dras i nästa lönekörning, som också redovisar frånvaron i sin arbetsgivardeklaration. Annars: återställ körningen till utkast och registrera dagen där.',
     message_en:
-      'The dates fall inside the deviation period of a salary run that is already calculated, approved or booked. Revert that run to draft, or run a correction, before changing absence or worked hours.',
+      'A salary run that is already calculated, approved, paid or declared has read these dates. If it is paid or declared, a day that became known late is registered on its real date and deducted in the next salary run, which also reports the absence in its own AGI. Otherwise revert that run to draft and register the day there.',
     remediation: {
       description:
-        'details.salary_run_id names the run and details.locked_dates the dates it reads. Draft runs never lock; a run in review can be reverted to draft (POST /salary-runs/{id}/revert, gnubok_revert_salary_run).',
+        'details.salary_run_id names the run, details.locked_dates the dates and details.reason why. late_day_needs_later_run: register the days again with carried_to_run_id = details.later_salary_run.salary_run_id (the next ordinary run that is neither paid nor declared; it must be a draft with the employee on it). A new day in the window of a corrected run is a late day too. run_not_settled: revert the run to draft (gnubok_unapprove_salary_run for an approved run, then gnubok_revert_salary_run; POST /salary-runs/{id}/unapprove and /revert). read_by_settled_run: the day is part of what was paid and is not rewritten; settle a difference with a payslip line on the next run. Never correct a paid run for a late day; a correction run stays for other errors in a booked run.',
+    },
+  },
+  SALARY_REGISTER_LATE_DAY_REFUSED: {
+    httpStatus: 409,
+    message_sv:
+      'De sent kända dagarna kan inte knytas till den lönekörningen. En sen dag dras i nästa lönekörning som varken är utbetald eller deklarerad, och den måste vara ett utkast med den anställde på.',
+    message_en:
+      'The late days cannot be carried to that salary run. A late day is deducted in the next salary run that is neither paid nor declared, and that run must be a draft with the employee on it.',
+    remediation: {
+      description:
+        'details.reason says why: not_found, not_draft (revert the run to draft first), not_later (the run does not come after the days), not_next (carry them to details.later_salary_run instead), employee_not_on_run (add the employee to the run first), calendar_long_leave (the company prices long leave per calendar day; a late parental, unpaid or sick day cannot be priced in a later run: deduct it with a payslip line), hourly_pay (an hourly employee\'s late VAB or parental day reduces no later pay, so its frånvarouppgift has no later period: do not register it as a late day), pay_type_changed (the employee was paid monthly in the period the days belong to and hourly on the named run, or the other way round: settle the difference with a payslip line), not_paid_then (the employee had no payslip on details.period_salary_run, so no paid pay is reduced), correction_period_filed (the named correction run declares a period whose AGI awaits signature, is filed or has its deadline marked done: carry the days to details.later_salary_run), correction_without_hand_deduction (the paid run the correction replaces carried no deduction typed by hand for the employee, or the days are hours: carry them to details.later_salary_run). not_next also answers a named run that is paid, declared or corrected. A correction draft takes late absence only when named, while its period\'s AGI is not at Skatteverket and the paid run carried a deduction typed by hand for the employee: the days replace that line.',
     },
   },
   SALARY_RUN_DEVIATION_PERIOD_INVALID: {
@@ -8616,11 +8683,11 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     message_sv:
       'Verifikationen makulerar en ångrad SIE-import och kan inte raderas: då blir importens verifikationer aktiva igen. Importera filen på nytt under Bokföring > Importera/Exportera, eller börja om med tomma verifikationsserier med Gör om migrering under Inställningar > Företaget > Företagsuppgifter > Riskzon.',
     message_en:
-      'This voucher reverses an undone SIE import and cannot be deleted: the import\'s vouchers would become active again. Import the file again, or start over with empty voucher series via Redo migration under Settings > Company.',
+      'This voucher reverses an undone SIE import and cannot be deleted: the import\'s vouchers would become active again. Import the file again, or start over with empty voucher series via Redo migration under Settings → Company → Company details → Danger zone.',
     retryable: false,
     remediation: {
       description:
-        'The storno belongs to an undone or replaced SIE import (retain_sie_undo_reversal). To bring the vouchers back, import the file again (gnubok_import_sie). To start the books over, the owner uses Redo migration (Gör om migrering) under Settings > Company in the app.',
+        'The storno belongs to an undone or replaced SIE import (retain_sie_undo_reversal). To bring the vouchers back, import the file again (gnubok_import_sie). To start the books over, the owner uses Redo migration (Gör om migrering) under Settings → Company → Company details → Danger zone in the app.',
       tool: 'gnubok_import_sie',
       resource: '/settings/company',
     },
@@ -8635,6 +8702,18 @@ const SALARY: Record<string, StructuredErrorEntry> = {
       description:
         'A generated payment file is kept for seven years, so the run it belongs to stays. Edit the draft run instead (gnubok_set_run_salary, gnubok_update_salary_run), or leave it unbooked.',
       tool: 'gnubok_update_salary_run',
+    },
+  },
+  SALARY_RUN_DELETE_BLOCKED_BY_LATE_DAYS: {
+    httpStatus: 409,
+    message_sv:
+      'Lönekörningen kan inte raderas eftersom sent kända dagar från en tidigare, redan utbetald eller deklarerad period ska dras i den. Ta bort de dagarna först, eller låt körningen vara kvar.',
+    message_en:
+      'This payroll run cannot be deleted because late days from an earlier, already paid or declared period are carried to it. Remove those days first, or keep the run.',
+    remediation: {
+      description:
+        'Absence or worked days from an earlier, already paid or declared period are carried to this draft run (carried_to_run_id) and would be deducted by no run without it. Delete those days first (gnubok_delete_absence for absence, gnubok_delete_worked_days for hours; list them with gnubok_list_absence and gnubok_list_worked_days), then delete the run, or keep it.',
+      tool: 'gnubok_delete_absence',
     },
   },
   DOCUMENT_DELETE_BLOCKED_BY_TRANSACTION: {
@@ -9141,7 +9220,7 @@ const PACKAGE: Record<string, StructuredErrorEntry> = {
     retryable: false,
     remediation: {
       description:
-        'For Lön in an enskild firma: set pays_salaries in the company tax profile (Inställningar, Skatt), then switch the package on.',
+        'For Lön in an enskild firma: set pays_salaries in the company tax profile (Inställningar → Bokföring → Löner), then switch the package on.',
     },
   },
 }
@@ -9282,6 +9361,15 @@ const PROVIDER: Record<string, StructuredErrorEntry> = {
     httpStatus: 502,
     message_sv: 'Leverantörens tjänst är inte tillgänglig just nu. Försök igen om en stund.',
     message_en: 'Provider service is unreachable (network/DNS error).',
+  },
+  // The provider took the request and did not answer before its time limit
+  // (classifyProviderError, #3137). A 502 like the other provider failures:
+  // a 504 is what the hosting platform answers when our own function runs
+  // out of time, and the two must stay apart.
+  PROVIDER_TIMEOUT: {
+    httpStatus: 502,
+    message_sv: 'Leverantören svarade inte i tid. Försök igen om en stund.',
+    message_en: 'The provider did not answer in time. Try again in a moment.',
   },
   PROVIDER_UPSTREAM_ERROR: {
     httpStatus: 502,
@@ -10217,12 +10305,12 @@ const SKATTEVERKET: Record<string, StructuredErrorEntry> = {
   SKATTEVERKET_NOT_CONNECTED: {
     httpStatus: 401,
     message_sv:
-      'Anslutningen till Skatteverket saknas eller har gått ut. Om företaget varit anslutet tidigare är detta normalt: Skatteverkets personliga inloggning räcker i ungefär tio timmar. Be användaren ansluta (igen) med BankID under Inställningar → Skatteverket.',
+      'Anslutningen till Skatteverket saknas eller har gått ut. Om företaget varit anslutet tidigare är detta normalt: Skatteverkets personliga inloggning räcker i ungefär tio timmar. Be användaren ansluta (igen) med BankID under Inställningar → Kopplingar → Skatteverket.',
     message_en:
-      'The Skatteverket connection is missing or has expired. If the company was connected before this is expected: Skatteverket personal sessions last about ten hours. Tell the user to connect (or reconnect) with BankID under Inställningar → Skatteverket in Accounted. Only a person can do this; do not retry until they confirm they have reconnected.',
+      'The Skatteverket connection is missing or has expired. If the company was connected before this is expected: Skatteverket personal sessions last about ten hours. Tell the user to connect (or reconnect) with BankID under Settings → Connections → Skatteverket in Accounted. Only a person can do this; do not retry until they confirm they have reconnected.',
     remediation: {
       description:
-        'A person must connect (or reconnect) to Skatteverket with BankID: call gnubok_connect_skatteverket for the connect_url and give it to the user, or they open Inställningar → Skatteverket. Personal Skatteverket sessions expire after about ten hours by SKV design, so an expired session is normal, not a fault. Do not retry until the user confirms they have reconnected.',
+        'A person must connect (or reconnect) to Skatteverket with BankID: call gnubok_connect_skatteverket for the connect_url and give it to the user, or they open Settings → Connections → Skatteverket. Personal Skatteverket sessions expire after about ten hours by SKV design, so an expired session is normal, not a fault. Do not retry until the user confirms they have reconnected.',
       tool: 'gnubok_connect_skatteverket',
     },
   },
@@ -10338,9 +10426,9 @@ const SKATTEVERKET: Record<string, StructuredErrorEntry> = {
   ORG_NUMBER_CONTESTED: {
     httpStatus: 409,
     message_sv:
-      'Organisationsnumret används av fler än ett företag. Anslut det här företaget till Skatteverket med BankID under Inställningar → Skatteverket och försök sedan igen. Den som ansluter måste få företräda företaget hos Skatteverket.',
+      'Organisationsnumret används av fler än ett företag. Anslut det här företaget till Skatteverket med BankID under Inställningar → Kopplingar → Skatteverket och försök sedan igen. Den som ansluter måste få företräda företaget hos Skatteverket.',
     message_en:
-      'The organisation number is used by more than one company. Connect this company to Skatteverket with BankID under Settings → Skatteverket, then try again. The person connecting must be allowed to represent the company at Skatteverket.',
+      'The organisation number is used by more than one company. Connect this company to Skatteverket with BankID under Settings → Connections → Skatteverket, then try again. The person connecting must be allowed to represent the company at Skatteverket.',
   },
   // Two or more claimants are proven: the connection follows neither.
   ORG_NUMBER_PROVEN_TWICE: {
@@ -11136,6 +11224,26 @@ const DIMENSION: Record<string, StructuredErrorEntry> = {
     httpStatus: 500,
     message_sv: 'Import av befintliga dimensionskoder misslyckades.',
     message_en: 'Failed to import existing dimension codes from journal lines.',
+  },
+  // Counterparty templates, the rules of Bokföringsregler (lib/rules/service.ts,
+  // operations counterparty-templates.*): the agent's rename and rule change.
+  COUNTERPARTY_TEMPLATE_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Regeln finns inte.',
+    message_en: 'Counterparty template not found in this company.',
+    remediation: {
+      description:
+        'List the templates (gnubok_get_counterparty_templates, include_paused true for paused ones) and use an id from the answer. A rename takes only an active template.',
+    },
+  },
+  COUNTERPARTY_TEMPLATE_NAME_TAKEN: {
+    httpStatus: 409,
+    message_sv: 'Det finns redan en mall med det här namnet.',
+    message_en: 'Another active counterparty template already has this name.',
+    remediation: {
+      description:
+        'Pick another name: two active templates cannot share one. gnubok_get_counterparty_templates lists the names in use.',
+    },
   },
   // Account dimension rules (lib/dimensions/rules-service.ts, operations
   // dimension-rules.*): one set of codes for the dashboard, v1 and MCP.
@@ -12753,10 +12861,10 @@ const PAYMENT_ORDERS: Record<string, StructuredErrorEntry> = {
   USAGE_LIMIT_REACHED: {
     httpStatus: 409,
     message_sv: 'Det som ingår är använt. Fler kostar en avgift per styck. Begär fler under Inställningar, Abonnemang, Användning, så öppnar vi.',
-    message_en: 'The included amount is used up. More cost a fee each. Ask for more under Settings, Billing, Usage, and we open it.',
+    message_en: 'The included amount is used up. More cost a fee each. Ask for more under Settings → Company → Subscription → Usage, and we open it.',
     remediation: {
       description:
-        'More than details.included of details.kind costs details.unit_price_ore öre each, and the charge is not open for this company. A person asks for more under Settings, Billing, Usage (POST /api/billing/usage/requests); Accounted opens the charge by hand. An agent cannot open it: tell the person, then retry once it is open.',
+        'More than details.included of details.kind costs details.unit_price_ore öre each, and the charge is not open for this company. A person asks for more under Settings → Company → Subscription → Usage (POST /api/billing/usage/requests); Accounted opens the charge by hand. An agent cannot open it: tell the person, then retry once it is open.',
     },
     thrown_message_sv: true,
   },
@@ -12764,10 +12872,10 @@ const PAYMENT_ORDERS: Record<string, StructuredErrorEntry> = {
   USAGE_SUBSCRIPTION_REQUIRED: {
     httpStatus: 409,
     message_sv: 'Det som ingår är använt. Fler kräver ett abonnemang. Starta det under Inställningar, Abonnemang.',
-    message_en: 'The included amount is used up. More need a subscription. Start one under Settings, Billing.',
+    message_en: 'The included amount is used up. More need a subscription. Start one under Settings → Company → Subscription.',
     remediation: {
       description:
-        'The company has no active subscription of its own and no byrå agreement (a trial or a free period), so nothing above details.included of details.kind can be opened or billed. A person starts a subscription under Settings, Billing; an agent cannot.',
+        'The company has no active subscription of its own and no byrå agreement (a trial or a free period), so nothing above details.included of details.kind can be opened or billed. A person starts a subscription under Settings → Company → Subscription; an agent cannot.',
     },
     thrown_message_sv: true,
   },
@@ -12778,7 +12886,7 @@ const PAYMENT_ORDERS: Record<string, StructuredErrorEntry> = {
     message_en: 'The included amount is used up. More can be requested after the first charge of the subscription.',
     remediation: {
       description:
-        'The company has a subscription, started during the trial, that has no payer until its first charge at the end of the trial, so nothing above details.included of details.kind can be opened or billed before then. Nothing is to be started: after the first charge a person asks for more under Settings, Billing, Usage.',
+        'The company has a subscription, started during the trial, that has no payer until its first charge at the end of the trial, so nothing above details.included of details.kind can be opened or billed before then. Nothing is to be started: after the first charge a person asks for more under Settings → Company → Subscription → Usage.',
     },
     thrown_message_sv: true,
   },

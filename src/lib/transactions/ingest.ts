@@ -9,6 +9,9 @@ import type { InvoiceMatchPool } from '@/lib/invoices/invoice-matching'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { logMatchEvent } from '@/lib/invoices/match-log'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { dbError } from '@/lib/errors/db-error'
+import { chunk } from '@/lib/utils'
+import { ID_READ_CHUNK } from '@/lib/reconciliation/limits'
 import { amountToOre, BANK_REDATE_MAX_DAYS, contentBucketKey, descriptionsBridge, normalizeImportedDescription, reconcileStableExternalIds } from '@/lib/transactions/external-id'
 import { addDaysIso } from '@/lib/dates/iso'
 import { classifyTransactionMethod } from '@/lib/transactions/transaction-method'
@@ -399,8 +402,48 @@ export function rekeyIncomingExternalIds<T extends DedupRow>(
 }
 
 /**
+ * A uuid in an `.in()` list in the query string: its 36 characters and the
+ * encoded comma (%2C) after it. ID_READ_CHUNK of them are the room one read
+ * may take.
+ */
+const UUID_IN_LIST_LENGTH = 39
+
+/**
+ * What one value takes in an `.in()` list in the query string: supabase-js
+ * quotes a value holding a comma or a parenthesis, and the list is
+ * form-encoded, its commas included.
+ */
+function inListLength(value: string): number {
+  const listed = /[,()]/.test(value) ? `"${value}"` : value
+  return new URLSearchParams({ v: `${listed},` }).toString().length - 'v='.length
+}
+
+/**
+ * A batch's external_ids in slices of one `.in()` read each. The ids travel
+ * in the GET query string, and the gateway refuses a long one before
+ * PostgREST sees it (ID_READ_CHUNK in lib/reconciliation/limits.ts). An
+ * external_id is no uuid: a bank feed's runs to some 80 characters and the v1
+ * API takes 200, so a slice holds as many as fit the room ID_READ_CHUNK uuids
+ * take, counted by the batch's longest id, and never more than ID_READ_CHUNK.
+ */
+function externalIdSlices(externalIds: readonly string[]): string[][] {
+  const longest = externalIds.reduce((max, id) => Math.max(max, inListLength(id)), UUID_IN_LIST_LENGTH)
+  return chunk(externalIds, Math.max(1, Math.floor((ID_READ_CHUNK * UUID_IN_LIST_LENGTH) / longest)))
+}
+
+/**
  * Which of these external_ids are already stored for the company (Layer 1),
- * mapped to the stored row's id. Chunked to stay clear of URL length limits.
+ * mapped to the stored row's id. Read in slices (externalIdSlices); a slice
+ * answers at most one row per id (the unique index on (company_id,
+ * external_id)), so none comes near PostgREST's 1000-row cap.
+ *
+ * Throws when a slice cannot be read, before any row is decided. Its rows
+ * would otherwise count as new while their stored twins stay in the content
+ * buckets (buildIngestDedupState reserves only the stored rows found here):
+ * a genuinely new row of the same day, amount and text could then be taken
+ * for one of those twins and never be imported, and the unique index only
+ * turns back the re-read row itself. A bank sync whose batch fails keeps its
+ * window, so the next sync reads the same rows again.
  */
 export async function fetchStoredExternalIds(
   supabase: SupabaseClient,
@@ -408,13 +451,13 @@ export async function fetchStoredExternalIds(
   externalIds: string[],
 ): Promise<Map<string, string | null>> {
   const stored = new Map<string, string | null>()
-  for (let i = 0; i < externalIds.length; i += 500) {
-    const chunk = externalIds.slice(i, i + 500)
-    const { data } = await supabase
+  for (const ids of externalIdSlices(externalIds)) {
+    const { data, error } = await supabase
       .from('transactions')
       .select('id, external_id')
       .eq('company_id', companyId)
-      .in('external_id', chunk)
+      .in('external_id', ids)
+    if (error) throw dbError(error, 'Stored external_id read failed')
     data?.forEach((r) => stored.set(r.external_id, r.id ?? null))
   }
   return stored
@@ -893,7 +936,8 @@ export type EnrichmentPatch = Partial<
 /**
  * The stored rows the batch's external ids name, whole, for the update on
  * re-read. Only read for an Open Payments batch, and only for the ids Layer 1
- * found stored. Chunked like fetchStoredExternalIds.
+ * found stored. Read in slices like fetchStoredExternalIds, and throws like
+ * it when a slice cannot be read.
  */
 export async function fetchStoredEnrichmentRows(
   supabase: SupabaseClient,
@@ -901,13 +945,13 @@ export async function fetchStoredEnrichmentRows(
   externalIds: string[],
 ): Promise<Map<string, Transaction>> {
   const rows = new Map<string, Transaction>()
-  for (let i = 0; i < externalIds.length; i += 500) {
-    const chunk = externalIds.slice(i, i + 500)
-    const { data } = await supabase
+  for (const ids of externalIdSlices(externalIds)) {
+    const { data, error } = await supabase
       .from('transactions')
       .select('*')
       .eq('company_id', companyId)
-      .in('external_id', chunk)
+      .in('external_id', ids)
+    if (error) throw dbError(error, 'Stored row read for the re-read failed')
     for (const row of (data ?? []) as Transaction[]) {
       if (row.external_id) rows.set(row.external_id, row)
     }
@@ -1266,11 +1310,20 @@ export async function ingestTransactions(
   // The stored rows an Open Payments re-read may update (see enrichmentPatch):
   // whole, for the ids Layer 1 found stored. Other feeds skip their Layer-1
   // duplicates exactly as before and never pay for this read.
+  // A failed read costs the update only: the re-read rows are skipped as the
+  // duplicates they are, unchanged, and the next sync re-reads the same window.
   const storedIdsOfBatch = externalIds.filter((id) => storedExternalIds.has(id))
-  const enrichable =
-    feedRereadsStoredRows(INGEST_FEEDS, rawTransactions[0]?.import_source) && storedIdsOfBatch.length > 0
-      ? await fetchStoredEnrichmentRows(supabase, companyId, storedIdsOfBatch)
-      : new Map<string, Transaction>()
+  let enrichable = new Map<string, Transaction>()
+  if (feedRereadsStoredRows(INGEST_FEEDS, rawTransactions[0]?.import_source) && storedIdsOfBatch.length > 0) {
+    try {
+      enrichable = await fetchStoredEnrichmentRows(supabase, companyId, storedIdsOfBatch)
+    } catch (error) {
+      log.warn('stored rows of the re-read unreadable: the re-read rows stay as stored', {
+        storedIds: storedIdsOfBatch.length,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
 
   // Resolve the cash account this batch settled on, once (readBatchCashAccount).
   const batchAccount = await readBatchCashAccount(supabase, companyId, options?.settlementAccount)

@@ -777,8 +777,9 @@ describe('generateAGIXml: Frånvarouppgift', () => {
     // Simulates the correction scenario the persistence is designed for:
     // the first vab day was deleted, so the remaining day keeps its
     // original specnummer (2). Without persistence the index would shift
-    // to 1 and Skatteverket would treat it as a replacement of the
-    // already-filed day-1 event.
+    // to 1 and Skatteverket would treat it as a replacement of the day-1
+    // event already saved in the draft (Bilaga Fältlista FK822). Once the
+    // period is filed no Frånvarouppgift is sent at all (ba_824).
     const xml = generateAGIXml(
       company,
       [{
@@ -922,6 +923,23 @@ describe('generateAGIXml: Frånvarouppgift', () => {
   it('omits the section entirely when no employee has absenceEvents', () => {
     const xml = generateAGIXml(company, employees, totals)
     expect(xml).not.toContain('Franvarouppgift')
+  })
+
+  // "Frånvarouppgifter får inte finnas för RedovisningsPeriod, FK006, där
+  // första deklaration redan har skickats in" (Skatteverket, Bilaga Kontroller
+  // 1.1.18.1, ba_824). It is a Bearbetningskontroll: a file that breaks it is
+  // not uploaded at all (Teknisk beskrivning 1.1.18.2, 12.5.1).
+  it("emits no Frånvarouppgift once the period's first declaration is filed, and nothing else changes (ba_824)", () => {
+    const first = generateAGIXml(company, employeesWithAbsence, totals)
+    const rattelse = generateAGIXml(company, employeesWithAbsence, totals, true)
+
+    expect(first.match(/<gem:Franvarouppgift>/g)).toHaveLength(3)
+    expect(rattelse).not.toContain('Franvarouppgift')
+    const withoutFranvaro = (xml: string) =>
+      xml
+        .replace(/ {2}<gem:Franvarouppgift>\n[\s\S]*?\n {2}<\/gem:Franvarouppgift>\n/g, '')
+        .replace(/<gem:Skapad>[^<]*<\/gem:Skapad>/, '')
+    expect(withoutFranvaro(rattelse)).toBe(withoutFranvaro(first))
   })
 })
 

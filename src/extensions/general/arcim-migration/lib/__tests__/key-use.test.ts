@@ -48,6 +48,11 @@ describe('providerKeyUse', () => {
   it('keeps a connection enrolled in the Bokio supplier completion in use', () => {
     expect(providerKeyUse('consent-1', facts({ supplierCompletionConsentIds: new Set(['consent-1']) }))).toBe('supplier_rows')
   })
+
+  it('keeps the connection the nightly top-up from Fortnox is on for in use, and only that one', () => {
+    expect(providerKeyUse('consent-1', facts({ topupConsentId: 'consent-1' }))).toBe('topup')
+    expect(providerKeyUse('consent-2', facts({ topupConsentId: 'consent-1' }))).toBe('idle')
+  })
 })
 
 type Call = { table: string; ops: [string, ...unknown[]][] }

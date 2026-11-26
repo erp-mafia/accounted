@@ -86,12 +86,13 @@ export function paymentsReadiness(input: {
 }
 
 /** The one thing a person can do about the verification now: the button's job. */
-export type VerificationStep = 'verify' | 'new_link' | 'renew' | 'open_form' | 'wait' | 'none'
+export type VerificationStep = 'verify' | 'new_link' | 'renew' | 'open_form' | 'none'
 
 /**
  * The step by state. A form opened in this sitting (its link at hand) is
- * opened again; one with the firmatecknare is waited for; one opened
- * elsewhere, or a dead link, gets a fresh link; a lapsed or lapsing
+ * opened again; one opened elsewhere, one handed to a firmatecknare (its link
+ * may be lost, and the 24 hours would hold the company), or a dead link gets
+ * a fresh link, as the Koppla banken step offers; a lapsed or lapsing
  * verification is renewed; none at all is started.
  */
 export function verificationStep(state: VerificationState, options: { formAtHand?: boolean } = {}): VerificationStep {
@@ -100,10 +101,9 @@ export function verificationStep(state: VerificationState, options: { formAtHand
     case 'not_started':
       return 'verify'
     case 'form_open':
+    case 'awaiting_signatory':
     case 'link_expired':
       return 'new_link'
-    case 'awaiting_signatory':
-      return 'wait'
     case 'expiring':
     case 'expired':
       return 'renew'

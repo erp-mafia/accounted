@@ -9,6 +9,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import { createMockRequest, createTableMockSupabase, parseJsonResponse } from '@/tests/helpers'
 
+// Route path ids are uuids: the route answers its 404 to anything else before it reads.
+const EMP_1 = 'fcd49043-9489-5813-aacd-a04b3e121e68'
+
 const requireAuthMock = vi.fn()
 vi.mock('@/lib/auth/require-auth', () => ({
   requireAuth: (...args: unknown[]) => requireAuthMock(...args),
@@ -36,10 +39,10 @@ import { PATCH } from '../route'
 import { encryptPersonnummer } from '@/lib/salary/personnummer'
 import { SAMMALONEREGELN_DEGREE_CHANGED } from '@/lib/salary/employee-update-rules'
 
-const params = { params: Promise.resolve({ id: 'emp-1' }) } as never
+const params = { params: Promise.resolve({ id: EMP_1 }) } as never
 
 const SAMMALONE_ROW = {
-  id: 'emp-1',
+  id: EMP_1,
   company_id: 'company-1',
   first_name: 'Test',
   last_name: 'Testsson',
@@ -74,7 +77,7 @@ function useRow(existing: Record<string, unknown> | null) {
 }
 
 const patchRequest = (body: Record<string, unknown>) =>
-  createMockRequest('/api/salary/employees/emp-1', { method: 'PATCH', body })
+  createMockRequest(`/api/salary/employees/${EMP_1}`, { method: 'PATCH', body })
 
 describe('PATCH /api/salary/employees/[id]: employment degree on sammalöneregeln (#31)', () => {
   beforeEach(() => {
@@ -136,7 +139,7 @@ describe('PATCH /api/salary/employees/[id]: employment degree on sammalöneregel
       company_id: 'company-1',
       action: 'GUARD_BYPASSED',
       table_name: 'employees',
-      record_id: 'emp-1',
+      record_id: EMP_1,
       actor_type: 'user',
       new_state: { employment_degree_from: 100, employment_degree_to: 80 },
     })

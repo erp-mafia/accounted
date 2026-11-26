@@ -143,6 +143,14 @@ describe('POST /api/sales-orders', () => {
     expect(status).toBe(400)
   })
 
+  it('returns 400 for a Märkning longer than the invoice holds', async () => {
+    const { status } = await parseJsonResponse(
+      await post({ customer_id: IDS.customer, invoice_marking: 'P'.repeat(201), items: [validLine] }),
+    )
+    expect(status).toBe(400)
+    expect(supabase.from).not.toHaveBeenCalled()
+  })
+
   it('returns 404 when the customer does not exist in the company', async () => {
     enqueue({ data: null })
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
@@ -174,6 +182,7 @@ describe('POST /api/sales-orders', () => {
       await post({
         customer_id: IDS.customer,
         order_date: '2026-09-01',
+        invoice_marking: 'PO-4711',
         items: [validLine, { line_type: 'text', description: 'Leverans v.36', quantity: 0, unit: '', unit_price: 0 }],
       }),
     )
@@ -189,6 +198,7 @@ describe('POST /api/sales-orders', () => {
       user_id: IDS.user,
       customer_id: IDS.customer,
       status: 'draft',
+      invoice_marking: 'PO-4711',
       subtotal: 1000,
       vat_amount: 250,
       total: 1250,

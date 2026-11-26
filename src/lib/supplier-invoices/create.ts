@@ -1403,8 +1403,10 @@ function privatelyPaidClaimFailure(
  * AccountsNotInChartError the commit answers. Every refusal is the commit's
  * own. Null when the registration posts no verifikat (kontantmetoden,
  * defer_invoice_booking): the accounts are judged when the invoice is booked.
+ * The inbox conversion's dry run (lib/operations/inbox-convert.ts) previews
+ * its registration here too, over the row its commit inserts.
  */
-async function previewRegistrationVerifikat(
+export async function previewRegistrationVerifikat(
   ctx: CreateSupplierInvoiceContext,
   args: {
     header: SupplierInvoice

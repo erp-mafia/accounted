@@ -47,6 +47,15 @@ const RUN = {
   calculation_params: {},
 }
 
+/**
+ * The read of the run a correction run corrects, when the run is one: the
+ * declaration walks the chain to find the late days carried to it
+ * (lib/salary/late-days.ts).
+ */
+function correctedRunRead(run: Record<string, unknown>): { data?: unknown }[] {
+  return run.corrects_run_id ? [{ data: { id: run.corrects_run_id, corrects_run_id: null } }] : []
+}
+
 const COMPANY = { name: 'Test AB', org_number: '556123-4567', entity_type: 'aktiebolag' }
 const SETTINGS = {
   company_name: 'Test AB',
@@ -104,6 +113,7 @@ function enqueueHappyPath(
     { data: PROFILE }, // profiles select
     { data: roster }, // salary_run_employees select
     { data: [] }, // salary_absence_days select
+    { data: [] }, // salary_absence_days: late days carried to the run
     { data: null }, // agi_declarations maybeSingle (first generation)
     { data: [] }, // salary_runs: no other live run paid out in the month
     { data: { id: 'agi-1' } }, // agi_declarations insert
@@ -160,6 +170,7 @@ describe('generateAgiDeclaration: a stale run', () => {
       { data: PROFILE },
       { data: [{ ...REGULAR_ROW, calculation_breakdown: null }] },
       { data: [] }, // salary_absence_days
+      { data: [] }, // salary_absence_days: late days carried to the run
       { data: null }, // agi_declarations maybeSingle
       { data: [] }, // salary_runs: no other live run paid out in the month
       { data: { id: 'agi-1' } }, // agi_declarations insert
@@ -184,6 +195,7 @@ describe('generateAgiDeclaration: kontaktperson (agent feedback seq 948847)', ()
       { data: PROFILE },
       { data: [REGULAR_ROW] },
       { data: [] }, // salary_absence_days
+      { data: [] }, // salary_absence_days: late days carried to the run
       { data: null }, // agi_declarations maybeSingle
       { data: [] }, // salary_runs: no other live run paid out in the month
       { data: { id: 'agi-1' } }, // agi_declarations insert
@@ -255,6 +267,7 @@ describe('generateAgiDeclaration: the identity it files under', () => {
       { data: PROFILE },
       { data: [REGULAR_ROW] },
       { data: [] }, // salary_absence_days
+      { data: [] }, // salary_absence_days: late days carried to the run
       { data: null }, // agi_declarations maybeSingle
       { data: [] }, // salary_runs: no other live run paid out in the month
       { data: { id: 'agi-1' } }, // agi_declarations insert
@@ -315,6 +328,7 @@ describe('generateAgiDeclaration: redovisningsperiod follows the payout month (#
       { data: PROFILE },
       { data: [REGULAR_ROW] },
       { data: [] }, // salary_absence_days
+      { data: [] }, // salary_absence_days: late days carried to the run
       { data: null }, // agi_declarations maybeSingle (first generation)
       { data: [] }, // salary_runs: no other live run paid out in the month
       { data: { id: 'agi-1' } }, // agi_declarations insert
@@ -347,7 +361,8 @@ describe('generateAgiDeclaration: redovisningsperiod follows the payout month (#
       { data: SETTINGS },
       { data: PROFILE },
       { data: [REGULAR_ROW] },
-      { data: [] },
+      { data: [] }, // salary_absence_days
+      { data: [] }, // salary_absence_days: late days carried to the run
       { data: { id: 'agi-other', salary_run_id: 'run-2' } }, // 202609 already declared by run-2
       { data: { id: 'run-2', status: 'booked', period_year: 2026, period_month: 9 } },
     ])
@@ -370,7 +385,9 @@ describe('generateAgiDeclaration: redovisningsperiod follows the payout month (#
       { data: SETTINGS },
       { data: PROFILE },
       { data: [REGULAR_ROW] },
-      { data: [] },
+      { data: { id: 'run-0', corrects_run_id: null } }, // salary_runs: the run it corrects
+      { data: [] }, // salary_absence_days
+      { data: [] }, // salary_absence_days: late days carried to the run
       { data: { id: 'agi-0', salary_run_id: 'run-0', status: 'generated', submitted_at: null } }, // declared by the run this one corrects
       { data: [] }, // salary_runs: no other live run paid out in the month
       { data: [{ id: 'agi-0' }] }, // agi_declarations update
@@ -400,7 +417,9 @@ describe('generateAgiDeclaration: a correction run starts its declaration unfile
       { data: SETTINGS },
       { data: PROFILE },
       { data: [REGULAR_ROW] },
+      ...correctedRunRead(run),
       { data: [] }, // salary_absence_days
+      { data: [] }, // salary_absence_days: late days carried to the run
       { data: stored }, // agi_declarations for the period
       { data: [] }, // salary_runs: no other live run paid out in the month
       { data: [{ id: stored.id }] }, // agi_declarations update
@@ -1266,6 +1285,7 @@ describe('generateAgiDeclaration: växa-stöd never reaches the IU (Lag 2025:133
       { data: PROFILE },
       { data: roster },
       { data: [] }, // salary_absence_days
+      { data: [] }, // salary_absence_days: late days carried to the run
       { data: null }, // agi_declarations maybeSingle (first generation)
       { data: [] }, // salary_runs: no other live run paid out in the month
       { data: { id: 'agi-1' } }, // agi_declarations insert
@@ -1600,6 +1620,7 @@ describe('generateAgiDeclaration: writeOnlyIfChanged (submit-time regeneration, 
       { data: PROFILE },
       { data: [REGULAR_ROW] },
       { data: [] }, // salary_absence_days
+      { data: [] }, // salary_absence_days: late days carried to the run
       { data: stored }, // agi_declarations for the period
       { data: [] }, // salary_runs: no other live run paid out in the month
       { data: [{ id: 'agi-1' }] }, // agi_declarations update
@@ -1701,7 +1722,8 @@ describe('generateAgiDeclaration: regionalt stöd (PH 208)', () => {
       { data: SETTINGS },
       { data: PROFILE },
       { data: roster },
-      { data: [] },
+      { data: [] }, // salary_absence_days
+      { data: [] }, // salary_absence_days: late days carried to the run
       { data: null },
       { data: [] }, // salary_runs: no other live run paid out in the month
       { data: { id: 'agi-1' } },
@@ -1774,7 +1796,9 @@ describe('generateAgiDeclaration: a filed declaration is never rewritten (#58)',
       { data: SETTINGS },
       { data: PROFILE },
       { data: [REGULAR_ROW] },
+      ...correctedRunRead(run),
       { data: [] }, // salary_absence_days
+      { data: [] }, // salary_absence_days: late days carried to the run
       ...afterAbsence,
     ])
   }
@@ -1804,6 +1828,7 @@ describe('generateAgiDeclaration: a filed declaration is never rewritten (#58)',
       { data: PROFILE },
       { data: [{ ...REGULAR_ROW, calculation_breakdown: null }] },
       { data: [] }, // salary_absence_days
+      { data: [] }, // salary_absence_days: late days carried to the run
       { data: FILED_ROW },
     ])
 
@@ -1879,6 +1904,7 @@ describe('generateAgiDeclaration: unreadable state refuses instead of writing (#
       { data: PROFILE },
       { data: [REGULAR_ROW] },
       absence,
+      { data: [] }, // salary_absence_days: late days carried to the run
       ...rest,
     ])
   }
@@ -1951,6 +1977,7 @@ describe('generateAgiDeclaration: every write compares and sets (#58)', () => {
       { data: PROFILE },
       { data: [REGULAR_ROW] },
       { data: [] }, // salary_absence_days
+      { data: [] }, // salary_absence_days: late days carried to the run
       ...rest,
     ])
   }
@@ -2099,7 +2126,9 @@ describe('generateAgiDeclaration: another live run paid out in the same month (c
       { data: SETTINGS },
       { data: PROFILE },
       { data: [REGULAR_ROW] },
+      ...correctedRunRead(run),
       { data: [] }, // salary_absence_days
+      { data: [] }, // salary_absence_days: late days carried to the run
       ...rest,
     ])
   }
@@ -2244,5 +2273,291 @@ describe('generateAgiDeclaration: another live run paid out in the same month (c
 
     expect(result).toMatchObject({ ok: false, code: 'DATABASE_ERROR' })
     expectNothingWritten(db)
+  })
+})
+
+describe('generateAgiDeclaration: late days carried to the run (TB 1.1.18.2, 5.6)', () => {
+  /** A June run (window June): the late days are May's, carried to it. */
+  function enqueueWithAbsence(
+    enqueueMany: (results: { data?: unknown; error?: unknown }[]) => void,
+    run: Record<string, unknown>,
+    windowRows: unknown,
+    lateRows: { data?: unknown; error?: unknown },
+  ) {
+    enqueueMany([
+      { data: run },
+      { data: COMPANY },
+      { data: SETTINGS },
+      { data: PROFILE },
+      { data: [REGULAR_ROW] },
+      ...correctedRunRead(run),
+      { data: windowRows }, // salary_absence_days: the window
+      lateRows, // salary_absence_days: late days carried to the run
+      { data: null }, // agi_declarations maybeSingle
+      { data: [] }, // salary_runs: no other live run paid out in the month
+      { data: [] }, // agi_kvittenser: the month has no kvittens
+      { data: [] }, // salary_runs: no run of the month is filed
+      { data: { id: 'agi-1' } }, // agi_declarations insert
+      { data: null }, // salary_runs update
+    ])
+  }
+
+  const day = (date: string, specnr: number, extra: Record<string, unknown> = {}) => ({
+    employee_id: REGULAR_ROW.employee_id,
+    absence_date: date,
+    absence_type: 'parental',
+    hours: 8,
+    franvaro_specifikationsnummer: specnr,
+    carried_to_run_id: null,
+    ...extra,
+  })
+
+  function franvaroDates(xml: string): string[] {
+    return [...xml.matchAll(/<gem:FranvaroDatum faltkod="821">([^<]+)<\/gem:FranvaroDatum>/g)].map((m) => m[1])
+  }
+
+  it('declares the late days the run deducts, next to its own, and none carried to another run', async () => {
+    const { supabase, enqueueMany, findCalls } = createQueuedMockSupabase()
+    enqueueWithAbsence(
+      enqueueMany,
+      RUN,
+      [
+        day('2026-06-02', 1),
+        // In June's window but carried to a later run: that run declares it.
+        day('2026-06-03', 2, { carried_to_run_id: 'run-7' }),
+      ],
+      { data: [day('2026-05-28', 1, { carried_to_run_id: 'run-1' }), day('2026-05-29', 2, { carried_to_run_id: 'run-1' })] },
+    )
+
+    const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(franvaroDates(result.xml).sort()).toEqual(['2026-05-28', '2026-05-29', '2026-06-02'])
+    // The late read asks for the days carried to this run.
+    expect(findCalls('salary_absence_days', 'in')).toContainEqual(['carried_to_run_id', ['run-1']])
+  })
+
+  it('a correction run declares the late days carried to the run it corrects', async () => {
+    const { supabase, enqueueMany, findCalls } = createQueuedMockSupabase()
+    enqueueWithAbsence(
+      enqueueMany,
+      { ...RUN, is_correction: true, corrects_run_id: 'run-0' },
+      [],
+      { data: [day('2026-05-28', 1, { carried_to_run_id: 'run-0' })] },
+    )
+
+    const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(franvaroDates(result.xml)).toEqual(['2026-05-28'])
+    expect(findCalls('salary_absence_days', 'in')).toContainEqual(['carried_to_run_id', ['run-1', 'run-0']])
+  })
+
+  it('refuses when the late days cannot be read, instead of filing without their frånvarouppgifter', async () => {
+    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    enqueueWithAbsence(enqueueMany, RUN, [], { error: { message: 'timeout' } })
+
+    const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+
+    expect(result).toMatchObject({ ok: false, code: 'DATABASE_ERROR' })
+    expect(findCall('agi_declarations', 'insert')).toBeUndefined()
+  })
+})
+
+describe("generateAgiDeclaration: a filed month's rättelse carries no frånvarouppgift (Kontroller ba_824)", () => {
+  // "Frånvarouppgifter får inte finnas för RedovisningsPeriod, FK006, där
+  // första deklaration redan har skickats in" (Skatteverket, Bilaga Kontroller
+  // 1.1.18.1, ba_824), a Bearbetningskontroll: a file that breaks it is not
+  // uploaded at all (Teknisk beskrivning 1.1.18.2, 12.5.1). Frånvarouppgifter
+  // go in with the period's first declaration only (TB 1.1.18.2, 3 and 9.3).
+  /** A VAB day in June's window: the original declared it, the correction reads it again. */
+  const VAB_DAY = {
+    employee_id: REGULAR_ROW.employee_id,
+    absence_date: '2026-06-02',
+    absence_type: 'vab',
+    hours: 8,
+    franvaro_specifikationsnummer: 1,
+    carried_to_run_id: null,
+  }
+  const CORRECTION = { ...RUN, status: 'booked', is_correction: true, corrects_run_id: 'run-0' }
+
+  function enqueueCorrection(
+    enqueueMany: (results: { data?: unknown; error?: unknown }[]) => void,
+    stored: Record<string, unknown>,
+    filingReads: { data?: unknown; error?: unknown }[],
+    run: Record<string, unknown> = CORRECTION,
+    day: Record<string, unknown> = VAB_DAY,
+  ) {
+    enqueueMany([
+      { data: run },
+      { data: COMPANY },
+      { data: SETTINGS },
+      { data: PROFILE },
+      { data: [REGULAR_ROW] },
+      ...correctedRunRead(run),
+      { data: [day] }, // salary_absence_days: the window
+      { data: [] }, // salary_absence_days: late days carried to the run
+      { data: stored }, // agi_declarations for the period
+      { data: [] }, // salary_runs: no other live run paid out in the month
+      ...filingReads, // agi_kvittenser and salary_runs: is the month filed?
+      { data: [{ id: stored.id }] }, // agi_declarations update
+      { data: null }, // salary_runs agi_generated_at stamp
+    ])
+  }
+
+  const franvarouppgifter = (xml: string) => xml.split('<gem:Franvarouppgift>').length - 1
+  const NOT_FILED = [{ data: [] }, { data: [] }]
+
+  it('leaves the frånvarouppgift out of a correction that takes over the filed row of the run it corrects', async () => {
+    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    enqueueCorrection(
+      enqueueMany,
+      { id: 'agi-0', salary_run_id: 'run-0', status: 'submitted', submitted_at: '2026-07-09T08:30:00Z' },
+      [], // the row's own receipt answers: nothing more is read
+    )
+
+    const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+
+    expect(result).toMatchObject({ ok: true, isCorrection: true })
+    if (!result.ok) return
+    expect(franvarouppgifter(result.xml)).toBe(0)
+    // The rättelse still carries the employee's IU, and that is what is stored.
+    expect(iuBlockFor(result.xml, '199001011234')).toContain('<gem:AvdrPrelSkatt faltkod="001">12000</gem:AvdrPrelSkatt>')
+    expect(findCall('agi_declarations', 'update')).toEqual([expect.objectContaining({ xml_content: result.xml })])
+    expect(findCall('agi_kvittenser', 'select')).toBeUndefined()
+  })
+
+  it("leaves it out once the correction holds the row, when Skatteverket's kvittens for the month is on record", async () => {
+    const { supabase, enqueueMany, findCalls } = createQueuedMockSupabase()
+    // Lön i efterskott: May's pay, paid out 25 June, is declared in 202606.
+    enqueueCorrection(
+      enqueueMany,
+      { id: 'agi-0', salary_run_id: 'run-1', status: 'generated', submitted_at: null },
+      [{ data: [{ id: 'kvittens-1' }] }, { data: [] }],
+      { ...CORRECTION, period_month: 5 },
+      { ...VAB_DAY, absence_date: '2026-05-12' },
+    )
+
+    const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+
+    expect(result).toMatchObject({ ok: true, periodYear: 2026, periodMonth: 6 })
+    if (!result.ok) return
+    expect(franvarouppgifter(result.xml)).toBe(0)
+    // The filing asked for is the redovisningsperiod's, the payout month, not May.
+    expect(findCalls('agi_kvittenser', 'eq')).toEqual([
+      ['company_id', 'company-1'],
+      ['period_year', 2026],
+      ['period_month', 6],
+    ])
+    expect(findCalls('salary_runs', 'gte')).toContainEqual(['payment_date', '2026-06-01'])
+    expect(findCalls('salary_runs', 'lte')).toContainEqual(['payment_date', '2026-06-30'])
+  })
+
+  it('leaves it out when a run of the month carries the filing stamp, even with no kvittens row', async () => {
+    const { supabase, enqueueMany, findCalls } = createQueuedMockSupabase()
+    enqueueCorrection(
+      enqueueMany,
+      { id: 'agi-0', salary_run_id: 'run-1', status: 'generated', submitted_at: null },
+      [{ data: [] }, { data: [{ period_year: 2026, period_month: 6, payment_date: '2026-06-25' }] }],
+    )
+
+    const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(franvarouppgifter(result.xml)).toBe(0)
+    expect(findCalls('salary_runs', 'not')).toContainEqual(['agi_submitted_at', 'is', null])
+  })
+
+  it.each(['generated', 'pending_signature', 'rejected'])(
+    "keeps it in a correction of a month not filed yet (the original's declaration %s): the correction files the month's first",
+    async (status) => {
+      const { supabase, enqueueMany } = createQueuedMockSupabase()
+      enqueueCorrection(enqueueMany, { id: 'agi-0', salary_run_id: 'run-0', status, submitted_at: null }, NOT_FILED)
+
+      const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(franvarouppgifter(result.xml)).toBe(1)
+      expect(result.xml).toContain('<gem:FranvaroDatum faltkod="821">2026-06-02</gem:FranvaroDatum>')
+    },
+  )
+
+  it("refuses when the month's filing cannot be read, instead of guessing which declaration this is", async () => {
+    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    enqueueCorrection(
+      enqueueMany,
+      { id: 'agi-0', salary_run_id: 'run-0', status: 'generated', submitted_at: null },
+      [{ error: { message: 'timeout' } }, { data: [] }],
+    )
+
+    const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+
+    expect(result).toMatchObject({ ok: false, code: 'DATABASE_ERROR' })
+    expect(findCall('agi_declarations', 'update')).toBeUndefined()
+  })
+
+  it('reads no filing for a run with no frånvarouppgift to leave out', async () => {
+    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    enqueueHappyPath(enqueueMany, [REGULAR_ROW])
+
+    const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+
+    expect(result.ok).toBe(true)
+    expect(findCall('agi_kvittenser', 'select')).toBeUndefined()
+  })
+
+  it('reads no filing for the day of a removed employee: a borttag IU carries no frånvarouppgift', async () => {
+    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: RUN },
+      { data: COMPANY },
+      { data: SETTINGS },
+      { data: PROFILE },
+      { data: [{ ...REGULAR_ROW, removed_from_agi: true }] },
+      { data: [VAB_DAY] }, // salary_absence_days: the window
+      { data: [] }, // salary_absence_days: late days carried to the run
+      { data: null }, // agi_declarations maybeSingle (first generation)
+      { data: [] }, // salary_runs: no other live run paid out in the month
+      { data: { id: 'agi-1' } }, // agi_declarations insert
+      { data: null }, // salary_runs update (agi_generated_at stamp)
+    ])
+
+    const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(franvarouppgifter(result.xml)).toBe(0)
+    expect(result.xml).toContain('<gem:Borttag faltkod="205">1</gem:Borttag>')
+    expect(findCall('agi_kvittenser', 'select')).toBeUndefined()
+  })
+
+  it('reads no filing for a period before 202501, which takes no frånvarouppgift at all (Kontroller ba_820)', async () => {
+    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: { ...RUN, period_year: 2024, period_month: 12, payment_date: '2024-12-20' } },
+      { data: COMPANY },
+      { data: SETTINGS },
+      { data: PROFILE },
+      { data: [REGULAR_ROW] },
+      { data: [{ ...VAB_DAY, absence_date: '2024-12-02' }] }, // salary_absence_days: the window
+      { data: [] }, // salary_absence_days: late days carried to the run
+      { data: null }, // agi_declarations maybeSingle (first generation)
+      { data: [] }, // salary_runs: no other live run paid out in the month
+      { data: { id: 'agi-1' } }, // agi_declarations insert
+      { data: null }, // salary_runs update (agi_generated_at stamp)
+    ])
+
+    const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+
+    expect(result).toMatchObject({ ok: true, periodYear: 2024, periodMonth: 12 })
+    if (!result.ok) return
+    expect(franvarouppgifter(result.xml)).toBe(0)
+    // No lookup, so none can fail and refuse the declaration.
+    expect(findCall('agi_kvittenser', 'select')).toBeUndefined()
+    expect(findCall('agi_declarations', 'insert')).toEqual([expect.objectContaining({ xml_content: result.xml })])
   })
 })

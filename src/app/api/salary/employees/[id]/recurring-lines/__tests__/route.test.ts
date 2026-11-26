@@ -9,6 +9,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import { createQueuedMockSupabase, createMockRequest, parseJsonResponse } from '@/tests/helpers'
 
+// Route path ids are uuids: the route answers its 404 to anything else before it reads.
+const EMP_1 = 'fcd49043-9489-5813-aacd-a04b3e121e68'
+
 const { supabase, enqueue, reset } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
@@ -36,10 +39,10 @@ vi.mock('@/lib/salary/invalidate-calculation', async (original) => ({
   invalidateRunCalculation: vi.fn(async () => null),
 }))
 
-const params = { params: Promise.resolve({ id: 'emp-1' }) } as never
+const params = { params: Promise.resolve({ id: EMP_1 }) } as never
 
 function post(body: unknown) {
-  return createMockRequest('/api/salary/employees/emp-1/recurring-lines', { method: 'POST', body })
+  return createMockRequest(`/api/salary/employees/${EMP_1}/recurring-lines`, { method: 'POST', body })
 }
 
 const validLine = {
@@ -79,7 +82,7 @@ describe('POST /api/salary/employees/[id]/recurring-lines', () => {
   })
 
   it('creates a recurring line (happy path)', async () => {
-    enqueue({ data: { id: 'emp-1' } }) // employee ownership check
+    enqueue({ data: { id: EMP_1 } }) // employee ownership check
     enqueue({ data: { id: 'line-1', item_type: 'gross_deduction_other', amount: -670.17 } }) // insert
 
     const response = await POST(post(validLine), params)
@@ -152,7 +155,7 @@ describe('POST /api/salary/employees/[id]/recurring-lines', () => {
     })
 
     it('accepts valid_to equal to valid_from (the bound is inclusive)', async () => {
-      enqueue({ data: { id: 'emp-1' } })
+      enqueue({ data: { id: EMP_1 } })
       enqueue({ data: { id: 'line-1' } })
 
       const response = await POST(
@@ -163,7 +166,7 @@ describe('POST /api/salary/employees/[id]/recurring-lines', () => {
     })
 
     it('accepts an omitted valid_to (open-ended line stays legal)', async () => {
-      enqueue({ data: { id: 'emp-1' } })
+      enqueue({ data: { id: EMP_1 } })
       enqueue({ data: { id: 'line-1' } })
 
       const response = await POST(post(validLine), params)
@@ -172,7 +175,7 @@ describe('POST /api/salary/employees/[id]/recurring-lines', () => {
   })
 
   it('maps a check_violation from the insert to 400, not 500', async () => {
-    enqueue({ data: { id: 'emp-1' } })
+    enqueue({ data: { id: EMP_1 } })
     enqueue({ data: null, error: { code: '23514', message: 'violates check constraint' } })
 
     const response = await POST(post(validLine), params)
@@ -180,7 +183,7 @@ describe('POST /api/salary/employees/[id]/recurring-lines', () => {
   })
 
   it('still reports a genuine DB failure as 500', async () => {
-    enqueue({ data: { id: 'emp-1' } })
+    enqueue({ data: { id: EMP_1 } })
     enqueue({ data: null, error: { code: '08006', message: 'connection failure' } })
 
     const response = await POST(post(validLine), params)
@@ -221,7 +224,7 @@ describe('POST /api/salary/employees/[id]/recurring-lines: text rows', () => {
 
   it('creates a text row with no amount: amount 0, no account, words normalised (201)', async () => {
     const { enqueue: enqueueOwn, findCall } = authedWithCalls()
-    enqueueOwn({ data: { id: 'emp-1' } }) // employee ownership check
+    enqueueOwn({ data: { id: EMP_1 } }) // employee ownership check
     enqueueOwn({ data: { id: 'line-text', item_type: 'text', amount: 0 } }) // insert
 
     const response = await POST(
@@ -233,7 +236,7 @@ describe('POST /api/salary/employees/[id]/recurring-lines: text rows', () => {
     expect(status).toBe(201)
     expect(body.data.id).toBe('line-text')
     expect(findCall('employee_recurring_lines', 'insert')?.[0]).toMatchObject({
-      employee_id: 'emp-1',
+      employee_id: EMP_1,
       company_id: 'company-1',
       item_type: 'text',
       description: 'Grundlön 40 000 kr + personligt tillägg 2 000 kr',
@@ -244,7 +247,7 @@ describe('POST /api/salary/employees/[id]/recurring-lines: text rows', () => {
 
   it('accepts an explicit 0 on a text row', async () => {
     const { enqueue: enqueueOwn } = authedWithCalls()
-    enqueueOwn({ data: { id: 'emp-1' } })
+    enqueueOwn({ data: { id: EMP_1 } })
     enqueueOwn({ data: { id: 'line-text' } })
     const response = await POST(post({ ...textLine, amount: 0 }), params)
     expect(response.status).toBe(201)

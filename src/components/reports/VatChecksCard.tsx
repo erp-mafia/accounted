@@ -2,7 +2,7 @@
 
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { useEffect, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { HelpPopover } from '@/components/ui/help-popover'
@@ -133,7 +133,6 @@ export function VatChecksCard({
   rcBasisAdvisory?: boolean
   onReviewsChanged?: () => void
 }) {
-  const router = useRouter()
   const t = useTranslations('reports')
   const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
@@ -326,11 +325,8 @@ export function VatChecksCard({
       title: `Verifikation ${formatVoucher({ voucher_series: gap.voucherSeries, voucher_number: gap.voucherNumber })} korrigerad`,
       description: 'Storno + ny verifikation skapad.',
       action: correctedId ? (
-        <ToastAction
-          altText="Visa verifikat"
-          onClick={() => router.push(`/bookkeeping/${correctedId}`)}
-        >
-          Visa verifikat
+        <ToastAction altText="Visa verifikat" asChild>
+          <Link href={`/bookkeeping/${correctedId}`}>Visa verifikat</Link>
         </ToastAction>
       ) : undefined,
     })

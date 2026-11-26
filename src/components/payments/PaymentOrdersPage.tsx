@@ -370,11 +370,11 @@ export function PaymentOrdersPage() {
       )
     }
     // The step by state (lib/payments/orders/readiness verificationStep): a
-    // form this page opened is opened again; one with the firmatecknare is
-    // waited for; one opened elsewhere, or none, gets a fresh link.
+    // form this page opened is opened again; one opened elsewhere or handed
+    // to a firmatecknare, or none, gets a fresh link.
     const step = verificationStep(verification.state, { formAtHand: verificationUrl !== null })
     const action =
-      verificationBusy || step === 'wait' || step === 'none'
+      verificationBusy || step === 'none'
         ? undefined
         : step === 'open_form' && verificationUrl
           ? { label: t('verification_open_form'), onClick: () => window.open(verificationUrl, '_blank', 'noopener,noreferrer') }

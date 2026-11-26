@@ -53,6 +53,21 @@ describe('foreignKeyRefusal', () => {
     })
   })
 
+  it('refuses to delete a draft run late days are carried to, for both registers, in Swedish for the dashboard', () => {
+    for (const [constraint, table] of [
+      ['salary_absence_days_carried_to_run_fkey', 'salary_absence_days'],
+      ['salary_worked_days_carried_to_run_fkey', 'salary_worked_days'],
+    ]) {
+      const refused = refusedDelete('salary_runs', constraint, table)
+      expect(foreignKeyRefusal(refused)).toMatchObject({
+        code: 'SALARY_RUN_DELETE_BLOCKED_BY_LATE_DAYS',
+        register: 'late_days',
+        referencedBy: table,
+      })
+      expect(getErrorMessage(refused)).toContain('sent kända dagar')
+    }
+  })
+
   it('gives an unmapped refused delete the general code and names the referencing table', () => {
     expect(foreignKeyRefusal(UNMAPPED)).toMatchObject({
       code: 'RECORD_STILL_REFERENCED',

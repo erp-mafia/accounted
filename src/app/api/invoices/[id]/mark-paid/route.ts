@@ -1,4 +1,4 @@
-import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
+import { isKronorCurrency, sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import { carriedSekOf, paidOfClearedSek } from '@/lib/bookkeeping/ledger-carried-sek'
 import { NextResponse } from 'next/server'
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
@@ -10,6 +10,7 @@ import { deriveCustomerSettlementAmount } from '@/lib/invoices/apply-invoice-pay
 import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplicate-payment-candidates'
 import { invoicePayableRefusal } from '@/lib/invoices/invoice-payable'
 import { settleInvoicePayment } from '@/lib/invoices/settle-invoice-payment'
+import { planSaleBeforeSettlement } from '@/lib/invoices/sale-first'
 import { resolveInvoicePaymentAccount } from '@/lib/invoices/invoice-payee'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { sessionFailureResponse } from '@/lib/operations/session'
@@ -376,4 +377,53 @@ export const POST = withRouteContext(
     })
   },
   { requireWrite: true },
+)
+
+/**
+ * GET /api/invoices/[id]/mark-paid
+ *
+ * What a payment of this invoice clears on 1510, for the rows
+ * PaymentBookingDialog proposes: `carried_sek`, or null when the remaining is
+ * what it clears. An invoice the payment books the sale of first
+ * (defer_invoice_booking, lib/invoices/sale-first.ts) clears what that sale
+ * leaves on 1510, which the ledger does not carry yet, so the dialog cannot
+ * read it there: a sale that books the öresavrundning leaves the rounded "Att
+ * betala", and rows at the reskontra's öre total are refused. That figure for
+ * a kronor invoice, as settleInvoicePayment plans the rows; carriedSekOf for
+ * every other invoice. Reads only. A sale the Bokför step would refuse
+ * answers carriedSekOf: the payment itself is refused with the Bokför code.
+ */
+export const GET = withRouteContext(
+  'invoice.mark_paid_carried',
+  async (_request, ctx, { params }: { params: Promise<{ id: string }> }) => {
+    const { id } = await params
+    const { user, supabase, companyId, log, requestId } = ctx
+    const opLog = log.child({ invoiceId: id })
+
+    const { data: invoice, error } = await supabase
+      .from('invoices')
+      .select('id, currency, total, paid_amount, remaining_amount, journal_entry_id, document_type, credited_invoice_id')
+      .eq('id', id)
+      .eq('company_id', companyId)
+      .single()
+    if (error || !invoice) {
+      return errorResponseFromCode('INVOICE_PAID_NOT_FOUND', opLog, { requestId })
+    }
+
+    // A foreign invoice clears what the ledger carries whether or not its sale
+    // is booked first, so only a kronor invoice needs the plan.
+    if (!isKronorCurrency(invoice.currency)) {
+      return NextResponse.json({ data: { carried_sek: await carriedSekOf(supabase, companyId, 'customer', invoice) } })
+    }
+    const salePlan = await planSaleBeforeSettlement({ supabase, companyId, userId: user.id, log: opLog }, invoice)
+    if (salePlan.ok && salePlan.required) {
+      return NextResponse.json({ data: { carried_sek: salePlan.receivableSek } })
+    }
+    // A concurrent Bokför booked the sale since the row was read: its null
+    // journal_entry_id is stale, so it is left unknown and carriedSekOf asks
+    // the ledger, as settleInvoicePayment does.
+    const bookedSince = salePlan.ok && salePlan.bookedSince === true && !invoice.journal_entry_id
+    const ledgerRow = bookedSince ? { ...invoice, journal_entry_id: undefined } : invoice
+    return NextResponse.json({ data: { carried_sek: await carriedSekOf(supabase, companyId, 'customer', ledgerRow) } })
+  },
 )

@@ -9,6 +9,7 @@
  * Mocks the three report generators (income statement, balance sheet, trial
  * balance, kassaflöde) so the test can plant deterministic inputs.
  */
+import { createHash } from 'node:crypto'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/reports/income-statement', () => ({
@@ -58,6 +59,7 @@ import multiYearSnapshot from './arsredovisning-k3-multiyear-snapshot.json'
 interface ChainableMock {
   from: ReturnType<typeof vi.fn>
   rpc: ReturnType<typeof vi.fn>
+  storage: { from: () => { download: (path: string) => Promise<unknown> } }
 }
 
 function makeSupabase(opts: {
@@ -84,8 +86,28 @@ function makeSupabase(opts: {
   equityEntries?: unknown[]
   /** The year's own row in fiscal_period_frameworks; absent means none (company default). */
   yearFramework?: { framework: 'k2' | 'k3'; source?: string; change_reason?: string | null }
+  /** sie_imports rows in place for the years asked about (balance-file-year.ts); none unless planted. */
+  sieImports?: unknown[]
+  /** The archived SIE files by storage path. */
+  sieFiles?: Record<string, string>
 }): ChainableMock {
   const from = vi.fn((table: string) => {
+    if (table === 'sie_imports') {
+      // whereSieImportInPlace(select().eq(company_id)).in(fiscal_period_id)
+      const query = {
+        select: () => query,
+        eq: () => query,
+        or: () => query,
+        in: (_column: string, ids: string[]) =>
+          Promise.resolve({
+            data: ((opts.sieImports ?? []) as Array<{ fiscal_period_id: string }>).filter((row) =>
+              ids.includes(row.fiscal_period_id),
+            ),
+            error: null,
+          }),
+      }
+      return query
+    }
     if (table === 'fiscal_period_frameworks' && opts.yearFramework) {
       return {
         select: () => ({
@@ -255,7 +277,15 @@ function makeSupabase(opts: {
         }
       : { data: null, error: { message: `unexpected rpc ${name}` } },
   )
-  return { from, rpc }
+  const storage = {
+    from: () => ({
+      download: async (path: string) =>
+        opts.sieFiles?.[path] !== undefined
+          ? { data: new Blob([opts.sieFiles[path]]), error: null }
+          : { data: null, error: { message: 'not found' } },
+    }),
+  }
+  return { from, rpc, storage }
 }
 
 const mockedIncomeStatement = vi.mocked(generateIncomeStatement)
@@ -2208,6 +2238,146 @@ describe('buildArsredovisningData: comparison year never closed in the books (cr
     expect(spec.previous?.derived).toBe(true)
     expect(spec.previous?.totals.movements).toEqual({ arets_resultat: 40_000 })
     expect(spec.integrity_issues).toEqual([])
+  })
+})
+
+describe('buildArsredovisningData: comparison year from an SIE balance file', () => {
+  // 2024 came in as a Fortnox saldofil: #IB, #UB and #RES, no #VER. The books
+  // hold its ingående balans and nothing else, so read from the books the
+  // comparison column would end where 2024 began. Its figures come from the
+  // file instead, the same as PREVIOUS (the year as booked elsewhere).
+  const TWO_YEARS = [
+    { id: 'fp1', name: '2025', period_start: '2025-01-01', period_end: '2025-12-31' },
+    { id: 'fp0', name: '2024', period_start: '2024-01-01', period_end: '2024-12-31' },
+  ]
+  const FILE = [
+    '#FLAGGA 0', '#PROGRAM "Fortnox" 3.0', '#SIETYP 4', '#FNAMN "Testbolaget AB"', '#RAR 0 20240101 20241231',
+    '#KONTO 1220 "Inventarier"', '#KONTO 1229 "Ack avskrivningar"', '#KONTO 1910 "Bank"',
+    '#KONTO 2081 "Aktiekapital"', '#KONTO 2091 "Balanserad vinst"', '#KONTO 2110 "Periodiseringsfond"',
+    '#KONTO 2440 "Leverantörsskulder"', '#KONTO 2510 "Skatteskulder"', '#KONTO 2610 "Utgående moms"',
+    '#KONTO 2941 "Upplupna sociala avgifter"', '#KONTO 3010 "Försäljning"', '#KONTO 4310 "Inköp"',
+    '#KONTO 5010 "Lokalhyra"', '#KONTO 7010 "Löner"', '#KONTO 7832 "Avskrivningar"',
+    '#KONTO 8410 "Räntekostnader"', '#KONTO 8910 "Skatt"',
+    '#IB 0 1910 85000.00', '#IB 0 2081 -25000.00', '#IB 0 2091 -60000.00',
+    '#UB 0 1220 80000.00', '#UB 0 1229 -12000.00', '#UB 0 1910 185000.00', '#UB 0 2081 -25000.00',
+    '#UB 0 2091 -60000.00', '#UB 0 2110 -30000.00', '#UB 0 2440 -25000.00', '#UB 0 2510 -15000.00',
+    '#UB 0 2610 -8000.00', '#UB 0 2941 -50000.00',
+    '#RES 0 3010 -500000.00', '#RES 0 4310 200000.00', '#RES 0 5010 80000.00', '#RES 0 7010 150000.00',
+    '#RES 0 7832 8000.00', '#RES 0 8410 2000.00', '#RES 0 8910 20000.00',
+  ].join('\n')
+  const HASH = createHash('sha256').update(FILE).digest('hex')
+  const PATH = `co1/sie-jobs/${HASH}.se`
+  const SOURCE_ACCOUNTS = ['1220', '1229', '1910', '2081', '2091', '2110', '2440', '2510', '2610', '2941',
+    '3010', '4310', '5010', '7010', '7832', '8410', '8910']
+  const IMPORT = {
+    id: 'imp0',
+    company_id: 'co1',
+    fiscal_period_id: 'fp0',
+    filename: 'saldo-2024.se',
+    job_state: 'completed',
+    // The import's own ingående balans verifikat.
+    transactions_count: 1,
+    file_storage_path: PATH,
+    file_hash: HASH,
+    manifest: {
+      input: {
+        sourceHash: HASH,
+        mappings: SOURCE_ACCOUNTS.map((account) => ({
+          sourceAccount: account, sourceName: account, targetAccount: account === '1910' ? '1930' : account,
+          targetName: account, confidence: 1, matchType: 'exact', isOverride: false,
+        })),
+      },
+    },
+  }
+  // The year's books: the import's ingående balans, no activity.
+  const IB_ONLY: TrialBalanceRow[] = [
+    ['1930', 'Bank', 85_000, 0],
+    ['2081', 'Aktiekapital', 0, 25_000],
+    ['2091', 'Balanserad vinst', 0, 60_000],
+  ].map(([account_number, account_name, debit, credit]) => ({
+    account_number: account_number as string,
+    account_name: account_name as string,
+    account_class: 1,
+    opening_debit: debit as number,
+    opening_credit: credit as number,
+    period_debit: 0,
+    period_credit: 0,
+    closing_debit: debit as number,
+    closing_credit: credit as number,
+  }))
+
+  beforeEach(() => {
+    mockFetchAllRows.mockResolvedValue(TWO_YEARS)
+    mockedTrialBalance.mockImplementation(async (_client, _companyId, periodId, opts) => ({
+      rows:
+        periodId === 'fp0'
+          ? IB_ONLY
+          : (opts.closingEntry === 'include' ? CURRENT.full : CURRENT.preClosing).map((r) => ({
+              ...r,
+              account_class: Number(r.account_number[0]),
+              opening_debit: 0,
+              opening_credit: 0,
+              period_debit: 0,
+              period_credit: 0,
+            })),
+      totalDebit: 0,
+      totalCredit: 0,
+      isBalanced: true,
+    }))
+  })
+
+  it("reads the comparison column from the file's closing balances and result, and says so", async () => {
+    const supabase = makeSupabase({
+      accountingFramework: 'k2', previousPeriodId: 'fp0', sieImports: [IMPORT], sieFiles: { [PATH]: FILE },
+    })
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+
+    expect(data.balansrakning.total_assets_previous).toBe(253_000)
+    expect(data.balansrakning.total_equity_liabilities_previous).toBe(253_000)
+    const equityRow = (key: string) =>
+      data.balansrakning.equity_liabilities.find((r) => r.semantic_key === key)
+    expect(equityRow('balance_sheet_current_year_result')).toMatchObject({ previous: 40_000 })
+    expect(equityRow('balance_sheet_equity_total')).toMatchObject({ previous: 125_000 })
+    expect(
+      data.resultatrakning.find((r) => r.semantic_key === 'income_statement_result'),
+    ).toMatchObject({ current: 120_000, previous: 40_000 })
+    expect(data.warnings).toContain(
+      "Räkenskapsåret 2024 har bara ingående balanser i Accounted, så dess belopp är hämtade ur den importerade SIE-filens utgående balanser och resultat (saldo-2024.se). Stäm av jämförelsesiffrorna mot föregående års fastställda årsredovisning.",
+    )
+  })
+
+  it('keeps the books when the year has no balance-file import in place', async () => {
+    const supabase = makeSupabase({ accountingFramework: 'k2', previousPeriodId: 'fp0' })
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+
+    expect(data.balansrakning.total_assets_previous).toBe(85_000)
+    expect(data.warnings.some((w) => w.includes('SIE-filen'))).toBe(false)
+  })
+
+  it('blocks the report when the archived file cannot be read', async () => {
+    const supabase = makeSupabase({ accountingFramework: 'k2', previousPeriodId: 'fp0', sieImports: [IMPORT] })
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+
+    expect(data.errors).toContain(
+      'Den importerade SIE-filen för räkenskapsåret 2024 (saldo-2024.se) kunde inte läsas, så årets jämförelsesiffror kan inte tas fram. Försök igen, och kontakta supporten om felet kvarstår.',
+    )
+  })
+
+  it("says why when the year's import cannot give its figures", async () => {
+    const supabase = makeSupabase({
+      accountingFramework: 'k2', previousPeriodId: 'fp0', sieImports: [IMPORT, { ...IMPORT, id: 'imp1' }],
+    })
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+
+    expect(data.balansrakning.total_assets_previous).toBe(85_000)
+    expect(data.errors).toBeUndefined()
+    expect(data.warnings).toContain(
+      'Räkenskapsåret 2024 har bara ingående balanser i Accounted, så dess belopp visar årets ingående balanser och ett resultat på 0 kr. Den importerade SIE-filen (saldo-2024.se, saldo-2024.se) kan inte användas i stället: flera importer ligger kvar för året. Bokför året eller importera det med verifikationer innan årsredovisningen lämnas in.',
+    )
   })
 })
 

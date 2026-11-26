@@ -262,7 +262,7 @@ describe('POST /api/invoices/[id]/convert-to-order', () => {
   })
 
   it('creates a draft order from the proforma, cancels the proforma and answers 201 with sales_order_id', async () => {
-    enqueue({ data: makeProforma() })
+    enqueue({ data: makeProforma({ invoice_marking: 'PO-4711' }) })
     enqueue({ data: null, count: 0 })
     enqueue({ data: makeOrderCustomer() })
     enqueue({ data: { id: IDS.order } }) // sales_orders insert
@@ -285,6 +285,8 @@ describe('POST /api/invoices/[id]/convert-to-order', () => {
       source_invoice_id: IDS.invoice,
       currency: 'SEK',
       your_reference: 'Anna',
+      // The buyer's Märkning travels with the agreement onto the order.
+      invoice_marking: 'PO-4711',
       notes: 'Enligt offert',
       subtotal: 1000,
       vat_amount: 250,
@@ -354,7 +356,7 @@ describe('POST /api/invoices/[id]/convert-to-order', () => {
     })
 
     it('creates a draft order from an open quote, marks the quote accepted (it stays) and answers 201', async () => {
-      enqueue({ data: makeQuote() })
+      enqueue({ data: makeQuote({ invoice_marking: 'PO-4711' }) })
       enqueue({ data: null, count: 0 }) // no live order
       enqueue({ data: null }) // no live converted invoice
       enqueue({ data: makeOrderCustomer() })
@@ -373,6 +375,9 @@ describe('POST /api/invoices/[id]/convert-to-order', () => {
       expect(findCall('sales_orders', 'insert')![0]).toMatchObject({
         customer_id: IDS.customer,
         source_invoice_id: IDS.invoice,
+        // The buyer's Märkning on the offert reaches the order, and through
+        // it every invoice the order produces.
+        invoice_marking: 'PO-4711',
         total: 1250,
       })
 

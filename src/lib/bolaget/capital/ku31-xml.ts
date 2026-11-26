@@ -127,7 +127,14 @@ export function fileOrgNumber(orgNumber10: string): string {
   return `16${orgNumber10}`
 }
 
-const EMAIL = /^[\wåäöÅÄÖ]+([-+.'_\wåäöÅÄÖ]+)*@[\wåäöÅÄÖ]+([-.][\wåäöÅÄÖ]+)*\.[\wåäöÅÄÖ]+([-.][\wåäöÅÄÖ]+)*$/
+/**
+ * The contact email's shape. The part before the @ is one letter, digit or _
+ * followed by any of those and - + . ': the same strings as
+ * `[\wåäöÅÄÖ]+([-+.'_\wåäöÅÄÖ]+)*`, written without a repetition inside a
+ * repetition, which could split a refused address in exponentially many ways
+ * and keep the check busy for minutes on a typo.
+ */
+const EMAIL = /^[\wåäöÅÄÖ][-+.'_\wåäöÅÄÖ]*@[\wåäöÅÄÖ]+([-.][\wåäöÅÄÖ]+)*\.[\wåäöÅÄÖ]+([-.][\wåäöÅÄÖ]+)*$/
 
 function textOk(value: string | null | undefined, max: number): value is string {
   return typeof value === 'string' && value.trim().length > 0 && value.length <= max
@@ -156,7 +163,7 @@ export function validateKuCommon(input: KuFileCommon, prefix: 'KU31' | 'KU20'): 
   }
   if (!/^\d{10}$/.test(input.payer_org_number) || !luhnValid(input.payer_org_number) || !isLegalPersonOrgNumber(input.payer_org_number)) {
     // OrganisationsnummerTYPE: 16 followed by a third digit 2-9 (a legal person), and the check digit.
-    push('PAYER_ORG_NUMBER', '201', 'Bolagets organisationsnummer saknas eller är ogiltigt. Kontrollera det under Inställningar, Företag.')
+    push('PAYER_ORG_NUMBER', '201', 'Bolagets organisationsnummer saknas eller är ogiltigt. Kontrollera det under Inställningar → Företaget → Företagsuppgifter.')
   }
   if (!textOk(input.payer_name, 50)) push('PAYER_NAME', '202', 'Bolagets namn saknas.')
   if (!textOk(input.contact.name, 50)) push('CONTACT_NAME', 'Kontaktperson.Namn', 'Ange kontaktpersonens namn (högst 50 tecken).')

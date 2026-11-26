@@ -298,4 +298,129 @@ describe('withRouteContext', () => {
     expect(res.status).toBe(200)
     expect(supabase.rpc).not.toHaveBeenCalled()
   })
+
+  describe('the tab company check', () => {
+    const post = (headers: Record<string, string>, path = '/api/test', method = 'POST') =>
+      new Request(`http://localhost${path}`, { method, headers })
+
+    it('runs a write whose tab company matches the active company', async () => {
+      const handler = vi.fn(async () => NextResponse.json({ ok: true }))
+      const route = withRouteContext('test.tab', handler)
+
+      const res = await route(post({ 'x-tab-company-id': 'company-1' }), EMPTY_PARAMS)
+
+      expect(res.status).toBe(200)
+      expect(handler).toHaveBeenCalledTimes(1)
+    })
+
+    it('refuses a write for another company with ACTIVE_COMPANY_CHANGED and runs nothing', async () => {
+      const handler = vi.fn(async () => NextResponse.json({ ok: true }))
+      const route = withRouteContext('test.tab', handler, { requireWrite: true })
+
+      const res = await route(post({ 'x-tab-company-id': 'company-2' }), EMPTY_PARAMS)
+      const body = (await res.json()) as { error: { code: string; requestId?: string } }
+
+      expect(res.status).toBe(409)
+      expect(body.error.code).toBe('ACTIVE_COMPANY_CHANGED')
+      expect(body.error.requestId).toMatch(/^req_/)
+      expect(res.headers.get('x-active-company-id')).toBe('company-1')
+      expect(handler).not.toHaveBeenCalled()
+      expect(requireWriteMock).not.toHaveBeenCalled()
+    })
+
+    it('runs a write without the header', async () => {
+      const handler = vi.fn(async () => NextResponse.json({ ok: true }))
+      const route = withRouteContext('test.tab', handler)
+
+      const res = await route(post({}), EMPTY_PARAMS)
+
+      expect(res.status).toBe(200)
+      expect(handler).toHaveBeenCalledTimes(1)
+    })
+
+    it('runs a GET that names another company', async () => {
+      const handler = vi.fn(async () => NextResponse.json({ ok: true }))
+      const route = withRouteContext('test.tab', handler)
+
+      const res = await route(post({ 'x-tab-company-id': 'company-2' }, '/api/test', 'GET'), EMPTY_PARAMS)
+
+      expect(res.status).toBe(200)
+      expect(handler).toHaveBeenCalledTimes(1)
+    })
+
+    it('never refuses the company switch', async () => {
+      const handler = vi.fn(async () => NextResponse.json({ ok: true }))
+      const route = withRouteContext('company.switch', handler)
+
+      const res = await route(post({ 'x-tab-company-id': 'company-2' }, '/api/company/switch'), EMPTY_PARAMS)
+
+      expect(res.status).toBe(200)
+      expect(handler).toHaveBeenCalledTimes(1)
+    })
+
+    it('answers an unauthenticated request without naming a company', async () => {
+      authState.user = null
+      const route = withRouteContext('test.tab', async () => NextResponse.json({ ok: true }))
+
+      const res = await route(post({ 'x-tab-company-id': 'company-2' }), EMPTY_PARAMS)
+
+      expect(res.status).toBe(401)
+      expect(res.headers.get('x-active-company-id')).toBeNull()
+    })
+  })
+
+  describe('the active company header', () => {
+    it('names the company on the handler response', async () => {
+      const route = withRouteContext('test.header', async () => NextResponse.json({ ok: true }))
+
+      const res = await route(new Request('http://localhost/api/test'), EMPTY_PARAMS)
+
+      expect(res.headers.get('x-active-company-id')).toBe('company-1')
+    })
+
+    it('names the company on a thrown error answer', async () => {
+      const route = withRouteContext('test.header', async () => {
+        throw new Error('boom')
+      })
+
+      const res = await route(new Request('http://localhost/api/test'), EMPTY_PARAMS)
+
+      expect(res.status).toBe(500)
+      expect(res.headers.get('x-active-company-id')).toBe('company-1')
+    })
+
+    it('names the company on a refusal after it is resolved', async () => {
+      requireWriteMock.mockResolvedValue({
+        ok: false,
+        response: NextResponse.json({ error: { code: 'FORBIDDEN' } }, { status: 403 }),
+      })
+      const route = withRouteContext('test.header', async () => NextResponse.json({ ok: true }), {
+        requireWrite: true,
+      })
+
+      const res = await route(new Request('http://localhost/api/test', { method: 'POST' }), EMPTY_PARAMS)
+
+      expect(res.status).toBe(403)
+      expect(res.headers.get('x-active-company-id')).toBe('company-1')
+    })
+
+    it('rebuilds a response that refuses the header, keeping status, headers and body', async () => {
+      const route = withRouteContext('test.header', async () => {
+        const upstream = new Response('streamed', { status: 202, headers: { 'X-Upstream': 'yes' } })
+        const set = upstream.headers.set.bind(upstream.headers)
+        vi.spyOn(upstream.headers, 'set').mockImplementation((name: string, value: string) => {
+          if (name.toLowerCase() === 'x-active-company-id') throw new TypeError('immutable')
+          set(name, value)
+        })
+        return upstream
+      })
+
+      const res = await route(new Request('http://localhost/api/test'), EMPTY_PARAMS)
+
+      expect(res.status).toBe(202)
+      expect(res.headers.get('x-upstream')).toBe('yes')
+      expect(res.headers.get('x-active-company-id')).toBe('company-1')
+      expect(await res.text()).toBe('streamed')
+    })
+  })
 })

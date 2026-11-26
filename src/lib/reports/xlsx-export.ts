@@ -193,8 +193,13 @@ export async function reportToWorkbook<_T = unknown>(spec: ReadonlyArray<SheetSp
   // `XLSX.write` with `type: 'buffer'` returns a Node Buffer. `bookType: 'csv'`
   // emits only the first sheet (CSV is single-sheet): fine for the flat,
   // single-sheet register exports that use this option.
+  //
+  // An xlsx is a zip of XML parts, and xlsx stores them uncompressed unless
+  // told otherwise, so a large huvudbok came out several times the size Excel
+  // writes. `compression` deflates the parts (CSV is not a zip and ignores
+  // it); the parts themselves, and so every cell, stay the same.
   const bookType = options.bookType ?? 'xlsx'
-  const out = XLSX.write(workbook, { type: 'buffer', bookType }) as Buffer
+  const out = XLSX.write(workbook, { type: 'buffer', bookType, compression: true }) as Buffer
   return out
 }
 

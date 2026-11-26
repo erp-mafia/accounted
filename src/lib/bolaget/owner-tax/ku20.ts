@@ -128,7 +128,7 @@ export async function loadKu20Status(ctx: OperationContext, year: number): Promi
     blockers.push({ code: 'KU20_CONTACT_MISSING', message_sv: 'Ange kontaktperson med namn, telefon och e-post under Kapital och utdelning, KU31 (samma kontaktperson gäller KU20).' })
   }
   const company = await companyIdentity(ctx)
-  if (!company.org_number) blockers.push({ code: 'KU20_PAYER_ORG_NUMBER', message_sv: 'Bolagets organisationsnummer saknas. Ange det under Inställningar, Företag.' })
+  if (!company.org_number) blockers.push({ code: 'KU20_PAYER_ORG_NUMBER', message_sv: 'Bolagets organisationsnummer saknas. Ange det under Inställningar → Företaget → Företagsuppgifter.' })
 
   return {
     income_year: year,

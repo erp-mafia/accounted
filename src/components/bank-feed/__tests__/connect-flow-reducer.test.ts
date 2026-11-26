@@ -4,8 +4,10 @@ import type { BankIdChallenge, ConnectionAttempt, ConnectionPoll, ConnectionView
 import { selectionBlocker } from '../account-selection'
 
 const SWEDBANK = { bic: 'SWEDSESS', name: 'Swedbank' }
-const SPARBANK = { id: '08999', name: 'Sparbanken Nord' }
-const DETAILS: OpenPaymentsBankDetails = { bic: 'SWEDSESS', name: 'Swedbank', decoupled: true, redirect: false, affiliates: [SPARBANK], transaction_history_max_days: 88, extended_transaction_history_max_days: 760 }
+const SPARBANK = { id: '08111', name: 'Sparbanken Nord' }
+// The provider lists Swedbank itself among the banks behind its BIC (08999), beside the sparbanker.
+const SWEDBANK_AFFILIATE = { id: '08999', name: 'Swedbank' }
+const DETAILS: OpenPaymentsBankDetails = { bic: 'SWEDSESS', name: 'Swedbank', decoupled: true, redirect: false, affiliates: [SPARBANK, SWEDBANK_AFFILIATE], transaction_history_max_days: 88, extended_transaction_history_max_days: 760 }
 const REDIRECT_BANK = { bic: 'REDIRSES', name: 'Redirect Bank', decoupled: false, redirect: true }
 const REDIRECT_CHALLENGE: BankIdChallenge = { approach: 'redirect', autostartToken: null, qrData: null, qrImage: null, redirectUrl: 'https://bank.example/sign' }
 
@@ -128,6 +130,20 @@ describe('the sparbank picker', () => {
     )
     expect(renewing.affiliate).toEqual(SPARBANK)
     expect(displayBankName(renewing)).toBe('Sparbanken Nord')
+  })
+
+  it("leaves Swedbank on its own row, not on the provider's Swedbank among the affiliates, which reaches no sparbank", () => {
+    const picked = run(openFlow('new'), { type: 'bank_picked', bank: SWEDBANK }, { type: 'bank_details_loaded', details: DETAILS })
+    expect(picked.affiliate).toBeNull()
+    // The row stays choosable: someone with accounts in Swedbank and a sparbank picks it.
+    expect(flowReducer(picked, { type: 'affiliate_picked', affiliate: SWEDBANK_AFFILIATE }).affiliate).toEqual(SWEDBANK_AFFILIATE)
+    // A renewal or a switch of a connection named Swedbank: the server keeps that connection's own choice.
+    const renewing = run(
+      openFlow('renew', { bank: { bic: '', name: 'Swedbank' }, replaceConnectionId: 'old' }),
+      { type: 'bank_resolved', bic: 'SWEDSESS' },
+      { type: 'bank_details_loaded', details: DETAILS },
+    )
+    expect(renewing.affiliate).toBeNull()
   })
 })
 

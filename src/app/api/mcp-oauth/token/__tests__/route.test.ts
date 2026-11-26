@@ -230,6 +230,20 @@ describe('POST /api/mcp-oauth/token', () => {
       expect(createKeyArgs(supabase).p_client).toBe('copilot')
     })
 
+    it("records native_app for an app's own reverse-domain scheme", async () => {
+      const redirectUri = 'se.example.dashboard:/oauth/callback'
+      vi.mocked(decryptAuthCode).mockReturnValue({ userId: 'user-1', codeChallenge: 'challenge', redirectUri, exp: Date.now() + 60_000 })
+      vi.mocked(verifyPkce).mockReturnValue(true)
+
+      const { supabase, enqueueMany } = createQueuedMockSupabase()
+      mocks.supabaseFactory.mockReturnValue(supabase)
+      enqueueMany(exchangeResults())
+
+      const res = await POST(formRequest({ ...codeExchange, redirect_uri: redirectUri }))
+      expect(res.status).toBe(200)
+      expect(createKeyArgs(supabase).p_client).toBe('native_app')
+    })
+
     it('stores client null for a redirect URI without a live registration', async () => {
       vi.mocked(decryptAuthCode).mockReturnValue({
         userId: 'user-1',

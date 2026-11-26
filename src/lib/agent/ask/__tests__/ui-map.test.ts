@@ -221,6 +221,24 @@ describe('renderUiGrounding: the menu', () => {
     expect(settingsNav.keywords_company).toContain(sv.company_switcher.add_company)
   })
 
+  // A user asked about Gör om migrering under Inställningar → Företag →
+  // Allmänt, and the assistant said no such function existed: the section's
+  // keywords named its Riskzon rows by words the page does not show. The
+  // app's own texts send people to "Gör om migrering under Riskzon".
+  it.each(['sv', 'en'] as const)('names the Riskzon rows on Företag by the labels the page shows (%s)', async (locale) => {
+    const messages = locale === 'en' ? en : sv
+    const page = messages.settings_company
+    const labels = [page.danger_heading, page.reset_row_label, page.danger_button]
+
+    const out = renderUiGrounding({ ctx: gateContext(), labels: await loadUiLabels(locale) })
+    const line = out.split('\n').find((l) => l.includes('(/settings/company):'))
+    for (const label of labels) expect(line).toContain(label)
+
+    // The settings search matches one comma-separated term at a time (SettingsRail).
+    const terms = messages.settings_nav.keywords_company.split(',').map((term) => term.trim())
+    expect(terms).toEqual(expect.arrayContaining(labels))
+  })
+
   it('names the add-company button by the English label for an English UI', async () => {
     const en = await loadUiLabels('en')
     const out = renderUiGrounding({ ctx: gateContext(), labels: en })

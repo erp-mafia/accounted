@@ -187,7 +187,7 @@ export function migrationRetrySeconds(failures: number): number {
 }
 
 /** Group internal failure codes into actionable, translated messages. */
-export function migrationIssueKind(code: string | null): 'connection' | 'access' | 'refused' | 'review' | 'lines' | 'size' | 'exists' | 'retry' {
+export function migrationIssueKind(code: string | null): 'connection' | 'access' | 'refused' | 'review' | 'lines' | 'size' | 'exists' | 'slow' | 'retry' {
   if (code === 'PROVIDER_AUTH_EXPIRED') return 'connection'
   // The provider refused part of the data on a connection that still works:
   // an invoice's detail or verifikat the token may not read stops the job
@@ -195,6 +195,11 @@ export function migrationIssueKind(code: string | null): 'connection' | 'access'
   // one (migration 20261005193815). A retry gets the same answer; the
   // remedy is a connection with the missing permission.
   if (code === 'PROVIDER_RESOURCE_FORBIDDEN') return 'refused'
+  // The provider did not answer in time. The worker tries a timeout again by
+  // itself like any other failure, so the job shows this code only once five
+  // claims in a row failed and it stopped: the sentence names the slow
+  // provider and the button that resumes the job (#3137).
+  if (code === 'PROVIDER_TIMEOUT') return 'slow'
   // A record with the same number already exists and differs. Resuming
   // repeats the same outcome, so never suggest a retry (23505 = unique_violation).
   if (code === 'MIGRATION_INVOICE_NUMBER_TAKEN' || code === '23505') return 'exists'

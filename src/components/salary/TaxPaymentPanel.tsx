@@ -74,9 +74,10 @@ interface TaxPaymentPanelProps {
    * period's due date: in payment or executed (GET
    * /api/skatteverket/tax-payments/{period}: bank_payment). Set, the panel
    * shows it, and leaves Betala via banken out when it pays the declaration
-   * (signed or executed, of the declaration's amount).
+   * (signed or executed, of the declaration's amount). One not signed
+   * (`signed` false: nothing pays it as it stands) reads Inte signerad.
    */
-  bankPayment?: { status: string; amount: number; requested_execution_date: string; pays_declaration: boolean } | null
+  bankPayment?: { status: string; amount: number; requested_execution_date: string; signed: boolean; pays_declaration: boolean } | null
   onChange?: () => void
 }
 
@@ -260,7 +261,11 @@ export function TaxPaymentPanel({
         {!taxPaidAt && bankPayment && (
           <DefRow label={t('tax_bank_payment')}>
             {t('tax_bank_payment_value', {
-              status: tb(`status_${bankPayment.status}`),
+              // One nothing pays as it stands (at the bank unsigned, claimed
+              // for signing, a BankID nobody finished) keeps the button
+              // beside it: by its status word it would read I betalning, as
+              // if the tax were being paid.
+              status: bankPayment.signed === false ? t('tax_bank_payment_not_signed') : tb(`status_${bankPayment.status}`),
               amount: formatCurrency(bankPayment.amount),
               date: formatDate(bankPayment.requested_execution_date),
             })}{' '}

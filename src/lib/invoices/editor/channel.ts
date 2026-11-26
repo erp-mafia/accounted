@@ -3,6 +3,7 @@ import { UNDECRYPTABLE_PERSONAL_NUMBER_MASK } from '@/lib/customers/mask-persona
 import { DIGITAL_MAILBOX_PROVIDERS, type DigitalMailboxProviderId } from '@/lib/digital-mailboxes/types'
 import { isLegalPersonOrgNumber, normalizeOrgNumber } from '@/lib/invariants/org-number'
 import { EMAIL_PATTERN } from '@/lib/invoices/email-recipients'
+import { defaultChannelByOrder, type SendOrderWay } from '@/lib/invoices/send-order'
 import type { InvoiceDocumentType } from '@/types'
 
 /**
@@ -235,17 +236,23 @@ export function resolveDefaultChannel(ctx: ChannelContext): EditorChannel {
 
 /**
  * The channel the primary acts on: the user's own pick while it is still
- * available (a customer switch can take email away), else the default.
+ * available (a customer switch can take email away), else the default. With
+ * a saved send order (company_settings.invoice_send_order) the default is
+ * the first way in it that is listed and choosable, else the default below;
+ * without one it is resolveDefaultChannel, unchanged.
  */
 export function resolveEffectiveChannel(
   choice: EditorChannel | null,
   ctx: ChannelContext,
+  sendOrder?: readonly SendOrderWay[] | null,
 ): EditorChannel {
+  const options = resolveChannelOptions(ctx)
   if (choice) {
-    const option = resolveChannelOptions(ctx).find((o) => o.channel === choice)
+    const option = options.find((o) => o.channel === choice)
     if (option?.available) return choice
   }
-  return resolveDefaultChannel(ctx)
+  const fallback = resolveDefaultChannel(ctx)
+  return sendOrder ? defaultChannelByOrder(options, sendOrder, fallback) : fallback
 }
 
 /**

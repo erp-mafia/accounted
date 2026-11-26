@@ -7,6 +7,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
 import {
+  bookedOreOnLedger,
   isReceivableAccount,
   openVatByAccount,
   reachedLedgerAsReceivable,
@@ -62,6 +63,8 @@ export interface CustomerLossState {
   openVat: Map<string, number>
   /** The receivable the invoice put on 151x, net of credit notes. */
   basis: number
+  /** The öresavrundning the invoice's own verifikat and its credit notes put on 3740, as a credit. */
+  oreRounding: number
   rows: WriteOffRow[]
   reserve: number
   confirmed: WriteOffRow | null
@@ -126,6 +129,7 @@ export async function loadCustomerLossState(
       receivableAccount,
       openVat: booked ? openVatByAccount(ownLines, creditNoteLines) : new Map(),
       basis: booked ? receivableBasis(ownLines, creditNoteLines) : 0,
+      oreRounding: booked ? bookedOreOnLedger(ownLines, creditNoteLines) : 0,
       rows,
       reserve: reserveOutstanding(rows),
       confirmed: liveConfirmed(rows),

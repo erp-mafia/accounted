@@ -1119,9 +1119,9 @@ export const paymentsUsage = defineOperation({
       'sent it to the provider, not the month it was drafted. included_payments is what the month includes (10 unless raised ' +
       'for the company) and cap_payments the hard stop: the same number, or a higher safety ceiling once billed_above_included ' +
       'is true and payments above what is included cost unit_price_ore each, billed in arrears. extra_offered says that charge ' +
-      'can be accepted; only a person with the admin role accepts it, under Settings, Billing, Usage. subscription_required says ' +
+      'can be accepted; only a person with the admin role accepts it, under Settings → Company → Subscription → Usage. subscription_required says ' +
       'it would be, but the company has no subscription of its own (a trial or a free period) and stops at what is included until a ' +
-      'person starts one under Settings, Billing. subscription_starting says the company has one, started during the trial, and ' +
+      'person starts one under Settings → Company → Subscription. subscription_starting says the company has one, started during the trial, and ' +
       'stops at what is included until its first charge at the end of the trial; nothing is to be started. remaining_payments is what the ' +
       'month still takes, and a BankID signing that would pass the cap is refused with BANK_PAYMENTS_ALLOWANCE_EXCEEDED. ' +
       'Accounts are counted, not capped. Payment files are not counted. The month defaults to the current one.',

@@ -6,7 +6,7 @@
  * `kontrollera`).
  *
  * Usage:
- *   npm run validate:ixbrl -- path/to/arsredovisning.xhtml [--package <zip>]
+ *   npm run validate:ixbrl -- path/to/arsredovisning.xhtml [--package <zip>] [--no-calc]
  *
  * The taxonomy package follows the document's schemaRef: a K3 document
  * (se/fr/gaap/k3/...) validates against taxonomi-paket-2026-08-31.zip, the
@@ -16,10 +16,30 @@
  * Arelle discovery order:
  *   1. `arelleCmdLine` on PATH (pip install arelle-release)
  *   2. `python -m arelle.CntlrCmdLine`
- *   3. docker image `arelle/arelle` (mounts the file + taxonomy package)
+ *   3. docker image `arelleproject/arelle` (mounts the file + taxonomy package)
+ *
+ * Arelle is asked for inconsistent duplicate facts (--validateDuplicateFacts
+ * inconsistent): a concept tagged more than once for the same context must
+ * state values that correspond, as the flerårsöversikt in tkr and the
+ * resultaträkning in kronor must (TA §2.7.3).
+ *
+ * Arelle also checks the sums of the taxonomy's calculation linkbase (--calc
+ * c11r, Calculations 1.1 rounding to nearest): a total must equal its rows.
+ * The K3 entry point carries no calculation linkbase, so K3 sums go unchecked.
+ * The XBRL 2.1 mode (c10) skips the sums that take in a fact tagged twice, as
+ * nettoomsättning and resultat efter finansiella poster are, and truncation
+ * (c11t) contradicts tkr figures rounded to the nearest thousand.
+ *
+ * --no-calc leaves the sums out, for an ekonomisk förening's document. The
+ * product files that form on paper (ixbrl: false in
+ * src/lib/company/forms/se-ekonomisk-forening.ts, and AR-DIGITAL-ENTITY in
+ * src/lib/bokslut/arsredovisning/eligibility.ts), and the document, built on
+ * the aktiebolag entry point, tags no rows under its bundet eget kapital.
  *
  * Arelle itself exits 0 whatever it finds, so the log is read: any ERROR or
- * CRITICAL message fails the run (exit 1); warnings are printed and pass.
+ * CRITICAL message, any inconsistent duplicate facts (which Arelle logs as a
+ * warning) and any INCONSISTENCY message (a sum that does not add up) fail the
+ * run (exit 1); other warnings are printed and pass.
  * Exits 0 with a notice when Arelle isn't available (CI machines without
  * Python shouldn't hard-fail), 2 on usage errors.
  */
@@ -37,11 +57,12 @@ const K3_PACKAGE = resolve(TAXONOMY_DIR, 'taxonomi-paket-2026-08-31.zip')
 const args = process.argv.slice(2)
 const packageFlag = args.indexOf('--package')
 const packageArg = packageFlag === -1 ? null : args[packageFlag + 1]
+const noCalc = args.includes('--no-calc')
 const fileArg = args.find(
   (arg, index) => !arg.startsWith('--') && (packageFlag === -1 || index !== packageFlag + 1),
 )
 if (!fileArg || (packageFlag !== -1 && !packageArg)) {
-  console.error('Usage: npm run validate:ixbrl -- <file.xhtml> [--package <taxonomy-package.zip>]')
+  console.error('Usage: npm run validate:ixbrl -- <file.xhtml> [--package <taxonomy-package.zip>] [--no-calc]')
   process.exit(2)
 }
 const file = resolve(process.cwd(), fileArg)
@@ -63,22 +84,36 @@ const arelleArgs = (filePath, packagePath) => [
   '--packages',
   packagePath,
   '--validate',
+  '--validateDuplicateFacts',
+  'inconsistent',
+  ...(noCalc ? [] : ['--calc', 'c11r']),
   '--logLevel',
   'warning',
   '--logFormat',
   LOG_FORMAT,
 ]
 
-/** Run Arelle, echo its log, and turn ERROR/CRITICAL messages into exit 1. */
+/**
+ * Run Arelle, echo its log, and turn ERROR/CRITICAL messages, inconsistent
+ * duplicate facts and INCONSISTENCY messages into exit 1.
+ */
 function runArelle(cmd, argv, label) {
-  console.log(`Validating ${basename(file)} against ${basename(TAXONOMY_PACKAGE)} with ${label} …`)
+  const sums = noCalc ? ', sums not checked' : ''
+  console.log(`Validating ${basename(file)} against ${basename(TAXONOMY_PACKAGE)} with ${label}${sums} …`)
   const run = spawnSync(cmd, argv, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
   const output = `${run.stdout ?? ''}${run.stderr ?? ''}`
   if (output.trim()) process.stdout.write(output.endsWith('\n') ? output : `${output}\n`)
-  const errors = output.split('\n').filter((line) => /^\[(ERROR|CRITICAL)\]/.test(line)).length
+  const lines = output.split('\n')
+  const errors = lines.filter((line) => /^\[(ERROR|CRITICAL)\]/.test(line)).length
+  // Logged as a warning: `[WARNING] [arelle:duplicateFacts] Duplicate fact set ...`.
+  const duplicates = lines.filter((line) => /^\[[A-Z-]+\] \[arelle:duplicateFacts\]/.test(line)).length
+  // Their own level: `[INCONSISTENCY] [calc11e:inconsistentCalculationUsingRounding] ...`.
+  const inconsistencies = lines.filter((line) => /^\[INCONSISTENCY\]/.test(line)).length
   if ((run.status ?? 1) !== 0) return 1
-  if (errors > 0) {
-    console.error(`Arelle reported ${errors} error(s).`)
+  if (errors > 0 || duplicates > 0 || inconsistencies > 0) {
+    console.error(
+      `Arelle reported ${errors} error(s), ${duplicates} set(s) of inconsistent duplicate facts and ${inconsistencies} inconsistency(ies).`,
+    )
     return 1
   }
   console.log('Arelle: no errors.')
@@ -105,17 +140,21 @@ if (available('arelleCmdLine', ['--version'])) {
       `${dirname(file)}:/data`,
       '-v',
       `${dirname(TAXONOMY_PACKAGE)}:/taxonomy`,
-      'arelle/arelle',
+      'arelleproject/arelle',
+      // The image's entrypoint execs the command it is given, so Arelle is
+      // started the way the image's docs start it.
+      'python',
+      'arelleCmdLine.py',
       ...arelleArgs(`/data/${basename(file)}`, `/taxonomy/${basename(TAXONOMY_PACKAGE)}`),
     ],
-    'docker image arelle/arelle',
+    'docker image arelleproject/arelle',
   )
 }
 
 if (status === null) {
   console.log(
     'Arelle is not installed: skipping schema validation.\n' +
-      'Install with: pip install arelle-release  (or use the arelle/arelle docker image).',
+      'Install with: pip install arelle-release  (or use the arelleproject/arelle docker image).',
   )
   process.exit(0)
 }

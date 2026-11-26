@@ -23,6 +23,7 @@ export const GET = withRouteContext(
     if (!checklist) return errorResponseFromCode('PERIOD_NOT_FOUND', log.child({ periodId: id }), { requestId })
     return NextResponse.json({ data: checklist })
   },
+  { uuidParams: { id: 'PERIOD_NOT_FOUND' } },
 )
 
 const PatchBodySchema = z.object({
@@ -64,5 +65,5 @@ export const PATCH = withRouteContext(
     const checklist = await buildBokslutChecklist(supabase, companyId, user.id, id)
     return NextResponse.json({ data: checklist })
   },
-  { requireWrite: true },
+  { requireWrite: true, uuidParams: { id: 'PERIOD_NOT_FOUND' } },
 )

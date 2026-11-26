@@ -189,8 +189,8 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'DELETE /api/settings/booking-templates/:id/hide': uiOnly(PREFS),
   'POST /api/settings/booking-templates/:id/touch': uiOnly('usage counter for the template picker'),
   'POST /api/settings/booking-templates/import': gap('P3', 'import templates exported from another company'),
-  'PATCH /api/settings/counterparty-templates': gap('P3', 'rename a learned counterparty template (read via gnubok_get_counterparty_templates)'),
-  'DELETE /api/settings/counterparty-templates': gap('P3'),
+  'PATCH /api/settings/counterparty-templates': covered(['gnubok_rename_counterparty_template']),
+  'DELETE /api/settings/counterparty-templates': covered(['gnubok_update_counterparty_template'], 'the soft delete reads as paused (the table\'s mode trigger): mode paused is the same act'),
   'PUT /api/settings/skattekonto-account': covered([`PATCH ${V}/settings/skattekonto-account`], 'no MCP tool yet: a staged write needs its own pending type (issue #50)'),
   'POST /api/settings/skattekonto-account/transfer-draft': covered([`POST ${V}/journal-entries`, 'gnubok_create_voucher'], 'the route drafts one two-line verifikat; a door books the same two lines as a generic voucher, with the amount from the account change answer (left_on_previous)'),
   'POST /api/settings/peppol': covered([`POST ${V}/peppol/registration`, 'gnubok_register_peppol_participant']),
@@ -209,7 +209,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'PATCH /api/settings/collections': gap('P3', 'the rules for handing invoices over to collection, and the booking accounts and automatic booking of what the provider collects'),
   'POST /api/extensions/:sector/:slug/data': uiOnly('internal extension key-value state'),
   'DELETE /api/extensions/:sector/:slug/data': uiOnly('internal extension key-value state'),
-  'PATCH /api/rules/:id': gap('P3', 'edit a counterparty booking rule'),
+  'PATCH /api/rules/:id': covered(['gnubok_update_counterparty_template']),
   // Hard blocks (accounted#130): what no key, agent, grant or bulk path may
   // book without a person's review. A key that could lift one would lift its
   // own limit, so an owner or admin sets and archives them in the browser.
@@ -961,6 +961,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/extensions/ext/arcim-migration/migration-jobs/accept': gap('P3', 'finish a reviewed import with the records it could not complete'),
   'POST /api/extensions/ext/arcim-migration/invoice-completion/retry': gap('P3'),
   'POST /api/extensions/ext/arcim-migration/deduction-backfill': gap('P3', 'post-migration ROT/RUT step: reads buyers\' personnummer and books vouchers; no API client has asked (crm#1144)'),
+  'PUT /api/extensions/ext/arcim-migration/fortnox-topup': gap('P3', 'switch the nightly top-up from Fortnox of the imported years on or off; no door (a client with a key appends a SIE file itself through POST /imports/sie with onExistingPeriod append)'),
   'POST /api/extensions/ext/arcim-migration/import-sie': gap('P3'),
   'POST /api/extensions/ext/arcim-migration/migrate': gap('P3'),
   'POST /api/extensions/ext/arcim-migration/reconcile': gap('P3'),
@@ -1175,5 +1176,11 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * 163 -> 162 (2026-11-24): sending an invoice to the customer's Kivra or
  * Billo mailbox, through the staged gnubok_send_invoice with channel kivra
  * or billo.
+ * 162 -> 159 (2026-11-25): renaming, removing and changing a learned booking
+ * rule, through the staged gnubok_rename_counterparty_template and
+ * gnubok_update_counterparty_template.
+ * 159 -> 160 (2026-11-25): the switch of the nightly top-up from Fortnox
+ * on a Fortnox connection (PUT .../arcim-migration/fortnox-topup), new and
+ * dashboard-only, as the nightly syncs of the webshop integrations.
  */
-export const GAP_CEILING = 162
+export const GAP_CEILING = 160

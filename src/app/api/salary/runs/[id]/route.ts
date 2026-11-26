@@ -155,6 +155,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
       },
     })
   },
+  { uuidParams: { id: 'SALARY_RUN_NOT_FOUND' } },
 )
 
 export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
@@ -196,7 +197,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     return NextResponse.json({ data: result.data.row })
   },
-  { requireWrite: true },
+  { requireWrite: true, uuidParams: { id: 'SALARY_RUN_NOT_FOUND' } },
 )
 
 export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
@@ -227,5 +228,5 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     return NextResponse.json({ data: { id, deleted: true } })
   },
-  { requireWrite: true },
+  { requireWrite: true, uuidParams: { id: 'SALARY_RUN_NOT_FOUND' } },
 )

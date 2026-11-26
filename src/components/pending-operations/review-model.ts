@@ -6,8 +6,10 @@
  * and the order the proposals are walked in.
  *
  * Pure: nothing here renders, fetches or decides what an approval does. Every
- * value comes from fields the staged operation already carries; a part the
- * operation has no data for is null or empty, never invented.
+ * value comes from fields the staged operation already carries (or, for the
+ * rows an approval builds at the click, from what the server built: see
+ * approvalPreviewOf); a part the operation has no data for is null or empty,
+ * never invented.
  */
 
 import type { PendingOperation } from '@/types'
@@ -406,17 +408,23 @@ export interface ApprovalPreview {
 
 /**
  * What the preview beside a row's Godkänn states before the click, where the
- * click is the approval for low and medium risk. Read from the staged preview
- * alone: nothing is fetched, and the rows are the ones it posts as staged
- * (postedVerifikat), never worked out a second time.
+ * click is the approval for low and medium risk. Read from the staged preview:
+ * nothing is fetched here, and the rows are the ones it posts as staged
+ * (postedVerifikat), never worked out a second time. A proposal whose rows
+ * the approval builds at the click (verifikatBuiltAtApproval) stages none:
+ * `builtAtApproval` holds the rows of each verifikat the server worked out
+ * with the approval's own code, and they are listed in their place.
  */
-export function approvalPreviewOf(op: Pick<PendingOperation, 'operation_type' | 'preview_data'>): ApprovalPreview {
+export function approvalPreviewOf(
+  op: Pick<PendingOperation, 'operation_type' | 'preview_data'>,
+  builtAtApproval?: readonly Data[][],
+): ApprovalPreview {
   const [first = [], ...rest] = proposalFacts(op.operation_type, op.preview_data) ?? []
   const verifikat: ApprovalPreview['verifikat'] = []
   let room = APPROVAL_PREVIEW_ROWS
   let hiddenVerifikat = 0
   let truncated = false
-  for (const lines of postedVerifikat(op.preview_data)) {
+  for (const lines of builtAtApproval ?? postedVerifikat(op.preview_data)) {
     if (room === 0) {
       hiddenVerifikat += 1
       truncated = true

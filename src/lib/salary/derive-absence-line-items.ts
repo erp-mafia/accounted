@@ -7,6 +7,7 @@ import { payslipLineFlags, type PayslipLineFlags } from './line-item-roles'
 import { scheduledHoursPerDay } from './work-schedule'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { isSwedishHolidayISO } from '@/lib/tax/swedish-holidays'
+import { CALENDAR_PRICED_ABSENCE_TYPES, FRANVARO_ABSENCE_TYPES } from './late-days'
 
 /**
  * Derive payroll line items from per-day absence records.
@@ -668,13 +669,19 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
     let day2_14Dates = 0
     let day15PlusCountTotal = 0
 
-    // Walk each segment that touches the period.
+    // Walk each segment that holds a period sick day. A segment of lookback
+    // days alone was priced by an earlier run; it can lie after periodMin only
+    // when a late day from an earlier period opens the period's days.
     for (const seg of segments) {
-      // Skip segments that don't touch the period at all.
-      if (seg.endDate < periodMin) continue
-      if (seg.startDate > periodSickDates[periodSickDates.length - 1]) continue
+      if (!periodSickDates.some(d => d >= seg.startDate && d <= seg.endDate)) continue
 
-      const segmentStartsInPeriod = seg.startDate >= periodMin
+      // The segment's days an earlier run already priced. They come before
+      // its period days: a lookback day lies before the window, and a late
+      // day placed before a priced one is refused (lateAbsenceRefusal).
+      const priorSickRows = lookbackSickRows.filter(
+        d => d.absence_date >= seg.startDate && d.absence_date <= seg.endDate,
+      )
+      const segmentStartsInPeriod = priorSickRows.length === 0
 
       // Karensavdrag for the segment (SjLL 6 §): one per sjuklöneperiod,
       // never larger than the sjuklön the period yields. The part a short
@@ -688,10 +695,7 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
         ),
       )
       const priorDaysInSjuklon = sumSickUnits(
-        lookbackSickRows.filter(
-          d => d.absence_date >= seg.startDate && d.absence_date < periodMin &&
-            sjukloneperiodDayIndex(seg, d.absence_date) <= 14,
-        ),
+        priorSickRows.filter(d => sjukloneperiodDayIndex(seg, d.absence_date) <= 14),
       )
       const karensEligible = segmentStartsInPeriod
         ? karensInWindow < cap
@@ -899,8 +903,13 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
 
 /** One employee's absence rows, as a salary calculation reads them. */
 export interface EmployeeAbsenceRows {
-  /** Rows inside the deviation window, by date. */
+  /** Rows the run deducts, by date: its window's own rows and its late days. */
   periodDays: AbsenceDay[]
+  /**
+   * The late days among periodDays: rows from an earlier, already paid or
+   * declared period carried to this run (lib/salary/late-days.ts).
+   */
+  lateDays: AbsenceDay[]
   /** Rows within a month either side of the window (calendar convention only). */
   contextDays: AbsenceDay[]
   /** Sick rows in the 365 days before the window. */
@@ -913,6 +922,7 @@ export interface EmployeeAbsenceRows {
 
 const NO_ABSENCE: EmployeeAbsenceRows = {
   periodDays: [],
+  lateDays: [],
   contextDays: [],
   lookbackSickDays: [],
   vabDaysYtd: 0,
@@ -924,18 +934,29 @@ function absenceDay(row: AbsenceDay): AbsenceDay {
   return { absence_date: row.absence_date, absence_type: row.absence_type, hours: row.hours }
 }
 
+function byDateThenType(a: AbsenceDay, b: AbsenceDay): number {
+  if (a.absence_date !== b.absence_date) return a.absence_date < b.absence_date ? -1 : 1
+  return a.absence_type < b.absence_type ? -1 : a.absence_type > b.absence_type ? 1 : 0
+}
+
 /**
- * Load the absence rows of every employee on a salary run in three reads,
+ * Load the absence rows of every employee on a salary run in four reads,
  * whatever the roster size: the deviation window (widened by a month either
  * side under the calendar convention, which reads those rows as context),
- * the 365-day sick lookback, and the intjänandeår's VAB and parental dates
- * before the window (SemL 17 a §: the 120-date cap counts within it).
- * Paginated: a roster's year of sick days passes PostgREST's 1000-row cap
- * long before an employer is large.
+ * the late days carried to the run, the 365-day sick lookback, and the
+ * intjänandeår's VAB and parental dates before the window (SemL 17 a §: the
+ * 120-date cap counts within it). Paginated: a roster's year of sick days
+ * passes PostgREST's 1000-row cap long before an employer is large.
  *
- * A failed window or lookback read throws: a calculation without them would
- * pay sick leave as if none was registered. A failed year-to-date read counts
- * as no earlier dates, as it always has.
+ * The reading rule is late-days.ts's: a row carried to another run is never
+ * one of this window's days, and a row carried to this run (or to a run it
+ * corrects) is deducted here whatever its date, so it is left out of the
+ * lookback and the year to date, which would count it twice. A row carried
+ * elsewhere still counts there: the day happened, and another run settles it.
+ *
+ * A failed window, late-day or lookback read throws: a calculation without
+ * them would pay sick leave as if none was registered. A failed year-to-date
+ * read counts as no earlier dates, as it always has.
  */
 export async function loadRunAbsence(
   supabase: SupabaseClient,
@@ -950,20 +971,31 @@ export async function loadRunAbsence(
      *  under the company's basis): where the VAB and parental date count
      *  starts. Omitted = 1 January of the window's year, the calendar basis. */
     earningYearStart?: string
+    /** The run and the runs it corrects (lateDayReaderRunIds): whose late days it deducts. */
+    readerRunIds: readonly string[]
   },
 ): Promise<Map<string, EmployeeAbsenceRows>> {
-  const { companyId, employeeIds, periodStart, periodEnd, withContext } = params
+  const { companyId, employeeIds, periodStart, periodEnd, withContext, readerRunIds } = params
   const byEmployee = new Map<string, EmployeeAbsenceRows>()
   if (employeeIds.length === 0) return byEmployee
   const forEmployee = (employeeId: string) => {
     let rows = byEmployee.get(employeeId)
     if (!rows) {
-      rows = { periodDays: [], contextDays: [], lookbackSickDays: [], vabDaysYtd: 0, parentalDaysPregnancyYtd: 0 }
+      rows = {
+        periodDays: [],
+        lateDays: [],
+        contextDays: [],
+        lookbackSickDays: [],
+        vabDaysYtd: 0,
+        parentalDaysPregnancyYtd: 0,
+      }
       byEmployee.set(employeeId, rows)
     }
     return rows
   }
-  type EmployeeAbsenceDay = AbsenceDay & { employee_id: string }
+  type EmployeeAbsenceDay = AbsenceDay & { employee_id: string; carried_to_run_id?: string | null }
+  const carriedHere = (row: EmployeeAbsenceDay) =>
+    Boolean(row.carried_to_run_id) && readerRunIds.includes(row.carried_to_run_id as string)
   // Every read orders by (employee_id, absence_date, absence_type), which is
   // unique: a total order for paging, and date order within an employee.
   const read = (
@@ -978,11 +1010,11 @@ export async function loadRunAbsence(
     })
 
   const yearStart = params.earningYearStart ?? `${periodStart.slice(0, 4)}-01-01`
-  const [windowRows, lookbackRows, ytdRows] = await Promise.all([
+  const [windowRows, lateRows, lookbackRows, ytdRows] = await Promise.all([
     read('Failed to load absence days', ({ from, to }) =>
       supabase
         .from('salary_absence_days')
-        .select('employee_id, absence_date, absence_type, hours')
+        .select('employee_id, absence_date, absence_type, hours, carried_to_run_id')
         .eq('company_id', companyId)
         .in('employee_id', employeeIds)
         .gte('absence_date', withContext ? addDays(periodStart, -31) : periodStart)
@@ -992,10 +1024,24 @@ export async function loadRunAbsence(
         .order('absence_type')
         .range(from, to),
     ),
+    // Every employee's, not only the roster's: a day carried here for an
+    // employee no longer on the run has no other reader, and the calculation
+    // refuses it by name (run-calculation.ts).
+    read('Failed to load late absence days', ({ from, to }) =>
+      supabase
+        .from('salary_absence_days')
+        .select('employee_id, absence_date, absence_type, hours, carried_to_run_id')
+        .eq('company_id', companyId)
+        .in('carried_to_run_id', [...readerRunIds])
+        .order('employee_id')
+        .order('absence_date')
+        .order('absence_type')
+        .range(from, to),
+    ),
     read('Failed to load absence lookback', ({ from, to }) =>
       supabase
         .from('salary_absence_days')
-        .select('employee_id, absence_date, absence_type, hours')
+        .select('employee_id, absence_date, absence_type, hours, carried_to_run_id')
         .eq('company_id', companyId)
         .in('employee_id', employeeIds)
         .eq('absence_type', 'sick')
@@ -1009,7 +1055,7 @@ export async function loadRunAbsence(
     read('Failed to load absence year to date', ({ from, to }) =>
       supabase
         .from('salary_absence_days')
-        .select('employee_id, absence_date, absence_type, hours')
+        .select('employee_id, absence_date, absence_type, hours, carried_to_run_id')
         .eq('company_id', companyId)
         .in('employee_id', employeeIds)
         .in('absence_type', ['vab', 'parental'])
@@ -1023,12 +1069,25 @@ export async function loadRunAbsence(
   ])
 
   for (const row of windowRows) {
+    // A late day of this run arrives with the late read; one carried to
+    // another run is never a day of this window, only context outside it.
+    if (carriedHere(row)) continue
     const rows = forEmployee(row.employee_id)
-    if (row.absence_date < periodStart || row.absence_date > periodEnd) rows.contextDays.push(absenceDay(row))
-    else rows.periodDays.push(absenceDay(row))
+    const inWindow = row.absence_date >= periodStart && row.absence_date <= periodEnd
+    if (!inWindow) rows.contextDays.push(absenceDay(row))
+    else if (!row.carried_to_run_id) rows.periodDays.push(absenceDay(row))
   }
-  for (const row of lookbackRows) forEmployee(row.employee_id).lookbackSickDays.push(absenceDay(row))
+  for (const row of lateRows) {
+    const rows = forEmployee(row.employee_id)
+    rows.periodDays.push(absenceDay(row))
+    rows.lateDays.push(absenceDay(row))
+  }
+  for (const rows of byEmployee.values()) rows.periodDays.sort(byDateThenType)
+  for (const row of lookbackRows) {
+    if (!carriedHere(row)) forEmployee(row.employee_id).lookbackSickDays.push(absenceDay(row))
+  }
   for (const row of ytdRows) {
+    if (carriedHere(row)) continue
     const rows = forEmployee(row.employee_id)
     if (row.absence_type === 'vab') rows.vabDaysYtd += 1
     else rows.parentalDaysPregnancyYtd += 1
@@ -1037,8 +1096,77 @@ export async function loadRunAbsence(
 }
 
 /**
+ * Why the late days among `rows` cannot be priced as the run's own days, in
+ * Swedish for the person running payroll, or null when they can. Two cases
+ * the engine has no state for, refused by name rather than priced wrong:
+ *
+ *   - long_leave = calendar_after_five_workdays: an episode is priced from
+ *     its full length within one window; days from an earlier window cannot
+ *     join one.
+ *   - a late sick day before a sick day an earlier run already priced in the
+ *     same sjuklöneperiod: that run decided karensavdrag and day numbers
+ *     without it. A late day after the priced days continues the period the
+ *     normal way: the lookback carries what was already deducted.
+ *   - a late VAB or parental day the run deducts nothing for (hourly pay, or
+ *     no monthly salary this run): its frånvarouppgift would be filed for a
+ *     pay it did not affect (lib/salary/late-days.ts).
+ */
+export function lateAbsenceRefusal(
+  rows: EmployeeAbsenceRows,
+  opts: {
+    calendarLongLeave: boolean
+    workdaysPerWeek?: number | null
+    /** Why the run deducts nothing for absence: hourly pay, or no monthly salary. */
+    noDeduction?: 'hourly' | 'no_salary' | null
+  },
+): string | null {
+  if (rows.lateDays.length === 0) return null
+  if (opts.calendarLongLeave) {
+    const priced = rows.lateDays.filter((d) => CALENDAR_PRICED_ABSENCE_TYPES.includes(d.absence_type))
+    if (priced.length > 0) {
+      const dates = [...new Set(priced.map((d) => d.absence_date))].sort()
+      return (
+        `Frånvaro från en tidigare period (${dates[0]}${dates.length > 1 ? ` till ${dates[dates.length - 1]}` : ''}) ` +
+        'kan inte räknas i den här körningen när företaget drar lång frånvaro per kalenderdag. ' +
+        'Ta bort de sena dagarna och lägg in avdraget som en egen rad på lönebeskedet.'
+      )
+    }
+  }
+  if (opts.noDeduction) {
+    const reported = rows.lateDays.filter((d) => FRANVARO_ABSENCE_TYPES.includes(d.absence_type))
+    if (reported.length > 0) {
+      const dates = [...new Set(reported.map((d) => d.absence_date))].sort()
+      return (
+        `VAB och föräldraledighet från en tidigare period (${dates[0]}${dates.length > 1 ? ` till ${dates[dates.length - 1]}` : ''}) ` +
+        `drar inget från lönen i den här körningen, eftersom ${opts.noDeduction === 'hourly' ? 'den anställde har timlön' : 'månadslönen är 0 kr'}. ` +
+        'En frånvarouppgift lämnas bara för en lön som frånvaron påverkar: ta bort de sena dagarna från körningen.'
+      )
+    }
+  }
+  const lateSick = rows.lateDays.filter((d) => d.absence_type === 'sick').map((d) => d.absence_date)
+  if (lateSick.length === 0) return null
+  const pricedSick = rows.lookbackSickDays.map((d) => d.absence_date)
+  const periodSick = rows.periodDays.filter((d) => d.absence_type === 'sick').map((d) => d.absence_date)
+  for (const segment of buildSjukloneperioder([...pricedSick, ...periodSick], opts.workdaysPerWeek)) {
+    const lateInSegment = lateSick.filter((d) => d >= segment.startDate && d <= segment.endDate).sort()
+    if (lateInSegment.length === 0) continue
+    const pricedAfter = pricedSick.filter((d) => d > lateInSegment[0] && d <= segment.endDate).sort()
+    if (pricedAfter.length > 0) {
+      return (
+        `Sjukdagen ${lateInSegment[0]} är registrerad i efterhand men ligger före sjukdagen ${pricedAfter[0]} ` +
+        'i samma sjuklöneperiod, som en tidigare lönekörning redan har räknat. Karensavdrag och sjuklön för ' +
+        'perioden kan då inte räknas om här: ta bort den sena dagen och lägg in skillnaden som en egen rad på lönebeskedet.'
+      )
+    }
+  }
+  return null
+}
+
+/**
  * Derive one employee's absence lines from the rows loadRunAbsence read.
- * An employee without rows derives nothing.
+ * An employee without rows derives nothing. Late days are priced as the
+ * run's own days; the ones that cannot be (lateAbsenceRefusal) throw an
+ * AbsenceInputError naming them.
  */
 export function deriveEmployeeAbsence(params: {
   rows: EmployeeAbsenceRows | undefined
@@ -1064,6 +1192,12 @@ export function deriveEmployeeAbsence(params: {
   calculationPolicy?: SalaryCalculationPolicy
 }): DeriveResult {
   const rows = params.rows ?? NO_ABSENCE
+  const lateRefusal = lateAbsenceRefusal(rows, {
+    calendarLongLeave: params.calculationPolicy?.long_leave === 'calendar_after_five_workdays',
+    workdaysPerWeek: params.workdaysPerWeek,
+    noDeduction: params.salaryType === 'hourly' ? 'hourly' : params.monthlySalary > 0 ? null : 'no_salary',
+  })
+  if (lateRefusal) throw new AbsenceInputError(lateRefusal)
   return deriveAbsenceLineItems({
     monthlySalary: params.monthlySalary,
     salaryType: params.salaryType,

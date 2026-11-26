@@ -1,19 +1,22 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { useTranslations } from 'next-intl'
+import dynamic from 'next/dynamic'
 import { useCompany } from '@/contexts/CompanyContext'
-import { performCompanySwitch } from '@/lib/company/switch-client'
-import { Button } from '@/components/ui/button'
 import {
   TAB_SYNC_CHANNEL,
   TAB_SYNC_STORAGE_KEY,
+  ACTIVE_COMPANY_HEADER,
+  ACTIVE_COMPANY_VERIFY_DELAY_MS,
+  COMPANY_CURRENT_PATH,
+  companyObservedFromResponse,
   decodeStorageValue,
+  isSameOriginApiUrl,
   guardStore,
   isTabMismatch,
   requestHasNextActionHeader,
-  resolveObservedCompanyName,
   shouldBlockMutation,
+  withTabCompanyHeader,
 } from '@/lib/company/tab-guard'
 
 /**
@@ -30,6 +33,10 @@ import {
  *      BroadcastChannel is unavailable; the switch action writes the key.
  *   3. visibilitychange + pageshow(persisted): tabs hidden/bfcache-frozen
  *      during the switch verify against /api/company/current on focus.
+ *   4. Every /api answer names the company the server acted on
+ *      (ACTIVE_COMPANY_HEADER): a tab that stayed visible while the company
+ *      was switched somewhere it cannot hear (another device, profile or
+ *      session) verifies against /api/company/current after a short wait.
  *
  * On mismatch the tab BLOCKS with a dialog whose only exits are switching
  * back to this tab's company or reloading as the new one. Deliberately no
@@ -60,6 +67,9 @@ import {
 // Guard state is the shared guardStore in lib/company/tab-guard.ts so
 // browser-direct write sites can consult the same belief. Single dashboard
 // shell = single writer (this component).
+
+/** The blocking dialog, loaded when it is first raised: no page renders it with its first view. */
+const CompanyTabDialog = dynamic(() => import('./CompanyTabDialog'), { ssr: false })
 
 let originalFetch: typeof window.fetch | null = null
 
@@ -111,7 +121,27 @@ function installFetchGuard(): void {
         ),
       )
     }
-    return originalFetch!(input as RequestInfo, init)
+    const pageOrigin = window.location.origin
+    const labelled = withTabCompanyHeader(input, init, {
+      tabCompanyId: guardStore.tabCompanyId,
+      pageOrigin,
+    })
+    return originalFetch!(labelled.input as RequestInfo, labelled.init).then((response) => {
+      // The server names the company it acted on. A tab that shows another one
+      // learns it from the first answer, whichever device made the switch, and
+      // then asks the server (after a wait, see ACTIVE_COMPANY_VERIFY_DELAY_MS).
+      // The server has already refused a write for the wrong company.
+      if (isSameOriginApiUrl(url, pageOrigin) && new URL(url, pageOrigin).pathname !== COMPANY_CURRENT_PATH) {
+        const observed = companyObservedFromResponse({
+          responseCompanyId: response.headers.get(ACTIVE_COMPANY_HEADER),
+          tabCompanyId: guardStore.tabCompanyId,
+          companySwitchInFlight: guardStore.companySwitchInFlight,
+          selfSwitchTargetId: guardStore.selfSwitchTargetId,
+        })
+        if (observed) guardStore.verifyActiveCompany?.()
+      }
+      return response
+    })
   }) as typeof window.fetch
 }
 
@@ -122,21 +152,22 @@ function uninstallFetchGuard(): void {
 }
 
 export default function CompanyTabSync() {
-  const { company, companies, foreignCompanies } = useCompany()
-  const t = useTranslations('company_tab_guard')
-  const currentCompanyId = company?.id ?? null
-  const [mismatch, setMismatch] = useState(false)
-  // The company the other tab switched to, so the dialog can name it: the
-  // choice between "switch back" and "reload as the new one" is only obvious
-  // when both sides are named. Read from the guard store at the moment the
-  // dialog is raised (both the observe path and the blocked-write path set
-  // observedCompanyId first).
-  const [observedCompanyId, setObservedCompanyId] = useState<string | null>(null)
-  const [resolving, setResolving] = useState(false)
+  const { company } = useCompany()
+  const companyId = company?.id ?? null
+  // Keyed by the company: a tab that renders another company starts over,
+  // with nothing raised and nothing observed.
+  return companyId ? <TabGuard key={companyId} currentCompanyId={companyId} /> : null
+}
+
+function TabGuard({ currentCompanyId }: { currentCompanyId: string }) {
+  // Set while the blocking dialog is up. It carries the company the session
+  // has active now, so the dialog can name it: the choice between "switch
+  // back" and "reload as the new one" is only obvious when both sides are
+  // named. Read from the guard store at the moment the dialog is raised (both
+  // the observe path and the blocked-write path set observedCompanyId first).
+  const [raised, setRaised] = useState<{ observedCompanyId: string | null } | null>(null)
 
   useEffect(() => {
-    if (!currentCompanyId) return
-
     guardStore.tabCompanyId = currentCompanyId
     guardStore.observedCompanyId = null
     guardStore.notifyBlocked = () => {
@@ -144,8 +175,7 @@ export default function CompanyTabSync() {
       // stray writes still get their 409, but the "switched in another tab"
       // dialog would just flash over the tab's own page load.
       if (!guardStore.selfSwitchTargetId) {
-        setObservedCompanyId(guardStore.observedCompanyId)
-        setMismatch(true)
+        setRaised({ observedCompanyId: guardStore.observedCompanyId })
       }
     }
     installFetchGuard()
@@ -155,8 +185,7 @@ export default function CompanyTabSync() {
       guardStore.observedCompanyId = observedId
       if (observedId === guardStore.selfSwitchTargetId) return
       if (isTabMismatch(currentCompanyId, observedId)) {
-        setObservedCompanyId(observedId)
-        setMismatch(true)
+        setRaised({ observedCompanyId: observedId })
       }
     }
 
@@ -191,6 +220,17 @@ export default function CompanyTabSync() {
       }
     }
 
+    // Layer 2b: an answer named another company than this tab shows. One
+    // question to the server after the wait, however many answers said so.
+    let verifyTimer: number | null = null
+    guardStore.verifyActiveCompany = () => {
+      if (verifyTimer !== null) return
+      verifyTimer = window.setTimeout(() => {
+        verifyTimer = null
+        void checkServer()
+      }, ACTIVE_COMPANY_VERIFY_DELAY_MS)
+    }
+
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
         void checkServer()
@@ -219,81 +259,12 @@ export default function CompanyTabSync() {
       guardStore.observedCompanyId = null
       guardStore.notifyBlocked = null
       guardStore.selfSwitchTargetId = null
+      guardStore.verifyActiveCompany = null
+      if (verifyTimer !== null) window.clearTimeout(verifyTimer)
       uninstallFetchGuard()
     }
   }, [currentCompanyId])
 
-  if (!mismatch || !currentCompanyId) return null
-
-  const newCompanyName = resolveObservedCompanyName(
-    observedCompanyId,
-    companies,
-    foreignCompanies ?? [],
-  )
-
-  const handleSwitchBack = async () => {
-    setResolving(true)
-    // Re-activate THIS tab's company and reload the page we are on (same
-    // company, so its data is still valid). Other tabs get the broadcast and
-    // face the same dialog: the hazard is symmetric by design.
-    const result = await performCompanySwitch(currentCompanyId, {
-      destination: window.location.pathname + window.location.search,
-    })
-    if (result?.error) {
-      // Membership lost or persist failure: this tab cannot win the company
-      // back, so the only safe exit left is loading the new company.
-      window.location.assign('/')
-    }
-  }
-
-  const handleReloadAsNew = () => {
-    setResolving(true)
-    // Land on the start page: the current path may not exist (or worse, mean
-    // another object) under the new company.
-    window.location.assign('/')
-  }
-
-  return (
-    <div
-      className="fixed inset-0 z-[100] flex items-center justify-center p-4"
-      role="alertdialog"
-      aria-modal="true"
-      aria-labelledby="company-tab-guard-title"
-    >
-      {/* Veil: deliberately no click-to-close and no Esc: the dialog is
-          blocking, its two buttons are the only exits (WL-09). */}
-      <div className="absolute inset-0 bg-background/80 backdrop-blur-sm" aria-hidden="true" />
-      <div className="relative w-full max-w-md rounded-xl border border-border bg-card p-6 shadow-[var(--shadow-lg)]">
-        <h2 id="company-tab-guard-title" className="text-lg leading-6">
-          {t('title')}
-        </h2>
-        <p className="mt-2 text-sm text-muted-foreground">
-          {newCompanyName
-            ? t('body_named', { company: company?.name ?? '', newCompany: newCompanyName })
-            : t('body', { company: company?.name ?? '' })}
-        </p>
-        {/* Both labels carry a company name of any length: let the row wrap and
-            each label break, or two long names push the buttons out of the card. */}
-        <div className="mt-6 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end">
-          <Button
-            variant="outline"
-            className="max-w-full whitespace-normal"
-            disabled={resolving}
-            onClick={handleReloadAsNew}
-          >
-            {newCompanyName
-              ? t('reload_as_named', { newCompany: newCompanyName })
-              : t('reload_as_new')}
-          </Button>
-          <Button
-            className="max-w-full whitespace-normal"
-            disabled={resolving}
-            onClick={() => void handleSwitchBack()}
-          >
-            {t('switch_back', { company: company?.name ?? '' })}
-          </Button>
-        </div>
-      </div>
-    </div>
-  )
+  if (!raised) return null
+  return <CompanyTabDialog currentCompanyId={currentCompanyId} observedCompanyId={raised.observedCompanyId} />
 }

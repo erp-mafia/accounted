@@ -5,6 +5,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import { createQueuedMockSupabase, createMockRequest, parseJsonResponse } from '@/tests/helpers'
 
+// Route path ids are uuids: the route answers its 404 to anything else before it reads.
+const RULE_1 = '4486b8fb-3890-5c33-896b-999f971d0e44'
+
 const { supabase, enqueue, reset, findCall } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
@@ -31,10 +34,10 @@ vi.mock('@/lib/salary/invalidate-calculation', async (original) => ({
 }))
 
 const EMP_A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
-const params = { params: Promise.resolve({ id: 'rule-1' }) } as never
+const params = { params: Promise.resolve({ id: RULE_1 }) } as never
 
 const storedRule = {
-  id: 'rule-1',
+  id: RULE_1,
   company_id: 'company-1',
   name: 'OB natt',
   applies_to_all_employees: true,
@@ -58,10 +61,10 @@ const storedRule = {
 }
 
 function patch(body: unknown) {
-  return createMockRequest('/api/salary/premium-rules/rule-1', { method: 'PATCH', body })
+  return createMockRequest(`/api/salary/premium-rules/${RULE_1}`, { method: 'PATCH', body })
 }
 function del() {
-  return createMockRequest('/api/salary/premium-rules/rule-1', { method: 'DELETE' })
+  return createMockRequest(`/api/salary/premium-rules/${RULE_1}`, { method: 'DELETE' })
 }
 
 beforeEach(() => {
@@ -174,20 +177,20 @@ describe('DELETE /api/salary/premium-rules/[id]', () => {
   })
 
   it('deletes the rule (happy path)', async () => {
-    enqueue({ data: [{ id: 'rule-1' }] })
+    enqueue({ data: [{ id: RULE_1 }] })
     const response = await DELETE(del(), params)
     const { status, body } = await parseJsonResponse<{ data: { id: string; deleted: boolean } }>(response)
     expect(status).toBe(200)
-    expect(body.data).toEqual({ id: 'rule-1', deleted: true, deactivated: false })
+    expect(body.data).toEqual({ id: RULE_1, deleted: true, deactivated: false })
     expect(findCall('shift_premium_rules', 'delete')).toBeDefined()
   })
 
   it('switches off a rule a payslip line derives from instead of deleting it', async () => {
     enqueue({ error: { code: '23503', message: 'foreign key' } })
-    enqueue({ data: [{ id: 'rule-1' }] })
+    enqueue({ data: [{ id: RULE_1 }] })
     const response = await DELETE(del(), params)
     const { status, body } = await parseJsonResponse<{ data: { deleted: boolean; deactivated: boolean } }>(response)
     expect(status).toBe(200)
-    expect(body.data).toEqual({ id: 'rule-1', deleted: false, deactivated: true })
+    expect(body.data).toEqual({ id: RULE_1, deleted: false, deactivated: true })
   })
 })

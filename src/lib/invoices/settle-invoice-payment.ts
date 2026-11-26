@@ -43,6 +43,8 @@ import {
   bookSaleBeforeSettlement,
   clearsReceivable,
   planSaleBeforeSettlement,
+  SALE_FIRST_NOT_REQUIRED,
+  type SaleFirstPlan,
   type SaleFirstRefusal,
 } from '@/lib/invoices/sale-first'
 import { createLogger } from '@/lib/logger'
@@ -56,12 +58,13 @@ const log = createLogger('settle-invoice-payment')
  * channel) shares the exact same booking, status transition, orphan handling
  * and event emission as the manual flow:
  *
- *   1. planInvoicePayment: ledger math + overpayment guard
- *   2. the sale first, when the company books invoices in a separate step
+ *   1. the sale's plan, when the company books invoices in a separate step
  *      (faktureringsmetoden with defer_invoice_booking) and this one has no
- *      verifikat yet: the Bokför step books it on its invoice date, and a
- *      refusal there refuses the payment with nothing written
- *      (lib/invoices/sale-first.ts)
+ *      verifikat yet: the Bokför step's dry run, and a refusal there refuses
+ *      the payment with nothing written (lib/invoices/sale-first.ts)
+ *   2. planInvoicePayment: ledger math + overpayment guard, against what
+ *      1510 will carry; then the sale itself, booked by the Bokför step on
+ *      its invoice date right before the payment
  *   3. journal entry: custom lines | cash entry (kontantmetoden, unbooked;
  *      pro rata per installment when the payment is partial and
  *      CASH_PARTIAL_PAYMENTS_ENABLED is set) | payment entry (clears 1510),
@@ -226,6 +229,37 @@ export async function settleInvoicePayment(
   // series follow that shape too.
   const bookingMethod = useCashEntry ? 'cash' : accountingMethod
 
+  const isRealInvoice = !invoice.document_type || invoice.document_type === 'invoice'
+
+  // Faktureringsmetoden with defer_invoice_booking: an invoice sent without
+  // its verifikat is booked first, by the Bokför step on its invoice date,
+  // then paid against the 1510 it debits (lib/invoices/sale-first.ts). The
+  // plan is the Bokför step's dry run plus the payment date's lock; a
+  // refusal there refuses the payment before anything is written: never a
+  // 1510 clearing without the sale that debits it. Edited rows that book
+  // the revenue themselves carry the sale already (clearsReceivable), and
+  // so does the generated cash entry: a kontantfaktura paid at issue
+  // (recognizeSaleAtPayment) books its sale in its one verifikat, in
+  // either accounting method, so booking the sale first would double the
+  // revenue and the utgående moms. Planned before the payment, which clears
+  // what that sale leaves on 1510 (salePlan.receivableSek), as the bank-match
+  // doors do: a sale that books the öresavrundning leaves the rounded "Att
+  // betala" there, not the reskontra's öre total.
+  const paymentBooksSale = customLines ? !clearsReceivable(customLines) : useCashEntry
+  const opCtx = { supabase, companyId, userId, log: log.child({ invoiceId: invoice.id }) }
+  let salePlan: SaleFirstPlan = SALE_FIRST_NOT_REQUIRED
+  if (isRealInvoice && !paymentBooksSale) {
+    const plan = await planSaleBeforeSettlement(opCtx, invoice, { settlementDate: paymentDate })
+    if (!plan.ok) return { ok: false, code: 'SALE_FIRST_REFUSED', refusal: plan }
+    salePlan = plan
+  }
+  // The row as carriedSekOf reads it. A null journal_entry_id was read by the
+  // caller and goes stale once a sale is booked, by this payment below or by
+  // a concurrent Bokför (bookedSince), so it is left unknown and carriedSekOf
+  // asks the ledger.
+  const saleOnLedger = salePlan.required || salePlan.bookedSince === true
+  const ledgerRow = saleOnLedger && !invoice.journal_entry_id ? { ...invoice, journal_entry_id: undefined } : invoice
+
   // Ledger math + overpayment guard. Runs BEFORE any journal entry is
   // created so a doomed overpayment never burns a voucher number.
   // Custom-line SEK settlements absorb a sub-krona öresavrundning residual
@@ -235,12 +269,16 @@ export async function settleInvoicePayment(
   // a deliberate sub-krona partial) get the strict plan instead. The
   // generated-entry paths (Stripe sync, no-body mark-paid) always pay the
   // exact remaining, so absorption is a no-op there. Lines for a SEK invoice
-  // whose issue verifikat booked the öresavrundning carry only the rest of it
-  // on 3740 (carriedSekOf, planInvoicePaymentForLines).
+  // whose issue verifikat, or sale booked first, booked the öresavrundning
+  // carry only the rest of it on 3740 (carriedSekOf, planInvoicePaymentForLines).
+  // A sale this payment books first is not on the ledger yet: its plan says
+  // what it leaves there.
   let linesCarriedSek: number | null = null
-  if (customLines && invoiceAlreadyBooked && isKronorCurrency(invoice.currency)) {
+  if (customLines && isKronorCurrency(invoice.currency) && salePlan.required) {
+    linesCarriedSek = salePlan.receivableSek
+  } else if (customLines && isKronorCurrency(invoice.currency) && (invoiceAlreadyBooked || saleOnLedger)) {
     try {
-      linesCarriedSek = await carriedSekOf(supabase, companyId, 'customer', invoice)
+      linesCarriedSek = await carriedSekOf(supabase, companyId, 'customer', ledgerRow)
     } catch (err) {
       return {
         ok: false,
@@ -265,8 +303,6 @@ export async function settleInvoicePayment(
   }
   const { newPaidAmount, newRemaining, newStatus } = payment.plan
   const paidAt = newStatus === 'paid' ? paidAtFromDate(paymentDate) : null
-
-  const isRealInvoice = !invoice.document_type || invoice.document_type === 'invoice'
 
   // The whole-payment cash entry (createInvoiceCashEntry) books the FULL
   // invoice and takes no payment amount, so it is only right for a payment
@@ -395,22 +431,8 @@ export async function settleInvoicePayment(
       }
     }
 
-    // Faktureringsmetoden with defer_invoice_booking: an invoice sent without
-    // its verifikat is booked first, by the Bokför step on its invoice date,
-    // then paid against the 1510 it debits (lib/invoices/sale-first.ts). The
-    // plan is the Bokför step's dry run plus the payment date's lock; a
-    // refusal there refuses the payment before anything is written: never a
-    // 1510 clearing without the sale that debits it. Edited rows that book
-    // the revenue themselves carry the sale already (clearsReceivable), and
-    // so does the generated cash entry: a kontantfaktura paid at issue
-    // (recognizeSaleAtPayment) books its sale in its one verifikat, in
-    // either accounting method, so booking the sale first would double the
-    // revenue and the utgående moms.
-    const paymentBooksSale = customLines ? !clearsReceivable(customLines) : useCashEntry
-    if (!paymentBooksSale) {
-      const opCtx = { supabase, companyId, userId, log: log.child({ invoiceId: invoice.id }) }
-      const salePlan = await planSaleBeforeSettlement(opCtx, invoice, { settlementDate: paymentDate })
-      if (!salePlan.ok) return { ok: false, code: 'SALE_FIRST_REFUSED', refusal: salePlan }
+    // The sale the plan above requires, booked right before the payment.
+    if (salePlan.required) {
       const sale = await bookSaleBeforeSettlement(opCtx, salePlan)
       if (!sale.ok) return { ok: false, code: 'SALE_FIRST_REFUSED', refusal: sale }
       if (sale.bookedHere) {
@@ -486,8 +508,8 @@ export async function settleInvoicePayment(
           supabase,
           companyId,
           userId,
-          // A sale booked first above is on the ledger by now.
-          { ...(invoice as Invoice), carried_sek: await carriedSekOf(supabase, companyId, 'customer', invoice) },
+          // A sale booked first above is on the ledger by now (ledgerRow).
+          { ...(invoice as Invoice), carried_sek: await carriedSekOf(supabase, companyId, 'customer', ledgerRow) },
           paymentDate,
           exchangeRateDifference,
           invoice.customer?.name ?? undefined,

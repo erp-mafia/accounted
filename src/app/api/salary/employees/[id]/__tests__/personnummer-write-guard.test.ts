@@ -24,6 +24,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createMockRequest } from '@/tests/helpers'
 
+// Route path ids are uuids: the route answers its 404 to anything else before it reads.
+const EMP_1 = 'fcd49043-9489-5813-aacd-a04b3e121e68'
+
 const requireAuthMock = vi.fn()
 vi.mock('@/lib/auth/require-auth', () => ({
   requireAuth: (...args: unknown[]) => requireAuthMock(...args),
@@ -63,12 +66,12 @@ vi.mock('@/lib/api/schemas', async (importOriginal) => {
 import { PATCH } from '../route'
 import { encryptPersonnummer } from '@/lib/salary/personnummer'
 
-const params = { params: Promise.resolve({ id: 'emp-1' }) } as never
+const params = { params: Promise.resolve({ id: EMP_1 }) } as never
 
 const STORED_CIPHERTEXT = encryptPersonnummer('190203040000')
 
 const EXISTING_ROW = {
-  id: 'emp-1',
+  id: EMP_1,
   company_id: 'company-1',
   first_name: 'Test',
   last_name: 'Testsson',
@@ -122,7 +125,7 @@ describe('PATCH /api/salary/employees/[id]: personnummer cannot be wiped', () =>
 
   it('rejects an empty-string personnummer instead of overwriting the ciphertext', async () => {
     const response = await PATCH(
-      createMockRequest('/api/salary/employees/emp-1', {
+      createMockRequest(`/api/salary/employees/${EMP_1}`, {
         method: 'PATCH',
         body: { personnummer: '' },
       }),
@@ -136,7 +139,7 @@ describe('PATCH /api/salary/employees/[id]: personnummer cannot be wiped', () =>
 
   it('rejects a null personnummer (the column is NOT NULL and AGI/KU need it)', async () => {
     const response = await PATCH(
-      createMockRequest('/api/salary/employees/emp-1', {
+      createMockRequest(`/api/salary/employees/${EMP_1}`, {
         method: 'PATCH',
         body: { personnummer: null },
       }),
@@ -151,7 +154,7 @@ describe('PATCH /api/salary/employees/[id]: personnummer cannot be wiped', () =>
     // Failing loudly matters more than partial success: a caller that thought it
     // was clearing the personnummer must learn that it did not happen.
     const response = await PATCH(
-      createMockRequest('/api/salary/employees/emp-1', {
+      createMockRequest(`/api/salary/employees/${EMP_1}`, {
         method: 'PATCH',
         body: { first_name: 'Ny', personnummer: '' },
       }),
@@ -167,7 +170,7 @@ describe('PATCH /api/salary/employees/[id]: personnummer cannot be wiped', () =>
     // real digits would sail through it. The explicit mask check is what makes
     // the refusal deterministic.
     const response = await PATCH(
-      createMockRequest('/api/salary/employees/emp-1', {
+      createMockRequest(`/api/salary/employees/${EMP_1}`, {
         method: 'PATCH',
         body: { personnummer: '190203040000-XXXX' },
       }),

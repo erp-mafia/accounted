@@ -78,6 +78,7 @@ export function makeSalesOrder(overrides: Partial<SalesOrder> = {}): SalesOrder 
     total: 1250,
     your_reference: null,
     our_reference: null,
+    invoice_marking: null,
     notes: null,
     default_dimensions: {},
     confirmed_at: null,

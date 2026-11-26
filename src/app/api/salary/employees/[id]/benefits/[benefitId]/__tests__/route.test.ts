@@ -13,6 +13,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import { createQueuedMockSupabase, createMockRequest, parseJsonResponse } from '@/tests/helpers'
 
+// Route path ids are uuids: the route answers its 404 to anything else before it reads.
+const BEN_1 = '85458e79-9efb-5781-911a-957cbe83465f'
+const EMP_1 = 'fcd49043-9489-5813-aacd-a04b3e121e68'
+
 const { supabase, enqueue, reset, findCall, findCalls } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
@@ -40,14 +44,14 @@ vi.mock('@/lib/salary/invalidate-calculation', async (original) => ({
   invalidateRunCalculation: vi.fn(async () => null),
 }))
 
-const params = { params: Promise.resolve({ id: 'emp-1', benefitId: 'ben-1' }) } as never
+const params = { params: Promise.resolve({ id: EMP_1, benefitId: BEN_1 }) } as never
 
 function del() {
-  return createMockRequest('/api/salary/employees/emp-1/benefits/ben-1', { method: 'DELETE' })
+  return createMockRequest(`/api/salary/employees/${EMP_1}/benefits/${BEN_1}`, { method: 'DELETE' })
 }
 
 function patch(body: unknown) {
-  return createMockRequest('/api/salary/employees/emp-1/benefits/ben-1', { method: 'PATCH', body })
+  return createMockRequest(`/api/salary/employees/${EMP_1}/benefits/${BEN_1}`, { method: 'PATCH', body })
 }
 
 /** Stored row as the PATCH route fetches it before writing. */
@@ -89,7 +93,7 @@ describe('DELETE /api/salary/employees/[id]/benefits/[benefitId]', () => {
 
   it('hard-deletes a benefit no payslip line derives from (happy path)', async () => {
     enqueue({ data: null, count: 0 }) // salary_line_items referencing count
-    enqueue({ data: [{ id: 'ben-1' }] }) // delete ... returning id
+    enqueue({ data: [{ id: BEN_1 }] }) // delete ... returning id
 
     const response = await DELETE(del(), params)
     const { status, body } = await parseJsonResponse<{
@@ -97,7 +101,7 @@ describe('DELETE /api/salary/employees/[id]/benefits/[benefitId]', () => {
     }>(response)
 
     expect(status).toBe(200)
-    expect(body.data).toEqual({ id: 'ben-1', deleted: true, deactivated: false })
+    expect(body.data).toEqual({ id: BEN_1, deleted: true, deactivated: false })
     expect(findCall('employee_benefits', 'delete')).toBeDefined()
     expect(findCall('employee_benefits', 'update')).toBeUndefined()
   })
@@ -108,7 +112,7 @@ describe('DELETE /api/salary/employees/[id]/benefits/[benefitId]', () => {
   // drops the line by its intact link.
   it('keeps and deactivates a benefit that a payslip line derives from', async () => {
     enqueue({ data: null, count: 1 }) // one derived line points at the row
-    enqueue({ data: [{ id: 'ben-1' }] }) // update ... returning id
+    enqueue({ data: [{ id: BEN_1 }] }) // update ... returning id
 
     const response = await DELETE(del(), params)
     const { status, body } = await parseJsonResponse<{
@@ -116,14 +120,14 @@ describe('DELETE /api/salary/employees/[id]/benefits/[benefitId]', () => {
     }>(response)
 
     expect(status).toBe(200)
-    expect(body.data).toEqual({ id: 'ben-1', deleted: false, deactivated: true })
+    expect(body.data).toEqual({ id: BEN_1, deleted: false, deactivated: true })
     expect(findCall('employee_benefits', 'delete')).toBeUndefined()
     expect(findCall('employee_benefits', 'update')).toEqual([{ is_active: false }])
     // The update is scoped to the row on this employee in this company.
     expect(findCalls('employee_benefits', 'eq')).toEqual(
       expect.arrayContaining([
-        ['id', 'ben-1'],
-        ['employee_id', 'emp-1'],
+        ['id', BEN_1],
+        ['employee_id', EMP_1],
         ['company_id', 'company-1'],
       ]),
     )
@@ -138,7 +142,7 @@ describe('DELETE /api/salary/employees/[id]/benefits/[benefitId]', () => {
       data: null,
       error: { code: '23503', message: 'violates foreign key constraint "salary_line_items_source_benefit_id_fkey"' },
     })
-    enqueue({ data: [{ id: 'ben-1' }] }) // update ... returning id
+    enqueue({ data: [{ id: BEN_1 }] }) // update ... returning id
 
     const response = await DELETE(del(), params)
     const { status, body } = await parseJsonResponse<{
@@ -146,7 +150,7 @@ describe('DELETE /api/salary/employees/[id]/benefits/[benefitId]', () => {
     }>(response)
 
     expect(status).toBe(200)
-    expect(body.data).toEqual({ id: 'ben-1', deleted: false, deactivated: true })
+    expect(body.data).toEqual({ id: BEN_1, deleted: false, deactivated: true })
     expect(findCall('employee_benefits', 'update')).toEqual([{ is_active: false }])
   })
 
@@ -203,13 +207,13 @@ describe('PATCH /api/salary/employees/[id]/benefits/[benefitId]', () => {
 
   it('updates the benefit (happy path)', async () => {
     enqueue({ data: storedBenefit }) // existence check
-    enqueue({ data: { id: 'ben-1', monthly_value: 100 } }) // update
+    enqueue({ data: { id: BEN_1, monthly_value: 100 } }) // update
 
     const response = await PATCH(patch({ monthly_value: 100 }), params)
     const { status, body } = await parseJsonResponse<{ data: { id: string } }>(response)
 
     expect(status).toBe(200)
-    expect(body.data.id).toBe('ben-1')
+    expect(body.data.id).toBe(BEN_1)
   })
 
   it('returns 404 when the benefit does not exist in the company', async () => {
@@ -269,7 +273,7 @@ describe('PATCH /api/salary/employees/[id]/benefits/[benefitId]', () => {
 
     it('accepts a valid_to-only patch that is still on or after the stored valid_from', async () => {
       enqueue({ data: storedBenefit })
-      enqueue({ data: { id: 'ben-1', valid_to: '2026-06-01' } })
+      enqueue({ data: { id: BEN_1, valid_to: '2026-06-01' } })
 
       // Equal to the stored valid_from: legal, the bound is inclusive.
       const response = await PATCH(patch({ valid_to: '2026-06-01' }), params)
@@ -278,7 +282,7 @@ describe('PATCH /api/salary/employees/[id]/benefits/[benefitId]', () => {
 
     it('accepts both dates equal (the bound is inclusive)', async () => {
       enqueue({ data: storedBenefit })
-      enqueue({ data: { id: 'ben-1' } })
+      enqueue({ data: { id: BEN_1 } })
 
       const response = await PATCH(
         patch({ valid_from: '2026-06-01', valid_to: '2026-06-01' }),
@@ -289,7 +293,7 @@ describe('PATCH /api/salary/employees/[id]/benefits/[benefitId]', () => {
 
     it('accepts valid_to: null (clearing the end date keeps the benefit open-ended)', async () => {
       enqueue({ data: storedBenefit })
-      enqueue({ data: { id: 'ben-1', valid_to: null } })
+      enqueue({ data: { id: BEN_1, valid_to: null } })
 
       const response = await PATCH(patch({ valid_to: null }), params)
       expect(response.status).toBe(200)
@@ -297,7 +301,7 @@ describe('PATCH /api/salary/employees/[id]/benefits/[benefitId]', () => {
 
     it('accepts a valid_from-only patch when the stored valid_to is null', async () => {
       enqueue({ data: { ...storedBenefit, valid_to: null } })
-      enqueue({ data: { id: 'ben-1' } })
+      enqueue({ data: { id: BEN_1 } })
 
       const response = await PATCH(patch({ valid_from: '2030-01-01' }), params)
       expect(response.status).toBe(200)

@@ -167,8 +167,25 @@ describe('gnubok_create_company', () => {
     // the first membership regardless of kind attached a consultant's private
     // company to their byrå team.
     expect(supabase.from).toHaveBeenCalledWith('team_members')
-    expect(supabase.chain.select).toHaveBeenCalledWith('team_id, teams!inner(kind, created_at)')
+    expect(supabase.chain.select).toHaveBeenCalledWith('team_id, teams!inner(id, kind, created_at)')
     expect(supabase.chain.eq).toHaveBeenCalledWith('teams.kind', 'personal')
+  })
+
+  it('refuses the preview and the creation when the personal team cannot be read', async () => {
+    const supabase = supabaseWithTeam(TEAM_ID)
+    supabase.chain.maybeSingle.mockResolvedValue({
+      data: null,
+      error: { code: '42703', message: 'column team_members_teams_1.id does not exist' },
+    })
+
+    for (const confirm of [undefined, true]) {
+      await expect(tool.execute({ ...setup, confirm }, '', 'user-1', supabase as never)).rejects.toMatchObject({
+        code: 'COMPANY_CREATE_FAILED',
+        message: expect.stringContaining('personal team could not be read'),
+      })
+    }
+    expect(mocks.createCompanyCore).not.toHaveBeenCalled()
+    expect(supabase.rpc).not.toHaveBeenCalled()
   })
 
   it('leaves team_id null when the user has no personal team', async () => {

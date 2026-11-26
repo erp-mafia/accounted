@@ -96,6 +96,17 @@ describe('settings operations: field split', () => {
     expect(field.description).toMatch(/length digit/i)
   })
 
+  it('lets the API and MCP read and write the send order', () => {
+    expect(keys(settingsUpdate.input)).toContain('invoice_send_order')
+    expect(toSettingsResource('c1', { invoice_send_order: ['peppol', 'email'] } as never).invoice_send_order).toEqual(['peppol', 'email'])
+    // A row read before the column exists reports it as unset.
+    expect(toSettingsResource('c1', {} as never).invoice_send_order ?? null).toBeNull()
+    const field = (settingsUpdate.input as unknown as z.ZodObject<z.ZodRawShape>).shape.invoice_send_order as z.ZodType
+    expect(field.safeParse(['kivra', 'email']).success).toBe(true)
+    expect(field.safeParse(null).success).toBe(true)
+    expect(field.safeParse(['email', 'email']).success).toBe(false)
+  })
+
   it('lets the API and MCP read and write the Swedbank payment-file ids, in Swedbank format only (crm#1117)', () => {
     const shape = (settingsUpdate.input as unknown as z.ZodObject<z.ZodRawShape>).shape
     for (const [field, valid, invalid] of [

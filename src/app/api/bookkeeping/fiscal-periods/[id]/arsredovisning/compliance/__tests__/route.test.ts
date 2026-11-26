@@ -2,6 +2,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { NextResponse } from 'next/server'
 import { createMockRequest, createQueuedMockSupabase, parseJsonResponse } from '@/tests/helpers'
 
+// Route path ids are uuids: the route answers its 404 to anything else before it reads.
+const PERIOD_1 = '967b285e-2dcb-5661-91f6-68a799845858'
+
 const requireAuthMock = vi.fn()
 const requireWriteMock = vi.fn()
 vi.mock('@/lib/auth/require-auth', () => ({
@@ -25,7 +28,7 @@ import { buildCanonicalAnnualReport } from '@/lib/bokslut/arsredovisning/model'
 import { upsertAnnualReportProfile } from '@/lib/bokslut/arsredovisning/profile-service'
 import { GET, PATCH } from '../route'
 
-const params = { params: Promise.resolve({ id: 'period-1' }) }
+const params = { params: Promise.resolve({ id: PERIOD_1 }) }
 const model = {
   report: {
     accounting_framework: 'k2',
@@ -34,7 +37,7 @@ const model = {
       resultatdisposition_amounts: { total: 100 },
     },
   },
-  profile: { company_id: 'company-1', fiscal_period_id: 'period-1' },
+  profile: { company_id: 'company-1', fiscal_period_id: PERIOD_1 },
   disclosures: {},
   eligibility: {
     k2_eligible: true,
@@ -124,7 +127,7 @@ describe('annual report compliance route', () => {
 
   it('persists legal facts and confirmation timestamps', async () => {
     const { enqueue } = setup()
-    enqueue({ data: { id: 'period-1' } })
+    enqueue({ data: { id: PERIOD_1 } })
     const response = await PATCH(
       createMockRequest('/x', {
         method: 'PATCH',
@@ -137,7 +140,7 @@ describe('annual report compliance route', () => {
       expect.anything(),
       'company-1',
       'user-1',
-      'period-1',
+      PERIOD_1,
       expect.objectContaining({
         is_public_limited_company: false,
         k2_assessment_confirmed_at: expect.any(String),
@@ -147,7 +150,7 @@ describe('annual report compliance route', () => {
 
   it('records explicit representative roster confirmation', async () => {
     const { enqueue } = setup()
-    enqueue({ data: { id: 'period-1' } })
+    enqueue({ data: { id: PERIOD_1 } })
     const response = await PATCH(
       createMockRequest('/x', {
         method: 'PATCH',
@@ -160,7 +163,7 @@ describe('annual report compliance route', () => {
       expect.anything(),
       'company-1',
       'user-1',
-      'period-1',
+      PERIOD_1,
       expect.objectContaining({ signer_roster_confirmed_at: expect.any(String) }),
     )
   })

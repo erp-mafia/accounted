@@ -78,5 +78,5 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     }
     return NextResponse.json({ data: posted })
   },
-  { requireWrite: true },
+  { requireWrite: true, uuidParams: { id: 'JOURNAL_ENTRY_NOT_FOUND' } },
 )

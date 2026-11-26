@@ -115,6 +115,9 @@ export async function convertToSalesOrder(
       currency: source.currency,
       your_reference: source.your_reference ?? null,
       our_reference: source.our_reference ?? null,
+      // The buyer's Märkning travels with the agreement: the invoices the
+      // order produces carry it (create-invoice-from-order.ts).
+      invoice_marking: source.invoice_marking ?? null,
       notes: source.notes ?? null,
       default_dimensions: source.default_dimensions ?? {},
       items,

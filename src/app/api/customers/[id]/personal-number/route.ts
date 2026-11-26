@@ -78,5 +78,5 @@ export const GET = withRouteContext(
 
     return NextResponse.json({ data: { personal_number: personalNumber } })
   },
-  { requireWrite: true },
+  { requireWrite: true, uuidParams: { id: 'CUSTOMER_NOT_FOUND' } },
 )

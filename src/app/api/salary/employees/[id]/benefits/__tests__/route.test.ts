@@ -11,6 +11,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import { createQueuedMockSupabase, createMockRequest, parseJsonResponse } from '@/tests/helpers'
 
+// Route path ids are uuids: the route answers its 404 to anything else before it reads.
+const EMP_1 = 'fcd49043-9489-5813-aacd-a04b3e121e68'
+
 const { supabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
@@ -38,14 +41,14 @@ vi.mock('@/lib/salary/invalidate-calculation', async (original) => ({
   invalidateRunCalculation: vi.fn(async () => null),
 }))
 
-const params = { params: Promise.resolve({ id: 'emp-1' }) } as never
+const params = { params: Promise.resolve({ id: EMP_1 }) } as never
 
 function get() {
-  return createMockRequest('/api/salary/employees/emp-1/benefits', { method: 'GET' })
+  return createMockRequest(`/api/salary/employees/${EMP_1}/benefits`, { method: 'GET' })
 }
 
 function post(body: unknown) {
-  return createMockRequest('/api/salary/employees/emp-1/benefits', { method: 'POST', body })
+  return createMockRequest(`/api/salary/employees/${EMP_1}/benefits`, { method: 'POST', body })
 }
 
 describe('GET /api/salary/employees/[id]/benefits', () => {
@@ -80,7 +83,7 @@ describe('GET /api/salary/employees/[id]/benefits', () => {
   // removed after a run derived a line from it is kept as is_active=false for
   // provenance; listing it here would show a "removed" benefit as live.
   it('lists active benefits only (happy path)', async () => {
-    enqueue({ data: { id: 'emp-1' } }) // employee lookup
+    enqueue({ data: { id: EMP_1 } }) // employee lookup
     enqueue({ data: [{ id: 'ben-1', is_active: true }] }) // benefits
 
     const response = await GET(get(), params)
@@ -90,7 +93,7 @@ describe('GET /api/salary/employees/[id]/benefits', () => {
     expect(body.data).toEqual([{ id: 'ben-1', is_active: true }])
     expect(findCalls('employee_benefits', 'eq')).toContainEqual(['is_active', true])
     expect(findCalls('employee_benefits', 'eq')).toContainEqual(['company_id', 'company-1'])
-    expect(findCalls('employee_benefits', 'eq')).toContainEqual(['employee_id', 'emp-1'])
+    expect(findCalls('employee_benefits', 'eq')).toContainEqual(['employee_id', EMP_1])
   })
 })
 
@@ -131,7 +134,7 @@ describe('POST /api/salary/employees/[id]/benefits', () => {
   })
 
   it('creates a benefit (happy path)', async () => {
-    enqueue({ data: { id: 'emp-1' } }) // employee ownership check
+    enqueue({ data: { id: EMP_1 } }) // employee ownership check
     enqueue({ data: { id: 'ben-1', benefit_type: 'other', monthly_value: 500 } }) // insert
 
     const response = await POST(post(validBenefit), params)
@@ -157,7 +160,7 @@ describe('POST /api/salary/employees/[id]/benefits', () => {
       // Queued as the DB would answer without the schema mirror: the employee
       // resolves, then the insert trips the CHECK. The route must never get
       // there; before the mirror this exact input returned an opaque 500.
-      enqueue({ data: { id: 'emp-1' } })
+      enqueue({ data: { id: EMP_1 } })
       enqueue({
         data: null,
         error: { code: '23514', message: 'violates check constraint "employee_benefits_check"' },
@@ -185,7 +188,7 @@ describe('POST /api/salary/employees/[id]/benefits', () => {
     })
 
     it('accepts valid_to equal to valid_from (the bound is inclusive)', async () => {
-      enqueue({ data: { id: 'emp-1' } })
+      enqueue({ data: { id: EMP_1 } })
       enqueue({ data: { id: 'ben-1' } })
 
       const response = await POST(
@@ -196,7 +199,7 @@ describe('POST /api/salary/employees/[id]/benefits', () => {
     })
 
     it('accepts an omitted valid_to (open-ended benefit stays legal)', async () => {
-      enqueue({ data: { id: 'emp-1' } })
+      enqueue({ data: { id: EMP_1 } })
       enqueue({ data: { id: 'ben-1' } })
 
       const response = await POST(post(validBenefit), params)
@@ -204,7 +207,7 @@ describe('POST /api/salary/employees/[id]/benefits', () => {
     })
 
     it('maps a check_violation from the insert to 400, not 500', async () => {
-      enqueue({ data: { id: 'emp-1' } })
+      enqueue({ data: { id: EMP_1 } })
       enqueue({ data: null, error: { code: '23514', message: 'violates check constraint' } })
 
       const response = await POST(post(validBenefit), params)
@@ -212,7 +215,7 @@ describe('POST /api/salary/employees/[id]/benefits', () => {
     })
 
     it('still reports a genuine DB failure as 500', async () => {
-      enqueue({ data: { id: 'emp-1' } })
+      enqueue({ data: { id: EMP_1 } })
       enqueue({ data: null, error: { code: '08006', message: 'connection failure' } })
 
       const response = await POST(post(validBenefit), params)

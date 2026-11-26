@@ -243,6 +243,7 @@ function toUpdatePayload(c: CompanySettingsChanges) {
     invoice_late_fee_text_en: c.invoice_late_fee_text_en,
     invoice_credit_terms_text_en: c.invoice_credit_terms_text_en,
     invoice_payment_links_enabled: c.invoice_payment_links_enabled,
+    invoice_send_order: c.invoice_send_order,
     invoice_email_texts: c.invoice_email_texts,
     invoice_email_cc_addresses: c.invoice_email_cc_addresses,
     invoice_email_bcc_addresses: c.invoice_email_bcc_addresses,
@@ -863,8 +864,8 @@ export async function withEntityTypeFallback<T extends SettingsRow>(
 
 /**
  * The columns of the settings.get read, but the recent one getCompanySettings
- * reads beside them while its migration may still be on its way:
- * invoice_ocr_length_digit (20261123152500). A column moves in here once its
+ * reads beside them while their migrations may still be on their way:
+ * invoice_ocr_length_digit (20261123152500) and invoice_send_order. A column moves in here once its
  * migration is applied everywhere: the read without the recent columns must
  * still return every setting that is stored.
  */
@@ -880,7 +881,7 @@ const SETTINGS_READ_COLUMNS =
 export async function getCompanySettings(ctx: OperationContext): Promise<OperationOutcome<SettingsRow>> {
   let read = await ctx.supabase
     .from('company_settings')
-    .select(`${SETTINGS_READ_COLUMNS}, invoice_ocr_length_digit`)
+    .select(`${SETTINGS_READ_COLUMNS}, invoice_ocr_length_digit, invoice_send_order`)
     .eq('company_id', ctx.companyId)
     .maybeSingle()
   if (isMissingColumnError(read.error)) {

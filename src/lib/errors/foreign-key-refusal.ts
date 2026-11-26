@@ -36,6 +36,11 @@
  *     after its payment file was generated. The file is räkenskapsinformation
  *     kept for seven years (migration 20260919105035), so the run stays
  *     (3 refusals).
+ *   - salary_absence_days_carried_to_run_fkey and
+ *     salary_worked_days_carried_to_run_fkey: a draft that late days from an
+ *     earlier, already paid period are carried to (migration 20261125183000).
+ *     Deleting it would leave the days deducted by no run, so the days go
+ *     first (lib/salary/late-days.ts).
  * The document DELETE (dashboard Arkiv, v1 and MCP documents.delete):
  *   - transactions_document_id_fkey: a document that is still a bank
  *     transaction's underlag (ON DELETE RESTRICT, 20260506100000). It is
@@ -46,12 +51,14 @@ import type { StructuredErrorRemediation } from './structured-errors'
 export type ForeignKeyRefusalCode =
   | 'JOURNAL_ENTRY_DELETE_BLOCKED_BY_REGISTER'
   | 'SALARY_RUN_DELETE_BLOCKED_BY_PAYMENT_FILE'
+  | 'SALARY_RUN_DELETE_BLOCKED_BY_LATE_DAYS'
   | 'DOCUMENT_DELETE_BLOCKED_BY_TRANSACTION'
   | 'RECORD_STILL_REFERENCED'
 
 export const FOREIGN_KEY_REFUSAL_CODES: ReadonlySet<string> = new Set<ForeignKeyRefusalCode>([
   'JOURNAL_ENTRY_DELETE_BLOCKED_BY_REGISTER',
   'SALARY_RUN_DELETE_BLOCKED_BY_PAYMENT_FILE',
+  'SALARY_RUN_DELETE_BLOCKED_BY_LATE_DAYS',
   'DOCUMENT_DELETE_BLOCKED_BY_TRANSACTION',
   'RECORD_STILL_REFERENCED',
 ])
@@ -64,6 +71,7 @@ export type ForeignKeyRefusalRegister =
   | 'accrual_origin'
   | 'payroll'
   | 'payment_file'
+  | 'late_days'
   | 'bank_transaction'
 
 interface MappedRefusal {
@@ -146,6 +154,28 @@ const PAYROLL_RUN_WITH_PAYMENT_FILE: MappedRefusal = {
   },
 }
 
+const PAYROLL_RUN_WITH_LATE_DAYS: MappedRefusal = {
+  code: 'SALARY_RUN_DELETE_BLOCKED_BY_LATE_DAYS',
+  register: 'late_days',
+  sv: 'Lönekörningen kan inte raderas eftersom sent kända dagar från en tidigare, redan utbetald eller deklarerad period ska dras i den. Ta bort de dagarna först, eller låt körningen vara kvar.',
+  en: 'This payroll run cannot be deleted because late days from an earlier, already paid or declared period are carried to it. Remove those days first, or keep the run.',
+  remediation: {
+    description:
+      'Absence days from an earlier, already paid or declared period are carried to this draft run (carried_to_run_id) and would be deducted by no run without it. Delete those days first (gnubok_delete_absence; list them with gnubok_list_absence), then delete the run, or keep it.',
+    tool: 'gnubok_delete_absence',
+  },
+}
+
+/** The same refusal when worked hours are what is carried to the run. */
+const PAYROLL_RUN_WITH_LATE_HOURS: MappedRefusal = {
+  ...PAYROLL_RUN_WITH_LATE_DAYS,
+  remediation: {
+    description:
+      'Worked hours from an earlier, already paid or declared period are carried to this draft run (carried_to_run_id) and would be paid by no run without it. Delete those hours first (gnubok_delete_worked_days; list them with gnubok_list_worked_days), then delete the run, or keep it.',
+    tool: 'gnubok_delete_worked_days',
+  },
+}
+
 const DOCUMENT_ON_TRANSACTION: MappedRefusal = {
   code: 'DOCUMENT_DELETE_BLOCKED_BY_TRANSACTION',
   register: 'bank_transaction',
@@ -167,6 +197,8 @@ const MAPPED_REFUSALS: Record<string, MappedRefusal> = {
   salary_runs_vacation_entry_id_fkey: PAYROLL_VOUCHER,
   salary_runs_pension_entry_id_fkey: PAYROLL_VOUCHER,
   salary_payment_files_salary_run_id_fkey: PAYROLL_RUN_WITH_PAYMENT_FILE,
+  salary_absence_days_carried_to_run_fkey: PAYROLL_RUN_WITH_LATE_DAYS,
+  salary_worked_days_carried_to_run_fkey: PAYROLL_RUN_WITH_LATE_HOURS,
   transactions_document_id_fkey: DOCUMENT_ON_TRANSACTION,
 }
 

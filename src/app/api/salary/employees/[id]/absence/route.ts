@@ -13,23 +13,30 @@ import {
   deleteAbsenceRange,
 } from '@/lib/salary/absence'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
+import { runOfPayslip } from '@/lib/salary/late-days'
+import { registerRefusalMessageSv } from '@/lib/salary/register-locks'
 
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
+
+/** The register refusals whose details name runs and dates, not database text. */
+const REGISTER_REFUSALS = new Set(['SALARY_REGISTER_DATES_LOCKED_BY_RUN', 'SALARY_REGISTER_LATE_DAY_REFUSED'])
 
 function errorResponse(code: string, details?: Record<string, unknown>): NextResponse {
   const entry = getErrorEntry(code)
   // Only the 24h-cap trigger's Swedish text is user-facing detail; for every
   // other code details.message is raw Postgres text and must not reach the
-  // client (the registry message is shown instead).
+  // client (the registry message is shown instead). A register refusal is
+  // worded from its details: the run, the dates and the way out.
   const message =
     (code === 'ABSENCE_HOURS_CONFLICT' ? (details?.message as string | undefined) : undefined) ??
+    registerRefusalMessageSv(code, details, 'dashboard') ??
     entry?.message_sv ??
     'Något gick fel'
-  // The register lock (409) names the run that already read the dates
+  // A register refusal (409) names the run that already read the dates
   // (salary_run_id, locked_dates): pass that through so the calendar can
   // point at it. Every other code keeps details server-side.
   const body =
-    code === 'SALARY_REGISTER_DATES_LOCKED_BY_RUN' && details
+    REGISTER_REFUSALS.has(code) && details
       ? { error: message, code, details }
       : { error: message, code }
   return NextResponse.json(body, { status: entry?.httpStatus ?? 500 })
@@ -64,6 +71,8 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     if (!validation.success) return validation.response
     const body = validation.data
 
+    // A day registered from a payslip's calendar on a date a paid or declared
+    // run already read is a late day: that payslip's run takes it.
     const result = await upsertAbsenceDay(supabase, {
       companyId,
       employeeId,
@@ -74,6 +83,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         notes: body.notes ?? null,
         salary_run_employee_id: body.salary_run_employee_id ?? null,
       },
+      carriedToRunId: await runOfPayslip(supabase, companyId, body.salary_run_employee_id),
     })
 
     if (!result.ok) return errorResponse(result.code, result.details)

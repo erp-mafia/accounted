@@ -6,6 +6,7 @@ import { resolveCompanyEntityType, resultClosingAccounts } from '@/lib/company/e
 import { isYearEndAccount } from '@/lib/bookkeeping/bas-data/result-accounts'
 import { resolvePeriodLockForDate } from '@/lib/core/bookkeeping/period-status'
 import { whereSieImportInPlace } from '@/lib/bookkeeping/sie-import-in-place'
+import { isIsoDateShaped } from '@/lib/invariants'
 import { mappingsToMap } from './account-mapper'
 import { closedPeriodRefusal, prepareSIEVouchers } from './sie-import'
 import { getEffectiveOpeningBalances } from './sie-parser'
@@ -305,14 +306,72 @@ interface PeriodRow {
   locked_at: string | null; closed_externally: boolean | null; closing_entry_id: string | null
 }
 
+/** The filter methods the base reading uses, on any query of sie_imports. */
+interface AppendBaseFilter {
+  eq(column: string, value: string): AppendBaseFilter
+  is(column: string, value: null): AppendBaseFilter
+}
+
+/** The imports an append can add to: a durable import that completed, never an append itself. */
+function whereSIEAppendBase<Query>(query: Query): Query {
+  return (query as unknown as AppendBaseFilter)
+    .eq('job_kind', 'import').eq('job_state', 'completed').is('base_import_id', null) as unknown as Query
+}
+
 /** The year's completed import an append adds to, or null. Never an append itself. */
 async function findSIEAppendBase(supabase: SupabaseClient, companyId: string, periodId: string): Promise<string | null> {
-  const { data, error } = await supabase.from('sie_imports').select('id')
-    .eq('company_id', companyId).eq('fiscal_period_id', periodId).eq('job_kind', 'import')
-    .eq('job_state', 'completed').is('base_import_id', null)
+  const { data, error } = await whereSIEAppendBase(supabase.from('sie_imports').select('id')
+    .eq('company_id', companyId).eq('fiscal_period_id', periodId))
     .order('created_at', { ascending: false }).limit(1).maybeSingle()
   if (error) throw new Error(error.message)
   return (data as { id: string } | null)?.id ?? null
+}
+
+export interface SIEAppendYear {
+  fiscalPeriodId: string
+  name: string
+  start: string
+  end: string
+  baseImportId: string
+  /** The year of the file the base imported (its #RAR), which the source system exports by; null when the import did not record it. */
+  sourceYear: { start: string; end: string } | null
+}
+
+/**
+ * The fiscal years a top-up of files from `program` (a file's #PROGRAM, as
+ * the import recorded it) can add vouchers to, oldest first: each year whose
+ * base (the one findSIEAppendBase picks, the newest) imported a file of that
+ * program, and that is neither closed nor locked (closedPeriodRefusal, the
+ * plan's own check). A year from another program is left out: the plan
+ * matches source numbers within one program only, so every voucher of it
+ * would read as new. The company lock date is the plan's to check: it
+ * refuses a new voucher dated behind it and says so. Read-only.
+ */
+export async function appendableSIEYears(supabase: SupabaseClient, companyId: string, program: string): Promise<SIEAppendYear[]> {
+  const bases = await fetchAllRows<{ id: string; fiscal_period_id: string | null; program: string | null; source_year: unknown }>(({ from, to }) =>
+    whereSIEAppendBase(supabase.from('sie_imports')
+      .select('id,fiscal_period_id,program:migration_documentation->>sourceSystem,source_year:migration_documentation->fiscalYear')
+      .eq('company_id', companyId))
+      .order('created_at', { ascending: false }).order('id').range(from, to))
+  const newest = new Map<string, (typeof bases)[number]>()
+  for (const base of bases) if (base.fiscal_period_id && !newest.has(base.fiscal_period_id)) newest.set(base.fiscal_period_id, base)
+  const fromProgram = [...newest.values()].filter(base => base.program === program)
+  if (!fromProgram.length) return []
+  const { data, error } = await supabase.from('fiscal_periods')
+    .select('id,name,period_start,period_end,is_closed,locked_at,closed_externally,closing_entry_id')
+    .eq('company_id', companyId).in('id', fromProgram.map(base => base.fiscal_period_id!))
+  if (error) throw new Error(error.message)
+  const isoDate = (value: unknown) => typeof value === 'string' && isIsoDateShaped(value) ? value : null
+  return ((data ?? []) as PeriodRow[]).filter(period => !closedPeriodRefusal(period))
+    .sort((a, b) => a.period_start.localeCompare(b.period_start))
+    .map(period => {
+      const base = newest.get(period.id)!
+      const sourceYear = (base.source_year ?? {}) as { start?: unknown; end?: unknown }
+      const sourceStart = isoDate(sourceYear.start)
+      const sourceEnd = isoDate(sourceYear.end)
+      return { fiscalPeriodId: period.id, name: period.name, start: period.period_start, end: period.period_end,
+        baseImportId: base.id, sourceYear: sourceStart && sourceEnd ? { start: sourceStart, end: sourceEnd } : null }
+    })
 }
 
 /**

@@ -6,6 +6,9 @@ import {
   createQueuedMockSupabase,
 } from '@/tests/helpers'
 
+// Route path ids are uuids: the route answers its 404 to anything else before it reads.
+const SUP_1 = '76905851-aef5-5322-b2a3-61d490564d4e'
+
 const { supabase: mockSupabase, enqueue, reset, findCall } = createQueuedMockSupabase()
 vi.mock('@/lib/supabase/server', () => ({
   createClient: () => Promise.resolve(mockSupabase),
@@ -23,7 +26,7 @@ vi.mock('@/lib/auth/require-write', () => ({
 import { GET, PUT } from '../route'
 
 const SUPPLIER = {
-  id: 'sup-1',
+  id: SUP_1,
   company_id: 'company-1',
   name: 'Beispiel GmbH',
   default_currency: 'EUR',
@@ -41,8 +44,8 @@ describe('GET /api/suppliers/[id]', () => {
   it('returns 401 when not authenticated', async () => {
     mockSupabase.auth.getUser.mockResolvedValue({ data: { user: null } })
 
-    const request = new Request('http://localhost/api/suppliers/sup-1')
-    const response = await GET(request, createMockRouteParams({ id: 'sup-1' }))
+    const request = new Request(`http://localhost/api/suppliers/${SUP_1}`)
+    const response = await GET(request, createMockRouteParams({ id: SUP_1 }))
     const { status } = await parseJsonResponse(response)
 
     expect(status).toBe(401)
@@ -51,8 +54,8 @@ describe('GET /api/suppliers/[id]', () => {
   it('returns 404 when the supplier does not exist', async () => {
     enqueue({ data: null, error: { message: 'not found' } })
 
-    const request = new Request('http://localhost/api/suppliers/sup-1')
-    const response = await GET(request, createMockRouteParams({ id: 'sup-1' }))
+    const request = new Request(`http://localhost/api/suppliers/${SUP_1}`)
+    const response = await GET(request, createMockRouteParams({ id: SUP_1 }))
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
 
     expect(status).toBe(404)
@@ -74,8 +77,8 @@ describe('GET /api/suppliers/[id]', () => {
       error: null,
     })
 
-    const request = new Request('http://localhost/api/suppliers/sup-1')
-    const response = await GET(request, createMockRouteParams({ id: 'sup-1' }))
+    const request = new Request(`http://localhost/api/suppliers/${SUP_1}`)
+    const response = await GET(request, createMockRouteParams({ id: SUP_1 }))
     const { status, body } = await parseJsonResponse<{
       data: { stats: { invoice_count: number; by_currency: unknown[] } }
     }>(response)
@@ -102,8 +105,8 @@ describe('GET /api/suppliers/[id]', () => {
       error: null,
     })
 
-    const request = new Request('http://localhost/api/suppliers/sup-1')
-    const response = await GET(request, createMockRouteParams({ id: 'sup-1' }))
+    const request = new Request(`http://localhost/api/suppliers/${SUP_1}`)
+    const response = await GET(request, createMockRouteParams({ id: SUP_1 }))
     const { body } = await parseJsonResponse<{
       data: { stats: { by_currency: { currency: string; total_outstanding: number }[] } }
     }>(response)
@@ -118,8 +121,8 @@ describe('GET /api/suppliers/[id]', () => {
       error: null,
     })
 
-    const request = new Request('http://localhost/api/suppliers/sup-1')
-    const response = await GET(request, createMockRouteParams({ id: 'sup-1' }))
+    const request = new Request(`http://localhost/api/suppliers/${SUP_1}`)
+    const response = await GET(request, createMockRouteParams({ id: SUP_1 }))
     const { body } = await parseJsonResponse<{
       data: { stats: { by_currency: { currency: string; total_outstanding: number }[] } }
     }>(response)

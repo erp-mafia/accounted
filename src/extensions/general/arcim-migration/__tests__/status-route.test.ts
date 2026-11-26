@@ -569,7 +569,7 @@ describe('GET /status: underlag left on reversed copies (#51)', () => {
   })
 
   it('does not ask when no connection can fetch underlag', async () => {
-    ;(listConsents as Mock).mockResolvedValue([consent('visma')])
+    ;(listConsents as Mock).mockResolvedValue([consent('briox')])
 
     expect((await underlagOnReplacedCopies(completed)).count).toBe(0)
     expect(countUnderlagOnReplacedCopies).not.toHaveBeenCalled()

@@ -14,6 +14,12 @@
  * conversion, order to invoice, and webshop orders. The web editor prefills
  * the field in front of the user instead, so a marking the user clears there
  * stays cleared.
+ *
+ * A kundorder keeps a Märkning of its own (sales_orders.invoice_marking):
+ * the one its offert or proforma carried, or one set on the order. Its
+ * invoices take that one, and the card's only when the order states none.
+ * Which Märkning a new invoice gets is this file's rule alone
+ * (scripts/checks/one-definition/invoice-marking-for-new-invoice.mjs).
  */
 
 type CustomerWithMarking = { invoice_marking?: string | null } | null | undefined
