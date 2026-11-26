@@ -73,6 +73,8 @@ interface RpcBooked {
   voucher_number: number | null
   party_id: string
   amount: number | string
+  /** The 3740 the verifikat booked: > 0 Dr, < 0 Cr, 0 none. */
+  ore_rounding?: number | string | null
   receivable_account: string
   payable_account: string
   invoice: { invoice_id: string; payment_id: string; status: string; paid_amount: number | string; remaining_amount: number | string }
@@ -123,7 +125,7 @@ export function setoffPreview(plan: SetoffPlan, state: Pick<SetoffPairState, 'cu
     // vouchers booked, which are these unless the company booked others.
     lines: [
       { account_number: payable, debit_amount: plan.amount, credit_amount: 0 },
-      { account_number: receivable, debit_amount: 0, credit_amount: plan.invoice.applied },
+      { account_number: receivable, debit_amount: 0, credit_amount: plan.invoice.receivableCleared },
       ...(plan.invoice.oreRounding !== 0 ? [oreLine(plan.invoice.oreRounding)] : []),
     ],
   }
@@ -291,13 +293,15 @@ async function archiveSetoffNote(
       setoffDate: plan.setoffDate,
       voucherLabel,
       amount: plan.amount,
-      oreRounding: plan.invoice.oreRounding,
+      // What the verifikat booked, as the RPC answered it under its row locks.
+      oreRounding: result.ore_rounding == null ? plan.invoice.oreRounding : Number(result.ore_rounding),
       invoice: {
         number: plan.invoice.number,
         invoiceDate: state.invoice.invoiceDate,
         total: state.invoice.total,
         remainingBefore: plan.invoice.remainingBefore,
         remainingAfter: plan.invoice.remainingAfter,
+        applied: plan.invoice.applied,
       },
       supplierInvoice: {
         number: plan.supplierInvoice.number,

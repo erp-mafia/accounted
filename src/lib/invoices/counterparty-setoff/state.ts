@@ -8,6 +8,8 @@
  * the invoicing block takes no new edge to the parties feature.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { carriedSekOf } from '@/lib/bookkeeping/ledger-carried-sek'
+import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
 import { isOpenPaymentOrder, OPEN_PAYMENT_ORDER_CANDIDATE_STATUSES } from '@/lib/payments/orders/status'
 import { ID_READ_CHUNK } from '@/lib/supabase/read-in-slices'
 import { chunk } from '@/lib/utils'
@@ -170,7 +172,7 @@ export async function paymentInFlightSupplierInvoiceIds(
 
 export function toSetoffInvoiceFacts(
   row: SetoffInvoiceRow,
-  context: { partyId: string | null; collectionOpen: boolean },
+  context: { partyId: string | null; collectionOpen: boolean; carriedSek?: number | null },
 ): SetoffInvoiceFacts {
   return {
     id: row.id,
@@ -186,6 +188,7 @@ export function toSetoffInvoiceFacts(
     invoiceDate: row.invoice_date,
     dueDate: row.due_date,
     booked: !!row.journal_entry_id,
+    carriedSek: context.carriedSek ?? null,
     partyId: context.partyId,
     collectionOpen: context.collectionOpen,
   }
@@ -259,10 +262,23 @@ export async function loadSetoffPair(
     supplier: { name: string | null; party_id: string | null } | null
   }
   const partyIds = [invoiceRow.customer?.party_id, supplierRow.supplier?.party_id].filter((id): id is string => !!id)
-  const [canonical, collections, inFlight] = await Promise.all([
+  const [canonical, collections, inFlight, carriedSek] = await Promise.all([
     resolveCanonicalParties(supabase, companyId, partyIds),
     openCollectionInvoiceIds(supabase, companyId, [invoiceRow.id]),
     paymentInFlightSupplierInvoiceIds(supabase, companyId, [supplierRow]),
+    // What 151x carries when the issue verifikat booked the öresavrundning;
+    // null (and no read) for every other invoice. A set-off is SEK only.
+    isLedgerCurrency(invoiceRow.currency)
+      ? carriedSekOf(supabase, companyId, 'customer', {
+          id: invoiceRow.id,
+          currency: invoiceRow.currency,
+          // The remainder the planner uses (toSetoffInvoiceFacts) and the SQL reads.
+          remaining_amount: invoiceRow.remaining_amount == null ? num(invoiceRow.total) : num(invoiceRow.remaining_amount),
+          total: num(invoiceRow.total),
+          paid_amount: num(invoiceRow.paid_amount),
+          journal_entry_id: invoiceRow.journal_entry_id,
+        })
+      : null,
   ])
   const party = (id: string | null | undefined) => (id ? (canonical.get(id) ?? null) : null)
   return {
@@ -271,6 +287,7 @@ export async function loadSetoffPair(
       invoice: toSetoffInvoiceFacts(invoiceRow, {
         partyId: party(invoiceRow.customer?.party_id),
         collectionOpen: collections.has(invoiceRow.id),
+        carriedSek,
       }),
       supplierInvoice: toSetoffSupplierInvoiceFacts(supplierRow, {
         partyId: party(supplierRow.supplier?.party_id),

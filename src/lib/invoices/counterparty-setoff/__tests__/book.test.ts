@@ -265,6 +265,34 @@ describe('bookCounterpartySetoff: booking', () => {
     })
   })
 
+  it('archives a note that settles the remainder and books what the RPC booked, when the issue verifikat booked the öre', async () => {
+    const state = pair()
+    h.loadSetoffPair.mockResolvedValueOnce({
+      ok: true,
+      state: { ...state, invoice: { ...state.invoice, total: 999.75, remaining: 999.75, carriedSek: 1000 } },
+    })
+    h.commitSqlPosting.mockResolvedValueOnce({ data: { ...BOOKED, amount: '1000', ore_rounding: '0' }, error: null })
+    await bookCounterpartySetoff(context(), { invoiceId: 'inv-1', supplierInvoiceId: 'si-1', amount: 1000, setoffDate: '2026-09-30' }, { dryRun: false })
+    expect(h.renderSetoffNote).toHaveBeenCalledWith(
+      expect.objectContaining({
+        amount: 1000,
+        oreRounding: 0,
+        invoice: expect.objectContaining({ remainingBefore: 999.75, applied: 999.75, remainingAfter: 0 }),
+      }),
+    )
+  })
+
+  it('archives the öre the RPC booked under its locks, not the plan read before them', async () => {
+    const state = pair()
+    h.loadSetoffPair.mockResolvedValueOnce({
+      ok: true,
+      state: { ...state, invoice: { ...state.invoice, total: 999.75, remaining: 999.75 } },
+    })
+    h.commitSqlPosting.mockResolvedValueOnce({ data: { ...BOOKED, amount: '1000', ore_rounding: '0' }, error: null })
+    await bookCounterpartySetoff(context(), { invoiceId: 'inv-1', supplierInvoiceId: 'si-1', amount: 1000, setoffDate: '2026-09-30' }, { dryRun: false })
+    expect(h.renderSetoffNote).toHaveBeenCalledWith(expect.objectContaining({ oreRounding: 0 }))
+  })
+
   it('takes the next ordinal for a pair that was set off before', async () => {
     h.countPairSetoffs.mockResolvedValue(2)
     await bookCounterpartySetoff(context(), { invoiceId: 'inv-1', supplierInvoiceId: 'si-1' }, { dryRun: false })
