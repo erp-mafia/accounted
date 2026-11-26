@@ -178,6 +178,16 @@ const NEWER_COLUMNS: Array<{ column: string; needs: (payload: Record<string, unk
 
 const newerColumns = (count: number): string[] => NEWER_COLUMNS.slice(0, count).map((newer) => newer.column)
 
+/** Postgres unique_violation: on an insert, another save created the row first. */
+const UNIQUE_VIOLATION = '23505'
+
+/**
+ * How many times saveMergedNarrative reads, merges and writes before it gives
+ * up. An attempt only fails because another save landed between its read and
+ * its write, so this many overlapping saves all land.
+ */
+const MERGED_SAVE_ATTEMPTS = 5
+
 /**
  * Run a read or a save with every column, and while it fails on a missing
  * column, again without the newest one still asked for. `run` gets the
@@ -297,6 +307,29 @@ export async function getNarrative(
   return (data as unknown as NarrativeRow | null) ?? null
 }
 
+/** The row a save writes: who saved it, the narrative it is, and the fields it sends. */
+function narrativePayload(
+  companyId: string,
+  userId: string,
+  fiscalPeriodId: string,
+  input: Partial<NarrativeOverrides>,
+): Record<string, unknown> {
+  const payload: Record<string, unknown> = {
+    user_id: userId,
+    company_id: companyId,
+    fiscal_period_id: fiscalPeriodId,
+  }
+  for (const [key, value] of Object.entries(input)) {
+    payload[key] = value ?? null
+  }
+  return payload
+}
+
+/** The payload without the columns a database without them is written without. */
+function withoutColumns(payload: Record<string, unknown>, leftOut: string[]): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(payload).filter(([key]) => !leftOut.includes(key)))
+}
+
 /**
  * Upsert narrative overrides for a fiscal period. Composite UNIQUE constraint
  * (company_id, fiscal_period_id) (see migration
@@ -311,19 +344,12 @@ export async function upsertNarrative(
   fiscalPeriodId: string,
   input: Partial<NarrativeOverrides>,
 ): Promise<NarrativeRow> {
-  const payload: Record<string, unknown> = {
-    user_id: userId,
-    company_id: companyId,
-    fiscal_period_id: fiscalPeriodId,
-  }
-  for (const [key, value] of Object.entries(input)) {
-    payload[key] = value ?? null
-  }
+  const payload = narrativePayload(companyId, userId, fiscalPeriodId, input)
   // On a database without a newer column the save goes through without it,
   // unless the save needs that column (NEWER_COLUMNS): everything else the
   // payload holds is written either way.
   const { data, error } = await withNewerColumns((columns, leftOut) => {
-    const row = Object.fromEntries(Object.entries(payload).filter(([key]) => !leftOut.includes(key)))
+    const row = withoutColumns(payload, leftOut)
     return supabase
       .from(TABLE)
       .upsert(row, { onConflict: 'company_id,fiscal_period_id' })
@@ -338,4 +364,49 @@ export async function upsertNarrative(
   // The projection is a runtime string (a newer column may be missing),
   // so the client cannot type the row.
   return data as unknown as NarrativeRow
+}
+
+/**
+ * Save fields worked out from the stored row: the keyed fields a save merges
+ * into the stored ones (workflow-service.ts). `merge` gets the row as it is
+ * stored, and the write only lands on that same row: an update conditional
+ * on the updated_at the read returned (the trigger
+ * arsredovisning_narratives_updated_at sets it on every update), or a plain
+ * insert when there was no row, which meets a racing insert on the unique key
+ * instead of replacing it. When another save landed in between, the row is
+ * read and merged again, so two overlapping saves (two tabs, or an agent and
+ * a person) cannot drop each other's keys. Null when another save landed
+ * before every attempt: nothing was written.
+ */
+export async function saveMergedNarrative(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  fiscalPeriodId: string,
+  merge: (stored: NarrativeRow | null) => Partial<NarrativeOverrides>,
+): Promise<NarrativeRow | null> {
+  for (let attempt = 0; attempt < MERGED_SAVE_ATTEMPTS; attempt += 1) {
+    const stored = await getNarrative(supabase, companyId, fiscalPeriodId)
+    const payload = narrativePayload(companyId, userId, fiscalPeriodId, merge(stored))
+    // A database without a newer column is written without it, as in upsertNarrative.
+    const { data, error } = await withNewerColumns((columns, leftOut) => {
+      const row = withoutColumns(payload, leftOut)
+      if (!stored) return supabase.from(TABLE).insert(row).select(columns).maybeSingle()
+      return supabase
+        .from(TABLE)
+        .update(row)
+        .eq('company_id', companyId)
+        .eq('fiscal_period_id', fiscalPeriodId)
+        .eq('updated_at', stored.updated_at)
+        .select(columns)
+        .maybeSingle()
+    }, payload)
+    if (!stored && error?.code === UNIQUE_VIOLATION) continue
+    if (error) throw error
+    // The projection is a runtime string (a newer column may be missing),
+    // so the client cannot type the row.
+    if (data) return data as unknown as NarrativeRow
+    // No row matched: another save changed the row after it was read.
+  }
+  return null
 }
