@@ -62,6 +62,15 @@
  * at the year's traktamente_natt. Logi against a receipt is an utlägg (the
  * receipt is the company's verifikation, its moms is deducted there), so it
  * reaches the payslip through "Lägg till utlägg", not as a row here.
+ *
+ * Semesterlön rörliga lönedelar is semesterlön for the variable pay of an
+ * employee on sammalöneregeln, paid with this salary because a central
+ * kollektivavtal allows it (Semesterlagen 2 a § andra stycket,
+ * variable-vacation-pay.ts). It is a semesterersättning row marked
+ * settles_variable_vacation_pay, and the dialog offers it only for such an
+ * employee and only with the operator's confirmation of the agreement.
+ * Without one the law pays it after the semesterår, which the calculation
+ * already does, so no unmarked semesterersättning row is offered.
  */
 import { roundOre } from '@/lib/money'
 import type { SalaryLineItemType } from '@/types'
@@ -83,6 +92,7 @@ export type ManualPayslipLineType =
   | 'overtime'
   | 'other'
   | 'correction'
+  | 'variable_vacation_pay'
   | 'benefit_meals'
   | 'benefit_other'
   | 'gross_deduction_other'
@@ -104,6 +114,12 @@ export interface ManualLineSpec {
   account?: string
   /** A foreign traktamente: the operator names the country and enters its normalbelopp. */
   foreign?: boolean
+  /**
+   * Semesterlön for rörliga lönedelar paid with the salary under a central
+   * kollektivavtal: sammalöneregeln only, and only with the operator's
+   * confirmation of the agreement (kollektivavtal_confirmed).
+   */
+  settlesVariableVacationPay?: true
 }
 
 /** In the order the dialog lists them: reimbursements, extra pay, benefits, deductions. */
@@ -136,6 +152,11 @@ export const MANUAL_PAYSLIP_LINE_SPECS: Record<ManualPayslipLineType, ManualLine
   overtime: { label: 'Övertid', unit: 'timmar' },
   other: { label: 'Övrigt' },
   correction: { label: 'Korrigering', typedSign: true },
+  variable_vacation_pay: {
+    label: 'Semesterlön rörliga lönedelar',
+    storedAs: 'semesterersattning',
+    settlesVariableVacationPay: true,
+  },
   benefit_meals: { label: 'Kostförmån', unit: 'maltider' },
   benefit_other: { label: 'Övrig förmån' },
   gross_deduction_other: { label: 'Bruttolöneavdrag' },
@@ -233,6 +254,8 @@ export interface ManualLineInput {
   country?: string | null
   /** Utlandstraktamente only: Skatteverket's normalbelopp per day for the country, the tax-free cap. */
   normalbelopp?: number | null
+  /** Semesterlön rörliga lönedelar only: the operator confirmed the central kollektivavtal that allows it. */
+  kollektivavtal_confirmed?: boolean
 }
 
 export interface ManualLineBody {
@@ -244,6 +267,8 @@ export interface ManualLineBody {
   vacation_category?: VacationCategory
   /** A variant's own account (utlandstraktamente 7323 / 7324); a typed override replaces it. */
   account_number?: string
+  /** Semesterlön for rörliga lönedelar paid with the salary under a kollektivavtal (payslip-lines.ts). */
+  settles_variable_vacation_pay?: true
 }
 
 /**
@@ -267,6 +292,7 @@ export type ManualLineBuild =
   | { ok: false; reason: 'no_days' }
   | { ok: false; reason: 'no_country' }
   | { ok: false; reason: 'no_normalbelopp' }
+  | { ok: false; reason: 'no_kollektivavtal' }
   | { ok: false; reason: 'above_tax_free_cap'; cap: number; unit: 'mil' | 'dagar' | 'natter' }
 
 /**
@@ -279,7 +305,8 @@ export type ManualLineBuild =
  * characters); quantity, unit price and amount are ignored. A vacation line
  * needs its days; its amount is optional (buildVacationLine). A tax-free
  * utlandstraktamente needs its country and normalbelopp (the cap), a
- * taxable one its country.
+ * taxable one its country. Semesterlön rörliga lönedelar needs the
+ * operator's confirmation of the kollektivavtal, and carries the mark.
  */
 export function buildManualPayslipLine(input: ManualLineInput, caps: ManualLineCaps = {}): ManualLineBuild {
   const spec = MANUAL_PAYSLIP_LINE_SPECS[input.item_type]
@@ -327,6 +354,10 @@ export function buildManualPayslipLine(input: ManualLineInput, caps: ManualLineC
   if (quantity !== undefined) body.quantity = quantity
   if (unitPrice !== undefined) body.unit_price = unitPrice
   if (spec.account) body.account_number = spec.account
+  if (spec.settlesVariableVacationPay) {
+    if (input.kollektivavtal_confirmed !== true) return { ok: false, reason: 'no_kollektivavtal' }
+    body.settles_variable_vacation_pay = true
+  }
   return { ok: true, body }
 }
 
