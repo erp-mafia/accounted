@@ -170,8 +170,9 @@ const ACTION_HINTS: Readonly<Record<VoucherOwnerAction, { sv: string; en: string
  * What an open_supplier_invoice hint says when the invoice's page offers
  * something particular: Ångra kreditering is there only on a credited
  * invoice (and is where a supplier credit note is undone), and a paid or
- * part-paid invoice's page changes nothing of its verifikat, so a line-only
- * fix is a radrättelse inside it, which the invoice keeps pointing at.
+ * part-paid invoice's page changes nothing of its verifikat. The paid hint
+ * names no tool: it also reaches a storno or correction in the chain and a
+ * verifikat in a locked period, where correct_entry_lines_inline refuses.
  */
 const SUPPLIER_INVOICE_HINTS = {
   uncredit: {
@@ -179,8 +180,8 @@ const SUPPLIER_INVOICE_HINTS = {
     en: 'Change it on the invoice instead (Undo credit), so the ledger follows.',
   },
   paid: {
-    sv: 'Fakturan är betald eller delbetald, och dess sida ändrar inte verifikationen. Rör rättelsen bara rader och inte leverantörsskulden, gör den som radrättelse i samma verifikation (gnubok_correct_entry_lines), så pekar fakturan kvar på den.',
-    en: 'The invoice is paid or part-paid, and its page does not change the voucher. If the correction changes only lines and not the payable, make it a line correction in the same voucher (gnubok_correct_entry_lines), so the invoice keeps pointing at it.',
+    sv: 'Fakturan är betald eller delbetald: dess sida ändrar inte verifikationen, och fakturan följer inte med en rättelse.',
+    en: 'The invoice is paid or part-paid: its page does not change the voucher, and the invoice does not follow a correction.',
   },
 } as const
 

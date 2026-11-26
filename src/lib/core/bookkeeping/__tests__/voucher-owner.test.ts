@@ -85,9 +85,9 @@ describe('resolveVoucherOwner', () => {
 
   // Ångra kreditering is on the page of a credited invoice only, so the hint
   // names it there and nowhere else. A paid invoice's page changes nothing of
-  // its verifikat: a line-only fix is a radrättelse in the same verifikat,
-  // which the invoice keeps pointing at.
-  it.each(['paid', 'partially_paid'])('points a %s supplier invoice to a line correction, not to Ångra kreditering', async (status) => {
+  // its verifikat, and the hint names no tool: correct_entry_lines_inline
+  // refuses a storno and a locked period, which this hint also reaches.
+  it.each(['paid', 'partially_paid'])('tells a %s supplier invoice its page does not change the voucher, not Ångra kreditering', async (status) => {
     const { db, enqueueMany } = client()
     enqueueMany([{ data: { id: 'si-1', supplier_invoice_number: '3744267', status, credited_invoice_id: null } }])
 
@@ -100,8 +100,29 @@ describe('resolveVoucherOwner', () => {
     expect(owner).toMatchObject({ action: 'open_supplier_invoice', tool: null })
     expect(owner?.hint_sv).not.toContain('Ångra kreditering')
     expect(owner?.hint_en).not.toContain('Undo credit')
-    expect(owner?.hint_sv).toContain('gnubok_correct_entry_lines')
-    expect(owner?.hint_en).toContain('gnubok_correct_entry_lines')
+    expect(owner?.hint_sv).toContain('dess sida ändrar inte verifikationen')
+    expect(owner?.hint_en).toContain('its page does not change the voucher')
+    expect(owner?.hint_sv).not.toContain('gnubok_')
+    expect(owner?.hint_en).not.toContain('gnubok_')
+  })
+
+  it('sends no storno of a paid supplier invoice voucher to a tool that refuses a storno', async () => {
+    const { db, enqueueMany } = client()
+    enqueueMany([
+      { data: { id: 'je-reg', source_type: 'supplier_invoice_registered', source_id: 'si-1', correction_of_id: null, reverses_id: null } },
+      { data: { id: 'si-1', supplier_invoice_number: '3744267', status: 'paid', credited_invoice_id: null } },
+    ])
+
+    const owner = await resolveVoucherOwner(db, COMPANY, {
+      id: 'je-storno',
+      source_type: 'storno',
+      source_id: 'si-1',
+      reverses_id: 'je-reg',
+    })
+
+    expect(owner).toMatchObject({ kind: 'supplier_invoice', owner_id: 'si-1', action: 'open_supplier_invoice' })
+    expect(owner?.hint_sv).not.toContain('Ångra kreditering')
+    expect(owner?.hint_sv).not.toContain('gnubok_')
   })
 
   it('names Ångra kreditering for a credited supplier invoice, whose page has it', async () => {
