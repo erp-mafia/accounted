@@ -225,7 +225,7 @@ export default function RefundCreditNoteDialog({
           </Button>
           <Button
             onClick={() => submit(booked !== null)}
-            disabled={!account || !refundDate || owed === null}
+            disabled={!account || !refundDate || owed === null || owed <= 0}
             loading={isSubmitting}
           >
             {booked ? t('book_anyway') : t('confirm')}
