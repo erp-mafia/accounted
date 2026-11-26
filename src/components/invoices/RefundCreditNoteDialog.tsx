@@ -65,6 +65,7 @@ export default function RefundCreditNoteDialog({
   const { toast } = useToast()
   const { company } = useCompany()
   const [bookedOre, setBookedOre] = useState<number | null>(null)
+  const [oreReadFailed, setOreReadFailed] = useState(false)
   const { cashAccounts } = useCashAccounts({ enabledOnly: true })
   const [refundDate, setRefundDate] = useState(() => todayIsoStockholm())
   const [cashAccountId, setCashAccountId] = useState<string>('')
@@ -88,28 +89,33 @@ export default function RefundCreditNoteDialog({
 
   // The öresavrundning the credit note's own verifikat booked: the door
   // refunds what 1510 carries, so the rows shown and sent are that figure.
+  // Until it is read no amount is shown or sent; a failed read says so and
+  // keeps the dialog from booking, since guessing 0 would quote the wrong
+  // figure for a rounded credit note.
   useEffect(() => {
     if (!open || !company?.id) return
     let cancelled = false
     setBookedOre(null)
-    readCreditNoteBookedOre(createClient(), company.id, creditNote)
-      // Safe: the door reads the same itself, and refuses rows that are not
-      // what 1510 carries (CREDIT_NOTE_REFUND_ORE_LEFT, EXCEEDS_OWED).
-      .catch(() => 0)
-      .then((ore) => {
+    setOreReadFailed(false)
+    readCreditNoteBookedOre(createClient(), company.id, creditNote).then(
+      (ore) => {
         if (!cancelled) setBookedOre(ore)
-      })
+      },
+      () => {
+        if (!cancelled) setOreReadFailed(true)
+      },
+    )
     return () => {
       cancelled = true
     }
   }, [open, company?.id, creditNote])
 
-  const owed = refundLedgerAmount(plan, bookedOre ?? 0)
+  const owed = bookedOre === null ? null : refundLedgerAmount(plan, bookedOre)
 
   const account = useMemo(() => cashAccounts.find((a) => a.id === cashAccountId) ?? null, [cashAccounts, cashAccountId])
 
   const submit = async (force: boolean) => {
-    if (!account) return
+    if (!account || owed === null) return
     setIsSubmitting(true)
     try {
       const response = await fetch(`/api/invoices/${creditNote.id}/mark-paid`, {
@@ -156,7 +162,9 @@ export default function RefundCreditNoteDialog({
             {t('title')}
             {creditNote.invoice_number ? <span data-ph-mask="">{` ${creditNote.invoice_number}`}</span> : null}
           </DialogTitle>
-          <DialogDescription>{t('description', { amount: formatCurrency(owed, 'SEK') })}</DialogDescription>
+          <DialogDescription>
+            {owed === null ? null : t('description', { amount: formatCurrency(owed, 'SEK') })}
+          </DialogDescription>
         </DialogHeader>
 
         {booked ? (
@@ -165,6 +173,8 @@ export default function RefundCreditNoteDialog({
               vouchers: booked.map((c) => c.voucher ?? c.entry_date).join(', '),
             })}
           </AttnLine>
+        ) : oreReadFailed ? (
+          <AttnLine>{t('ore_read_failed')}</AttnLine>
         ) : (
           <div className="space-y-4">
             <div className="space-y-1.5">
@@ -194,7 +204,7 @@ export default function RefundCreditNoteDialog({
                 </SelectContent>
               </Select>
             </div>
-            {account && (
+            {account && owed !== null && (
               <div className="rounded-lg bg-secondary/40 px-4 py-3 text-sm bg-control shadow-raised">
                 <div className="flex justify-between gap-4">
                   <span>{t('line_debit', { account: RECEIVABLE_ACCOUNT })}</span>
@@ -215,7 +225,7 @@ export default function RefundCreditNoteDialog({
           </Button>
           <Button
             onClick={() => submit(booked !== null)}
-            disabled={!account || !refundDate || bookedOre === null}
+            disabled={!account || !refundDate || owed === null}
             loading={isSubmitting}
           >
             {booked ? t('book_anyway') : t('confirm')}
