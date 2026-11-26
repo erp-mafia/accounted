@@ -57,6 +57,7 @@ import {
   shouldRefuseForTabCompany,
 } from '@/lib/company/tab-guard'
 import { sessionShadow, type TodayOutcome } from '@/lib/permissions/shadow'
+import { malformedUuidParam, type UuidParamCodes } from '@/lib/api/uuid-params'
 
 export interface RouteContext {
   /** Stable id for this HTTP request: appears in logs, error envelope, X-Request-Id header. */
@@ -98,7 +99,7 @@ export interface RouteContext {
   role?: CompanyRole
 }
 
-interface RouteContextOptions {
+interface RouteContextOptions<P extends DynamicParams = DynamicParams> {
   /**
    * Defaults to false. When true, the wrapper rejects callers whose role in
    * the active company is `viewer` (or who have no membership). Mirrors the
@@ -120,6 +121,16 @@ interface RouteContextOptions {
   requireAdmin?: boolean
   /** File exports must not escape while a company has an incomplete import. */
   requireCompleteLedger?: boolean | ((request: Request) => boolean)
+  /**
+   * The path parameters that name a uuid row, each with the code the route
+   * answers for a row that is not there: `{ id: 'ASSET_NOT_FOUND' }`, or
+   * NOT_FOUND where the route has no code of its own. A value that is not a
+   * uuid names no row, and in a uuid filter Postgres refuses it (22P02), which
+   * a route's error branch answered as a 500. The wrapper answers the code in
+   * the handler's place, after the auth, company and role gates, so a 401 or
+   * a 403 still comes first (lib/api/uuid-params.ts).
+   */
+  uuidParams?: UuidParamCodes<ParamName<P>>
 }
 
 // Next.js 16 always passes a `{ params: Promise<...> }` second arg to route
@@ -128,6 +139,9 @@ interface RouteContextOptions {
 // having to declare any params at the call site.
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 type DynamicParams = { params: Promise<Record<string, string | string[]>> } | { params: Promise<{}> }
+
+/** The names of a route's path parameters, as its params type declares them. */
+type ParamName<P extends DynamicParams> = Extract<keyof Awaited<P['params']>, string>
 
 type RouteHandler<P extends DynamicParams = { params: Promise<Record<string, never>> }> = (
   request: Request,
@@ -210,7 +224,7 @@ export async function resolveSessionCompany(
 export function withRouteContext<P extends DynamicParams = { params: Promise<Record<string, never>> }>(
   operation: string,
   handler: RouteHandler<P>,
-  options: RouteContextOptions = {},
+  options: RouteContextOptions<P> = {},
 ): (request: Request, params: P) => Promise<Response> {
   const { requireWrite = false, requireAdmin = false } = options
 
@@ -367,6 +381,11 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
 
       const handlerStart = Date.now()
       handlerStarted = true
+      // A path id that is not a uuid names no row: the route's not-found,
+      // answered in the handler's place before anything queries with it.
+      const malformedParam = options.uuidParams
+        ? malformedUuidParam(await params?.params, options.uuidParams)
+        : null
       const requireCompleteLedger = typeof options.requireCompleteLedger === 'function'
         ? options.requireCompleteLedger(request) : options.requireCompleteLedger
       // Every commit the handler makes, however many frames down, is stamped
@@ -376,10 +395,15 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
       // The user's id rides along so a write the handler makes through a
       // service-role client (the invoicer role's scoped client, a service
       // client) is audited as theirs, not the row creator's.
-      let response = await runWithActor({ type: 'user', userId: user.id }, () =>
-        requireCompleteLedger
-          ? withSIEPeriodRead(handlerSupabase, companyId, 'report_export', () => handler(request, ctx, params))
-          : handler(request, ctx, params))
+      let response = malformedParam
+        ? errorResponseFromCode(malformedParam.code, ctx.log, {
+            requestId,
+            reason: `path parameter ${malformedParam.param} is not a uuid`,
+          })
+        : await runWithActor({ type: 'user', userId: user.id }, () =>
+            requireCompleteLedger
+              ? withSIEPeriodRead(handlerSupabase, companyId, 'report_export', () => handler(request, ctx, params))
+              : handler(request, ctx, params))
       const handlerMs = Date.now() - handlerStart
       // A 403 from the handler is a check of its own after the gates passed.
       recordShadow(

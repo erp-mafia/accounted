@@ -35,5 +35,8 @@ export const GET = withRouteContext(
     })
   },
   // Frozen versions remain readable during recovery; live balances do not.
-  { requireCompleteLedger: request => !new URL(request.url).searchParams.get('version') },
+  {
+    requireCompleteLedger: request => !new URL(request.url).searchParams.get('version'),
+    uuidParams: { id: 'PERIOD_NOT_FOUND' },
+  },
 )

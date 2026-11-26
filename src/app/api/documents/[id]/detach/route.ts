@@ -44,5 +44,5 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     return NextResponse.json({ data })
   },
-  { requireWrite: true },
+  { requireWrite: true, uuidParams: { id: 'DOC_NOT_FOUND' } },
 )

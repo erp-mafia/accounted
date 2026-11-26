@@ -8,6 +8,9 @@ import {
 } from '@/tests/helpers'
 import { AccrualDraftPostedByScheduleError, BookkeepingDatabaseError, JournalEntryNotBalancedError } from '@/lib/bookkeeping/errors'
 
+// Route path ids are uuids: the route answers its 404 to anything else before it reads.
+const ENTRY_1 = '017acff0-ac7e-5f8b-99fb-6567a5691e8f'
+
 const mockCreateClient = vi.fn()
 vi.mock('@/lib/supabase/server', () => ({
   createClient: () => mockCreateClient(),
@@ -91,10 +94,10 @@ describe('POST /api/bookkeeping/journal-entries/[id]/commit', () => {
       auth: { getUser: vi.fn().mockResolvedValue({ data: { user: null } }), mfa: { listFactors: async () => ({ data: { all: [], totp: [], phone: [] }, error: null }) } },
     })
 
-    const request = createMockRequest('/api/bookkeeping/journal-entries/entry-1/commit', {
+    const request = createMockRequest(`/api/bookkeeping/journal-entries/${ENTRY_1}/commit`, {
       method: 'POST',
     })
-    const response = await POST(request, createMockRouteParams({ id: 'entry-1' }))
+    const response = await POST(request, createMockRouteParams({ id: ENTRY_1 }))
     const { status, body } = await parseJsonResponse(response)
 
     expect(status).toBe(401)
@@ -110,29 +113,48 @@ describe('POST /api/bookkeeping/journal-entries/[id]/commit', () => {
       ),
     })
 
-    const request = createMockRequest('/api/bookkeeping/journal-entries/entry-1/commit', {
+    const request = createMockRequest(`/api/bookkeeping/journal-entries/${ENTRY_1}/commit`, {
       method: 'POST',
     })
-    const response = await POST(request, createMockRouteParams({ id: 'entry-1' }))
+    const response = await POST(request, createMockRouteParams({ id: ENTRY_1 }))
     const { status } = await parseJsonResponse(response)
 
     expect(status).toBe(403)
     expect(mockCommitEntry).not.toHaveBeenCalled()
   })
 
+  it('answers 404 for an id that is not a uuid, before it reads or commits', async () => {
+    // The draft read and the commit RPC both filter a uuid column: Postgres
+    // refused `new` there, which this route answered as a 500.
+    const from = vi.fn()
+    mockCreateClient.mockResolvedValue({
+      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: mockUser } }), mfa: { listFactors: async () => ({ data: { all: [], totp: [], phone: [] }, error: null }) } },
+      from,
+    })
+
+    const request = createMockRequest('/api/bookkeeping/journal-entries/new/commit', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'new' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(404)
+    expect(body.error.code).toBe('JOURNAL_ENTRY_NOT_FOUND')
+    expect(from).not.toHaveBeenCalled()
+    expect(mockCommitEntry).not.toHaveBeenCalled()
+  })
+
   it('returns posted entry on success', async () => {
     const postedEntry = makeJournalEntry({
-      id: 'entry-1',
+      id: ENTRY_1,
       status: 'posted',
       voucher_series: 'A',
       voucher_number: 42,
     })
     mockCommitEntry.mockResolvedValue(postedEntry)
 
-    const request = createMockRequest('/api/bookkeeping/journal-entries/entry-1/commit', {
+    const request = createMockRequest(`/api/bookkeeping/journal-entries/${ENTRY_1}/commit`, {
       method: 'POST',
     })
-    const response = await POST(request, createMockRouteParams({ id: 'entry-1' }))
+    const response = await POST(request, createMockRouteParams({ id: ENTRY_1 }))
     const { status, body } = await parseJsonResponse<{ data: unknown }>(response)
 
     expect(status).toBe(200)
@@ -141,7 +163,7 @@ describe('POST /api/bookkeeping/journal-entries/[id]/commit', () => {
       expect.anything(),
       'company-1',
       'user-1',
-      'entry-1',
+      ENTRY_1,
       'user_accept'
     )
   })
@@ -151,10 +173,10 @@ describe('POST /api/bookkeeping/journal-entries/[id]/commit', () => {
     // through errorResponse() → registry status + { error: { code, ... } }.
     mockCommitEntry.mockRejectedValue(new JournalEntryNotBalancedError(1000, 900))
 
-    const request = createMockRequest('/api/bookkeeping/journal-entries/entry-1/commit', {
+    const request = createMockRequest(`/api/bookkeeping/journal-entries/${ENTRY_1}/commit`, {
       method: 'POST',
     })
-    const response = await POST(request, createMockRouteParams({ id: 'entry-1' }))
+    const response = await POST(request, createMockRouteParams({ id: ENTRY_1 }))
     const { status, body } = await parseJsonResponse<{ error: { code: string; message_en?: string } }>(response)
 
     expect(status).toBe(400)
@@ -165,18 +187,18 @@ describe('POST /api/bookkeeping/journal-entries/[id]/commit', () => {
     // A draft a killed accrual run left behind, picked up by a person or an
     // agent cleaning up drafts: the engine's generic commit refuses it.
     mockCreateClient.mockResolvedValue(clientWithDraft({ entry_date: '2026-03-01', description: 'Periodisering 2026-03', source_type: 'accrual', lines: [] }))
-    mockCommitEntry.mockRejectedValue(new AccrualDraftPostedByScheduleError('entry-1'))
+    mockCommitEntry.mockRejectedValue(new AccrualDraftPostedByScheduleError(ENTRY_1))
 
-    const request = createMockRequest('/api/bookkeeping/journal-entries/entry-1/commit', { method: 'POST' })
-    const response = await POST(request, createMockRouteParams({ id: 'entry-1' }))
+    const request = createMockRequest(`/api/bookkeeping/journal-entries/${ENTRY_1}/commit`, { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: ENTRY_1 }))
     const { status, body } = await parseJsonResponse<{ error: { code: string; message: string; details?: unknown } }>(response)
 
     expect(status).toBe(409)
     expect(body.error.code).toBe('ACCRUAL_DRAFT_POSTED_BY_SCHEDULE')
     expect(body.error.message).toMatch(/^Periodiseringens verifikat bokförs av periodiseringen själv/)
-    expect(body.error.details).toEqual({ journal_entry_id: 'entry-1' })
+    expect(body.error.details).toEqual({ journal_entry_id: ENTRY_1 })
     // Through the one generic commit, which is where the refusal lives.
-    expect(mockCommitEntry).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', 'entry-1', 'user_accept')
+    expect(mockCommitEntry).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', ENTRY_1, 'user_accept')
   })
 
   it('answers a bank-row draft without its bank link with 409 and where to book it, not a database error', async () => {
@@ -185,8 +207,8 @@ describe('POST /api/bookkeeping/journal-entries/[id]/commit', () => {
     mockCreateClient.mockResolvedValue(clientWithDraft({ entry_date: '2026-09-02', description: 'Kortköp', source_type: 'bank_transaction', lines: [] }))
     mockCommitEntry.mockRejectedValue(new BookkeepingDatabaseError('commit_entry', 'BANK_BOOKING_CONTEXT_REQUIRED', '23514'))
 
-    const request = createMockRequest('/api/bookkeeping/journal-entries/entry-1/commit', { method: 'POST' })
-    const response = await POST(request, createMockRouteParams({ id: 'entry-1' }))
+    const request = createMockRequest(`/api/bookkeeping/journal-entries/${ENTRY_1}/commit`, { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: ENTRY_1 }))
     const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(response)
 
     expect(status).toBe(409)
@@ -212,8 +234,8 @@ describe('POST /api/bookkeeping/journal-entries/[id]/commit', () => {
       mockCreateClient.mockResolvedValue(clientWithDraft(typedDraft))
 
       const response = await POST(
-        createMockRequest('/api/bookkeeping/journal-entries/entry-1/commit', { method: 'POST' }),
-        createMockRouteParams({ id: 'entry-1' }),
+        createMockRequest(`/api/bookkeeping/journal-entries/${ENTRY_1}/commit`, { method: 'POST' }),
+        createMockRouteParams({ id: ENTRY_1 }),
       )
       const { status, body } = await parseJsonResponse<{ error: { code: string; details: { warnings: Array<{ code: string }> } } }>(response)
 
@@ -225,38 +247,38 @@ describe('POST /api/bookkeeping/journal-entries/[id]/commit', () => {
 
     it('commits once the warnings are confirmed and records it', async () => {
       mockCreateClient.mockResolvedValue(clientWithDraft(typedDraft))
-      mockCommitEntry.mockResolvedValue(makeJournalEntry({ id: 'entry-1', status: 'posted' }))
+      mockCommitEntry.mockResolvedValue(makeJournalEntry({ id: ENTRY_1, status: 'posted' }))
 
       const response = await POST(
-        createMockRequest('/api/bookkeeping/journal-entries/entry-1/commit', {
+        createMockRequest(`/api/bookkeeping/journal-entries/${ENTRY_1}/commit`, {
           method: 'POST',
           body: { acknowledged_warnings: ['INPUT_VAT_ABOVE_RATE'] },
         }),
-        createMockRouteParams({ id: 'entry-1' }),
+        createMockRouteParams({ id: ENTRY_1 }),
       )
 
       expect((await parseJsonResponse(response)).status).toBe(200)
       expect(mockCommitEntry).toHaveBeenCalledTimes(1)
       expect(mockAppendProcessingHistory).toHaveBeenCalledWith(
-        expect.objectContaining({ eventType: 'VoucherWarningsAcknowledged', aggregateId: 'entry-1' }),
+        expect.objectContaining({ eventType: 'VoucherWarningsAcknowledged', aggregateId: ENTRY_1 }),
       )
     })
 
     it('leaves a draft another flow generated to its own checks', async () => {
       mockCreateClient.mockResolvedValue(clientWithDraft({ ...typedDraft, source_type: 'system' }))
-      mockCommitEntry.mockResolvedValue(makeJournalEntry({ id: 'entry-1', status: 'posted' }))
+      mockCommitEntry.mockResolvedValue(makeJournalEntry({ id: ENTRY_1, status: 'posted' }))
 
       const response = await POST(
-        createMockRequest('/api/bookkeeping/journal-entries/entry-1/commit', { method: 'POST' }),
-        createMockRouteParams({ id: 'entry-1' }),
+        createMockRequest(`/api/bookkeeping/journal-entries/${ENTRY_1}/commit`, { method: 'POST' }),
+        createMockRouteParams({ id: ENTRY_1 }),
       )
 
       expect((await parseJsonResponse(response)).status).toBe(200)
     })
 
     it('answers 400 to a body that is not JSON', async () => {
-      const request = new Request('http://localhost/api/bookkeeping/journal-entries/entry-1/commit', { method: 'POST', body: '{nope' })
-      const response = await POST(request as never, createMockRouteParams({ id: 'entry-1' }))
+      const request = new Request(`http://localhost/api/bookkeeping/journal-entries/${ENTRY_1}/commit`, { method: 'POST', body: '{nope' })
+      const response = await POST(request as never, createMockRouteParams({ id: ENTRY_1 }))
       expect((await parseJsonResponse(response)).status).toBe(400)
     })
   })
@@ -274,27 +296,27 @@ describe('POST /api/bookkeeping/journal-entries/[id]/commit', () => {
 
     it('hands the posted verifikat, its date and its lines to the bank matcher', async () => {
       mockCreateClient.mockResolvedValue(clientWithDraft(bankPayment))
-      mockCommitEntry.mockResolvedValue(makeJournalEntry({ id: 'entry-1', status: 'posted' }))
+      mockCommitEntry.mockResolvedValue(makeJournalEntry({ id: ENTRY_1, status: 'posted' }))
 
       const response = await POST(
-        createMockRequest('/api/bookkeeping/journal-entries/entry-1/commit', { method: 'POST' }),
-        createMockRouteParams({ id: 'entry-1' }),
+        createMockRequest(`/api/bookkeeping/journal-entries/${ENTRY_1}/commit`, { method: 'POST' }),
+        createMockRouteParams({ id: ENTRY_1 }),
       )
 
       expect((await parseJsonResponse(response)).status).toBe(200)
       expect(mockLink).toHaveBeenCalledTimes(1)
       const [, companyId, userId, voucher] = mockLink.mock.calls[0]
       expect([companyId, userId]).toEqual(['company-1', 'user-1'])
-      expect(voucher).toEqual({ journalEntryId: 'entry-1', entryDate: '2026-09-01', lines: bankPayment.lines })
+      expect(voucher).toEqual({ journalEntryId: ENTRY_1, entryDate: '2026-09-01', lines: bankPayment.lines })
     })
 
     it('leaves a draft another flow generated alone: that flow anchors its own bank row', async () => {
       mockCreateClient.mockResolvedValue(clientWithDraft({ ...bankPayment, source_type: 'bank_transaction' }))
-      mockCommitEntry.mockResolvedValue(makeJournalEntry({ id: 'entry-1', status: 'posted' }))
+      mockCommitEntry.mockResolvedValue(makeJournalEntry({ id: ENTRY_1, status: 'posted' }))
 
       const response = await POST(
-        createMockRequest('/api/bookkeeping/journal-entries/entry-1/commit', { method: 'POST' }),
-        createMockRouteParams({ id: 'entry-1' }),
+        createMockRequest(`/api/bookkeeping/journal-entries/${ENTRY_1}/commit`, { method: 'POST' }),
+        createMockRouteParams({ id: ENTRY_1 }),
       )
 
       expect((await parseJsonResponse(response)).status).toBe(200)

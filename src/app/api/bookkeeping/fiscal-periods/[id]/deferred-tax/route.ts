@@ -46,7 +46,7 @@ export const GET = withRouteContext<Params>('period.deferred_tax.get', async (_r
   } catch (err) {
     return errorResponse(err, log, { requestId })
   }
-})
+}, { uuidParams: { id: 'PERIOD_NOT_FOUND' } })
 
 /**
  * Save the inputs (whether the loss carried forward is recognised and why,
@@ -73,5 +73,5 @@ export const PUT = withRouteContext<Params>(
       return errorResponse(err, log, { requestId })
     }
   },
-  { requireWrite: true },
+  { requireWrite: true, uuidParams: { id: 'PERIOD_NOT_FOUND' } },
 )
