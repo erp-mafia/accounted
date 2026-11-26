@@ -184,8 +184,8 @@ type DocumentMode = ArchiveScope | 'unlinked'
  * subfolders, a flat `dokument/` with manifest tagged by fiscal_period_id,
  * and an unfiltered `revision/behandlingshistorik.json`.
  *
- * The whole ZIP is held in memory: for callers with their own size cap
- * (cloud backup, the MCP audit package). Downloads use streamFullArchive.
+ * The whole ZIP is held in memory: for callers with their own size cap (the
+ * MCP audit package). Downloads and the cloud backup use streamFullArchive.
  */
 export async function generateFullArchive(
   supabase: SupabaseClient,
@@ -320,17 +320,20 @@ async function buildFullArchive(
  * everything that is not tied to a single fiscal year. Master-data JSON
  * dumps, original imported SIE files, documents no period archive carries
  * (unlinked/draft), the full behandlingshistorik and the system
- * documentation. Complements one `generateFullArchive(scope='period')` ZIP
+ * documentation. Complements one `streamFullArchive(scope='period')` ZIP
  * per räkenskapsår.
+ *
+ * Produced while it is read, like streamFullArchive: the backup sends it to
+ * the provider as it is written rather than holding it whole.
  */
-export async function generateBaseDataArchive(
+export async function* streamBaseDataArchive(
   supabase: SupabaseClient,
   companyId: string,
   options: { include_documents?: boolean } = {}
-): Promise<ArrayBuffer> {
+): AsyncGenerator<Uint8Array> {
   const archive = await withSIEPeriodRead(supabase, companyId, 'report_export', () =>
     buildBaseDataArchive(supabase, companyId, options))
-  return collectBytes(archive.zip())
+  yield* archive.zip()
 }
 
 async function buildBaseDataArchive(
@@ -373,8 +376,8 @@ async function buildBaseDataArchive(
  *
  * Sums `file_size_bytes` across all documents in scope plus a fixed overhead
  * for SIE, reports, audit trail, and system documentation. Shown before a
- * download, and the cap for callers that hold the whole ZIP in memory (cloud
- * backup, the MCP audit package).
+ * download, and the cap for a caller that holds the whole ZIP in memory (the
+ * MCP audit package).
  */
 export async function estimateArchiveSize(
   supabase: SupabaseClient,
