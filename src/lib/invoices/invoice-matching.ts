@@ -31,6 +31,8 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { chunk } from '@/lib/utils'
+import { ID_READ_CHUNK } from '@/lib/reconciliation/limits'
 import { normalizeCurrencyCode, invoiceAmountSek } from './duplicate-guard-currency'
 import { descriptionMentionsReference } from '@/lib/invariants/reference-number'
 import { normalizeOcrReference } from './duplicate-payment-guard'
@@ -380,14 +382,18 @@ export async function loadInvoiceMatchPool(
   const fullCandidateIds = payableInvoices
     .filter((inv) => inv.status === 'sent' || inv.status === 'overdue')
     .map((inv) => inv.id as string)
+  // In slices of ID_READ_CHUNK ids, each paged: the ids travel in the GET
+  // query string, and one list of every open invoice of a company with many
+  // was refused by the gateway before PostgREST saw it, so none of that
+  // company's bank rows got a match.
   const paidIds = new Set<string>()
-  if (fullCandidateIds.length > 0) {
+  for (const ids of chunk(fullCandidateIds, ID_READ_CHUNK)) {
     const paymentRows = await fetchAllRows<{ id: string; invoice_id: string }>(({ from, to }) =>
       supabase
         .from('invoice_payments')
         .select('id, invoice_id')
         .eq('company_id', companyId)
-        .in('invoice_id', fullCandidateIds)
+        .in('invoice_id', ids)
         .not('journal_entry_id', 'is', null)
         .order('id', { ascending: true })
         .range(from, to),
