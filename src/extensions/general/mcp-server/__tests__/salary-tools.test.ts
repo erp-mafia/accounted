@@ -162,7 +162,9 @@ describe('gnubok_create_salary_run', () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     // 1. company_settings.salary_deviation_period (avvikelseperiod)
     enqueue({ data: { salary_deviation_period: 'previous_month' } })
-    // 2. salary_runs overlap guard
+    // 2a. salary_runs: the previous month's run, where its window ended
+    enqueue({ data: [] })
+    // 2b. salary_runs overlap guard
     enqueue({ data: [] })
     // 3. company_settings: the company's salary series (standard set: K)
     enqueue({ data: { default_voucher_series_per_source_type: { salary_payment: 'K' } } })

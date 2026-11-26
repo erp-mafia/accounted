@@ -198,7 +198,7 @@ Generating the XML stamps \`agi_generated_at\` on the salary run and emits an \`
 
 Most Swedish payrolls pay the fixed salary for the current month and take the deviations (sjukfrånvaro, VAB, föräldraledighet, tjänstledighet, worked hours for hourly staff, OB) from the **previous** month, because the current month's calendar is not complete on pay day. The run carries that window as \`deviation_period_start\` / \`deviation_period_end\`; \`:calculate\` reads \`salary_absence_days\` and \`salary_worked_days\` from it, and the AGI frånvarouppgifter follow the same window.
 
-- **Company default**: \`salary_deviation_period\` in the company's payroll settings (\`same_month\` by default, \`previous_month\` for the setup above). Set it once, before the first run: the dashboard, the MCP tool and \`POST /salary-runs\` all resolve it when no dates are passed.
+- **Company default**: \`salary_deviation_period\` in the company's payroll settings (\`same_month\` by default, \`previous_month\` for the setup above). Set it once, before the first run: the dashboard, the MCP tool and \`POST /salary-runs\` all resolve it when no dates are passed. When the previous month's run stopped reading earlier (after a switch from \`previous_month\` to \`same_month\`), the new run's window starts the day after it and reads the days between.
 - **Per run**: pass both \`deviation_period_start\` and \`deviation_period_end\` (ISO dates, at most 62 days) on \`POST /salary-runs\`. Explicit dates win over the setting.
 
 \`\`\`json
