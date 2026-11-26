@@ -17,17 +17,33 @@
 -- passed the 8 s statement timeout for a company whose years had just been
 -- imported, and no parties were suggested.
 --
--- With enable_nestloop off the planner hashes or merges those joins, and each
--- CTE is read once. The joins that can only loop still loop, as nothing else
--- can run them: money's LATERAL probe of idx_journal_entry_lines_entry_account
--- per voucher (20261119223000) and acct_counts' unnest of each voucher's
--- accounts. The bank-merchant check and the named descriptions are subplans,
--- not joins, and keep their plans. A join added to this statement later is
+-- With enable_nestloop off the planner hashes or merges those joins, and no
+-- CTE is read again for each row of another: each of its readers reads it
+-- once. The joins that can only loop still loop, as nothing else can run
+-- them: money's LATERAL probe of idx_journal_entry_lines_entry_account per
+-- voucher (20261119223000) and acct_counts' unnest of each voucher's
+-- accounts. The bank-merchant check and the test against the named
+-- descriptions are subplans, not joins, and keep their plans; the semi-join
+-- inside named can now only hash. A join added to this statement later is
 -- hashed as well: one that should probe an index per row belongs in a LATERAL
 -- subquery, as money's does.
 --
+-- The setting holds for the whole call, so it also reaches every statement
+-- planned during it. For a signed-in caller that is user_company_ids(), which
+-- the row-level policies of the tables read here call: its join of the
+-- caller's memberships to companies merges over the index of active companies
+-- instead of probing one company per membership. That costs a little more
+-- per call as companies grow, small next to what the setting saves. Two
+-- things to revisit: Postgres 18 caches a SQL function's plan across calls
+-- without replanning when this setting changes, so check before that upgrade
+-- whether user_company_ids keeps a plan made inside this call; and the loops
+-- that must stay loops carry the planner's disable cost, so the statement's
+-- estimated cost is above 10^10, harmless while JIT is off and no
+-- plan_filter cost limit is set.
+--
 -- The body is 20261123005000's, unchanged, and so is the answer (the pg test
--- compares it with that function in every window, limit and set of keys).
+-- compares it with that function in four windows, five limits and five sets
+-- of keys).
 
 CREATE OR REPLACE FUNCTION public.get_observed_parties(
   p_company_id uuid,

@@ -308,8 +308,12 @@ describe('get_observed_parties (pg)', () => {
 
 interface PlanNode { 'Node Type': string; 'Relation Name'?: string; 'Index Name'?: string; 'CTE Name'?: string; 'Actual Loops'?: number; Plans?: PlanNode[] }
 
-/** The function's own plan, with row counts: auto_explain reports the nested statement to the client. */
-async function functionPlan(companyId: string, limit: number, keys: string[] | null): Promise<PlanNode> {
+/**
+ * The function's own plan, with row counts: auto_explain reports the nested
+ * statement to the client. As the pool's owner by default, so without the
+ * row-level policies; `asUser` runs it as that signed-in user, with them.
+ */
+async function functionPlan(companyId: string, limit: number, keys: string[] | null, asUser?: string): Promise<PlanNode> {
   const client = await getClient()
   const notices: string[] = []
   const onNotice = (notice: { message?: string }) => {
@@ -320,6 +324,11 @@ async function functionPlan(companyId: string, limit: number, keys: string[] | n
     await client.query('BEGIN')
     for (const setting of ['log_min_duration = 0', 'log_nested_statements = on', 'log_analyze = on', 'log_format = json', 'log_level = notice']) {
       await client.query(`SET LOCAL auto_explain.${setting}`)
+    }
+    if (asUser) {
+      await client.query(`SELECT set_config('request.jwt.claims', $1, true)`, [JSON.stringify({ sub: asUser, role: 'authenticated' })])
+      await client.query(`SELECT set_config('request.jwt.claim.sub', $1, true)`, [asUser])
+      await client.query('SET LOCAL ROLE authenticated')
     }
     await client.query('SELECT public.get_observed_parties($1, NULL, $2, $3)', [companyId, limit, keys])
   } finally {
@@ -462,10 +471,10 @@ describe('get_observed_parties ranking nothing (20261123005000)', () => {
  * key over all the ranked keys' vouchers: the work grew with vouchers times
  * keys, and the all-years ranking the SIE import's party suggestions ask for
  * passed the 8 s statement timeout. The function now plans with nested loops
- * off. Its answer must not move: the function it replaces (20261123005000) is
- * the oracle.
+ * off, so no CTE is read again for each row of another. Its answer must not
+ * move: the function it replaces (20261123005000) is the oracle.
  */
-describe('get_observed_parties reads each CTE once (20261125233000)', () => {
+describe('get_observed_parties reads no CTE again per row (20261125233000)', () => {
   const shipped = readFileSync(
     new URL('../../supabase/migrations/20261123005000_observed_parties_named_keys_only.sql', import.meta.url), 'utf8',
   ).split('AS $$')[1]!.split('$$;')[0]!.trim().replace(/;$/, '')
@@ -573,13 +582,18 @@ describe('get_observed_parties reads each CTE once (20261125233000)', () => {
     return [...here, ...(node.Plans ?? []).flatMap(cteRereads)]
   }
 
-  it('reads each CTE once, ranking every key, a few with keys named, or only named keys', async () => {
+  it('reads no CTE again per row, ranking every key, a few with keys named, or only named keys, with and without the row-level policies', async () => {
     const low = ranked.slice(-3)
-    for (const [limit, keys] of [[1000, null], [7, low], [0, low]] as const) {
-      const plan = await functionPlan(company.companyId, limit, keys)
-      expect(cteRereads(plan), `${limit}/${JSON.stringify(keys)}`).toEqual([])
-      // The vouchers are still probed one by one: the lines once per voucher read, as 20261119223000 has it.
-      expect(loops(plan, (n) => n['Relation Name'] === 'journal_entry_lines')[0]).toBeGreaterThan(1)
+    // The service role (the SIE import's suggestions) reads without the
+    // policies; a signed-in member (the Parter page) reads through them.
+    for (const asUser of [undefined, company.userId]) {
+      for (const [limit, keys] of [[1000, null], [7, low], [0, low]] as const) {
+        const plan = await functionPlan(company.companyId, limit, keys, asUser)
+        const label = `${asUser ? 'member' : 'owner'}/${limit}/${JSON.stringify(keys)}`
+        expect(cteRereads(plan), label).toEqual([])
+        // The vouchers are still probed one by one: the lines once per voucher read, as 20261119223000 has it.
+        expect(loops(plan, (n) => n['Relation Name'] === 'journal_entry_lines')[0], label).toBeGreaterThan(1)
+      }
     }
   })
 })
