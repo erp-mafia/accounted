@@ -28,6 +28,7 @@ import { z } from 'zod'
 import {
   generateAGIXml,
   buildIndividuppgifterSnapshot,
+  franvarouppgiftCount,
   AGIIncompleteDataError,
   AGIPayloadTooLargeError,
   findMissingCompanyData,
@@ -51,6 +52,7 @@ import { regionalSupportForRun } from '../regional-support'
 import { agiFiledForRun } from '../agi-submission-state'
 import type { Logger } from '@/lib/logger'
 import { stockholmYearMonth } from '@/lib/dates/iso'
+import { agiPeriodFiled } from '@/lib/deadlines/agi-period-filed'
 import { effectiveOrgNumber } from '@/lib/company/org-number'
 import { parseEntityType } from '@/lib/company/entity-type'
 import {
@@ -1112,10 +1114,29 @@ export async function generateAgiDeclaration(
   if ('answer' in target) return target.answer
   let isCorrection = target.row !== null
 
+  // A month whose first declaration is filed takes no frånvarouppgift: this
+  // declaration is a rättelse (agiPeriodFiled, Kontroller ba_824). Read only
+  // when the XML would carry one: none before 202501 or for a removed IU.
+  const franvarouppgifter = franvarouppgiftCount(agiPeriod, employeeData)
+  let periodFiled = false
+  if (franvarouppgifter > 0) {
+    const filing = await agiPeriodFiled(supabase, companyId, agiPeriod, target.row)
+    if (!filing.ok) return { ok: false, code: 'DATABASE_ERROR', details: filing.error }
+    periodFiled = filing.filed
+    if (periodFiled) {
+      opLog.info('AGI rättelse leaves out frånvarouppgifter: the month is filed (Kontroller ba_824)', {
+        companyId,
+        periodYear: agiPeriod.periodYear,
+        periodMonth: agiPeriod.periodMonth,
+        leftOut: franvarouppgifter,
+      })
+    }
+  }
+
   // 7. Generate XML.
   let xml: string
   try {
-    xml = generateAGIXml(companyData, employeeData, totals, isCorrection)
+    xml = generateAGIXml(companyData, employeeData, totals, periodFiled)
   } catch (err) {
     if (err instanceof AGIIncompleteDataError) {
       return {
@@ -1172,7 +1193,7 @@ export async function generateAgiDeclaration(
       if ('answer' in target) return target.answer
       // The re-read can turn a lost insert into an update of the row the
       // winner wrote: the caller is told what this write is. The XML does
-      // not depend on it (generateAGIXml ignores the flag).
+      // not depend on the write decision, only on the month's filing.
       isCorrection = target.row !== null
     }
 
