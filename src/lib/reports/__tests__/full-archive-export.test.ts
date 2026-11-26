@@ -8,7 +8,7 @@ import {
   estimateArchiveSize,
   MASTER_DATA_DUMP_TABLES,
 } from '../full-archive-export'
-import { createPagedMockSupabase, createQueuedMockSupabase, manyRows } from '@/tests/helpers'
+import { createQueuedMockSupabase } from '@/tests/helpers'
 import { ArchiveTooLargeError } from '../archive-folder'
 import { getAuditLog } from '@/lib/core/audit/audit-service'
 import { generateTrialBalance } from '../trial-balance'
@@ -17,6 +17,7 @@ import { generateSIEExport } from '../sie-export'
 import { generateJournalRegister } from '../journal-register'
 import { generateSystemdokumentation } from '../systemdokumentation'
 import type { AuditLogEntry } from '@/types'
+import { createPagedMockSupabase, manyRows } from '@/tests/helpers'
 
 vi.mock('../sie-export', () => ({
   generateSIEExport: vi.fn().mockResolvedValue('#FLAGGA 0\n#PROGRAM "ERPBase"'),
