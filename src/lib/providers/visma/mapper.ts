@@ -17,6 +17,7 @@ import {
 import { parseSourceVoucherRef } from '../source-voucher';
 import { documentPayment, documentState } from '../document-state';
 import { roundOre } from '@/lib/money';
+import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils';
 import { vismaDeductionKind, vismaHouseholdDeduction, vismaHouseholdWork } from './housework';
 
 function amount(value: number | undefined | null, currency: string = 'SEK'): AmountType {
@@ -56,7 +57,7 @@ function salesInvoiceAmounts(raw: Record<string, unknown>, currency: string): {
   remaining: number | null;
 } {
   const total = raw['TotalAmountInvoiceCurrency'];
-  if (currency.toUpperCase() === 'SEK' || typeof total !== 'number') {
+  if (isLedgerCurrency(currency.toUpperCase()) || typeof total !== 'number') {
     return {
       total: raw['TotalAmount'] as number ?? 0,
       vat: readNumber(raw, VISMA_INVOICE_VAT_KEYS),
