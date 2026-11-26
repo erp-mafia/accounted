@@ -47,10 +47,14 @@ type TokenRow = { user_id: string; status: string; created_at?: string }
  * to the given rows, already in created_at DESC order (the DB does the
  * ordering; the resolver only picks). Pass a single row for the one-member
  * case, an array for several members, null for no rows.
+ *
+ * company_members answers `.select().in().order().order().range()` with
+ * `members` (default: every user with a token row is still a member of
+ * company-1), or with `membersError`.
  */
 function makeSupabase(
   tokenRows: TokenRow | TokenRow[] | null,
-  opts: { error?: { message: string } } = {},
+  opts: { error?: { message: string }; members?: string[]; membersError?: { message: string } } = {},
 ) {
   const rows = tokenRows === null ? [] : Array.isArray(tokenRows) ? tokenRows : [tokenRows]
   const chain: Record<string, unknown> = {}
@@ -65,8 +69,23 @@ function makeSupabase(
   chain.maybeSingle = vi.fn(() => {
     throw new Error('maybeSingle() must not be used for the company token lookup')
   })
-  return { from: vi.fn(() => chain), _chain: chain } as unknown as SupabaseClient & {
+  const members = opts.members ?? rows.map((row) => row.user_id)
+  const membersChain: Record<string, unknown> = {}
+  for (const m of ['select', 'in', 'order']) {
+    membersChain[m] = vi.fn(() => membersChain)
+  }
+  membersChain.range = vi.fn().mockResolvedValue(
+    opts.membersError
+      ? { data: null, error: opts.membersError }
+      : { data: members.map((user_id) => ({ company_id: 'company-1', user_id })), error: null },
+  )
+  return {
+    from: vi.fn((table: string) => (table === 'company_members' ? membersChain : chain)),
+    _chain: chain,
+    _members: membersChain,
+  } as unknown as SupabaseClient & {
     _chain: Record<string, ReturnType<typeof vi.fn>>
+    _members: Record<string, ReturnType<typeof vi.fn>>
   }
 }
 
@@ -306,6 +325,53 @@ describe('findCompanyTokenUser', () => {
       needsReconsent: false,
       createdAt: '2',
     })
+  })
+})
+
+describe('findCompanyTokenUser: a member who left the company', () => {
+  const ROWS: TokenRow[] = [
+    { user_id: 'user-left', status: 'active', created_at: '2' },
+    { user_id: 'user-a', status: 'active', created_at: '1' },
+  ]
+
+  it("never serves the company's reads: the newest row of someone still in it does", async () => {
+    const supabase = makeSupabase(ROWS, { members: ['user-a'] })
+    expect(await findCompanyTokenUser(supabase, 'company-1')).toMatchObject({ userId: 'user-a' })
+    // Also when their id is the one passed (a stored or remembered user id).
+    expect(await findCompanyTokenUser(supabase, 'company-1', { preferUserId: 'user-left' })).toMatchObject({
+      userId: 'user-a',
+    })
+    expect(supabase._members.in).toHaveBeenCalledWith('company_id', ['company-1'])
+  })
+
+  it('with nobody left who connected, the company has no token: no_token for user reads, no recipient on system reads', async () => {
+    const supabase = makeSupabase([ROWS[0]], { members: ['user-a'] })
+    expect(await findCompanyTokenUser(supabase, 'company-1')).toBeNull()
+    expect(await resolveUserReadAuth(supabase, 'company-1')).toEqual({ ok: false, reason: 'no_token' })
+
+    mockMode.mockReturnValue('on')
+    mockConfigured.mockReturnValue(true)
+    mockGetConnection.mockResolvedValue(GRANTED_CONNECTION)
+    expect(await resolveReadAuth(supabase, 'company-1', { requires: 'lasombud' })).toMatchObject({
+      ok: true,
+      source: 'system',
+      tokenUserId: null,
+    })
+  })
+
+  it('a failed membership read answers null, as a failed token read does, and never throws', async () => {
+    const supabase = makeSupabase(ROWS, { membersError: { message: 'boom' } })
+    expect(await findCompanyTokenUser(supabase, 'company-1')).toBeNull()
+    expect(await resolveReadAuth(supabase, 'company-1', { requires: 'lasombud' })).toEqual({
+      ok: false,
+      reason: 'no_token',
+    })
+  })
+
+  it('a company without token rows never reads its members', async () => {
+    const supabase = makeSupabase(null)
+    expect(await findCompanyTokenUser(supabase, 'company-1')).toBeNull()
+    expect(supabase.from).not.toHaveBeenCalledWith('company_members')
   })
 })
 

@@ -115,6 +115,7 @@ import { getConnection } from '@/extensions/general/skatteverket/lib/connection-
 import { recordGrantRefusal } from '@/extensions/general/skatteverket/lib/grant-probe'
 import { completeTaxDeadline } from '@/lib/deadlines/complete-tax-deadline'
 import { sendKvittensNotification } from '@/extensions/general/skatteverket/lib/kvittens-notification'
+import { companyMembersChain } from '@/tests/helpers'
 
 const mockCreateClient = vi.mocked(createClient)
 const mockVerifyCronSecret = vi.mocked(verifyCronSecret)
@@ -148,10 +149,15 @@ const PENDING_DECLARATION = {
 function makeSupabaseStub(tables: Record<string, { data: unknown; error?: unknown }>) {
   return {
     from: vi.fn((table: string) => {
+      // Every token owner is still a member, unless a test says otherwise.
+      if (table === 'company_members' && !tables.company_members) {
+        const owners = ((tables.skatteverket_tokens?.data ?? []) as Array<{ user_id: string }>).map((row) => row.user_id)
+        return companyMembersChain(owners)
+      }
       const result = tables[table] ?? { data: null, error: null }
       const resolved = { data: result.data, error: result.error ?? null }
       const chain: any = {}
-      for (const method of ['select', 'eq', 'in', 'gt', 'order', 'limit', 'update', 'delete', 'insert', 'upsert']) {
+      for (const method of ['select', 'eq', 'in', 'gt', 'order', 'limit', 'range', 'update', 'delete', 'insert', 'upsert']) {
         chain[method] = vi.fn(() => chain)
       }
       // The wrap-round read of the rotating batch (id <= pivot): the first
@@ -711,6 +717,23 @@ describe('AGI kvittenser cron', () => {
     expect(body.results[0]).toMatchObject({ status: 'no_token' })
     expect(runSummary()).toMatchObject({ noToken: 1, errors: 0 })
     expect(errorRecorder).not.toHaveBeenCalled()
+  })
+
+  it('never reads a kvittens on the connection of someone who left the company', async () => {
+    mockCreateClient.mockReturnValueOnce(
+      makeSupabaseStub({
+        agi_declarations: { data: [PENDING_DECLARATION] },
+        skatteverket_tokens: { data: [{ user_id: 'user-left', status: 'active' }] },
+        company_members: { data: [] },
+        company_settings: { data: { org_number: '556123-4567', entity_type: 'aktiebolag' } },
+      }),
+    )
+
+    const body = await (await GET(makeRequest())).json()
+
+    expect(body.results[0]).toMatchObject({ status: 'no_token' })
+    expect(mockAgiGetKvittenser).not.toHaveBeenCalled()
+    expect(mockSendKvittensNotification).not.toHaveBeenCalled()
   })
 
   it('starts no declaration after 30 s, so the slowest one (refresh 10 s, second look 1 s, call 15 s, writes) ends inside the 60 s limit', async () => {

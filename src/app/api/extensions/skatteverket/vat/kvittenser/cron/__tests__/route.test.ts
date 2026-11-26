@@ -96,6 +96,7 @@ import { completeTaxDeadline } from '@/lib/deadlines/complete-tax-deadline'
 import { recordVatFilingConfirmed } from '@/lib/vat/filing-record-store'
 import { markNeedsReconsent } from '@/extensions/general/skatteverket/lib/token-store'
 import { recordGrantRefusal } from '@/extensions/general/skatteverket/lib/grant-probe'
+import { companyMembersChain } from '@/tests/helpers'
 
 const mockCreateClient = vi.mocked(createClient)
 const mockVerifyCronSecret = vi.mocked(verifyCronSecret)
@@ -127,6 +128,11 @@ function makeSupabaseStub(
 ) {
   return {
     from: vi.fn((table: string) => {
+      // Every token owner is still a member, unless a test says otherwise.
+      if (table === 'company_members' && !tables.company_members) {
+        const owners = ((tables.skatteverket_tokens?.data ?? []) as Array<{ user_id: string }>).map((row) => row.user_id)
+        return companyMembersChain(owners)
+      }
       const result = tables[table] ?? { data: null, error: null }
       const resolved = { data: result.data, error: result.error ?? null }
       const chain: any = {}
@@ -518,6 +524,22 @@ describe('VAT kvittenser cron', () => {
     expect(errorRecorder).toHaveBeenCalledTimes(1)
   })
 
+  it("never checks a filing on the connection of someone who left the company, nor mails them", async () => {
+    mockCreateClient.mockReturnValueOnce(
+      makeSupabaseStub({
+        extension_data: { data: [{ company_id: 'comp-1', key: 'submission_202606', value: JSON.stringify(LOCKED_STATE) }] },
+        skatteverket_tokens: { data: [{ user_id: 'user-left', status: 'active' }] },
+        company_members: { data: [] },
+      }),
+    )
+
+    const body = await (await GET(makeRequest())).json()
+
+    expect(body.results).toEqual([{ companyId: 'comp-1', period: '202606', status: 'no_token' }])
+    expect(mockSkvRequest).not.toHaveBeenCalled()
+    expect(mockSendKvittensNotification).not.toHaveBeenCalled()
+  })
+
   it('flips the state only if the row is still the one it read, and leaves a state changed meanwhile alone', async () => {
     const READ_AT = '2026-07-01T09:00:00.123456+00:00'
     const SIGNED = { ok: true, status: 200, json: async () => ({ kvittensnummer: 'KV-123' }) } as any
@@ -530,7 +552,7 @@ describe('VAT kvittenser cron', () => {
         skatteverket_tokens: { data: [{ user_id: 'user-1', status: 'active' }] },
       })
     const updateChain = (client: any) =>
-      client.from.mock.results.map((r: any) => r.value).find((chain: any) => chain.update.mock.calls.length > 0)
+      client.from.mock.results.map((r: any) => r.value).find((chain: any) => chain.update?.mock.calls.length > 0)
 
     // Unchanged since the read: the write goes through, guarded on updated_at.
     const untouched = stub()
