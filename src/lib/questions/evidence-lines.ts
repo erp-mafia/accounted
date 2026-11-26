@@ -23,7 +23,9 @@ import { dbError } from '@/lib/errors/db-error'
 import { isAccountNumber } from '@/lib/invariants/account-number'
 import { isUuid } from '@/lib/invariants/uuid'
 import { sumOre } from '@/lib/money'
+import { ID_READ_CHUNK } from '@/lib/reconciliation/limits'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { chunk } from '@/lib/utils'
 import type { EvidenceKind, EvidenceRef } from './types'
 
 export interface EvidenceLine {
@@ -294,7 +296,8 @@ function missing(ref: EvidenceRef): EvidenceLine {
 
 /**
  * One line per reference, in the order given, read in one query per kind
- * whatever the number of questions. Throws when a read fails.
+ * (per ID_READ_CHUNK ids of it) whatever the number of questions. Throws when
+ * a read fails.
  */
 export async function evidenceLines(
   supabase: SupabaseClient,
@@ -309,6 +312,15 @@ export async function evidenceLines(
     }
   }
   const lines: Lines = new Map()
-  await Promise.all([...idsByKind].map(([kind, ids]) => LOADERS[kind](supabase, companyId, [...ids], lines)))
+  // Each kind in slices of ID_READ_CHUNK, one after another: the ids travel in
+  // the GET query string, which the gateway refuses past its limit, and the
+  // settled questions name up to 320 records of one kind (their own evidence
+  // and their closes'), the operations of 200 questions up to 1000 bank rows.
+  // A slice of verifikat keeps the read of their lines within the limit too.
+  await Promise.all(
+    [...idsByKind].map(async ([kind, ids]) => {
+      for (const slice of chunk([...ids], ID_READ_CHUNK)) await LOADERS[kind](supabase, companyId, slice, lines)
+    }),
+  )
   return questions.map((refs) => refs.map((ref) => lines.get(keyOf(ref.kind, ref.id)) ?? missing(ref)))
 }

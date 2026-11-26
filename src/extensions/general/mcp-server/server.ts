@@ -261,6 +261,8 @@ import { dimensionFilterPartialView } from '@/lib/reports/dimension-filter'
 import { resolveAgentWorklist, verifikatNextStepKinds, type NextStepKind, type VerifikatErrandRow } from '@/lib/receipt-hunt/agent-worklist'
 import { isSkatteverketEnabled } from '@/lib/skatteverket/enabled'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { chunk } from '@/lib/utils'
+import { ID_READ_CHUNK } from '@/lib/reconciliation/limits'
 import { expandParty } from '@/lib/parties/party-api'
 import {
   cashAccountCurrencyMismatch,
@@ -3584,18 +3586,27 @@ async function documentIdsForInboxItems(
   ids: string[],
 ): Promise<Map<string, string>> {
   if (ids.length === 0) return new Map()
-  const { data, error } = await supabase
-    .from('invoice_inbox_items')
-    .select('id, document_id')
-    .eq('company_id', companyId)
-    .in('id', ids)
-    .not('document_id', 'is', null)
-  if (error) {
-    if (isLookupMiss(error)) return new Map()
-    throw dbError(error)
+  // In slices of ID_READ_CHUNK: the ids travel in the GET query string, which
+  // the gateway refuses past its limit, and gnubok_link_documents_to_vouchers
+  // asks about up to 300. A lookup miss in any slice answers as the one read
+  // did: no inbox item resolves.
+  const held = new Map<string, string>()
+  for (const slice of chunk(ids, ID_READ_CHUNK)) {
+    const { data, error } = await supabase
+      .from('invoice_inbox_items')
+      .select('id, document_id')
+      .eq('company_id', companyId)
+      .in('id', slice)
+      .not('document_id', 'is', null)
+    if (error) {
+      if (isLookupMiss(error)) return new Map()
+      throw dbError(error)
+    }
+    for (const r of (data ?? []) as Array<{ id: string; document_id: string }>) {
+      if (r.document_id !== r.id) held.set(r.id, r.document_id)
+    }
   }
-  const rows = (data ?? []) as Array<{ id: string; document_id: string }>
-  return new Map(rows.filter((r) => r.document_id !== r.id).map((r) => [r.id, r.document_id]))
+  return held
 }
 
 /** NOT_FOUND for the operation id sent to approve or reject. */
@@ -20709,16 +20720,22 @@ export const tools: McpTool[] = [
         periodsByYear.set(year, bucket)
       }
 
-      // ── Batch-fetch documents.
+      // ── Batch-fetch documents, in slices of ID_READ_CHUNK: the ids travel
+      //    in the GET query string, which the gateway refuses past its
+      //    limit, and one call names up to 300 documents.
       type LinkDoc = { id: string; file_name: string; mime_type: string; journal_entry_id: string | null }
       const fetchDocs = async (ids: string[]) => {
-        const { data, error } = await supabase
-          .from('document_attachments')
-          .select('id, file_name, mime_type, journal_entry_id')
-          .in('id', ids)
-          .eq('company_id', companyId)
-        if (error) throw dbError(error)
-        return (data ?? []) as LinkDoc[]
+        const docs: LinkDoc[] = []
+        for (const slice of chunk(ids, ID_READ_CHUNK)) {
+          const { data, error } = await supabase
+            .from('document_attachments')
+            .select('id, file_name, mime_type, journal_entry_id')
+            .in('id', slice)
+            .eq('company_id', companyId)
+          if (error) throw dbError(error)
+          docs.push(...((data ?? []) as LinkDoc[]))
+        }
+        return docs
       }
       let documentIds = [...new Set(rawLinks.map((l) => l.document_id))]
       const docsById = new Map((await fetchDocs(documentIds)).map((d) => [d.id, d]))
@@ -20786,17 +20803,19 @@ export const tools: McpTool[] = [
           je,
         ]))
       }
-      // By id: at most 300 per call, under the 1000-row cap.
+      // By id: at most 300 per call, under the 1000-row cap. In slices of
+      // ID_READ_CHUNK: the ids travel in the GET query string, which the
+      // gateway refuses past its limit.
       const entryIds = [...new Set(rawLinks.flatMap((l) => (l.journal_entry_id ? [l.journal_entry_id] : [])))]
-      let jesById = new Map<string, CandidateJe>()
-      if (entryIds.length > 0) {
+      const jesById = new Map<string, CandidateJe>()
+      for (const ids of chunk(entryIds, ID_READ_CHUNK)) {
         const { data: byId, error: byIdError } = await supabase
           .from('journal_entries')
           .select('id, entry_date, description, voucher_series, voucher_number, status, fiscal_period_id')
           .eq('company_id', companyId)
-          .in('id', entryIds)
+          .in('id', ids)
         if (byIdError) throw dbError(byIdError)
-        jesById = new Map(((byId ?? []) as CandidateJe[]).map((je) => [je.id, je]))
+        for (const je of (byId ?? []) as CandidateJe[]) jesById.set(je.id, je)
       }
       const periodsById = new Map((periods ?? []).map((p) => [p.id as string, p as LinkPeriod]))
 

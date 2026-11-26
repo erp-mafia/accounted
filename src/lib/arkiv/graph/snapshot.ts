@@ -3,6 +3,8 @@ import { createLogger } from '@/lib/logger'
 import { buildCompanyGraph, GRAPH_VERSION } from './build'
 import type { CompanyGraph } from './types'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { chunk } from '@/lib/utils'
+import { ID_READ_CHUNK } from '@/lib/reconciliation/limits'
 
 /**
  * One snapshot per company, so the page and the agent read the same picture
@@ -56,9 +58,16 @@ export async function markCompanyGraphStale(supabase: SupabaseClient, companyId:
  */
 export async function refreshStaleGraphs(supabase: SupabaseClient, companyIds: string[], limit: number, today = todayIsoStockholm()): Promise<{ refreshed: number; failed: number }> {
   if (companyIds.length === 0) return { refreshed: 0, failed: 0 }
-  const { data, error } = await supabase.from('arkiv_graph_snapshots').select('company_id, stale, computed_at').in('company_id', companyIds)
-  if (error) throw new Error(`graph snapshot list failed: ${error.message}`)
-  const rows = new Map(((data ?? []) as Array<{ company_id: string; stale: boolean; computed_at: string }>).map((r) => [r.company_id, r]))
+  // In slices of ID_READ_CHUNK: the ids travel in the GET query string, which
+  // the gateway refuses past its limit, and with `*` in the rollout the lint
+  // cron passes up to 500 companies. One snapshot per company, so a slice is
+  // a single page.
+  const rows = new Map<string, { company_id: string; stale: boolean; computed_at: string }>()
+  for (const ids of chunk(companyIds, ID_READ_CHUNK)) {
+    const { data, error } = await supabase.from('arkiv_graph_snapshots').select('company_id, stale, computed_at').in('company_id', ids)
+    if (error) throw new Error(`graph snapshot list failed: ${error.message}`)
+    for (const r of (data ?? []) as Array<{ company_id: string; stale: boolean; computed_at: string }>) rows.set(r.company_id, r)
+  }
   const due = companyIds
     .filter((id) => { const r = rows.get(id); return !r || r.stale || Date.now() - new Date(r.computed_at).getTime() > MAX_AGE_HOURS * 3600 * 1000 })
     .sort((a, b) => new Date(rows.get(a)?.computed_at ?? 0).getTime() - new Date(rows.get(b)?.computed_at ?? 0).getTime())

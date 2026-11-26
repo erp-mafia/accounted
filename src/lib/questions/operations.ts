@@ -23,6 +23,8 @@ import { isUuid } from '@/lib/invariants/uuid'
 import { operationNumberOf } from '@/lib/pending-operations/operation-number'
 import { readWithOperationNumber } from '@/lib/pending-operations/operation-number-read'
 import { pendingOperationTaskState } from '@/lib/pending-operations/task-state'
+import { ID_READ_CHUNK } from '@/lib/reconciliation/limits'
+import { chunk } from '@/lib/utils'
 import { emitQuestionEvent } from './events'
 import { evidenceLines } from './evidence-lines'
 import { assertCompanyQuestionsOn, readQuestionRow } from './rows'
@@ -285,37 +287,49 @@ export async function questionOperations(
   const ids = [...new Set(questionIds)]
   if (ids.length === 0) return byQuestion
 
-  const { data: linkRows, error: linksError } = await supabase
-    .from('company_question_operations')
-    .select('question_id, operation_id, created_at')
-    .eq('company_id', companyId)
-    .in('question_id', ids)
-    .order('created_at', { ascending: true })
-    .order('operation_id', { ascending: true })
-  if (linksError) throw dbError(linksError)
-  const links = (linkRows ?? []) as Array<{ question_id: string; operation_id: string }>
+  // In slices of ID_READ_CHUNK: the ids travel in the GET query string, which
+  // the gateway refuses past its limit, and gnubok_list_questions lists up to
+  // 200 questions. A question's links all come in its own slice, in the order
+  // they were linked.
+  const links: Array<{ question_id: string; operation_id: string }> = []
+  for (const slice of chunk(ids, ID_READ_CHUNK)) {
+    const { data: linkRows, error: linksError } = await supabase
+      .from('company_question_operations')
+      .select('question_id, operation_id, created_at')
+      .eq('company_id', companyId)
+      .in('question_id', slice)
+      .order('created_at', { ascending: true })
+      .order('operation_id', { ascending: true })
+    if (linksError) throw dbError(linksError)
+    links.push(...((linkRows ?? []) as Array<{ question_id: string; operation_id: string }>))
+  }
   if (links.length === 0) return byQuestion
 
   const operationIds = [...new Set(links.map((link) => link.operation_id))]
-  // operation_number: read without it while the column is not there yet.
-  const { data: stagedRows, error: stagedError } = await readWithOperationNumber((withOperationNumber) => {
-    const numbered = () =>
-      supabase
-        .from('pending_operations')
-        .select(
-          'id, operation_number, operation_type, title, status, result_data, transaction_id:params->>transaction_id, document_name:preview_data->>document_file_name, voucher_label:preview_data->>voucher_label',
-        )
-    const query = withOperationNumber
-      ? numbered()
-      : (supabase
+  // Sliced the same way: a question holds up to QUESTION_LIMITS.maxOperations,
+  // so 200 questions name up to 1000 operations.
+  const rows: StagedRow[] = []
+  for (const slice of chunk(operationIds, ID_READ_CHUNK)) {
+    // operation_number: read without it while the column is not there yet.
+    const { data: stagedRows, error: stagedError } = await readWithOperationNumber((withOperationNumber) => {
+      const numbered = () =>
+        supabase
           .from('pending_operations')
           .select(
-            'id, operation_type, title, status, result_data, transaction_id:params->>transaction_id, document_name:preview_data->>document_file_name, voucher_label:preview_data->>voucher_label',
-          ) as unknown as ReturnType<typeof numbered>)
-    return query.eq('company_id', companyId).in('id', operationIds)
-  })
-  if (stagedError) throw dbError(stagedError)
-  const rows = (stagedRows ?? []) as unknown as StagedRow[]
+            'id, operation_number, operation_type, title, status, result_data, transaction_id:params->>transaction_id, document_name:preview_data->>document_file_name, voucher_label:preview_data->>voucher_label',
+          )
+      const query = withOperationNumber
+        ? numbered()
+        : (supabase
+            .from('pending_operations')
+            .select(
+              'id, operation_type, title, status, result_data, transaction_id:params->>transaction_id, document_name:preview_data->>document_file_name, voucher_label:preview_data->>voucher_label',
+            ) as unknown as ReturnType<typeof numbered>)
+      return query.eq('company_id', companyId).in('id', slice)
+    })
+    if (stagedError) throw dbError(stagedError)
+    rows.push(...((stagedRows ?? []) as unknown as StagedRow[]))
+  }
   const staged = new Map((await operationsOfRows(supabase, companyId, rows)).map((operation) => [operation.operation_id, operation]))
 
   for (const link of links) {

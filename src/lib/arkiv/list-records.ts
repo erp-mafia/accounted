@@ -3,6 +3,9 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { fillTypeFromClassification } from '@/lib/documents/locked-period'
 import { DOC_TYPES, isDocType } from '@/lib/documents/classify/taxonomy'
 import { NOT_STRUCTURED_MIME_FILTER } from '@/lib/documents/read/types'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { chunk } from '@/lib/utils'
+import { ID_READ_CHUNK } from '@/lib/reconciliation/limits'
 import { FOLDER_ORDER, folderFor, type FolderKey } from './folders'
 
 /**
@@ -138,19 +141,40 @@ export async function originalsOf(
   const canonical = new Map<string, { id: string; created_at: string }>()
   const uniqueHashes = [...new Set(hashOf.values())]
   if (uniqueHashes.length) {
-    const { data: twins, error: twinError } = await supabase
-      .from('document_classifications')
-      .select('document_id, content_sha256')
-      .eq('company_id', companyId)
-      .eq('is_current', true)
-      .in('content_sha256', uniqueHashes)
-    if (twinError) throw new Error(`duplicates failed: ${twinError.message}`)
-    const twinRows = (twins ?? []) as Array<{ document_id: string; content_sha256: string }>
+    // In slices of ID_READ_CHUNK, each paged: the hashes travel in the GET
+    // query string (about 67 characters each), which the gateway refuses past
+    // its limit, and up to 200 documents are listed at once, each with a text
+    // of its own. A slice of texts archived many times over returns more than
+    // one page of rows.
+    const twinRows: Array<{ document_id: string; content_sha256: string }> = []
+    try {
+      for (const hashes of chunk(uniqueHashes, ID_READ_CHUNK)) {
+        twinRows.push(
+          ...(await fetchAllRows<{ document_id: string; content_sha256: string }>(({ from, to }) =>
+            supabase
+              .from('document_classifications')
+              .select('document_id, content_sha256')
+              .eq('company_id', companyId)
+              .eq('is_current', true)
+              .in('content_sha256', hashes)
+              .order('id', { ascending: true })
+              .range(from, to),
+          )),
+        )
+      }
+    } catch (err) {
+      throw new Error(`duplicates failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
     const twinIds = [...new Set(twinRows.map((t) => t.document_id))]
     if (twinIds.length > 1) {
-      const { data: docs, error: docError } = await supabase.from('document_attachments').select('id, created_at').eq('company_id', companyId).in('id', twinIds)
-      if (docError) throw new Error(`duplicates failed: ${docError.message}`)
-      const createdAt = new Map(((docs ?? []) as Array<{ id: string; created_at: string }>).map((d) => [d.id, d.created_at]))
+      // Sliced too: every document that shares a text with the page, however
+      // many. By id, so a slice is a single page.
+      const createdAt = new Map<string, string>()
+      for (const part of chunk(twinIds, ID_READ_CHUNK)) {
+        const { data: docs, error: docError } = await supabase.from('document_attachments').select('id, created_at').eq('company_id', companyId).in('id', part)
+        if (docError) throw new Error(`duplicates failed: ${docError.message}`)
+        for (const d of (docs ?? []) as Array<{ id: string; created_at: string }>) createdAt.set(d.id, d.created_at)
+      }
       for (const t of twinRows) {
         const at = createdAt.get(t.document_id)
         if (!at) continue
@@ -165,9 +189,28 @@ export async function originalsOf(
   const byteOriginal = new Map<string, { id: string; created_at: string }>()
   const byteHashes = [...new Set(rows.map((r) => r.sha256_hash).filter((h): h is string => !!h))]
   if (byteHashes.length) {
-    const { data: same, error: sameError } = await supabase.from('document_attachments').select('id, created_at, sha256_hash').eq('company_id', companyId).in('sha256_hash', byteHashes)
-    if (sameError) throw new Error(`duplicates failed: ${sameError.message}`)
-    for (const d of (same ?? []) as Array<{ id: string; created_at: string; sha256_hash: string }>) {
+    // In slices of ID_READ_CHUNK, each paged, as the texts above: up to 200
+    // file hashes travel in the query string, and a file can be archived many
+    // times over.
+    const same: Array<{ id: string; created_at: string; sha256_hash: string }> = []
+    try {
+      for (const hashes of chunk(byteHashes, ID_READ_CHUNK)) {
+        same.push(
+          ...(await fetchAllRows<{ id: string; created_at: string; sha256_hash: string }>(({ from, to }) =>
+            supabase
+              .from('document_attachments')
+              .select('id, created_at, sha256_hash')
+              .eq('company_id', companyId)
+              .in('sha256_hash', hashes)
+              .order('id', { ascending: true })
+              .range(from, to),
+          )),
+        )
+      }
+    } catch (err) {
+      throw new Error(`duplicates failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    for (const d of same) {
       const current = byteOriginal.get(d.sha256_hash)
       if (!current || d.created_at < current.created_at || (d.created_at === current.created_at && d.id < current.id)) byteOriginal.set(d.sha256_hash, { id: d.id, created_at: d.created_at })
     }

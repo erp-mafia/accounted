@@ -3,6 +3,8 @@ import type { CollectionsFeatures } from '@accounted/connect-contract'
 import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
 import { createLogger, type Logger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
+import { ID_READ_CHUNK } from '@/lib/reconciliation/limits'
+import { chunk } from '@/lib/utils'
 import { expireStaleDailyBatches, resolveDailyBatchOwner } from '@/lib/pending-operations/daily-batch-staging'
 import { getRiskLevel } from '@/lib/pending-operations/risk-tiers'
 import { traceIdColumn, writeWithTraceId } from '@/lib/observability/trace-column'
@@ -167,14 +169,21 @@ async function loadDecisionCases(db: Pick<SupabaseClient, 'from'>, companyId: st
   if (error) throw new Error(`collection_cases decision lookup failed: ${error.message}`)
   const rows = ((data ?? []) as Record<string, unknown>[]).map(normalizeCaseRow)
   if (rows.length === 0) return []
-  const { data: invoices, error: invoiceError } = await db
-    .from('invoices')
-    .select('id, invoice_number, due_date, customer:customers(name, collections_excluded)')
-    .eq('company_id', companyId)
-    .in('id', rows.map((r) => r.invoice_id))
-  if (invoiceError) throw new Error(`decision invoices lookup failed: ${invoiceError.message}`)
+  // In slices of ID_READ_CHUNK: every open case awaiting a decision is read,
+  // so the list grows with the backlog, and the ids travel in the GET query
+  // string, which the gateway refuses past its limit. Reads by primary key:
+  // a slice answers at most ID_READ_CHUNK rows.
   type InvoiceRow = { id: string; invoice_number: string | null; due_date: string | null; customer: unknown }
-  const byId = new Map(((invoices ?? []) as InvoiceRow[]).map((i) => [i.id, i]))
+  const byId = new Map<string, InvoiceRow>()
+  for (const ids of chunk(rows.map((r) => r.invoice_id), ID_READ_CHUNK)) {
+    const { data: invoices, error: invoiceError } = await db
+      .from('invoices')
+      .select('id, invoice_number, due_date, customer:customers(name, collections_excluded)')
+      .eq('company_id', companyId)
+      .in('id', ids)
+    if (invoiceError) throw new Error(`decision invoices lookup failed: ${invoiceError.message}`)
+    for (const invoice of (invoices ?? []) as InvoiceRow[]) byId.set(invoice.id, invoice)
+  }
   return rows.map((row) => {
     const invoice = byId.get(row.invoice_id)
     const rawCustomer = invoice?.customer

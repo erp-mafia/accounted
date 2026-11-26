@@ -2,6 +2,8 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { coreKey, ledgerKey } from '@/lib/parties/ledger-key'
 import { addDays, daysBetween } from './dates'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { chunk } from '@/lib/utils'
+import { ID_READ_CHUNK } from '@/lib/reconciliation/limits'
 
 /**
  * Arkiv phase 4: did the expected money arrive? Obligations are compared
@@ -148,30 +150,55 @@ function textTokens(t: TransactionRow): Set<string> {
 }
 
 async function loadObligations(supabase: SupabaseClient, companyId: string, today: string, agreementIds?: readonly string[]): Promise<ObligationRow[]> {
-  let query = supabase
-    .from('agreement_obligations')
-    .select('id, agreement_id, due_on, amount, currency, amount_is_estimate, status, direction')
-    .eq('company_id', companyId)
-    .in('status', ['expected', 'missed'])
-    .gte('due_on', addDays(today, -LOOKBACK_DAYS))
-    .lte('due_on', addDays(today, LOOKAHEAD_DAYS))
-  if (agreementIds) query = query.in('agreement_id', [...agreementIds])
-  const { data, error } = await query.order('due_on', { ascending: true })
-  if (error) throw new Error(`obligations fetch failed: ${error.message}`)
-  return (data ?? []) as ObligationRow[]
+  // Narrowed, in slices of ID_READ_CHUNK: the ids travel in the GET query
+  // string, which the gateway refuses past its limit, and the list names
+  // every manual agreement of the company, ended ones too. Not narrowed, one
+  // read as before. The match loop takes the obligations in due_on order, so
+  // the slices are sorted again once merged; the sort is stable, so ties
+  // keep the order their slice gave them.
+  const slices: Array<string[] | null> = agreementIds ? chunk([...new Set(agreementIds)], ID_READ_CHUNK) : [null]
+  const rows: ObligationRow[] = []
+  for (const slice of slices) {
+    let query = supabase
+      .from('agreement_obligations')
+      .select('id, agreement_id, due_on, amount, currency, amount_is_estimate, status, direction')
+      .eq('company_id', companyId)
+      .in('status', ['expected', 'missed'])
+      .gte('due_on', addDays(today, -LOOKBACK_DAYS))
+      .lte('due_on', addDays(today, LOOKAHEAD_DAYS))
+    if (slice) query = query.in('agreement_id', slice)
+    const { data, error } = await query.order('due_on', { ascending: true })
+    if (error) throw new Error(`obligations fetch failed: ${error.message}`)
+    rows.push(...((data ?? []) as ObligationRow[]))
+  }
+  return rows.sort((a, b) => (a.due_on < b.due_on ? -1 : a.due_on > b.due_on ? 1 : 0))
 }
 
+/**
+ * In slices of ID_READ_CHUNK: the ids travel in the GET query string, which
+ * the gateway refuses past its limit, and they are the agreements of every
+ * obligation in the window. One row per id, so a slice is a single page.
+ */
 async function loadAgreements(supabase: SupabaseClient, ids: string[]): Promise<AgreementRow[]> {
-  const { data, error } = await supabase.from('agreements').select('id, counterparty_party_id, counterparty_name').in('id', ids)
-  if (error) throw new Error(`agreements fetch failed: ${error.message}`)
-  return (data ?? []) as AgreementRow[]
+  const rows: AgreementRow[] = []
+  for (const slice of chunk(ids, ID_READ_CHUNK)) {
+    const { data, error } = await supabase.from('agreements').select('id, counterparty_party_id, counterparty_name').in('id', slice)
+    if (error) throw new Error(`agreements fetch failed: ${error.message}`)
+    rows.push(...((data ?? []) as AgreementRow[]))
+  }
+  return rows
 }
 
+/** In slices of ID_READ_CHUNK, as the agreements: their counterparties, one row per id. */
 async function loadParties(supabase: SupabaseClient, ids: string[]): Promise<PartyRow[]> {
   if (ids.length === 0) return []
-  const { data, error } = await supabase.from('parties').select('id, display_name, legal_name, alias_keys').in('id', ids)
-  if (error) throw new Error(`parties fetch failed: ${error.message}`)
-  return (data ?? []) as PartyRow[]
+  const rows: PartyRow[] = []
+  for (const slice of chunk(ids, ID_READ_CHUNK)) {
+    const { data, error } = await supabase.from('parties').select('id, display_name, legal_name, alias_keys').in('id', slice)
+    if (error) throw new Error(`parties fetch failed: ${error.message}`)
+    rows.push(...((data ?? []) as PartyRow[]))
+  }
+  return rows
 }
 
 /** Unignored transactions around the obligations' due dates; the sign is checked per obligation's direction. */

@@ -4,6 +4,8 @@ import { isArkivBrainEnabled } from '@/lib/arkiv/flag'
 import { todayIso } from '@/lib/arkiv/agreements/dates'
 import type { AgreementKind, Period } from '@/lib/arkiv/agreements/derive'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { readInSlices } from '@/lib/supabase/read-in-slices'
 
 /**
  * GET /api/arkiv/agreements
@@ -82,19 +84,27 @@ export const GET = withRouteContext('arkiv.agreements', async (_request, ctx) =>
   const ids = agreements.map((a) => a.id)
 
   const [parties, obligations, deadlines, documents, duplicates] = await Promise.all([
-    ctx.supabase
-      .from('parties')
-      .select('id, display_name')
-      .in(
-        'id',
-        agreements.map((a) => a.counterparty_party_id).filter((id): id is string => !!id),
+    readInSlices<{ id: string; display_name: string }>(
+      [...new Set(agreements.map((a) => a.counterparty_party_id).filter((id): id is string => !!id))],
+      (slice) => ctx.supabase.from('parties').select('id, display_name').in('id', slice),
+    ),
+    // Each slice paged: an agreement carries its payments a year ahead and
+    // its history, so a slice passes one page of rows. All of an agreement's
+    // rows come from its own slice, in due_on order, as the next payment
+    // below needs; id breaks due_on ties for stable pages.
+    readInSlices<ObligationRow>(ids, async (slice) => ({
+      data: await fetchAllRows<ObligationRow>(({ from, to }) =>
+        ctx.supabase
+          .from('agreement_obligations')
+          .select('agreement_id, due_on, amount, currency, status, kind')
+          .in('agreement_id', slice)
+          .neq('status', 'waived')
+          .order('due_on', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, to),
       ),
-    ctx.supabase
-      .from('agreement_obligations')
-      .select('agreement_id, due_on, amount, currency, status, kind')
-      .in('agreement_id', ids)
-      .neq('status', 'waived')
-      .order('due_on', { ascending: true }),
+      error: null,
+    })),
     ctx.supabase
       .from('deadlines')
       .select('source_key, due_date, title')
@@ -102,13 +112,10 @@ export const GET = withRouteContext('arkiv.agreements', async (_request, ctx) =>
       .like('source_key', 'agreement:%')
       .eq('is_completed', false)
       .is('dismissed_at', null),
-    ctx.supabase
-      .from('document_attachments')
-      .select('id, file_name')
-      .in(
-        'id',
-        agreements.map((a) => a.source_document_id),
-      ),
+    readInSlices<{ id: string; file_name: string }>(
+      [...new Set(agreements.map((a) => a.source_document_id))],
+      (slice) => ctx.supabase.from('document_attachments').select('id, file_name').in('id', slice),
+    ),
     ctx.supabase.from('arkiv_findings').select('detail').eq('company_id', ctx.companyId).eq('kind', 'agreement_duplicate').eq('status', 'open').limit(200),
   ])
   for (const result of [parties, obligations, deadlines, documents, duplicates])

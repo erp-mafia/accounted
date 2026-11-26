@@ -5,101 +5,24 @@
  * and supabase-js puts those ids in the GET query string. Sent as one list of
  * every open invoice, the request ran past the gateway's URL limit, the
  * gateway refused it before PostgREST saw it, and no bank row of that company
- * got an invoice match. The fake gateway below builds the URL the way
- * supabase-js does and refuses one past a self-hosted Kong's 8 KB, the
- * stricter of the two limits (hosted Supabase's is about 16 KB). Behind it,
- * every response is capped at PostgREST's 1000 rows.
+ * got an invoice match. The fake gateway (tests/gateway-supabase.ts) refuses a
+ * URL past a self-hosted Kong's 8 KB, the stricter of the two limits (hosted
+ * Supabase's is about 16 KB). Behind it, every response is capped at
+ * PostgREST's 1000 rows.
  */
 import { describe, expect, it } from 'vitest'
 import { loadInvoiceMatchPool } from '../invoice-matching'
-import { makeCustomer, makeInvoice } from '@/tests/helpers'
+import { makeCustomer, makeInvoice, POSTGREST_MAX_ROWS as MAX_ROWS } from '@/tests/helpers'
+import { createGatewaySupabase, GATEWAY_URL_LIMIT as URL_LIMIT, type GatewayRequest as Request } from '@/tests/gateway-supabase'
 
 type Row = Record<string, unknown>
-type Answer = { data: Row[] | null; error: { message: string; code?: string } | null }
 
 const COMPANY = '5b0c3c1e-0000-4000-8000-000000000001'
-const URL_LIMIT = 8 * 1024
-const MAX_ROWS = 1000
 
 const uuid = (n: number, prefix = '00000000') => `${prefix}-0000-4000-8000-${String(n).padStart(12, '0')}`
 
-interface Request {
-  table: string
-  url: string
-  inValues: number
-}
-
-function gatewaySupabase(tables: Record<string, Row[]>, refuse?: (request: Request) => boolean) {
-  const requests: Request[] = []
-  const from = (table: string) => {
-    const params = new URLSearchParams()
-    const keep: Array<(row: Row) => boolean> = []
-    let inValues = 0
-    let orderBy: string | null = null
-    let window: [number, number] | null = null
-    const builder = {
-      select(columns: string) {
-        params.append('select', columns)
-        return builder
-      },
-      eq(column: string, value: unknown) {
-        params.append(column, `eq.${String(value)}`)
-        keep.push((row) => row[column] === value)
-        return builder
-      },
-      is(column: string, value: null) {
-        params.append(column, 'is.null')
-        keep.push((row) => (row[column] ?? null) === value)
-        return builder
-      },
-      gte(column: string, value: number) {
-        params.append(column, `gte.${value}`)
-        keep.push((row) => Number(row[column]) >= value)
-        return builder
-      },
-      not(column: string, op: string, value: null) {
-        if (op !== 'is') throw new Error(`gateway fake: not(${op}) is not modelled`)
-        params.append(column, 'not.is.null')
-        keep.push((row) => (row[column] ?? null) !== value)
-        return builder
-      },
-      in(column: string, values: readonly unknown[]) {
-        params.append(column, `in.(${values.join(',')})`)
-        inValues += values.length
-        keep.push((row) => values.includes(row[column]))
-        return builder
-      },
-      order(column: string) {
-        orderBy = column
-        params.append('order', `${column}.asc`)
-        return builder
-      },
-      range(start: number, end: number) {
-        window = [start, end]
-        params.set('offset', String(start))
-        params.set('limit', String(end - start + 1))
-        return builder
-      },
-      then(resolve: (answer: Answer) => void) {
-        const request = { table, url: `https://abcdefghijklmnopqrst.supabase.co/rest/v1/${table}?${params}`, inValues }
-        requests.push(request)
-        if (request.url.length > URL_LIMIT) return resolve({ data: null, error: { message: 'Request-URI Too Large' } })
-        if (refuse?.(request)) {
-          return resolve({ data: null, error: { message: 'canceling statement due to statement timeout', code: '57014' } })
-        }
-        let rows = (tables[table] ?? []).filter((row) => keep.every((test) => test(row)))
-        if (orderBy) {
-          const key = orderBy
-          rows = [...rows].sort((a, b) => String(a[key]).localeCompare(String(b[key])))
-        }
-        if (window) rows = rows.slice(window[0], window[1] + 1)
-        resolve({ data: structuredClone(rows.slice(0, MAX_ROWS)), error: null })
-      },
-    }
-    return builder
-  }
-  return { supabase: { from } as never, requests }
-}
+const gatewaySupabase = (tables: Record<string, Row[]>, refuse?: (request: Request) => boolean) =>
+  createGatewaySupabase(tables, { refuse })
 
 const customer = makeCustomer({ id: uuid(1, 'cccccccc'), company_id: COMPANY, name: 'Nordviken Bygg AB' })
 

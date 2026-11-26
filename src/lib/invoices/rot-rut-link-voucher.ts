@@ -25,6 +25,8 @@ import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/accou
 import { accountClass } from '@/lib/invariants/account-number'
 import { VAT_OUTPUT_ACCOUNTS } from '@/lib/reports/vat-declaration'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
+import { ID_READ_CHUNK } from '@/lib/reconciliation/limits'
+import { chunk } from '@/lib/utils'
 
 export type LinkRotRutPayoutVoucherErrorCode =
   | 'ROT_RUT_REQUEST_NOT_FOUND'
@@ -214,30 +216,36 @@ export async function listRotRutPayoutVoucherCandidates(
   ]
   if (ids.length === 0) return { data: [], error: null }
 
-  const [{ data: entries, error: entryError }, { data: used, error: usedError }] = await Promise.all([
-    supabase
-      .from('journal_entries')
-      .select(
-        'id, entry_date, voucher_series, voucher_number, description, source_type, lines:journal_entry_lines(account_number, debit_amount, credit_amount)',
-      )
-      .eq('company_id', companyId)
-      .eq('status', 'posted')
-      .is('reversed_by_id', null)
-      .in('id', ids),
-    supabase
-      .from('rot_rut_payout_requests')
-      .select('settlement_journal_entry_id')
-      .eq('company_id', companyId)
-      .in('settlement_journal_entry_id', ids),
-  ])
-  if (entryError) return { data: [], error: entryError }
-  if (usedError) return { data: [], error: usedError }
+  // In slices of ID_READ_CHUNK: every verifikat since the begäran that
+  // credits 1513 (and, under kontantmetoden, every bank debit of exactly the
+  // expected payout) is read, with no cap before the cut below, and the ids
+  // travel in the GET query string, which the gateway refuses past its limit.
+  const entries: CandidateEntryRow[] = []
+  const usedIds = new Set<string | null>()
+  for (const slice of chunk(ids, ID_READ_CHUNK)) {
+    const [{ data: entryRows, error: entryError }, { data: used, error: usedError }] = await Promise.all([
+      supabase
+        .from('journal_entries')
+        .select(
+          'id, entry_date, voucher_series, voucher_number, description, source_type, lines:journal_entry_lines(account_number, debit_amount, credit_amount)',
+        )
+        .eq('company_id', companyId)
+        .eq('status', 'posted')
+        .is('reversed_by_id', null)
+        .in('id', slice),
+      supabase
+        .from('rot_rut_payout_requests')
+        .select('settlement_journal_entry_id')
+        .eq('company_id', companyId)
+        .in('settlement_journal_entry_id', slice),
+    ])
+    if (entryError) return { data: [], error: entryError }
+    if (usedError) return { data: [], error: usedError }
+    entries.push(...((entryRows ?? []) as CandidateEntryRow[]))
+    for (const r of (used ?? []) as Array<{ settlement_journal_entry_id: string | null }>) usedIds.add(r.settlement_journal_entry_id)
+  }
 
-  const usedIds = new Set(
-    ((used ?? []) as Array<{ settlement_journal_entry_id: string | null }>).map((r) => r.settlement_journal_entry_id),
-  )
-
-  const candidates = ((entries ?? []) as CandidateEntryRow[])
+  const candidates = entries
     .filter((entry) => !usedIds.has(entry.id) && !['storno', 'opening_balance'].includes(entry.source_type))
     .map((entry) => {
       let bank = 0

@@ -3,6 +3,8 @@ import type { StoredSkattekontoTransaction } from '../types'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { roundOre } from '@/lib/money'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { chunk } from '@/lib/utils'
+import { ID_READ_CHUNK } from '@/lib/reconciliation/limits'
 import { resolveSkattekontoAccount, type SkattekontoLedgerAccount } from '@/lib/skatteverket/skattekonto-account'
 import { loadCancelledEntryIds } from '@/lib/skatteverket/skattekonto-cancelled-entries'
 import { fetchLiveLedgerSettlements } from '@/lib/reconciliation/ledger-settlement-store'
@@ -635,16 +637,29 @@ export async function findMatchSuggestionsBulk(
   // SKV rows already linked to a candidate entry, with their amounts: an
   // entry with links is only a candidate for a row that the group check
   // still accepts together with them.
+  //
+  // In slices of ID_READ_CHUNK, each paged: the ids travel in the GET query
+  // string, the window holds every verifikat on the account since the oldest
+  // open row (more than the gateway takes in one URL), and a group link puts
+  // up to 50 rows on one verifikat.
   const candidateEntryIds = Array.from(new Set(lines.map(l => l.journal_entries.id)))
-  const { data: linked, error: linkedError } = candidateEntryIds.length
-    ? await supabase
-        .from('skattekonto_transactions')
-        .select('journal_entry_id, belopp_skatteverket')
-        .eq('company_id', companyId)
-        .in('journal_entry_id', candidateEntryIds)
-    : { data: [], error: null }
-  // Read as "none linked", a taken verifikat would be proposed again.
-  if (linkedError) return new Map()
+  const linked: Array<{ journal_entry_id: string | null; belopp_skatteverket?: number | string | null }> = []
+  try {
+    for (const ids of chunk(candidateEntryIds, ID_READ_CHUNK)) {
+      linked.push(...(await fetchAllRows<(typeof linked)[number]>((range) =>
+        supabase
+          .from('skattekonto_transactions')
+          .select('journal_entry_id, belopp_skatteverket')
+          .eq('company_id', companyId)
+          .in('journal_entry_id', ids)
+          .order('id', { ascending: true })
+          .range(range.from, range.to),
+      )))
+    }
+  } catch {
+    // Read as "none linked", a taken verifikat would be proposed again.
+    return new Map()
+  }
 
   // AGI period extraction across the batch.
   const periods: Array<{ year: number; month: number }> = []

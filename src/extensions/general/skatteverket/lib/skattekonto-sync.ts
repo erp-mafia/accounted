@@ -7,6 +7,8 @@ import { companyRedovisare } from '@/lib/company/org-number'
 import { computeDedupKey, contentSignature } from '@/lib/skatteverket/skattekonto-dedup'
 import { getEarliestFiscalPeriodStart } from '@/lib/core/bookkeeping/period-service'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { chunk } from '@/lib/utils'
+import { ID_READ_CHUNK } from '@/lib/reconciliation/limits'
 import { settleAgiTaxPayments } from './agi-tax-settlement'
 import { refreshSkattekontoProposals } from './skattekonto-proposals'
 import { getSkattekontoReconciliationStatus } from '@/lib/reconciliation/skattekonto-reconciliation'
@@ -512,20 +514,30 @@ export async function syncSkattekonto(
   // Find which dedup_keys are NEW (not yet in the table) so we can fire
   // the `skattekonto.transaction.upcoming` event only for first-appearance
   // upcoming rows.
+  //
+  // In slices of ID_READ_CHUNK keys: they travel in the GET query string, and
+  // the response carries every row of SKV's window (up to 555 days), more
+  // than the gateway takes in one URL for a busy account. A slice that cannot
+  // be read fails the sync, like the upsert below: read as "nothing stored",
+  // every upcoming row would be announced again and could overwrite a row
+  // stored as booked.
   const dedupKeys = allRows.map(r => r.dedup_key)
-  const { data: existingRows } = dedupKeys.length
-    ? await ctx.supabase
-        .from('skattekonto_transactions')
-        .select('dedup_key, status')
-        .eq('company_id', ctx.companyId)
-        .in('dedup_key', dedupKeys)
-    : { data: [] }
-
   const existingMap = new Map<string, { status: 'booked' | 'upcoming' }>()
-  for (const row of existingRows ?? []) {
-    existingMap.set(row.dedup_key as string, {
-      status: row.status as 'booked' | 'upcoming',
-    })
+  for (const keys of chunk(dedupKeys, ID_READ_CHUNK)) {
+    const { data: existingRows, error: existingError } = await ctx.supabase
+      .from('skattekonto_transactions')
+      .select('dedup_key, status')
+      .eq('company_id', ctx.companyId)
+      .in('dedup_key', keys)
+    if (existingError) {
+      log.error('stored rows read failed', { companyId: ctx.companyId, message: existingError.message })
+      throw new Error(`Kunde inte läsa sparade skattekonto-transaktioner: ${existingError.message}`)
+    }
+    for (const row of existingRows ?? []) {
+      existingMap.set(row.dedup_key as string, {
+        status: row.status as 'booked' | 'upcoming',
+      })
+    }
   }
 
   // Take over hash-keyed rows for transactions the API now identifies.
