@@ -455,6 +455,20 @@ describe('findSettingsWithStaleUpcomingDeadlines', () => {
     expect(findSettingsWithStaleUpcomingDeadlines([company], rows, years, from)).toEqual([])
   })
 
+  it('does not flag a declared first year once its rows match the schedule', () => {
+    const declared = {
+      company_id: 'company-3',
+      ...makeSettings({
+        employer_registered: true,
+        fiscal_years: [{ start: '2026-04-01', end: '2026-12-31', declaredFirst: true }],
+      }),
+    }
+    const rows = rowsFor('company-3', getExpectedUpcomingDeadlineKeys(toDeadlineSettings(declared), years, from))
+    expect(rows.length).toBeGreaterThan(0)
+    expect(findSettingsWithStaleUpcomingDeadlines([declared], rows, years, from)).toEqual([])
+    expect(findSettingsMissingUpcomingDeadlines([declared], rows, years, from)).toEqual([])
+  })
+
   it('does not flag an ordinary calendar-year company whose rows match the schedule', () => {
     const ordinary = {
       company_id: 'company-2',
@@ -475,13 +489,17 @@ describe('backfillMissingTaxDeadlines: rows for obligations that never existed',
    */
   function makeSupabase(tables: Record<string, unknown[]>) {
     const inserts: Array<Array<Record<string, unknown>>> = []
+    const selects: Array<[string, string]> = []
     const from = vi.fn((table: string) => {
       const chain: Record<string, unknown> = {}
       let deleting = false
       for (const method of ['eq', 'is', 'gte', 'lte', 'or', 'not', 'order']) {
         chain[method] = vi.fn(() => chain)
       }
-      chain.select = vi.fn(() => (deleting ? Promise.resolve({ data: [], error: null }) : chain))
+      chain.select = vi.fn((columns?: string) => {
+        if (!deleting) selects.push([table, columns ?? ''])
+        return deleting ? Promise.resolve({ data: [], error: null }) : chain
+      })
       chain.range = vi.fn(async () => ({ data: tables[table] ?? [], error: null }))
       chain.insert = vi.fn((rows: Array<Record<string, unknown>>) => {
         inserts.push(rows)
@@ -500,7 +518,7 @@ describe('backfillMissingTaxDeadlines: rows for obligations that never existed',
       if (args.p_rows.length > 0) inserts.push(args.p_rows)
       return { data: [{ created: args.p_rows.length, deleted: 0 }], error: null }
     })
-    return { supabase: { from, rpc } as unknown as SupabaseClient, inserts }
+    return { supabase: { from, rpc } as unknown as SupabaseClient, inserts, selects }
   }
 
   beforeEach(() => {
@@ -559,7 +577,7 @@ describe('backfillMissingTaxDeadlines: rows for obligations that never existed',
       new Date(2026, 10, 10, 12),
     )
     expect(heldKeys).toContain('inkomstdeklaration_ab:2025/2026:2026-12-01')
-    const { supabase, inserts } = makeSupabase({
+    const { supabase, inserts, selects } = makeSupabase({
       company_settings: [{ company_id: 'company-1', ...rawSettings }],
       fiscal_periods: [
         { company_id: 'company-1', name: 'Första räkenskapsåret 2026', period_start: '2026-04-01', period_end: '2026-12-31' },
@@ -575,6 +593,10 @@ describe('backfillMissingTaxDeadlines: rows for obligations that never existed',
     const written = inserts[0].map((row) => `${row.tax_deadline_type}:${row.tax_period}`)
     expect(written).not.toContain('inkomstdeklaration_ab:2025/2026')
     expect(written).toContain('inkomstdeklaration_ab:2026')
+    // The name is what carries the declaration, so the read must ask for it.
+    const periodReads = selects.filter(([table]) => table === 'fiscal_periods')
+    expect(periodReads.length).toBeGreaterThan(0)
+    for (const [, columns] of periodReads) expect(columns.split(/,\s*/)).toContain('name')
   })
 })
 
