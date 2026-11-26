@@ -84,3 +84,26 @@ export function planMarkingPrefill(input: {
     customerReference: customerInvoiceMarking(input.customer),
   })
 }
+
+/** The card fields Er referens and Märkning are filled from. */
+interface CardReferenceSources {
+  invoice_reference?: string | null
+  contact_person?: string | null
+  invoice_marking?: string | null
+}
+
+/**
+ * After the picked customer's card is saved from the editor: which of Er
+ * referens and Märkning to plan again. Each only when its card source changed
+ * in that save (customerCardReference, the card's Märkning), so an edit of
+ * the address leaves both as they are, an emptied field included.
+ */
+export function cardEditReplans(
+  before: CardReferenceSources,
+  after: CardReferenceSources,
+): { reference: boolean; marking: boolean } {
+  return {
+    reference: customerCardReference(before) !== customerCardReference(after),
+    marking: customerInvoiceMarking(before) !== customerInvoiceMarking(after),
+  }
+}
