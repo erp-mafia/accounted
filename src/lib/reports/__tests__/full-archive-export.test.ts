@@ -4,12 +4,12 @@ import JSZip from 'jszip'
 import {
   generateFullArchive,
   streamFullArchive,
-  generateBaseDataArchive,
+  streamBaseDataArchive,
   estimateArchiveSize,
   MASTER_DATA_DUMP_TABLES,
 } from '../full-archive-export'
 import { createQueuedMockSupabase } from '@/tests/helpers'
-import { ArchiveTooLargeError } from '../archive-folder'
+import { ArchiveTooLargeError, collectBytes } from '../archive-folder'
 import { getAuditLog } from '@/lib/core/audit/audit-service'
 import { generateTrialBalance } from '../trial-balance'
 import { balanceSheetFromTrialBalance } from '../balance-sheet'
@@ -1319,7 +1319,7 @@ describe('generateFullArchive', () => {
   })
 })
 
-describe('generateBaseDataArchive', () => {
+describe('streamBaseDataArchive', () => {
   let supabase: ReturnType<typeof createQueuedMockSupabase>['supabase']
   let enqueueMany: ReturnType<typeof createQueuedMockSupabase>['enqueueMany']
 
@@ -1373,7 +1373,7 @@ describe('generateBaseDataArchive', () => {
     ] as unknown as AuditLogEntry[]
     mockGetAuditLog.mockResolvedValueOnce({ data: history, count: 0 })
 
-    const buffer = await generateBaseDataArchive(supabase as any, 'company-1')
+    const buffer = await collectBytes(streamBaseDataArchive(supabase as any, 'company-1'))
     const zip = await JSZip.loadAsync(buffer)
 
     // The same bytes JSON.stringify wrote when the history was one string.
