@@ -2295,6 +2295,8 @@ describe('generateAgiDeclaration: late days carried to the run (TB 1.1.18.2, 5.6
       lateRows, // salary_absence_days: late days carried to the run
       { data: null }, // agi_declarations maybeSingle
       { data: [] }, // salary_runs: no other live run paid out in the month
+      { data: [] }, // agi_kvittenser: the month has no kvittens
+      { data: [] }, // salary_runs: no run of the month is filed
       { data: { id: 'agi-1' } }, // agi_declarations insert
       { data: null }, // salary_runs update
     ])
@@ -2361,5 +2363,143 @@ describe('generateAgiDeclaration: late days carried to the run (TB 1.1.18.2, 5.6
 
     expect(result).toMatchObject({ ok: false, code: 'DATABASE_ERROR' })
     expect(findCall('agi_declarations', 'insert')).toBeUndefined()
+  })
+})
+
+describe("generateAgiDeclaration: a filed month's rättelse carries no frånvarouppgift (Kontroller ba_824)", () => {
+  // "Frånvarouppgifter får inte finnas för RedovisningsPeriod, FK006, där
+  // första deklaration redan har skickats in" (Skatteverket, Bilaga Kontroller
+  // 1.1.18.1, ba_824), a Bearbetningskontroll: a file that breaks it is not
+  // uploaded at all (Teknisk beskrivning 1.1.18.2, 12.5.1). Frånvarouppgifter
+  // go in with the period's first declaration only (TB 1.1.18.2, 3 and 9.3).
+  /** A VAB day in June's window: the original declared it, the correction reads it again. */
+  const VAB_DAY = {
+    employee_id: REGULAR_ROW.employee_id,
+    absence_date: '2026-06-02',
+    absence_type: 'vab',
+    hours: 8,
+    franvaro_specifikationsnummer: 1,
+    carried_to_run_id: null,
+  }
+  const CORRECTION = { ...RUN, status: 'booked', is_correction: true, corrects_run_id: 'run-0' }
+
+  function enqueueCorrection(
+    enqueueMany: (results: { data?: unknown; error?: unknown }[]) => void,
+    stored: Record<string, unknown>,
+    filingReads: { data?: unknown; error?: unknown }[],
+  ) {
+    enqueueMany([
+      { data: CORRECTION },
+      { data: COMPANY },
+      { data: SETTINGS },
+      { data: PROFILE },
+      { data: [REGULAR_ROW] },
+      ...correctedRunRead(CORRECTION),
+      { data: [VAB_DAY] }, // salary_absence_days: the window
+      { data: [] }, // salary_absence_days: late days carried to the run
+      { data: stored }, // agi_declarations for the period
+      { data: [] }, // salary_runs: no other live run paid out in the month
+      ...filingReads, // agi_kvittenser and salary_runs: is the month filed?
+      { data: [{ id: stored.id }] }, // agi_declarations update
+      { data: null }, // salary_runs agi_generated_at stamp
+    ])
+  }
+
+  const franvarouppgifter = (xml: string) => xml.split('<gem:Franvarouppgift>').length - 1
+  const NOT_FILED = [{ data: [] }, { data: [] }]
+
+  it('leaves the frånvarouppgift out of a correction that takes over the filed row of the run it corrects', async () => {
+    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    enqueueCorrection(
+      enqueueMany,
+      { id: 'agi-0', salary_run_id: 'run-0', status: 'submitted', submitted_at: '2026-07-09T08:30:00Z' },
+      [], // the row's own receipt answers: nothing more is read
+    )
+
+    const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+
+    expect(result).toMatchObject({ ok: true, isCorrection: true })
+    if (!result.ok) return
+    expect(franvarouppgifter(result.xml)).toBe(0)
+    // The rättelse still carries the employee's IU, and that is what is stored.
+    expect(iuBlockFor(result.xml, '199001011234')).toContain('<gem:AvdrPrelSkatt faltkod="001">12000</gem:AvdrPrelSkatt>')
+    expect(findCall('agi_declarations', 'update')).toEqual([expect.objectContaining({ xml_content: result.xml })])
+    expect(findCall('agi_kvittenser', 'select')).toBeUndefined()
+  })
+
+  it("leaves it out once the correction holds the row, when Skatteverket's kvittens for the month is on record", async () => {
+    const { supabase, enqueueMany, findCalls } = createQueuedMockSupabase()
+    enqueueCorrection(
+      enqueueMany,
+      { id: 'agi-0', salary_run_id: 'run-1', status: 'generated', submitted_at: null },
+      [{ data: [{ id: 'kvittens-1' }] }, { data: [] }],
+    )
+
+    const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(franvarouppgifter(result.xml)).toBe(0)
+    // The kvittens asked for is the redovisningsperiod's, the payout month.
+    expect(findCalls('agi_kvittenser', 'eq')).toEqual([
+      ['company_id', 'company-1'],
+      ['period_year', 2026],
+      ['period_month', 6],
+    ])
+  })
+
+  it('leaves it out when a run of the month carries the filing stamp, even with no kvittens row', async () => {
+    const { supabase, enqueueMany, findCalls } = createQueuedMockSupabase()
+    enqueueCorrection(
+      enqueueMany,
+      { id: 'agi-0', salary_run_id: 'run-1', status: 'generated', submitted_at: null },
+      [{ data: [] }, { data: [{ period_year: 2026, period_month: 6, payment_date: '2026-06-25' }] }],
+    )
+
+    const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(franvarouppgifter(result.xml)).toBe(0)
+    expect(findCalls('salary_runs', 'not')).toContainEqual(['agi_submitted_at', 'is', null])
+  })
+
+  it.each(['generated', 'pending_signature', 'rejected'])(
+    "keeps it in a correction of a month not filed yet (the original's declaration %s): the correction files the month's first",
+    async (status) => {
+      const { supabase, enqueueMany } = createQueuedMockSupabase()
+      enqueueCorrection(enqueueMany, { id: 'agi-0', salary_run_id: 'run-0', status, submitted_at: null }, NOT_FILED)
+
+      const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(franvarouppgifter(result.xml)).toBe(1)
+      expect(result.xml).toContain('<gem:FranvaroDatum faltkod="821">2026-06-02</gem:FranvaroDatum>')
+    },
+  )
+
+  it("refuses when the month's filing cannot be read, instead of guessing which declaration this is", async () => {
+    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    enqueueCorrection(
+      enqueueMany,
+      { id: 'agi-0', salary_run_id: 'run-0', status: 'generated', submitted_at: null },
+      [{ error: { message: 'timeout' } }, { data: [] }],
+    )
+
+    const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+
+    expect(result).toMatchObject({ ok: false, code: 'DATABASE_ERROR' })
+    expect(findCall('agi_declarations', 'update')).toBeUndefined()
+  })
+
+  it('reads no filing for a run with no frånvarouppgift to leave out', async () => {
+    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    enqueueHappyPath(enqueueMany, [REGULAR_ROW])
+
+    const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+
+    expect(result.ok).toBe(true)
+    expect(findCall('agi_kvittenser', 'select')).toBeUndefined()
   })
 })

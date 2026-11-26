@@ -378,6 +378,105 @@ describe('a corrected run: generate, submit, and the kvittens promotes the corre
   })
 })
 
+describe("a corrected month's VAB and parental days stay with its first declaration (Kontroller ba_824)", () => {
+  /**
+   * Skatteverket's Bearbetningskontroll ba_824 as the upload applies it,
+   * written from Bilaga Kontroller 1.1.18.1: "Frånvarouppgifter får inte
+   * finnas för RedovisningsPeriod, FK006, där första deklaration redan har
+   * skickats in." A Bearbetningskontroll that fails stops the whole file:
+   * "Om någon av de här kontrollerna slår ut laddas inte filen upp" (Teknisk
+   * beskrivning 1.1.18.2, 12.5.1); through the API the inlämning ends
+   * DONE_REJECTED, "inga underlag har sparats" (Tjänstebeskrivning
+   * Arbetsgivardeklaration inlämning, dokumentversion 1.23, 4.1.2.1).
+   * `filedPeriods`: the periods Skatteverket holds a kvittens for. Answers the
+   * FK006 of every frånvarouppgift in the file the check refuses.
+   */
+  function ba824(xml: string, filedPeriods: readonly string[]): string[] {
+    return [...xml.matchAll(/<gem:Franvarouppgift>([\s\S]*?)<\/gem:Franvarouppgift>/g)]
+      .map((block) => /<gem:RedovisningsPeriod faltkod="006">(\d{6})</.exec(block[1])?.[1] ?? '')
+      .filter((period) => filedPeriods.includes(period))
+  }
+
+  const franvaroDates = (xml: string) =>
+    [...xml.matchAll(/<gem:FranvaroDatum faltkod="821">([^<]+)</g)].map((match) => match[1])
+
+  /** May, corrected, with a parental day in its window; `filed`: May's first declaration is at Skatteverket. */
+  function correctedMayWithParentalDay(filed: boolean) {
+    const tables = baseTables()
+    tables.salary_runs = [
+      salaryRun('run-orig', {
+        status: 'corrected',
+        agi_generated_at: '2026-06-01T08:00:00Z',
+        agi_submitted_at: filed ? ORIGINAL_KVITTENS.signeradTid : null,
+      }),
+      salaryRun('run-corr', { total_gross: 41000, is_correction: true, corrects_run_id: 'run-orig' }),
+    ]
+    tables.salary_run_employees = [payslip('run-orig', 40000), payslip('run-corr', 41000)]
+    tables.salary_absence_days = [
+      {
+        company_id: COMPANY_ID,
+        employee_id: '11111111-1111-4111-8111-111111111111',
+        absence_date: '2026-05-12',
+        absence_type: 'parental',
+        hours: 8,
+        franvaro_specifikationsnummer: 1,
+        carried_to_run_id: null,
+      },
+    ]
+    tables.agi_declarations = [
+      {
+        id: 'agi-1',
+        company_id: COMPANY_ID,
+        user_id: USER_ID,
+        salary_run_id: 'run-orig',
+        period_year: 2026,
+        period_month: 5,
+        xml_content: '<original/>',
+        status: filed ? 'submitted' : 'generated',
+        kvittensnummer: filed ? 'k-original' : null,
+        submitted_at: filed ? ORIGINAL_KVITTENS.signeradTid : null,
+        submitted_by: filed ? USER_ID : null,
+        response_data: filed ? { uuidKvittens: 'k-original', signeradTid: ORIGINAL_KVITTENS.signeradTid } : null,
+        is_correction: false,
+        total_gross: 40000,
+        created_at: '2026-06-01T08:00:00Z',
+      },
+    ]
+    if (filed) {
+      tables.agi_kvittenser = [
+        { company_id: COMPANY_ID, period_year: 2026, period_month: 5, uuid_kvittens: 'k-original', signerad_tid: ORIGINAL_KVITTENS.signeradTid, receipt: ORIGINAL_KVITTENS, recorded_by: 'cron' },
+      ]
+    }
+    return memoryDb(tables)
+  }
+
+  it("posts a rättelse of a filed month that ba_824 lets through: the corrected IU, none of the month's frånvarouppgifter", async () => {
+    const db = correctedMayWithParentalDay(true)
+
+    expect(await generate(db, 'run-corr')).toMatchObject({ ok: true, isCorrection: true })
+    expect(await submitAgiChain(db.supabase, USER_ID, COMPANY_ID, settings, 'run-corr')).toMatchObject({ ok: true, period: '202605' })
+
+    const posted = vi.mocked(agiPostUnderlag).mock.calls[0][3] as string
+    expect(ba824(posted, [ORIGINAL_KVITTENS.period])).toEqual([])
+    expect(franvaroDates(posted)).toEqual([])
+    expect(posted).toContain('<gem:KontantErsattningUlagAG faltkod="011">41000</gem:KontantErsattningUlagAG>')
+    expect(db.one('agi_declarations', 'agi-1').xml_content).toBe(posted)
+  })
+
+  it("keeps the day in a correction of a month not filed yet: its declaration is the month's first", async () => {
+    const db = correctedMayWithParentalDay(false)
+
+    expect(await generate(db, 'run-corr')).toMatchObject({ ok: true, isCorrection: true })
+    expect(await submitAgiChain(db.supabase, USER_ID, COMPANY_ID, settings, 'run-corr')).toMatchObject({ ok: true, period: '202605' })
+
+    const posted = vi.mocked(agiPostUnderlag).mock.calls[0][3] as string
+    expect(ba824(posted, [])).toEqual([])
+    expect(franvaroDates(posted)).toEqual(['2026-05-12'])
+    // The judge does refuse that file for a month already filed.
+    expect(ba824(posted, ['202605'])).toEqual(['202605'])
+  })
+})
+
 describe('the normal path is unchanged: generate, submit, kvittens', () => {
   it('files a run with no earlier filing on the newest kvittens', async () => {
     const tables = baseTables()

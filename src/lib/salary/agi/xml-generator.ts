@@ -41,12 +41,13 @@ import type { EntityType } from '@/types'
  *     Accounted tracks hours, not percent.
  *   - FranvaroSpecifikationsnummer is persisted on salary_absence_days
  *     (column franvaro_specifikationsnummer; assigned by DB trigger on
- *     INSERT, never re-numbered). Skatteverket replaces a Frånvarouppgift
- *     on match of (BetalningsmottagarId, FranvaroDatum,
- *     FranvaroSpecifikationsnummer, RedovisningsPeriod, AgRegistreradId).
- *     Because the number is stable, corrections survive day deletions:
- *     remaining events keep their original numbers, and Skatteverket
- *     matches each event back to its prior submission.
+ *     INSERT, never re-numbered). A Frånvarouppgift with the same
+ *     (BetalningsmottagarId, FranvaroDatum, FranvaroSpecifikationsnummer,
+ *     RedovisningsPeriod, AgRegistreradId) replaces the one saved in the
+ *     draft (Bilaga Fältlista FK822), so a file uploaded again before
+ *     signing keeps each day's number.
+ *   - Only the period's first declaration carries Frånvarouppgift: a
+ *     rättelse of a filed period carries none (ba_824, see generateAGIXml).
  *   - Periods before 202501 emit no Frånvarouppgift (Skatteverket rejects).
  *
  * Sick pay never reaches the AGI. Per-employee sick days go to
@@ -465,6 +466,15 @@ const UNDERLAG_FIELDS: Record<AGIUnderlag, AGIUnderlagFields> = {
 /**
  * Generate AGI XML for a period.
  *
+ * `firstDeclarationFiled`: the period's first declaration is already filed,
+ * so this one is a rättelse, and it carries no Frånvarouppgift.
+ * "Frånvarouppgifter får inte finnas för RedovisningsPeriod, FK006, där
+ * första deklaration redan har skickats in" (Skatteverket, Bilaga Kontroller
+ * 1.1.18.1, ba_824) is a Bearbetningskontroll: a file that breaks it is not
+ * uploaded at all (Teknisk beskrivning 1.1.18.2, 12.5.1). The uppgifter went
+ * in with the first declaration, and changed or added ones cannot be sent
+ * with a rättelse (TB 1.1.18.2, 3 and 9.3).
+ *
  * Throws AGIIncompleteDataError if required fields (orgNumber, contact info)
  * are missing: we never emit partial XML that Skatteverket would reject.
  */
@@ -472,7 +482,7 @@ export function generateAGIXml(
   company: AGICompanyData,
   employees: AGIEmployeeData[],
   totals: AGITotals,
-  _isCorrection: boolean = false
+  firstDeclarationFiled: boolean = false
 ): string {
   assertRequiredCompanyData(company)
   assertRequiredPeriod(company.periodYear, company.periodMonth)
@@ -694,9 +704,10 @@ export function generateAGIXml(
   }
 
   // ── Frånvarouppgift (per-event VAB/parental records, FK820-827) ───────
-  // Skatteverket only accepts Frånvarouppgift from period 202501 onward.
+  // Skatteverket only accepts Frånvarouppgift from period 202501 onward
+  // (ba_820), and only with the period's first declaration (ba_824).
   const periodAsNumber = company.periodYear * 100 + company.periodMonth
-  if (periodAsNumber >= 202501) {
+  if (periodAsNumber >= 202501 && !firstDeclarationFiled) {
     for (const emp of employees) {
       if (!emp.absenceEvents || emp.absenceEvents.length === 0) continue
       // Tombstoned IU: skip absence records too. A removed individuppgift
