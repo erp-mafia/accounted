@@ -13,7 +13,7 @@
  * holds nothing.
  *
  * The read backfill holds the same rule in SQL (document_backfill_candidates,
- * migration 20261126000300, and document_retry_candidates, migration
+ * migration 20261126010000, and document_retry_candidates, migration
  * 20261112152731): keep them alike.
  * The rule's register entry: scripts/checks/one-definition/document-job-holds-document.mjs.
  */

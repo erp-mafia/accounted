@@ -1,5 +1,5 @@
 // The SQL repeats this rule: document_backfill_candidates (newest in
-// supabase/migrations/20261126000300_document_backfill_candidates_index_only.sql) and
+// supabase/migrations/20261126010000_document_backfill_candidates_voucher_join.sql) and
 // document_retry_candidates (supabase/migrations/20261112152731_document_read_candidates_skip_open_jobs.sql) pick the read
 // backfill's rows in the database, where a TypeScript function cannot reach, and this guard does
 // not scan SQL. That copy is acceptable because it is the only other one, both name each other,
