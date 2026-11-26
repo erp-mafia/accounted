@@ -2,7 +2,7 @@ import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { isSkatteverketOmbudEnabled } from '@/lib/skatteverket/ombud-access'
-import { isOnboardingSourcesEnabled } from '@/lib/onboarding/sources-rollout'
+import { isOnboardingSourcesEnabled, sourcesFlowAvailable } from '@/lib/onboarding/sources-rollout'
 import { getActiveCompanyId } from '@/lib/company/context'
 import { resolveBooksResume, type LatestImportJob } from '@/lib/onboarding-books/resume'
 import BooksJourney from '@/components/onboarding/books/BooksJourney'
@@ -76,7 +76,7 @@ export default async function BooksPage({
       hasBanking={ENABLED_EXTENSION_IDS.has('enable-banking')}
       hasSkatteverket={ENABLED_EXTENSION_IDS.has('skatteverket')}
       skvOmbud={await isSkatteverketOmbudEnabled()}
-      sourcesFlow={isOnboardingSourcesEnabled(user.id)}
+      sourcesFlow={sourcesFlowAvailable(ENABLED_EXTENSION_IDS) && isOnboardingSourcesEnabled(user.id)}
     />
   )
 }

@@ -32,6 +32,10 @@ async function fetchWorklistCounts(): Promise<WorklistCounts> {
  * agent chips, then what the app already found to do (open when bank rows
  * wait to be booked, otherwise folded until asked; each row opens the page
  * in the app or hands the row to a connected agent), and the door to Hem.
+ *
+ * The sources arrangement shows the card and the door only: its AI step has
+ * the chips, and Hem names the first thing to do, so the found rows are not
+ * listed here and the door stays in view under the card.
  */
 export function DoneStep({ ctx, onLeave, leaving }: {
   ctx: BooksCtx
@@ -49,8 +53,10 @@ export function DoneStep({ ctx, onLeave, leaving }: {
   const bookingScreen = useBookingScreenEnabled()
   // null until the toggle is clicked: the list then follows what it holds (foundTasksStartOpen).
   const [toggled, setToggled] = useState<boolean | null>(null)
+  const sourcesFlow = ctx.flags.sourcesFlow === true
+  // The found rows are the only reader: the sources arrangement does not ask (null key).
   const { data: worklist, isValidating, error, mutate } = useSWR(
-    ['worklist-counts', company?.id ?? null] as const,
+    sourcesFlow ? null : (['worklist-counts', company?.id ?? null] as const),
     fetchWorklistCounts,
   )
   // A bank row task opens where every "book these" link leads (Att bokföra with the booking screen).
@@ -62,7 +68,6 @@ export function DoneStep({ ctx, onLeave, leaving }: {
     void mutate()
   }, [mutate])
   const { connection, connected, preferredClient, onConnect } = useAiConnection(findings)
-  const sourcesFlow = ctx.flags.sourcesFlow === true
   const connectionKey = connected.join(',')
   const tasks = worklist && !error ? listAiTasks(worklist.counts, { hasAi }) : []
   const open = toggled ?? foundTasksStartOpen(tasks)
@@ -120,7 +125,7 @@ export function DoneStep({ ctx, onLeave, leaving }: {
         </>
       )}
 
-      {error ? (
+      {sourcesFlow ? null : error ? (
         <p className="found-note" role="alert">
           {t('ai_handoff_failed')}{' '}
           <Button variant="ghost" className="text-muted-foreground" onClick={refetch} disabled={isValidating}>

@@ -424,6 +424,15 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
   const nAcct = tickedList.length
   const gather = phase === 'fetching' || (phase === 'connected' && !pillsGone)
 
+
+  // The way on without a bank, shown in every state the bank is not connected
+  // in. Its text is a whole sentence: books.css (.bank-manual) lets it wrap
+  // where the screen is narrower than the sentence, so it never widens the page.
+  const manualDoor = (
+    <Button variant="ghost" className="bank-manual text-muted-foreground" onClick={() => dispatch({ type: 'BANK_SKIP', flags })}>
+      {t('bank_manual')}
+    </Button>
+  )
   return (
     <div className="bks-host">
       <div className="jny-qstep" style={{ textAlign: 'center' }}>
@@ -440,7 +449,7 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
         !findings ? (
           <div className="jny-qactions is-stack">
             {loadingFindings ? <Wait text={t('bank_loading')} height={96} /> : <Button variant="ghost" className="text-muted-foreground" onClick={() => void loadFindings()}>{t('findings_retry')}</Button>}
-            <Button variant="ghost" className="text-muted-foreground" onClick={() => dispatch({ type: 'BANK_SKIP', flags })}>{t('bank_manual')}</Button>
+            {manualDoor}
           </div>
         ) : openPayments.status === 'loading' ? (
           <Wait text={t('bank_loading')} height={96} />
@@ -460,9 +469,7 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
             <Button variant="ghost" className="text-muted-foreground" onClick={() => bankFlow.open('new')}>
               {t('bank_more_banks')}
             </Button>
-            <Button variant="ghost" className="text-muted-foreground" onClick={() => dispatch({ type: 'BANK_SKIP', flags })}>
-              {t('bank_manual')}
-            </Button>
+            {manualDoor}
           </div>
         ) : openPayments.status === 'available' ? (
           <div className="jny-qactions is-stack">
@@ -470,9 +477,7 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
               {t('bank_open_flow')}
             </Button>
             <p className="jny-qsub" style={{ textAlign: 'center' }}>{t('bank_open_flow_hint')}</p>
-            <Button variant="ghost" className="text-muted-foreground" onClick={() => dispatch({ type: 'BANK_SKIP', flags })}>
-              {t('bank_manual')}
-            </Button>
+            {manualDoor}
           </div>
         ) : !flags.hasBanking ? (
           <p className="jny-qsub" style={{ textAlign: 'center' }}>{t('bank_unavailable')}</p>
@@ -480,9 +485,7 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
           <div className="jny-qactions is-stack">
             <p className="jny-qsub" style={{ textAlign: 'center' }}>{t('bank_list_failed')}</p>
             <Button variant="outline" onClick={() => setBanksFailed(false)}>{t('bank_list_retry')}</Button>
-            <Button variant="ghost" className="text-muted-foreground" onClick={() => dispatch({ type: 'BANK_SKIP', flags })}>
-              {t('bank_manual')}
-            </Button>
+            {manualDoor}
           </div>
         ) : banks === null ? (
           <Wait text={t('bank_loading')} height={96} />
@@ -510,9 +513,7 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
             {aliasHint ? <p className="jny-qsub">{t('bank_alias_hint', { product: aliasHint.product, bank: aliasHint.bank })}</p> : null}
             {/* The way out sits under the banks, quiet: connecting is the point of the step (product direction 2026-09-14). */}
             <div className="bank-exit">
-              <Button variant="ghost" className="text-muted-foreground" onClick={() => dispatch({ type: 'BANK_SKIP', flags })}>
-                {t('bank_manual')}
-              </Button>
+              {manualDoor}
             </div>
           </>
         )
@@ -673,7 +674,8 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
       <div className="jny-qactions is-stack">
         {(phase === 'connected' && landed) || alreadyConnected ? (
           <Button size="lg" onClick={() => dispatch({ type: 'AFTER_BANK', flags })}>
-            {flags.hasSkatteverket ? t('to_skv') : t('to_done')}
+            {/* The sources arrangement goes on to the AI step, not to Skatteverket: the plain word. */}
+            {flags.sourcesFlow ? t('to_done') : flags.hasSkatteverket ? t('to_skv') : t('to_done')}
           </Button>
         ) : null}
         {phase === 'authed' && tickedList.length > 0 ? (

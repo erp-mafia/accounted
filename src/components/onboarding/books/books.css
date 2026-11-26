@@ -384,6 +384,13 @@ body.bks-theater [data-onboarding-backdrop] { opacity: 0.3; }
 
 /* Six stations on the rail (the arrangement with the AI and receipts steps): a wider band and narrower labels so neighbours never overlap. */
 .bks-six .jny-journey { width: min(760px, 94vw); }
-.bks-six .jny-pt { width: 120px; }
+/* Six stops: each takes at most a sixth of the rail, so the last one stays inside a phone screen. */
+.bks-six .jny-pt { width: min(120px, 15vw); }
+
+/* The bank step's way on without a bank is a whole sentence. On a screen
+   narrower than the sentence (a phone) it wraps onto a second line and
+   never widens the page; on a wider one it is the one line, at the height,
+   it was. */
+.bks .bank-manual { height: auto; min-height: 1.75rem; max-width: 100%; white-space: normal; text-align: center; }
 /* the receipts step lists the mailbox rows inline, left aligned like the other hosted lists */
 .docs-list { text-align: left; max-width: 560px; margin: 0 auto; }

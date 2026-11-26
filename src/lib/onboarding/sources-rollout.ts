@@ -17,3 +17,18 @@ export function isOnboardingSourcesEnabled(userId: string | null | undefined): b
   const rollout = onboardingSourcesRollout()
   return rollout === 'all' || rollout.includes(userId)
 }
+
+/**
+ * The extensions the arrangement's own two stops connect through: the agent
+ * connection (the AI stop) and the inbox (the receipts stop).
+ */
+export const SOURCES_FLOW_EXTENSIONS: readonly string[] = ['mcp-server', 'invoice-inbox']
+
+/**
+ * Whether this deployment can show the arrangement at all. Without one of
+ * the extensions above a stop would offer what the deployment does not have,
+ * so the first arrangement stands, whoever the rollout lists.
+ */
+export function sourcesFlowAvailable(enabledExtensionIds: ReadonlySet<string>): boolean {
+  return SOURCES_FLOW_EXTENSIONS.every((id) => enabledExtensionIds.has(id))
+}
