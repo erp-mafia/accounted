@@ -136,9 +136,10 @@ describe('callback authentication and redirects', () => {
     expect(emitted).toHaveBeenCalledWith(expect.objectContaining({ type: 'bank_connection.consent_granted',
       payload: expect.objectContaining({ userId: 'colleague' }) }))
   })
-  it("refuses the first connector's browser on a renewal a colleague started", async () => {
+  it.each([['the first connector', row.user_id], ['a third member', 'bystander']])("refuses %s's browser on a renewal a colleague started", async (_who, signedIn) => {
     reconnect([{ uid: 'a', currency: 'SEK', iban }])
     pending!.oauth_user_id = 'colleague'
+    mocks.getUser.mockResolvedValue({ data: { user: { id: signedIn } }, error: null })
     const { response } = await complete()
     expect(new URL(response.headers.get('location')!).searchParams.get('bank_error')).toContain('annat användarkonto')
     expect(mocks.read).not.toHaveBeenCalled(); expect(mocks.createSession).not.toHaveBeenCalled()

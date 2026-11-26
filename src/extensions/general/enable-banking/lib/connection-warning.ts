@@ -16,9 +16,11 @@
  *   silently kill a sibling company's feed at a one-session bank we have not
  *   identified yet.
  *
- * Siblings that SHARE the session being renewed are not warned about at all:
- * the renewal callback carries the new session to them (fanOutSessionRenewal
- * in session-sharing.ts), so they keep syncing whatever the bank's policy is.
+ * Siblings that SHARE the session being renewed are not warned about at all.
+ * When the member who holds them renews, the callback carries the new session
+ * to them (fanOutSessionRenewal in session-sharing.ts); a colleague's renewal
+ * is another person's login and leaves their session as it is. Either way
+ * they keep syncing whatever the bank's policy is.
  *
  * Pure module (no React, no fetch) so the decision table is unit-testable.
  */
@@ -84,9 +86,10 @@ export interface SameBankWarning {
 export function sameBankWarning(input: SameBankWarningInput): SameBankWarning | null {
   const { bankName, clashes, isReconnect, currentSessionId } = input
 
-  // Siblings on the session being renewed ride along on the renewal
-  // (fanOutSessionRenewal): they are not at risk and must not inflate the
-  // warning. A null session on either side proves nothing, so it never exempts.
+  // Siblings on the session being renewed are not at risk: they ride along
+  // when their holder renews (fanOutSessionRenewal), and a colleague's renewal
+  // leaves their session alone. They must not inflate the warning. A null
+  // session on either side proves nothing, so it never exempts.
   const atRisk = currentSessionId
     ? clashes.filter(c => c.sessionId !== currentSessionId)
     : clashes
