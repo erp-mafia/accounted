@@ -19,9 +19,12 @@ import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { futurePaymentDateRefusal, type FuturePaymentDateRefusal } from '@/lib/invoices/payment-date'
 import {
   planCreditNoteRefund,
+  RECEIVABLE_ACCOUNT,
+  refundLedgerAmount,
   REFUNDABLE_CREDIT_NOTE_STATUSES,
   type CreditNoteRefundPlan,
 } from '@/lib/invoices/credit-note-refund-plan'
+import { readCreditNoteBookedOre } from '@/lib/invoices/credit-note-booked-ore'
 import type { CreateJournalEntryInput, CreateJournalEntryLineInput, Invoice } from '@/types'
 
 /**
@@ -32,7 +35,11 @@ import type { CreateJournalEntryInput, CreateJournalEntryLineInput, Invoice } fr
  *
  * The verifikat is the mirror of an invoice payment: Dr 1510 Kundfordringar
  * (the credit the credit note's own verifikat left there) / Cr the account
- * the money left from, in both accounting methods. Under kontantmetoden the
+ * the money left from, in both accounting methods. When that verifikat booked
+ * the öresavrundning (Cr 1510 1 000 / Dr 3740 0,25 on a credit of 999,75),
+ * the refund that settles the credit pays back what 1510 carries, 1 000, and
+ * the credit note still records 999,75 settled (refundLedgerAmount), so the
+ * ledger and the kundreskontra both reach zero. Under kontantmetoden the
  * credit note of a paid original already reversed the revenue and the
  * utgående moms in its own period (creditNoteNeedsJournalEntry), so the
  * refund moves money only and books no moms (swedish-invoice-compliance:
@@ -85,9 +92,10 @@ export interface RefundCreditNoteParams {
   /** Where the money left from (Cr). Ignored when customLines carry their own. */
   settlementAccountNumber: string
   /**
-   * The person's own rows (dashboard and v1): debit 1510 for at most what is
-   * owed, credit the bank. Absent: the whole amount owed, Dr 1510 / Cr
-   * settlementAccountNumber.
+   * The person's own rows (v1, or a caller's): debit 1510 for at most what
+   * the refund takes off 1510, credit the bank. Absent: the whole amount
+   * owed, Dr 1510 / Cr settlementAccountNumber, at what 1510 carries for the
+   * credit when its verifikat booked an öresavrundning.
    */
   customLines?: RefundCustomLine[]
   /** Skip the already-booked guard after the person confirmed it is another refund. */
@@ -108,7 +116,7 @@ export type RefundCreditNoteResult =
   | {
       ok: true
       dryRun: boolean
-      /** Kronor refunded by this call. */
+      /** Kronor refunded by this call: what the verifikat takes off 1510. */
       amount: number
       /** Still owed after this call (0 once refunded in full). */
       owedAfter: number
@@ -122,6 +130,7 @@ export type RefundCreditNoteResult =
   | Extract<CreditNoteRefundPlan, { ok: false }>
   | { ok: false; code: 'CREDIT_NOTE_REFUND_LIKELY_BOOKED'; details: { candidates: BookedRefundCandidate[]; amount: number } }
   | { ok: false; code: 'CREDIT_NOTE_REFUND_EXCEEDS_OWED'; details: { owed: number; amount: number } }
+  | { ok: false; code: 'CREDIT_NOTE_REFUND_ORE_LEFT'; details: { owed: number; amount: number } }
   | { ok: false; code: 'CREDIT_NOTE_REFUND_LINES_INVALID'; details: { reason: 'debit_not_receivable' | 'credit_on_receivable' } }
   | { ok: false; code: 'INVOICE_PAID_LINES_UNBALANCED'; details: { total_debit: number; total_credit: number } }
   | { ok: false; code: 'INVOICE_PAID_NO_FISCAL_PERIOD'; details: { payment_date: string } }
@@ -133,7 +142,7 @@ export type RefundCreditNoteResult =
   | { ok: false; code: 'DB_ERROR'; error: unknown }
 
 /** The receivable the credit note's verifikat credits (buildCreditNoteLines): 1510. */
-export const RECEIVABLE_ACCOUNT = resolveAccountRole(PINNED_JURISDICTION, 'accounts_receivable')
+export { RECEIVABLE_ACCOUNT }
 /** Skatteverket's share of a ROT/RUT invoice: never money paid out to the customer. */
 const ROT_RUT_RECEIVABLE_ACCOUNT = resolveAccountRole(PINNED_JURISDICTION, 'rot_rut_receivable')
 
@@ -347,9 +356,32 @@ export async function refundCreditNote(
   const plan = planCreditNoteRefund(creditNote, original, creditUsed.used)
   if (!plan.ok) return plan
 
-  const built = buildCreditNoteRefundLines(creditNote, plan.owed, settlementAccountNumber, customLines)
+  let bookedOre: number
+  try {
+    bookedOre = await readCreditNoteBookedOre(supabase, companyId, creditNote)
+  } catch (error) {
+    return { ok: false, code: 'DB_ERROR', error }
+  }
+  // The verifikat takes off 1510 what it carries for the credit; the credit
+  // note records the debt settled, so the kundreskontra nets it to zero
+  // exactly when 1510 does.
+  const ledgerOwed = refundLedgerAmount(plan, bookedOre)
+  if (ledgerOwed <= ORE_TOLERANCE) {
+    return { ok: false, code: 'CREDIT_NOTE_REFUND_NOTHING_OWED', details: { refunded: plan.refunded, credit_used: creditUsed.used } }
+  }
+
+  const built = buildCreditNoteRefundLines(creditNote, ledgerOwed, settlementAccountNumber, customLines)
   if (!built.ok) return built
   const { amount, description, lines } = built
+  // Rows that pay back the whole credit at the kundreskontra's figure (999,75
+  // where 1510 carries 1 000), or anything between the two, would close the
+  // credit note with öre left on 1510: the whole refund is what 1510 carries.
+  if (ledgerOwed > plan.owed + ORE_TOLERANCE && amount >= plan.owed - ORE_TOLERANCE && amount < ledgerOwed - ORE_TOLERANCE) {
+    return { ok: false, code: 'CREDIT_NOTE_REFUND_ORE_LEFT', details: { owed: ledgerOwed, amount } }
+  }
+  // What the credit note records settled: its whole open credit for a refund
+  // of what 1510 carries, else the refund's own kronor (always less than owed).
+  const settled = amount >= ledgerOwed - ORE_TOLERANCE ? plan.owed : amount
 
   if (!force) {
     const since = guardWindowStart(creditNote.invoice_date, refundDate)
@@ -360,8 +392,8 @@ export async function refundCreditNote(
   }
 
   const priorPaid = roundOre(Number(creditNote.paid_amount ?? 0))
-  const paidAmount = roundOre(priorPaid - amount)
-  const owedAfter = roundOre(plan.owed - amount)
+  const paidAmount = roundOre(priorPaid - settled)
+  const owedAfter = roundOre(plan.owed - settled)
   const refundedAt = owedAfter <= ORE_TOLERANCE ? paidAtFromDate(refundDate) : null
 
   // Refused before anything is written, the dry run included: the engine's
@@ -402,7 +434,7 @@ export async function refundCreditNote(
           creditNote,
           input,
           { paymentAccount: customLines ? null : settlementAccountNumber, generated: !customLines, bankLine: false },
-          { linkBasis: linkBasisColumnsFor(REFUND_LINK_BASIS), settledAmount: amount },
+          { linkBasis: linkBasisColumnsFor(REFUND_LINK_BASIS), settledAmount: settled },
         ),
       input,
     })

@@ -3935,7 +3935,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           open={showRefundDialog}
           onOpenChange={setShowRefundDialog}
           creditNote={invoice}
-          owed={refundPlan.owed}
+          plan={refundPlan}
           onSuccess={() => {
             fetchInvoice()
             toast({
