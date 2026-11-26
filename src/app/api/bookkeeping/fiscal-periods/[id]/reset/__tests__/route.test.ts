@@ -16,6 +16,9 @@ import {
   parseJsonResponse,
 } from '@/tests/helpers'
 
+// Route path ids are uuids: the route answers its 404 to anything else before it reads.
+const PERIOD_1 = '967b285e-2dcb-5661-91f6-68a799845858'
+
 const { supabase, reset } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
@@ -42,13 +45,13 @@ vi.mock('@/lib/core/bookkeeping/fiscal-year-reset', () => ({
 
 import { GET, POST } from '../route'
 
-const routeParams = () => createMockRouteParams({ id: 'period-1' })
+const routeParams = () => createMockRouteParams({ id: PERIOD_1 })
 
 const ELIGIBILITY = {
   eligible: true,
   blockers: [],
   period: {
-    id: 'period-1',
+    id: PERIOD_1,
     name: '2026',
     period_start: '2026-01-01',
     period_end: '2026-12-31',
@@ -72,7 +75,7 @@ describe('GET /api/bookkeeping/fiscal-periods/[id]/reset', () => {
     })
 
     const response = await GET(
-      createMockRequest('/api/bookkeeping/fiscal-periods/period-1/reset'),
+      createMockRequest(`/api/bookkeeping/fiscal-periods/${PERIOD_1}/reset`),
       routeParams(),
     )
 
@@ -84,21 +87,21 @@ describe('GET /api/bookkeeping/fiscal-periods/[id]/reset', () => {
     getEligibilityMock.mockResolvedValue({ ok: true, eligibility: ELIGIBILITY })
 
     const response = await GET(
-      createMockRequest('/api/bookkeeping/fiscal-periods/period-1/reset'),
+      createMockRequest(`/api/bookkeeping/fiscal-periods/${PERIOD_1}/reset`),
       routeParams(),
     )
     const { status, body } = await parseJsonResponse<{ data: typeof ELIGIBILITY }>(response)
 
     expect(status).toBe(200)
     expect(body.data).toEqual(ELIGIBILITY)
-    expect(getEligibilityMock).toHaveBeenCalledWith(supabase, 'company-1', 'period-1')
+    expect(getEligibilityMock).toHaveBeenCalledWith(supabase, 'company-1', PERIOD_1)
   })
 
   it('returns 404 when the period does not exist', async () => {
     getEligibilityMock.mockResolvedValue({ ok: false, code: 'FISCAL_YEAR_RESET_NOT_FOUND' })
 
     const response = await GET(
-      createMockRequest('/api/bookkeeping/fiscal-periods/period-1/reset'),
+      createMockRequest(`/api/bookkeeping/fiscal-periods/${PERIOD_1}/reset`),
       routeParams(),
     )
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
@@ -111,7 +114,7 @@ describe('GET /api/bookkeeping/fiscal-periods/[id]/reset', () => {
     getEligibilityMock.mockResolvedValue({ ok: false, code: 'FISCAL_YEAR_RESET_FORBIDDEN' })
 
     const response = await GET(
-      createMockRequest('/api/bookkeeping/fiscal-periods/period-1/reset'),
+      createMockRequest(`/api/bookkeeping/fiscal-periods/${PERIOD_1}/reset`),
       routeParams(),
     )
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
@@ -124,7 +127,7 @@ describe('GET /api/bookkeeping/fiscal-periods/[id]/reset', () => {
     getEligibilityMock.mockResolvedValue({ ok: false, code: 'SOMETHING_ELSE' })
 
     const response = await GET(
-      createMockRequest('/api/bookkeeping/fiscal-periods/period-1/reset'),
+      createMockRequest(`/api/bookkeeping/fiscal-periods/${PERIOD_1}/reset`),
       routeParams(),
     )
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
@@ -143,7 +146,7 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/reset', () => {
   })
 
   const postRequest = (body?: unknown) =>
-    createMockRequest('/api/bookkeeping/fiscal-periods/period-1/reset', {
+    createMockRequest(`/api/bookkeeping/fiscal-periods/${PERIOD_1}/reset`, {
       method: 'POST',
       body: body ?? { confirm_name: '2026' },
     })
@@ -198,7 +201,7 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/reset', () => {
     expect(resetFiscalYearMock).toHaveBeenCalledWith(
       supabase,
       'company-1',
-      'period-1',
+      PERIOD_1,
       'user-1',
       '2026',
     )

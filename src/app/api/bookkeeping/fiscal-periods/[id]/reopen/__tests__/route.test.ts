@@ -16,6 +16,9 @@ import {
   parseJsonResponse,
 } from '@/tests/helpers'
 
+// Route path ids are uuids: the route answers its 404 to anything else before it reads.
+const PERIOD_1 = '967b285e-2dcb-5661-91f6-68a799845858'
+
 const { supabase, reset } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
@@ -48,14 +51,14 @@ vi.mock('@/lib/agent/composer/tic-fetch', () => ({
 
 import { GET, POST } from '../route'
 
-const routeParams = () => createMockRouteParams({ id: 'period-1' })
-const URL_PATH = '/api/bookkeeping/fiscal-periods/period-1/reopen'
+const routeParams = () => createMockRouteParams({ id: PERIOD_1 })
+const URL_PATH = `/api/bookkeeping/fiscal-periods/${PERIOD_1}/reopen`
 
 const ELIGIBILITY = {
   eligible: true,
   blockers: [],
   resume: false,
-  period: { id: 'period-1', name: '2025', period_start: '2025-01-01', period_end: '2025-12-31', closing_entry_id: 'je-1' },
+  period: { id: PERIOD_1, name: '2025', period_start: '2025-01-01', period_end: '2025-12-31', closing_entry_id: 'je-1' },
   next_period: { id: 'period-2', name: '2026' },
   entries: [],
   annual_report: { versions_to_supersede: 1, pending_signatures: 1, agm_date: null },
@@ -85,6 +88,29 @@ describe('GET /api/bookkeeping/fiscal-periods/[id]/reopen', () => {
     expect(getEligibilityMock).not.toHaveBeenCalled()
   })
 
+  it('answers 404 for an id that is not a uuid, before the service reads or reopens', async () => {
+    // Postgres refused `new` in the period filter, and the preview answered 500.
+    const params = createMockRouteParams({ id: 'new' })
+
+    const preview = await GET(createMockRequest('/api/bookkeeping/fiscal-periods/new/reopen'), params)
+    const execute = await POST(
+      createMockRequest('/api/bookkeeping/fiscal-periods/new/reopen', {
+        method: 'POST',
+        body: { confirm_name: '2025', confirm_annual_report_not_adopted: true },
+      }),
+      params,
+    )
+
+    for (const response of [preview, execute]) {
+      const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+      expect(status).toBe(404)
+      expect(body.error.code).toBe('FISCAL_YEAR_REOPEN_NOT_FOUND')
+    }
+    expect(getEligibilityMock).not.toHaveBeenCalled()
+    expect(reopenMock).not.toHaveBeenCalled()
+    expect(ensureTicSnapshotMock).not.toHaveBeenCalled()
+  })
+
   it('returns the preview', async () => {
     getEligibilityMock.mockResolvedValue({ ok: true, eligibility: ELIGIBILITY })
 
@@ -94,7 +120,7 @@ describe('GET /api/bookkeeping/fiscal-periods/[id]/reopen', () => {
 
     expect(status).toBe(200)
     expect(body.data).toEqual(ELIGIBILITY)
-    expect(getEligibilityMock).toHaveBeenCalledWith(supabase, 'company-1', 'period-1', {
+    expect(getEligibilityMock).toHaveBeenCalledWith(supabase, 'company-1', PERIOD_1, {
       refreshRegistry: expect.any(Function),
     })
   })
@@ -182,7 +208,7 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/reopen', () => {
       periodName: '2025',
       resumed: false,
       reversed: [
-        { id: 'je-1', kind: 'closing_entry', voucher_series: 'A', voucher_number: 43, entry_date: '2025-12-31', fiscal_period_id: 'period-1' },
+        { id: 'je-1', kind: 'closing_entry', voucher_series: 'A', voucher_number: 43, entry_date: '2025-12-31', fiscal_period_id: PERIOD_1 },
       ],
       supersededVersions: 1,
     })
@@ -201,7 +227,7 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/reopen', () => {
     expect(reopenMock).toHaveBeenCalledWith(
       supabase,
       'company-1',
-      'period-1',
+      PERIOD_1,
       'user-1',
       { confirmName: '2025', confirmNotAdopted: true },
       // The posting port's link basis, handed down to the kernel as a function.
