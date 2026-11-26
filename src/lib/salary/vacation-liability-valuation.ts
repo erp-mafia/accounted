@@ -298,7 +298,7 @@ export async function computeVacationLiability(
               (run) => run.status === 'booked' || run.salaryRunId === options.inFlightRunId,
             ),
             rate: resolveVacationPayRate(emp.vacation_days_per_year, emp.vacation_pay_rate),
-            window: { earnedFrom: previousStart, earnedTo: dayAfter, paidFrom: yearStart, paidTo: dayAfter },
+            window: { earnedFrom: previousStart, earnedTo: dayAfter, paidFrom: yearStart, paidTo: dayAfter, splitAt: yearStart },
           }).unpaid
         : 0
 
