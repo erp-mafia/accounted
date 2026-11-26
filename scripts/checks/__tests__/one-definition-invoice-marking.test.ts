@@ -13,6 +13,7 @@ describe('invoice-marking-for-new-invoice', () => {
   it.each([
     // The order door as it was: the card's Märkning alone.
     'invoice_marking: customerInvoiceMarking(customer) ?? undefined,',
+    'invoice_marking: customerInvoiceMarking (customer),',
     // The same through the home, with the stated Märkning left out.
     'invoice_marking: invoiceMarkingForNewInvoice(null, customer),',
     'invoice_marking: invoiceMarkingForNewInvoice(undefined, customer) ?? undefined,',

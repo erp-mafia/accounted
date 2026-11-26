@@ -5,8 +5,8 @@ export default {
   why: "The kundorder door took the card's Märkning alone, so the marking an offert or proforma carried was lost on its way through the order to the invoice.",
   match: [
     // The card's Märkning alone, passing over what the source states.
-    /\bcustomerInvoiceMarking\(/,
-    /\binvoiceMarkingForNewInvoice\(\s*(?:null|undefined)\s*,/,
+    /\bcustomerInvoiceMarking\s*\(/,
+    /\binvoiceMarkingForNewInvoice\s*\(\s*(?:null|undefined)\s*,/,
     // The card's field copied into a Märkning, or fallen back to, by hand.
     // Showing the card's own field is not choosing an invoice's Märkning.
     /\binvoice_marking\s*:\s*(?:[\w$]+\??\.)*customers?\??\.invoice_marking\b/,

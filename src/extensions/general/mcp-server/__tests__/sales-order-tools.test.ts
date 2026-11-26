@@ -300,9 +300,15 @@ describe('gnubok_create_sales_order', () => {
     )) as { staged: boolean }
 
     expect(result.staged).toBe(true)
-    const insert = findCall('pending_operations', 'insert')?.[0] as { operation_type: string; params: Record<string, unknown> }
+    const insert = findCall('pending_operations', 'insert')?.[0] as {
+      operation_type: string
+      params: Record<string, unknown>
+      preview_data: Record<string, unknown>
+    }
     expect(insert.operation_type).toBe('create_sales_order')
     expect(insert.params.invoice_marking).toBe('PO-4711')
+    // The approver sees it before the order exists.
+    expect(insert.preview_data.invoice_marking).toBe('PO-4711')
   })
 
   it('refuses a Märkning that is not text instead of staging the order without it', async () => {

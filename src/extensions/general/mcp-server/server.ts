@@ -11860,6 +11860,8 @@ export const tools: McpTool[] = [
           currency,
           order_date: params.order_date,
           requested_delivery_date: params.requested_delivery_date ?? null,
+          // Shown on the approval card: the Märkning the order's invoices carry.
+          ...(params.invoice_marking?.trim() ? { invoice_marking: params.invoice_marking.trim() } : {}),
           // Informational: an order is not a verifikat, so no period check.
           writes_verifikat: false,
           ...(dimensionResolutions.length > 0 ? { dimension_resolutions: dimensionResolutions } : {}),
