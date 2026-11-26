@@ -2,28 +2,31 @@
 -- is that invoice, not a new one.
 --
 -- An import from before fortnox_number (the older /migrate path) holds
--- Fortnox's löpnummer as the invoice's supplier number. The background import
--- recognises such an invoice by that number and its header, but only on the
--- supplier card it resolved for the record's Fortnox supplier. The older path
--- put an invoice on a card by its org number or the name the invoice gives,
--- and folded the Fortnox suppliers of one org number into one card; the
--- background import keeps each Fortnox supplier on a card of its own. When the
--- two disagree, the invoice was inserted a second time: one invoice, two open
+-- Fortnox's löpnummer as the invoice's supplier number, on the card that path
+-- chose: the one with the org number the invoice gives, else the one with the
+-- name it gives (a card it made when none had it). It folded the Fortnox
+-- suppliers of one org number into one card. The background import keeps each
+-- Fortnox supplier on a card of its own and looked for such an invoice only on
+-- the card it resolved for the record's Fortnox supplier. Where the two
+-- disagreed, the invoice was inserted a second time: one invoice, two open
 -- payables in the supplier ledger.
 --
--- The löpnummer is the company's own series at Fortnox, and
--- repair_fortnox_supplier_invoice_numbers (20261013133930) already reads it
--- that way: the one invoice with no fortnox_number that holds it as its
--- supplier number, with the same date, total, currency and kind, on any card.
--- commit_provider_migration_records now asks that too, after the lookup on the
--- resolved card finds nothing, and two such invoices are refused as
--- MIGRATION_INVOICE_AMBIGUOUS. An adopted invoice keeps its card and its
--- header, and gets the löpnummer, as on the resolved card. Nothing else
--- changes: the body is copied verbatim from 20261012161644 (identical to
--- production) with that one block added; privileges are kept by CREATE OR
--- REPLACE.
+-- commit_provider_migration_records now asks, after every lookup on the
+-- resolved card has found nothing and before it stores a new row, for the
+-- invoice in the company with no fortnox_number that holds the löpnummer as
+-- its supplier number with the record's date, currency, total and kind (the
+-- reading repair_fortnox_supplier_invoice_numbers, 20261013133930, makes of
+-- these rows). It is adopted when its card is one the older path would have
+-- chosen for this invoice: the org number the invoice gives, or the name it
+-- gives with no other org number. An adopted invoice keeps its card and its
+-- header and gets the löpnummer and the record's source map, as on the
+-- resolved card. One on any other card, which may be another supplier's own
+-- invoice, and two such invoices are refused as MIGRATION_INVOICE_AMBIGUOUS
+-- for a person to decide. The candidate is read FOR UPDATE.
 --
--- Applies from now on. Nothing stored changes.
+-- Nothing else changes: the body is copied verbatim from 20261012161644
+-- (identical to production) with that one block added; privileges are kept by
+-- CREATE OR REPLACE. Applies from now on. Nothing stored changes.
 
 CREATE OR REPLACE FUNCTION public.commit_provider_migration_records(p_job_id uuid,p_worker_id uuid,p_attempt integer,p_records jsonb)
 RETURNS void LANGUAGE plpgsql SECURITY INVOKER SET search_path = public AS $$
@@ -110,23 +113,6 @@ BEGIN
             target:=ids[1];
           END IF;
         END IF;
-        -- That import found an invoice's supplier by org number or name, never
-        -- by Fortnox's supplier number, so the invoice can sit on another card
-        -- than the one this job resolved: a card named as the invoice names its
-        -- supplier, or one card for two Fortnox suppliers of one org number.
-        -- The löpnummer is the company's own series at Fortnox: the one invoice
-        -- in the company that holds it as its supplier number, with this
-        -- header, is that invoice, as repair_fortnox_supplier_invoice_numbers
-        -- reads it. Two such invoices are refused, never chosen between.
-        IF target IS NULL THEN
-          SELECT array_agg(id) INTO ids FROM (SELECT id FROM supplier_invoices WHERE company_id=j.company_id
-            AND fortnox_number IS NULL AND supplier_invoice_number=fortnox
-            AND invoice_date=(row_data->>'invoice_date')::date AND currency=row_data->>'currency'
-            AND total=(row_data->>'total')::numeric
-            AND is_credit_note=COALESCE((row_data->>'is_credit_note')::boolean,false) LIMIT 2) elsewhere;
-          IF cardinality(ids)>1 THEN RAISE EXCEPTION 'MIGRATION_INVOICE_AMBIGUOUS'; END IF;
-          target:=ids[1];
-        END IF;
         IF target IS NOT NULL AND NOT EXISTS(SELECT 1 FROM migration_source_records WHERE company_id=j.company_id
           AND provider=j.provider AND account_key=j.account_key AND resource=c.resource AND source_id=c.source_id) THEN
           IF EXISTS(SELECT 1 FROM migration_source_records WHERE company_id=j.company_id AND provider=j.provider
@@ -163,6 +149,34 @@ BEGIN
             AND total=(row_data->>'total')::numeric
             AND is_credit_note=COALESCE((row_data->>'is_credit_note')::boolean,false) LIMIT 2) moved;
           IF cardinality(ids)>1 THEN RAISE EXCEPTION 'MIGRATION_INVOICE_AMBIGUOUS'; END IF;
+          target:=ids[1];
+        END IF;
+        -- No invoice on the resolved card is this Fortnox record. An import
+        -- from before fortnox_number may hold it on another card: that import
+        -- put an invoice on the card with the org number the invoice gives,
+        -- else on the card with the name it gives (one it made when none had
+        -- it), never by Fortnox's supplier number, and it kept the löpnummer
+        -- as the supplier number. The löpnummer is the company's own series at
+        -- Fortnox, and only the same header makes an invoice holding it this
+        -- record, as repair_fortnox_supplier_invoice_numbers reads it. Such an
+        -- invoice is adopted only on a card that import would have chosen for
+        -- this invoice: the org number the invoice gives, or the name it gives
+        -- with no other org number. One on any other card may be another
+        -- supplier's own invoice, and two cannot be told apart: both are
+        -- refused for a person, never guessed at and never stored twice.
+        IF target IS NULL AND fortnox IS NOT NULL THEN
+          SELECT array_agg(id) INTO ids FROM (SELECT id FROM supplier_invoices WHERE company_id=j.company_id
+            AND fortnox_number IS NULL AND supplier_invoice_number=fortnox
+            AND invoice_date=(row_data->>'invoice_date')::date AND currency=row_data->>'currency'
+            AND total=(row_data->>'total')::numeric
+            AND is_credit_note=COALESCE((row_data->>'is_credit_note')::boolean,false) LIMIT 2 FOR UPDATE) elsewhere;
+          IF cardinality(ids)>1 THEN RAISE EXCEPTION 'MIGRATION_INVOICE_AMBIGUOUS'; END IF;
+          IF ids[1] IS NOT NULL AND NOT EXISTS(SELECT 1 FROM supplier_invoices si JOIN suppliers s ON s.id=si.supplier_id
+            WHERE si.id=ids[1] AND (public.party_org_key(s.org_number)=public.party_org_key(r->'party'->>'org_number')
+              OR (lower(btrim(regexp_replace(s.name,'\s+',' ','g')))=lower(btrim(regexp_replace(r->'party'->>'name','\s+',' ','g')))
+                AND (public.party_org_key(s.org_number) IS NULL OR public.party_org_key(r->'party'->>'org_number') IS NULL)))) THEN
+            RAISE EXCEPTION 'MIGRATION_INVOICE_AMBIGUOUS';
+          END IF;
           target:=ids[1];
         END IF;
         IF target IS NOT NULL AND EXISTS(SELECT 1 FROM migration_source_records
