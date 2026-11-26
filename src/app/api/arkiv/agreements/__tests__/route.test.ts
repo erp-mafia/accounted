@@ -78,7 +78,7 @@ describe('GET /api/arkiv/agreements', () => {
 
   it('shows the latest missed payment when nothing is expected ahead', async () => {
     enqueue({ data: [{ id: 'agr-1', kind: 'subscription', title: 'Abonnemang X', status: 'active', counterparty_party_id: null, counterparty_name: null, amount: '299', currency: 'SEK', period: 'monthly', starts_on: null, ends_on: null, source_document_id: 'doc-1', sources: {} }] })
-    enqueue({ data: [] })
+    // No counterparty party, so no parties read.
     enqueue({ data: [{ agreement_id: 'agr-1', due_on: '2026-08-10', amount: '299', currency: 'SEK', status: 'missed', kind: 'payment' }] })
     enqueue({ data: [] })
     enqueue({ data: [{ id: 'doc-1', file_name: 'x.pdf' }] })

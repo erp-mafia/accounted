@@ -734,6 +734,11 @@ export default async function DashboardLayout({
       <DashboardRouteShell
         onboarding={
           <div className="relative min-h-dvh bg-background">
+            {/* The books act writes into the active company like any page: it
+                runs inside the same company guard as the shell below. First in
+                the branch, so its fetch guard is installed before the act's
+                own first request. */}
+            <CompanyTabSync />
             <OnboardingBackdrop />
             <main id="main-content" className="relative z-10">
               {showSignpost ? (

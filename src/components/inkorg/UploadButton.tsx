@@ -12,6 +12,7 @@ import { uploadToInbox, type UploadDuplicate, type UploadOutcome } from './attac
 
 /**
  * Ladda upp, the page's primary action in the top bar: files chosen here
+ * (or dropped on the page, which sends them over the same `upload`)
  * land in the Inkorg as uploads, one at a time over the inbox's own upload
  * (uploadToInbox, the calls the Underlag workspace makes), and show up under
  * Behöver dig once they are read. Nothing is matched to a purchase here:
@@ -26,9 +27,9 @@ import { uploadToInbox, type UploadDuplicate, type UploadOutcome } from './attac
  * rest, with one message saying how many were not uploaded and why. The
  * page shows one toast at a time, so that message is the last one shown.
  */
-export function UploadButton({ onUploaded }: { onUploaded: () => Promise<void> }) {
+export function UploadButton({ upload }: { upload: InboxUpload }) {
   const t = useTranslations('inkorg')
-  const { input, pick, progress, label } = useInboxUpload(onUploaded)
+  const { input, pick, progress, label } = upload
   return (
     <>
       {input}
@@ -43,7 +44,9 @@ export function UploadButton({ onUploaded }: { onUploaded: () => Promise<void> }
 /**
  * The upload behind the button, without the button: the hidden file input to
  * render, `pick` to open it (from a click, so the browser allows the file
- * dialog), and what a button says while files go up (`label`, null at rest).
+ * dialog), `upload` to send files that came another way (a drop on the
+ * Inkorg page), and what a button says while files go up (`label`, null at
+ * rest). One hook per page, so a drop and the button share one queue.
  * The shell's "Ladda upp underlag" (the Att göra and Dokument areas, the
  * rail's plus) uses it from any page, so an upload there is this same upload.
  */
@@ -57,8 +60,9 @@ export function useInboxUpload(onUploaded: () => Promise<void>) {
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null)
   const [waitSec, setWaitSec] = useState<number | null>(null)
 
-  async function upload(files: File[]) {
-    if (files.length === 0 || progress) return
+  /** Sends the files; resolves to how many went in (a duplicate counts) and how many did not. */
+  async function upload(files: File[]): Promise<{ sent: number; failed: number }> {
+    if (files.length === 0 || progress) return { sent: 0, failed: 0 }
     setProgress({ done: 0, total: files.length })
     const failures: Extract<UploadOutcome, { ok: false }>[] = []
     const duplicates: UploadDuplicate[] = []
@@ -101,6 +105,7 @@ export function useInboxUpload(onUploaded: () => Promise<void>) {
     // The page shows one toast at a time: a stopped upload is the message that
     // stays, counting every file that did not go in (any earlier failure too),
     // with the limit's reason, which says when to try again.
+    const outcome = { sent: uploaded + duplicates.length, failed: failures.length + (stopped?.count ?? 0) }
     if (stopped) {
       toast({
         title: tUpload('upload_queue_stopped_title'),
@@ -109,7 +114,7 @@ export function useInboxUpload(onUploaded: () => Promise<void>) {
           .join(' '),
         variant: 'destructive',
       })
-      return
+      return outcome
     }
     // One toast for what failed, naming the first reason: the others are almost always the same one.
     const first = failures[0]
@@ -123,6 +128,7 @@ export function useInboxUpload(onUploaded: () => Promise<void>) {
         variant: 'destructive',
       })
     }
+    return outcome
   }
 
   const input = (
@@ -148,5 +154,7 @@ export function useInboxUpload(onUploaded: () => Promise<void>) {
         : progress
           ? t('uploading')
           : null
-  return { input, pick: () => inputRef.current?.click(), progress, label }
+  return { input, pick: () => inputRef.current?.click(), upload, progress, label }
 }
+
+export type InboxUpload = ReturnType<typeof useInboxUpload>

@@ -7,6 +7,8 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { isMatchableInvoiceStatus, isMatchableSupplierInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
+import { ID_READ_CHUNK } from '@/lib/supabase/read-in-slices'
+import { chunk } from '@/lib/utils'
 import type { BankTransactionPart } from '@/types'
 
 export interface TransactionPartSuggestedInvoice {
@@ -114,13 +116,17 @@ export async function readTransactionParts(
   const invoiceIds = parts.flatMap((p) => (p.suggested_invoice_id ? [p.suggested_invoice_id] : []))
   const supplierInvoiceIds = parts.flatMap((p) => (p.suggested_supplier_invoice_id ? [p.suggested_supplier_invoice_id] : []))
 
+  // In slices of ID_READ_CHUNK: a BgMax deposit or an Autogiro settle day
+  // has one part per payment, with no cap, and the ids travel in the GET
+  // query string, which the gateway refuses past its limit. Reads by
+  // primary key: a slice answers at most ID_READ_CHUNK rows.
   const invoices = new Map<string, TransactionPartSuggestedInvoice>()
-  if (invoiceIds.length > 0) {
+  for (const ids of chunk(invoiceIds, ID_READ_CHUNK)) {
     const { data: rows, error: invoiceError } = await supabase
       .from('invoices')
       .select('id, invoice_number, remaining_amount, currency, status, customer:customers(name)')
       .eq('company_id', companyId)
-      .in('id', invoiceIds)
+      .in('id', ids)
     if (invoiceError) throw invoiceError
     for (const row of (rows ?? []) as unknown as CustomerInvoiceSummary[]) {
       const remaining = Number(row.remaining_amount ?? 0)
@@ -135,12 +141,12 @@ export async function readTransactionParts(
       })
     }
   }
-  if (supplierInvoiceIds.length > 0) {
+  for (const ids of chunk(supplierInvoiceIds, ID_READ_CHUNK)) {
     const { data: rows, error: supplierError } = await supabase
       .from('supplier_invoices')
       .select('id, supplier_invoice_number, arrival_number, remaining_amount, currency, status, supplier:suppliers(name)')
       .eq('company_id', companyId)
-      .in('id', supplierInvoiceIds)
+      .in('id', ids)
     if (supplierError) throw supplierError
     for (const row of (rows ?? []) as unknown as SupplierInvoiceSummary[]) {
       const remaining = Number(row.remaining_amount ?? 0)

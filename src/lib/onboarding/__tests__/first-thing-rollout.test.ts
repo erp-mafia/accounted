@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { hemFirstThingRollout, isHemFirstThingEnabled } from '../first-thing-rollout'
+import { hemFirstThingCreatedFrom, hemFirstThingRollout, isHemFirstThingEnabled } from '../first-thing-rollout'
 
 afterEach(() => {
   vi.unstubAllEnvs()
@@ -35,5 +35,30 @@ describe('isHemFirstThingEnabled', () => {
     vi.stubEnv('HEM_FIRST_THING_USER_IDS', '*')
     expect(isHemFirstThingEnabled(null)).toBe(false)
     expect(isHemFirstThingEnabled(undefined)).toBe(false)
+  })
+})
+
+describe('hemFirstThingCreatedFrom', () => {
+  it('is null when unset, blank or not a date', () => {
+    vi.stubEnv('HEM_FIRST_THING_FROM', '')
+    expect(hemFirstThingCreatedFrom()).toBeNull()
+    vi.stubEnv('HEM_FIRST_THING_FROM', '   ')
+    expect(hemFirstThingCreatedFrom()).toBeNull()
+    vi.stubEnv('HEM_FIRST_THING_FROM', 'tomorrow')
+    expect(hemFirstThingCreatedFrom()).toBeNull()
+    vi.stubEnv('HEM_FIRST_THING_FROM', '2026-11-26T08:00:00Z')
+    expect(hemFirstThingCreatedFrom()).toBeNull()
+  })
+
+  it('is null for a day that does not exist', () => {
+    vi.stubEnv('HEM_FIRST_THING_FROM', '2026-02-31')
+    expect(hemFirstThingCreatedFrom()).toBeNull()
+    vi.stubEnv('HEM_FIRST_THING_FROM', '2026-13-01')
+    expect(hemFirstThingCreatedFrom()).toBeNull()
+  })
+
+  it('is the day when it is one', () => {
+    vi.stubEnv('HEM_FIRST_THING_FROM', ' 2026-11-26 ')
+    expect(hemFirstThingCreatedFrom()).toBe('2026-11-26')
   })
 })

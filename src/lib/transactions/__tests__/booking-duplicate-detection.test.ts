@@ -64,12 +64,19 @@ function jeChain(data: JeRow | null) {
   c.maybeSingle = () => Promise.resolve({ data, error: null })
   return c
 }
-/** Chain for the anchor lookups, terminal on `.in()`. */
+/**
+ * Chain for the anchor lookups: the paged slices end on `.order().range()`,
+ * the physical-key read on `.in()`, and the chain answers when awaited.
+ */
 function anchorChain(data: unknown[]) {
   const c: Record<string, unknown> = {}
   c.select = () => c
   c.eq = () => c
-  c.in = () => Promise.resolve({ data, error: null })
+  c.in = () => c
+  c.order = () => c
+  c.range = () => c
+  c.then = (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
+    Promise.resolve({ data, error: null }).then(resolve, reject)
   return c
 }
 function makeSupabase(
@@ -452,7 +459,12 @@ function ledgerChain(result: { data: unknown; error: unknown }) {
   c.limit = () => Promise.resolve(result)
   c.maybeSingle = () => Promise.resolve(result)
   c.single = () => Promise.resolve(result)
-  c.in = () => Promise.resolve(result) // terminal for the link-exclusion lookups
+  // The link-exclusion lookups are paged slices ending on `.order().range()`;
+  // the by-id reads end on `.in()`, so the chain answers when awaited.
+  c.in = () => c
+  c.range = () => Promise.resolve(result)
+  c.then = (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
+    Promise.resolve(result).then(resolve, reject)
   return c
 }
 

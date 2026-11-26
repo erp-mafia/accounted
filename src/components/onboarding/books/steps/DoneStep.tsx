@@ -10,6 +10,7 @@ import { useBranding } from '@/lib/branding/brand-context'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { useFormat } from '@/lib/hooks/use-format'
 import { AI_CLIENTS } from '@/lib/onboarding/ai-clients'
+import { yearsOfBooks } from '@/lib/onboarding/books-years'
 import { AI_TASK_LABEL_KEY, aiTaskHref, foundTasksStartOpen, listAiTasks, type AiTaskCategory } from '@/lib/worklist/ai-task'
 import type { WorklistCounts } from '@/lib/worklist/types'
 import { AiTaskAction } from '@/components/dashboard/AiTaskAction'
@@ -32,6 +33,10 @@ async function fetchWorklistCounts(): Promise<WorklistCounts> {
  * agent chips, then what the app already found to do (open when bank rows
  * wait to be booked, otherwise folded until asked; each row opens the page
  * in the app or hands the row to a connected agent), and the door to Hem.
+ *
+ * The sources arrangement shows the card and the door only: its AI step has
+ * the chips, and Hem names the first thing to do, so the found rows are not
+ * listed here and the door stays in view under the card.
  */
 export function DoneStep({ ctx, onLeave, leaving }: {
   ctx: BooksCtx
@@ -49,8 +54,10 @@ export function DoneStep({ ctx, onLeave, leaving }: {
   const bookingScreen = useBookingScreenEnabled()
   // null until the toggle is clicked: the list then follows what it holds (foundTasksStartOpen).
   const [toggled, setToggled] = useState<boolean | null>(null)
+  const sourcesFlow = ctx.flags.sourcesFlow === true
+  // The found rows are the only reader: the sources arrangement does not ask (null key).
   const { data: worklist, isValidating, error, mutate } = useSWR(
-    ['worklist-counts', company?.id ?? null] as const,
+    sourcesFlow ? null : (['worklist-counts', company?.id ?? null] as const),
     fetchWorklistCounts,
   )
   // A bank row task opens where every "book these" link leads (Att bokföra with the booking screen).
@@ -62,7 +69,6 @@ export function DoneStep({ ctx, onLeave, leaving }: {
     void mutate()
   }, [mutate])
   const { connection, connected, preferredClient, onConnect } = useAiConnection(findings)
-  const sourcesFlow = ctx.flags.sourcesFlow === true
   const connectionKey = connected.join(',')
   const tasks = worklist && !error ? listAiTasks(worklist.counts, { hasAi }) : []
   const open = toggled ?? foundTasksStartOpen(tasks)
@@ -79,7 +85,7 @@ export function DoneStep({ ctx, onLeave, leaving }: {
     [
       t('card_books'),
       b && b.entries > 0
-        ? t('card_books_value', { count: b.entries, years: b.periods.length })
+        ? t('card_books_value', { count: b.entries, years: yearsOfBooks(b) })
         : state.path === 'fresh'
           ? t('answer_fresh')
           : t('card_books_none'),
@@ -120,7 +126,7 @@ export function DoneStep({ ctx, onLeave, leaving }: {
         </>
       )}
 
-      {error ? (
+      {sourcesFlow ? null : error ? (
         <p className="found-note" role="alert">
           {t('ai_handoff_failed')}{' '}
           <Button variant="ghost" className="text-muted-foreground" onClick={refetch} disabled={isValidating}>

@@ -85,6 +85,14 @@ export interface PutFileResult {
   size_bytes: number
 }
 
+/**
+ * The bytes of one file, made while they are uploaded: held whole (twice,
+ * while it was collected), a large archive ran the backup function out of
+ * memory. Each call starts the file again from its first byte, for an upload
+ * that has to be sent over.
+ */
+export type FileBytes = () => AsyncIterable<Uint8Array>
+
 export interface PutFileParams {
   accessToken: string
   target: CloudTarget
@@ -95,7 +103,7 @@ export interface PutFileParams {
    * the user deleted the file); path-addressed providers ignore it.
    */
   previousId?: string
-  data: ArrayBuffer
+  data: FileBytes
   contentType: string
 }
 
@@ -140,9 +148,11 @@ export interface CloudStorageProvider {
   prepareTarget(params: PrepareTargetParams): Promise<PreparedTarget>
   /**
    * Write one file into the target, replacing any existing file of that name.
-   * Implementations verify the stored bytes against the provider's own
-   * checksum: a silently corrupted backup is worse than a failed one.
-   * Throws {@link CloudScopeMissingError} when the grant lacks the scope.
+   * Implementations send `data` as it is read, never holding more of it than
+   * one request, read it to its end, and verify the stored bytes against the
+   * provider's own checksum: a silently corrupted backup is worse than a
+   * failed one. Throws {@link CloudScopeMissingError} when the grant lacks
+   * the scope.
    */
   putFile(params: PutFileParams): Promise<PutFileResult>
 }

@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { SupabaseDataClient } from '@/lib/supabase/data-client'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { ID_READ_CHUNK } from '@/lib/supabase/read-in-slices'
 import { chunk } from '@/lib/utils'
 import { NON_ISSUED_INVOICE_STATUSES_FILTER } from '@/lib/bookkeeping/matchable-statuses'
 import { MAX_CHAIN_WALK } from './correction-chain'
@@ -133,10 +134,13 @@ export async function getJournalEntryUnderlagReferences(
     if (row.invoice_id && !invoices.has(row.invoice_id)) paymentInvoiceIds.add(row.invoice_id)
   }
 
-  if (paymentInvoiceIds.size > 0) {
+  // In slices of LINK_LOOKUP_CHUNK: one batch-match verifikat pays up to
+  // MAX_BANK_ROW_SPLIT invoices, and the ids travel in the GET query string,
+  // which the gateway refuses past its limit.
+  for (const ids of chunk(Array.from(paymentInvoiceIds), LINK_LOOKUP_CHUNK)) {
     const paidInvoices = await fetchAllRows<InvoiceRow>(({ from, to }) =>
       supabase.from('invoices').select('id, invoice_number')
-        .eq('company_id', companyId).in('id', Array.from(paymentInvoiceIds))
+        .eq('company_id', companyId).in('id', ids)
         .not('status', 'in', NON_ISSUED_INVOICE_STATUSES_FILTER)
         .order('id', { ascending: true }).range(from, to),
     )
@@ -192,10 +196,11 @@ export async function getJournalEntryUnderlagReferences(
     }
   }
 
-  if (supplierPaymentIds.size > 0) {
+  // Sliced like the customer arm: a batch match pays supplier invoices too.
+  for (const ids of chunk(Array.from(supplierPaymentIds), LINK_LOOKUP_CHUNK)) {
     const paidSupplierInvoices = await fetchAllRows<SupplierInvoiceRow>(({ from, to }) =>
       supabase.from('supplier_invoices').select(SUPPLIER_INVOICE_COLUMNS)
-        .eq('company_id', companyId).in('id', Array.from(supplierPaymentIds))
+        .eq('company_id', companyId).in('id', ids)
         .order('id', { ascending: true }).range(from, to),
     )
 
@@ -344,8 +349,8 @@ export const INVOICE_SOURCED_ENTRY_TYPES: ReadonlySet<string> = new Set([
   'reminder_fee',
 ])
 
-/** Ids per PostgREST `.in()` filter (URL-length convention, lib/worklist/categories.ts). */
-export const LINK_LOOKUP_CHUNK = 100
+/** Ids per PostgREST `.in()` filter: the one slice size, ID_READ_CHUNK. */
+export const LINK_LOOKUP_CHUNK = ID_READ_CHUNK
 
 /** The columns {@link getInvoicesExplainingJournalEntries} reads off an entry. */
 export interface ExplainableJournalEntry {

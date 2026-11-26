@@ -50,6 +50,8 @@ import { isAccountNumber } from '@/lib/invariants/account-number'
 import { sameCashAccount } from '@/lib/cash-accounts/ledger-slots'
 import { readPhysicalKeys } from '@/lib/cash-accounts/twins'
 import { chunk } from '@/lib/utils'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { ID_READ_CHUNK } from '@/lib/supabase/read-in-slices'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('transactions/booking-duplicate-detection')
@@ -437,32 +439,54 @@ export async function detectBookedDuplicateTransaction(
   // supplier_invoice_payments (multi-allocation). Batch-fetched only for the
   // rows whose own column is NULL. All lookups filter by company_id (defense
   // in depth alongside RLS).
+  //
+  // In slices of ID_READ_CHUNK, each paged: the window holds up to 500 rows,
+  // the ids travel in the GET query string (the gateway refuses a long one),
+  // and one split or batch-matched row carries hundreds of anchors. Each read
+  // fails on its own: one that cannot be read is logged and adds no rows, and
+  // the scan decides on the anchors that were read. A missing anchor can only
+  // hide a sibling, never make one, so a sibling booked through its own
+  // pointer, or anchored in another table, is still flagged.
   const unanchoredIds = matches.filter((r) => r.journal_entry_id == null).map((r) => r.id)
-  let paymentRows: { transaction_id: string | null; journal_entry_id: string | null }[] = []
-  let voucherLinkRows: { transaction_id: string; journal_entry_id: string }[] = []
-  if (unanchoredIds.length > 0) {
-    const [vl, ip, sp] = await Promise.all([
-      supabase
-        .from('transaction_voucher_links')
-        .select('transaction_id, journal_entry_id')
-        .eq('company_id', companyId)
-        .in('transaction_id', unanchoredIds),
-      supabase
-        .from('invoice_payments')
-        .select('transaction_id, journal_entry_id')
-        .eq('company_id', companyId)
-        .in('transaction_id', unanchoredIds),
-      supabase
-        .from('supplier_invoice_payments')
-        .select('transaction_id, journal_entry_id')
-        .eq('company_id', companyId)
-        .in('transaction_id', unanchoredIds),
+  type AnchorRow = { transaction_id: string | null; journal_entry_id: string | null }
+  const paymentRows: AnchorRow[] = []
+  const voucherLinkRows: { transaction_id: string; journal_entry_id: string }[] = []
+  for (const ids of chunk(unanchoredIds, ID_READ_CHUNK)) {
+    const [vl, ip, sp] = await Promise.allSettled([
+      fetchAllRows<{ transaction_id: string; journal_entry_id: string }>(({ from, to }) =>
+        supabase
+          .from('transaction_voucher_links')
+          .select('transaction_id, journal_entry_id')
+          .eq('company_id', companyId)
+          .in('transaction_id', ids)
+          .order('id', { ascending: true })
+          .range(from, to),
+      ),
+      fetchAllRows<AnchorRow>(({ from, to }) =>
+        supabase
+          .from('invoice_payments')
+          .select('transaction_id, journal_entry_id')
+          .eq('company_id', companyId)
+          .in('transaction_id', ids)
+          .order('id', { ascending: true })
+          .range(from, to),
+      ),
+      fetchAllRows<AnchorRow>(({ from, to }) =>
+        supabase
+          .from('supplier_invoice_payments')
+          .select('transaction_id, journal_entry_id')
+          .eq('company_id', companyId)
+          .in('transaction_id', ids)
+          .order('id', { ascending: true })
+          .range(from, to),
+      ),
     ])
-    voucherLinkRows = (vl.data ?? []) as { transaction_id: string; journal_entry_id: string }[]
-    paymentRows = [...(ip.data ?? []), ...(sp.data ?? [])] as {
-      transaction_id: string | null
-      journal_entry_id: string | null
-    }[]
+    for (const read of [vl, ip, sp]) {
+      if (read.status === 'rejected') log.warn('sibling anchors partly unreadable: deciding on the anchors read', read.reason)
+    }
+    if (vl.status === 'fulfilled') voucherLinkRows.push(...vl.value)
+    if (ip.status === 'fulfilled') paymentRows.push(...ip.value)
+    if (sp.status === 'fulfilled') paymentRows.push(...sp.value)
   }
 
   const booked = matches
@@ -766,28 +790,60 @@ export async function detectLedgerDuplicateVoucher(
   // sibling scan missed on date, this scan dropped the voucher as linked).
   // Such a voucher is returned as the twin WITH transaction_id set so the UI
   // can offer match/ignore instead of a blind second booking.
-  const entryIds = candidates.map((l) => l.journal_entry.id)
-  const [{ data: txLinks }, { data: payLinks }, { data: voucherLinks }] = await Promise.all([
-    supabase
-      .from('transactions')
-      .select('id, date, amount, currency, cash_account_id, journal_entry_id, external_id, import_source, bank_connection_id, provider_transaction_id, bank_file_import_id')
-      .eq('company_id', companyId)
-      .in('journal_entry_id', entryIds),
-    supabase
-      .from('invoice_payments')
-      .select('journal_entry_id, transaction_id')
-      .eq('company_id', companyId)
-      .in('journal_entry_id', entryIds),
-    // Rows bulk-booked onto a voucher, or linked to an existing one, are
-    // anchored here and not in transactions.journal_entry_id. Unseen, such a
-    // voucher read as an orphan, and every same-amount row of the week was
-    // called its duplicate (crm#1312).
-    supabase
-      .from('transaction_voucher_links')
-      .select('transaction_id, journal_entry_id')
-      .eq('company_id', companyId)
-      .in('journal_entry_id', entryIds),
-  ])
+  //
+  // In slices of ID_READ_CHUNK, each paged: a price many customers pay puts
+  // hundreds of same-amount verifikat in the window, the ids travel in the GET
+  // query string (the gateway refuses a long one), and a batch verifikat
+  // carries hundreds of payment rows. A slice that cannot be read fails open
+  // like the line read above, out loud: an unread link reads as an orphan,
+  // and every candidate would be called this row's duplicate.
+  const entryIds = [...new Set(candidates.map((l) => l.journal_entry.id))]
+  const txLinks: LinkedTxRow[] = []
+  const payLinks: { journal_entry_id: string | null; transaction_id: string | null }[] = []
+  const voucherLinks: { transaction_id: string | null; journal_entry_id: string | null }[] = []
+  try {
+    for (const ids of chunk(entryIds, ID_READ_CHUNK)) {
+      const [tx, pay, links] = await Promise.all([
+        fetchAllRows<LinkedTxRow>(({ from, to }) =>
+          supabase
+            .from('transactions')
+            .select('id, date, amount, currency, cash_account_id, journal_entry_id, external_id, import_source, bank_connection_id, provider_transaction_id, bank_file_import_id')
+            .eq('company_id', companyId)
+            .in('journal_entry_id', ids)
+            .order('id', { ascending: true })
+            .range(from, to),
+        ),
+        fetchAllRows<{ journal_entry_id: string | null; transaction_id: string | null }>(({ from, to }) =>
+          supabase
+            .from('invoice_payments')
+            .select('journal_entry_id, transaction_id')
+            .eq('company_id', companyId)
+            .in('journal_entry_id', ids)
+            .order('id', { ascending: true })
+            .range(from, to),
+        ),
+        // Rows bulk-booked onto a voucher, or linked to an existing one, are
+        // anchored here and not in transactions.journal_entry_id. Unseen, such a
+        // voucher read as an orphan, and every same-amount row of the week was
+        // called its duplicate (crm#1312).
+        fetchAllRows<{ transaction_id: string | null; journal_entry_id: string | null }>(({ from, to }) =>
+          supabase
+            .from('transaction_voucher_links')
+            .select('transaction_id, journal_entry_id')
+            .eq('company_id', companyId)
+            .in('journal_entry_id', ids)
+            .order('id', { ascending: true })
+            .range(from, to),
+        ),
+      ])
+      txLinks.push(...tx)
+      payLinks.push(...pay)
+      voucherLinks.push(...links)
+    }
+  } catch (err) {
+    log.warn('ledger duplicate links unreadable: no duplicate warning shown', err)
+    return null
+  }
 
   type LinkedTxRow = {
     id: string

@@ -11,6 +11,9 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { NOT_STRUCTURED_MIME_FILTER } from '@/lib/documents/read/types'
 import { folderQuery, isFolderKey } from '@/lib/arkiv/folders'
 import { fillTypeFromClassification } from '@/lib/documents/locked-period'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { ID_READ_CHUNK, readInSlices } from '@/lib/supabase/read-in-slices'
+import { chunk } from '@/lib/utils'
 
 /**
  * GET /api/arkiv/documents?q=&year=
@@ -109,19 +112,34 @@ export const GET = withRouteContext('arkiv.documents', async (request, ctx) => {
     if (searchIds.length === 0) return NextResponse.json({ data: [] })
   }
 
-  let query = ctx.supabase
-    .from('document_attachments')
-    .select('id, created_at, file_name, mime_type, file_size_bytes, doc_type, admission_state, journal_entry_id, journal_entry_line_id, extracted_data, page_count')
-    .eq('company_id', ctx.companyId)
-    .in('admission_state', ['admitted', 'held'])
-    .or(NOT_STRUCTURED_MIME_FILTER)
-    .order('created_at', { ascending: false })
-    .limit(pageOrder ? pageOrder.length : limit)
-  if (searchIds) query = query.in('id', searchIds)
-  if (pageOrder) query = query.in('id', pageOrder)
-  const { data, error } = await query
-  if (error) return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 })
-  const docs = (data ?? []) as Array<{ id: string; created_at: string; file_name: string; mime_type?: string | null; file_size_bytes?: number | null; doc_type: string | null; admission_state: string; journal_entry_id: string | null; journal_entry_line_id?: string | null; extracted_data: Record<string, unknown> | null; page_count: number | null }>
+  type DocRow = { id: string; created_at: string; file_name: string; mime_type?: string | null; file_size_bytes?: number | null; doc_type: string | null; admission_state: string; journal_entry_id: string | null; journal_entry_line_id?: string | null; extracted_data: Record<string, unknown> | null; page_count: number | null }
+  const cap = pageOrder ? pageOrder.length : limit
+  const readDocs = (ids: string[] | null) => {
+    const query = ctx.supabase
+      .from('document_attachments')
+      .select('id, created_at, file_name, mime_type, file_size_bytes, doc_type, admission_state, journal_entry_id, journal_entry_line_id, extracted_data, page_count')
+      .eq('company_id', ctx.companyId)
+      .in('admission_state', ['admitted', 'held'])
+      .or(NOT_STRUCTURED_MIME_FILTER)
+      .order('created_at', { ascending: false })
+      .limit(cap)
+    return ids ? query.in('id', ids) : query
+  }
+  // The ids the rows are read by: the search hits, the folder page, or both.
+  // Read in slices, then newest first and cut to `cap`, as one read ordered
+  // and limited over the whole list answered.
+  const searchSet = searchIds ? new Set(searchIds) : null
+  const wanted = pageOrder && searchSet ? pageOrder.filter((id) => searchSet.has(id)) : (pageOrder ?? searchIds)
+  let docs: DocRow[]
+  if (wanted) {
+    const read = await readInSlices<DocRow>(wanted, (slice) => readDocs(slice))
+    if (read.error) return NextResponse.json({ error: getErrorMessage(read.error) }, { status: 500 })
+    docs = read.data.sort((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0)).slice(0, cap)
+  } else {
+    const { data, error } = await readDocs(null)
+    if (error) return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 })
+    docs = (data ?? []) as DocRow[]
+  }
   if (docs.length === 0) return NextResponse.json(pageOrder ? { data: [], next_offset: nextOffset } : { data: [] })
   const ids = docs.map((d) => d.id)
   // A document tied to a closed or locked period keeps its type on the classification (lib/documents/locked-period.ts).
@@ -132,9 +150,9 @@ export const GET = withRouteContext('arkiv.documents', async (request, ctx) => {
   const brain = isArkivBrainEnabled(ctx.companyId)
   const none = Promise.resolve({ data: [], error: null })
   const [extractions, agreements, entries] = await Promise.all([
-    brain ? ctx.supabase.from('document_extractions').select('document_id, payload').in('document_id', ids).eq('is_current', true) : none,
-    brain ? ctx.supabase.from('agreements').select('id, source_document_id, title, counterparty_name, amount, currency, period').in('source_document_id', ids) : none,
-    entryIds.length ? ctx.supabase.from('journal_entries').select('id, voucher_series, voucher_number, entry_date').in('id', entryIds) : none,
+    brain ? readInSlices(ids, (slice) => ctx.supabase.from('document_extractions').select('document_id, payload').in('document_id', slice).eq('is_current', true)) : none,
+    brain ? readInSlices(ids, (slice) => ctx.supabase.from('agreements').select('id, source_document_id, title, counterparty_name, amount, currency, period').in('source_document_id', slice)) : none,
+    entryIds.length ? readInSlices([...new Set(entryIds)], (slice) => ctx.supabase.from('journal_entries').select('id, voucher_series, voucher_number, entry_date').in('id', slice)) : none,
   ])
   for (const r of [extractions, agreements, entries]) if (r.error) return NextResponse.json({ error: getErrorMessage(r.error) }, { status: 500 })
   const payloadByDoc = new Map(((extractions.data ?? []) as Array<{ document_id: string; payload: Payload }>).map((e) => [e.document_id, e.payload]))
@@ -159,17 +177,23 @@ export const GET = withRouteContext('arkiv.documents', async (request, ctx) => {
     ]),
   )
   const expectedCount = new Map<string, number>()
-  if (agreementRows.length) {
-    const { data: expected, error: expectedError } = await ctx.supabase
-      .from('agreement_obligations')
-      .select('agreement_id')
-      .in(
-        'agreement_id',
-        agreementRows.map((a) => a.id),
+  // Sliced like the reads above, each slice paged: an agreement expects a
+  // payment every month a year ahead, so a slice can pass 1000 rows.
+  try {
+    for (const slice of chunk(agreementRows.map((a) => a.id), ID_READ_CHUNK)) {
+      const expected = await fetchAllRows<{ agreement_id: string }>(({ from, to }) =>
+        ctx.supabase
+          .from('agreement_obligations')
+          .select('agreement_id')
+          .in('agreement_id', slice)
+          .eq('status', 'expected')
+          .order('id', { ascending: true })
+          .range(from, to),
       )
-      .eq('status', 'expected')
-    if (expectedError) return NextResponse.json({ error: getErrorMessage(expectedError) }, { status: 500 })
-    for (const o of (expected ?? []) as Array<{ agreement_id: string }>) expectedCount.set(o.agreement_id, (expectedCount.get(o.agreement_id) ?? 0) + 1)
+      for (const o of expected) expectedCount.set(o.agreement_id, (expectedCount.get(o.agreement_id) ?? 0) + 1)
+    }
+  } catch (err) {
+    return NextResponse.json({ error: getErrorMessage(err) }, { status: 500 })
   }
 
   const rows: ArkivDocumentRow[] = docs.map((d) => {

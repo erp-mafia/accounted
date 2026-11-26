@@ -1,11 +1,12 @@
 'use client'
 
 import dynamic from 'next/dynamic'
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
+import { Suspense, useCallback, useEffect, useEffectEvent, useMemo, useRef, useState, type DragEvent } from 'react'
+import { createPortal } from 'react-dom'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
-import { ArrowTopRightOnSquareIcon } from '@/components/icons'
+import { ArrowTopRightOnSquareIcon, ArrowUpTrayIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { PageHeader } from '@/components/ui/page-header'
 import { useToast } from '@/components/ui/use-toast'
@@ -30,6 +31,7 @@ import {
   splitMissing,
   type AttachedHere,
 } from '@/lib/inkorg/missing'
+import { pageDropUploads, splitPageDrop } from '@/lib/inkorg/page-drop'
 import { portalRows, purchasesAtPortal } from '@/lib/inkorg/portals'
 import { useDoorName } from './door-icon'
 import { InkorgFocus, type FocusMotion } from './InkorgFocus'
@@ -46,7 +48,7 @@ import { FocusStage, type FinePrintOpen } from './FocusStage'
 import { FetchWithAiButton } from './FetchWithAiButton'
 import { followCompanion } from './follow-companion'
 import { WORK_AREA_CLASS } from './frame'
-import { UploadButton } from './UploadButton'
+import { UploadButton, useInboxUpload } from './UploadButton'
 import { useAttachUnderlag } from './use-attach-underlag'
 import { PayInBankDialog, type PayInBankTarget } from './PayInBankDialog'
 import { useInkorgData } from './use-inkorg-data'
@@ -178,6 +180,96 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
   // A one-click booking the voucher guard questions: its warnings, and the booking to send again if the person confirms.
   const [voucherConfirm, setVoucherConfirm] = useState<{ itemId: string; body: OneClickBooking; warnings: VoucherWarning[] } | null>(null)
   const [confirmingVoucher, setConfirmingVoucher] = useState(false)
+
+  // Ladda upp and a file dropped on the page: one upload, so the two share a queue and a button label.
+  const inboxUpload = useInboxUpload(refresh)
+  // Where the page's drop outline is drawn while files are dragged over it; null at rest.
+  const [dropRect, setDropRect] = useState<DOMRect | null>(null)
+  const takesPageDrop = canWrite && pageDropUploads(view)
+  const uploadDropped = useEffectEvent((dropped: File[]) => {
+    if (dropped.length === 0) return
+    // The button waits while files go up; a drop meanwhile is said, not lost in silence.
+    if (inboxUpload.progress !== null) {
+      toast({ title: t('page_drop_busy') })
+      return
+    }
+    const { upload, refused } = splitPageDrop(dropped)
+    void (async () => {
+      const { sent, failed } = await inboxUpload.upload(upload)
+      // The page shows one toast at a time: what was left out comes after the upload's own
+      // toast, and names what did go in; a failed upload's message is the one that stays.
+      if (refused.length === 0 || failed > 0) return
+      toast({
+        title: t('page_drop_refused', { count: refused.length }),
+        description: sent > 0 ? t('page_drop_refused_body_rest', { count: sent }) : t('page_drop_refused_body'),
+        ...(sent > 0 ? {} : { variant: 'destructive' as const }),
+      })
+    })()
+  })
+  // A file dropped anywhere on the panel goes up as Ladda upp sends it (Behöver dig and the
+  // doors; Saknar underlag keeps its drop on the purchase, below). Native listeners on the
+  // panel, as Arkiv's surface has (DocumentUploadZone): a dragenter/dragleave pair fires for
+  // every child crossed, so a depth counter tells "left the panel" from "moved between rows",
+  // and the panel reaches below a short list, where a missed drop would open the file in the tab.
+  useEffect(() => {
+    const surface = document.getElementById('main-content')
+    if (!surface || !takesPageDrop) return
+    let depth = 0
+    // dragover repeats every few hundred ms at most while files are over the panel. A row
+    // replaced mid-drag never sends its dragleave and leaves the count above zero, so the
+    // outline also goes when the repeats stop.
+    let idle: ReturnType<typeof setTimeout> | null = null
+    const reset = () => {
+      depth = 0
+      if (idle) clearTimeout(idle)
+      idle = null
+      setDropRect(null)
+    }
+    const onDragEnter = (e: globalThis.DragEvent) => {
+      if (!dragCarriesFiles(e.dataTransfer?.types)) return
+      depth += 1
+      if (depth === 1) setDropRect(surface.getBoundingClientRect())
+    }
+    const onDragOver = (e: globalThis.DragEvent) => {
+      if (!dragCarriesFiles(e.dataTransfer?.types)) return
+      // Without this the browser refuses the drop and opens the file instead.
+      e.preventDefault()
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
+      if (depth === 0) {
+        depth = 1
+        setDropRect(surface.getBoundingClientRect())
+      }
+      if (idle) clearTimeout(idle)
+      idle = setTimeout(reset, 1000)
+    }
+    const onDragLeave = (e: globalThis.DragEvent) => {
+      if (!dragCarriesFiles(e.dataTransfer?.types)) return
+      depth = Math.max(0, depth - 1)
+      if (depth === 0) setDropRect(null)
+    }
+    const onDrop = (e: globalThis.DragEvent) => {
+      if (!dragCarriesFiles(e.dataTransfer?.types)) return
+      e.preventDefault()
+      reset()
+      uploadDropped(Array.from(e.dataTransfer?.files ?? []))
+    }
+    surface.addEventListener('dragenter', onDragEnter)
+    surface.addEventListener('dragover', onDragOver)
+    surface.addEventListener('dragleave', onDragLeave)
+    surface.addEventListener('drop', onDrop)
+    // A drag that ends elsewhere (on the desktop, escaped) sends the panel no dragleave.
+    window.addEventListener('dragend', reset)
+    window.addEventListener('drop', reset)
+    return () => {
+      reset()
+      surface.removeEventListener('dragenter', onDragEnter)
+      surface.removeEventListener('dragover', onDragOver)
+      surface.removeEventListener('dragleave', onDragLeave)
+      surface.removeEventListener('drop', onDrop)
+      window.removeEventListener('dragend', reset)
+      window.removeEventListener('drop', reset)
+    }
+  }, [takesPageDrop])
   const queue = useMemo(
     () => queueFor(items, view).filter((item) => !following.has(item.id) && !booking.has(item.id)),
     [items, view, following, booking],
@@ -705,10 +797,26 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
 
   return (
     <div {...missingDropGuard}>
+      {/* Shown only while files are dragged over the panel: the page keeps no drop box at rest. */}
+      {dropRect &&
+        createPortal(
+          <div
+            aria-hidden="true"
+            className="pointer-events-none fixed z-[70] flex items-center justify-center rounded-xl border-2 border-dashed border-primary bg-background/85"
+            style={{ top: dropRect.top, left: dropRect.left, width: dropRect.width, height: dropRect.height }}
+          >
+            <div className="flex flex-col items-center gap-2 text-center">
+              <ArrowUpTrayIcon className="h-8 w-8 text-primary" />
+              <p className="text-sm font-medium text-foreground">{t('page_drop_surface_prompt')}</p>
+              <p className="text-xs text-muted-foreground">{t('page_drop_surface_hint')}</p>
+            </div>
+          </div>,
+          document.body,
+        )}
       <PageHeader
         title={t('title')}
         // A viewer uploads nothing and adds no mailbox: neither button is offered.
-        action={canWrite ? <UploadButton onUploaded={refresh} /> : undefined}
+        action={canWrite ? <UploadButton upload={inboxUpload} /> : undefined}
         help={
           <HelpPopover>
             <p>{t('help_body')}</p>

@@ -1168,6 +1168,7 @@ Creates a salary_line_items row (bonus, overtime, gross/net deduction, benefit, 
 - The calculation owns the absence types (sick_karens, sick_day2_14, sick_day15_plus, vab, parental_leave, unpaid_leave) and the shift-premium types (overtime_50, overtime_100, ob_weekday_evening, ob_weekend, ob_night, ob_holiday): a line of those types returns 400 SALARY_LINE_CALCULATED. Register absence or worked hours instead, or put a one-off övertid or OB amount on item_type overtime or other.
 - one_off_tax_percent is the percentage YOU verified against Skatteverket's engångsbelopp table for the employee's yearly income; the API never estimates it. It is refused (400) on deductions, benefits, non-taxable rows and non-positive amounts. A valid jämkning decision on the employee overrides it. Equal percentages are summed before the öre are dropped, so splitting one bonus over two rows never changes the withholding.
 - vacation_category is only valid on item_type vacation (400 VALIDATION_ERROR otherwise) and vacation_saved_year only with category saved. Omitted category = paid. The vacation ledger splits the booked run's days by category: saved consumes the named origin year, or the oldest saved year first when omitted; unpaid and advance consume their own cutover pools.
+- Under sammalöneregeln the semesterlön of the variable pay (övertid, OB, bonus, provision) is accrued every run and paid after the semesterår by the calculation itself. settles_variable_vacation_pay: true on a semesterersattning line is your confirmation that a central kollektivavtal lets that semesterlön be paid with the salary (Semesterlagen 2 a § andra stycket); it is logged, so send it only on the user's word. The line then counts as already paid: it lowers the accrual and the payout after the semesterår. Only on a positive semesterersattning line of an employee on sammalöneregeln (400 VALIDATION_ERROR otherwise), and on the same payslip as the variable pay it is for: calculate returns 400 SALARY_RUN_VARIABLE_VACATION_PAY_WITH_SALARY_INVALID when it is more than that payslip's own variable pay earns. It cannot be changed by an update: delete the line and add it again.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -1188,7 +1189,8 @@ Request body:
   sort_order?: number,
   one_off_tax_percent?: number | null,
   vacation_category?: "paid" | "extra_paid" | "saved" | "unpaid" | "advance" | null,
-  vacation_saved_year?: string | null
+  vacation_saved_year?: string | null,
+  settles_variable_vacation_pay?: boolean
 }
 ```
 
@@ -1222,7 +1224,8 @@ Response `200`:
     sort_order: number,
     one_off_tax_percent?: number | null,
     vacation_category?: string | null,
-    vacation_saved_year?: string | null
+    vacation_saved_year?: string | null,
+    settles_variable_vacation_pay?: true
   },
   meta: {
     request_id: string,

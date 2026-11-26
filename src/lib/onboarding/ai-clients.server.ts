@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { OAUTH_MCP_KEY_NAME } from '@/lib/auth/api-keys'
 import { createLogger } from '@/lib/logger'
-import { aiConnection, firstTaskClient, NO_AI_CONNECTION, type AiClient, type AiConnection } from '@/lib/onboarding/ai-clients'
+import { aiClientsBoundTo, aiConnection, firstTaskClient, NO_AI_CONNECTION, type AiClient, type AiConnection } from '@/lib/onboarding/ai-clients'
 
 const log = createLogger('onboarding-ai-clients')
 
@@ -43,6 +43,28 @@ export async function loadAiConnection(supabase: SupabaseClient, userId: string)
   } catch (error) {
     log.warn('connected AI clients read failed, answering none', { userId, error })
     return NO_AI_CONNECTION
+  }
+}
+
+/**
+ * The verified clients whose connection starts in `companyId` when a hand-off
+ * names no company (aiClientsBoundTo), for a button that opens a chat with a
+ * prompt that cannot name one. Never throws: a failed read answers none, so
+ * the button is not offered, and is logged.
+ */
+export async function loadAiClientsBoundTo(supabase: SupabaseClient, userId: string, companyId: string): Promise<AiClient[]> {
+  try {
+    const { data, error } = await supabase
+      .from('api_keys')
+      .select('client, company_id')
+      .eq('user_id', userId)
+      .eq('name', OAUTH_MCP_KEY_NAME)
+      .is('revoked_at', null)
+    if (error) throw new Error(error.message)
+    return aiClientsBoundTo((data ?? []) as { client: string | null; company_id: string | null }[], companyId)
+  } catch (error) {
+    log.warn('connected AI clients of a company read failed, answering none', { userId, companyId, error })
+    return []
   }
 }
 

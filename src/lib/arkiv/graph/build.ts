@@ -6,6 +6,7 @@ import { isPaymentText, merchantKey, merchantLabel } from './merchant-key'
 import { CLUSTER_LABELS, type ClusterId, type CompanyGraph, type GraphLink, type GraphNode } from './types'
 import { NOT_STRUCTURED_MIME_FILTER } from '@/lib/documents/read/types'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { readInSlices } from '@/lib/supabase/read-in-slices'
 
 /**
  * Builds the company graph from the tables that exist. Every query is listed
@@ -190,17 +191,14 @@ export async function buildCompanyGraph(supabase: SupabaseClient, companyId: str
         .range(r.from, r.to),
     3000,
   )
-  const matchedTxIds = ((obligations.data ?? []) as Array<{ transaction_id: string | null }>).map((o) => o.transaction_id).filter((id): id is string => !!id)
-  const transactions = await capped(
-    (r) =>
-      supabase
-        .from('transactions')
-        .select('id, journal_entry_id')
-        .eq('company_id', companyId)
-        .in('id', matchedTxIds.length ? matchedTxIds : [NONE])
-        .order('id')
-        .range(r.from, r.to),
-    3000,
+  const matchedTxIds = [...new Set(((obligations.data ?? []) as Array<{ transaction_id: string | null }>).map((o) => o.transaction_id).filter((id): id is string => !!id))]
+  // In slices (readInSlices): the ids travel in the GET query string, which
+  // the gateway refuses past its limit, and every matched obligation of the
+  // window (up to 3000) names one. By id, so a slice is a single page. An
+  // empty list still makes one read, so the reads keep their fixed order.
+  const transactions = await readInSlices<{ id: string; journal_entry_id: string | null }>(
+    matchedTxIds.length ? matchedTxIds : [NONE],
+    (ids) => supabase.from('transactions').select('id, journal_entry_id').eq('company_id', companyId).in('id', ids),
   )
   // Counterparties known from the bank side: the alias a person or the resolver tied to a party,
   // and every booked transaction of the period, so a loan paid straight from the account has a party too.

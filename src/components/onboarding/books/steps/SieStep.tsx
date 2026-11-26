@@ -20,6 +20,7 @@ import { InkText } from '@/components/onboarding/journey/ink'
 import type { TheaterApi } from '../engines/theater-engine'
 import { Theater, type TheaterLine, type TheaterModelInput } from '../ui/Theater'
 import { Facts, Wait } from '../ui/Verdicts'
+import { BooksOnward } from '../ui/BooksOnward'
 import { InsightPanel } from '../ui/InsightPanel'
 import { CHANGE_LINK_CLASS, OptRow, OptRows, Sentence, Switch } from '../ui/Sentence'
 import {
@@ -95,6 +96,8 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
   const [prepared, setPrepared] = useState(0)
   const [jobPhase, setJobPhase] = useState<JobPhase | null>(null)
   const [written, setWritten] = useState(0)
+  // How many of the written verifikat are opening balances (one per file that carries one).
+  const [openingWritten, setOpeningWritten] = useState(0)
   const [fileIdx, setFileIdx] = useState(0)
   const [created, setCreated] = useState(0)
   const [importError, setImportError] = useState<string | null>(null)
@@ -250,6 +253,7 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
     setImportError(null)
     setTick(0)
     setWritten(0)
+    setOpeningWritten(0)
     setPrepared(0)
     setReg(null)
     setJobPhase('preparing')
@@ -322,11 +326,12 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
               setTick(writtenSoFar + written)
               apiRef.current?.setFeedCap(Math.min(totalVouchers, writtenSoFar + written))
             })
-          : (res.ok ? data.result : data?.error?.details?.result)) as { success?: boolean; journalEntriesCreated?: number; errors?: string[] } | undefined
+          : (res.ok ? data.result : data?.error?.details?.result)) as { success?: boolean; journalEntriesCreated?: number; openingBalanceEntryId?: string | null; errors?: string[] } | undefined
         if (!res.ok && !result) throw new Error(getErrorMessage(data))
         if (!result?.success) throw new Error(result?.errors?.length ? result.errors.join(' ') : getErrorMessage(data))
         writtenSoFar += result.journalEntriesCreated ?? 0
         setWritten(writtenSoFar)
+        if (result.openingBalanceEntryId) setOpeningWritten((count) => count + 1)
         setTick(writtenSoFar)
         for (const a of p.accounts) importedAccounts.push(a.number)
         void invalidateReferenceData(['ref:accounts', 'ref:fiscal-periods'])
@@ -467,23 +472,13 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
   // one way on stands right under the title, over the theater, in view
   // without scrolling. The stage gives the height back (books.css, .is-done).
   const doneView = flags.sourcesFlow === true && canContinue
-  const onward = (
-    <Button size="lg" onClick={() => dispatch({ type: 'AFTER_BOOKS', flags })}>
-      {flags.hasBanking ? t('to_bank') : flags.hasSkatteverket ? t('to_skv') : t('to_done')}
-    </Button>
-  )
-  const onwardRef = useRef<HTMLDivElement | null>(null)
-  useEffect(() => {
-    // Someone who scrolled down to follow the run is brought back to the way on.
-    if (doneView) onwardRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
-  }, [doneView])
 
   return (
     <div className={doneView ? 'bks-host is-done' : 'bks-host'}>
       <div className="jny-qstep" style={{ textAlign: 'center' }}>
         <h1 className="jny-qtitle"><InkText text={doneView ? t('sie_done_title') : t('sie_title')} /></h1>
         {doneView ? (
-          <div className="jny-qactions" ref={onwardRef}>{onward}</div>
+          <BooksOnward ctx={ctx} bringIntoView />
         ) : (
           <p className="jny-qsub">{sieFirst ? t('sie_sub_first', { provider: provName ?? '' }) : t('sie_sub')}</p>
         )}
@@ -582,6 +577,7 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
           progress={regBusy || reg === 'done' ? undefined : {
             phase: importError ? 'failed' : phase === 'imported' ? 'complete' : jobPhase ?? 'checking',
             written: tick,
+            opening: openingWritten,
             total: totalVouchers,
             prepared,
             file: { current: fileIdx + 1, total: ordered.length },
@@ -620,7 +616,11 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
 
       {phase === 'imported' && !doneView ? (
         <div className="jny-qactions">
-          {canContinue ? onward : null}
+          {canContinue ? (
+            <Button size="lg" onClick={() => dispatch({ type: 'AFTER_BOOKS', flags })}>
+              {flags.hasBanking ? t('to_bank') : flags.hasSkatteverket ? t('to_skv') : t('to_done')}
+            </Button>
+          ) : null}
           {importError ? (
             <>
               <Button variant="ghost" className="text-muted-foreground" onClick={() => { setPhase('drop'); setFiles([]); setModel(null); setShown(0); setTick(0); setImportError(null) }}>{t('sie_other_file')}</Button>
