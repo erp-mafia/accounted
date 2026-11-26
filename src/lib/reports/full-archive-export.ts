@@ -1878,24 +1878,26 @@ async function buildEntryToPeriodMap(
   const periodIds = periods.map((p) => p.id)
   if (periodIds.length === 0) return map
 
-  let query = supabase
-    .from('journal_entries')
-    .select('id, fiscal_period_id')
-    .eq('company_id', companyId)
-    .in('status', ['posted', 'reversed'])
+  // A new query for every page. fetchAllRows reads the later pages of a
+  // long read side by side, and a query is one request that `.range()`
+  // changes in place: ranged on one shared query, those pages all went out
+  // with the last one's range, and the entries between were never read.
+  const entries = await fetchAllRows<{ id: string; fiscal_period_id: string }>(({ from, to }) => {
+    let query = supabase
+      .from('journal_entries')
+      .select('id, fiscal_period_id')
+      .eq('company_id', companyId)
+      .in('status', ['posted', 'reversed'])
 
-  if (scope === 'period') {
-    query = query.eq('fiscal_period_id', periodIds[0])
-  } else {
-    query = query.in('fiscal_period_id', periodIds)
-  }
+    if (scope === 'period') {
+      query = query.eq('fiscal_period_id', periodIds[0])
+    } else {
+      query = query.in('fiscal_period_id', periodIds)
+    }
 
-  // Stable total order for correct paging (see fetch-all.ts).
-  query = query.order('id', { ascending: true })
-
-  const entries = await fetchAllRows<{ id: string; fiscal_period_id: string }>(({ from, to }) =>
-    query.range(from, to)
-  )
+    // Stable total order for correct paging (see fetch-all.ts).
+    return query.order('id', { ascending: true }).range(from, to)
+  })
 
   for (const entry of entries) {
     map.set(entry.id, entry.fiscal_period_id)
