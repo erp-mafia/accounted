@@ -9,7 +9,7 @@ function entry(over: Partial<BooksEntry> = {}): BooksEntry {
 }
 
 describe('the arrangement with the AI and receipts steps (sourcesFlow)', () => {
-  const SRC = { ...ALL, sourcesFlow: true }
+  const SRC = { ...ALL, sourcesFlow: true, hasDocs: true }
   const at = (step: BooksStep, over = {}) => ({ ...initialState(entry()), step, ...over })
 
   it('orders the steps after the books: bank, ai, docs, skv, done', () => {
@@ -47,11 +47,20 @@ describe('the arrangement with the AI and receipts steps (sourcesFlow)', () => {
   })
 
   it('without banking and Skatteverket: ai, docs, done', () => {
-    const flags = { ...NONE, sourcesFlow: true }
+    const flags = { ...NONE, sourcesFlow: true, hasDocs: true }
     expect(stepAfterBooks(flags)).toBe('ai')
     expect(booksReducer(at('ai'), { type: 'AFTER_AI', flags }).step).toBe('docs')
     expect(booksReducer(at('docs'), { type: 'AFTER_DOCS', flags }).step).toBe('done')
     expect(booksReducer(at('done'), { type: 'GO_BACK', flags }).step).toBe('docs')
+  })
+
+  it('passes over the receipts step for a company with no mailbox to offer', () => {
+    const flags = { ...SRC, hasDocs: false }
+    expect(booksReducer(at('ai'), { type: 'AFTER_AI', flags }).step).toBe('skv')
+    expect(booksReducer(at('skv'), { type: 'GO_BACK', flags }).step).toBe('ai')
+    // A draft restored on the step leads onward, not back to the bank.
+    expect(booksReducer(at('docs'), { type: 'AFTER_DOCS', flags }).step).toBe('skv')
+    expect(booksReducer(at('docs'), { type: 'AFTER_DOCS', flags: { ...flags, hasSkatteverket: false } }).step).toBe('done')
   })
 
   it('a fresh start lands on the first step after the books', () => {

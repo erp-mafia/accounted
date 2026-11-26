@@ -57,3 +57,22 @@ export function mailboxEntries(
     return { door, comingSoon: !INTAKE_SOURCES[door].live || !carried }
   })
 }
+
+/**
+ * Whether Billo is left out of a list that offers Kivra and Billo as the
+ * company's one digital mailbox (the onboarding's receipts step): a company
+ * that already has its mailbox at Kivra, or has connected Kivra, is not also
+ * offered Billo. A Billo that is already connected stays listed. While the
+ * answer is on its way Billo waits, so it never shows and then goes; a failed
+ * read lists both, each with its own line.
+ */
+export function billoLeftOutForKivra(input: {
+  read: 'loading' | 'ready' | 'failed'
+  kivraCompanyMailbox: 'has' | 'none' | 'unknown' | null
+  kivraConnected: boolean
+  billoConnected: boolean
+}): boolean {
+  if (input.read === 'loading') return true
+  if (input.read === 'failed' || input.billoConnected) return false
+  return input.kivraCompanyMailbox === 'has' || input.kivraConnected
+}

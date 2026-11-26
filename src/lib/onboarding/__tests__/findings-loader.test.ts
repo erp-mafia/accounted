@@ -10,12 +10,13 @@ const client = supabase as unknown as SupabaseClient
 const PERIOD = { id: 'period-1', name: '2026', period_start: '2026-01-01', period_end: '2026-12-31', is_closed: false }
 const EMPTY_SUMMARY = { period_name: null, revenue: null, result: null, vat_balance: 0, ledger_1630: 0 }
 
-/** The eleven reads in call order; `summary` and `underlag` are the two RPCs. */
+/** The twelve reads in call order; `summary` and `underlag` are the two RPCs, `revenueAccounts` the class 3 accounts without a momskod. */
 function enqueueReads(overrides: {
   entries?: number
   skv?: { status: string }[]
   summary?: unknown
   underlag?: unknown
+  revenueAccounts?: unknown[]
 } = {}) {
   enqueue({ data: null, count: overrides.entries ?? 1 })
   enqueue({ data: [PERIOD] })
@@ -23,13 +24,14 @@ function enqueueReads(overrides: {
   enqueue({ data: overrides.skv ?? [] }); enqueue({ data: [] }); enqueue({ data: [{ entry_date: '2026-06-30' }] })
   enqueue({ data: 'summary' in overrides ? overrides.summary : EMPTY_SUMMARY })
   enqueue({ data: 'underlag' in overrides ? overrides.underlag : { ok: true, total_count: 0 } })
+  enqueue({ data: overrides.revenueAccounts ?? [] })
 }
 
 describe('findings read integrity', () => {
   beforeEach(() => { vi.clearAllMocks(); reset() })
 
-  it.each(Array.from({ length: 11 }, (_, index) => index))('does not report an empty company when query %s fails', async (failedIndex) => {
-    for (let index = 0; index < 11; index++) enqueue({ data: [], count: 0, error: index === failedIndex ? { code: '57014', message: 'timeout' } : null })
+  it.each(Array.from({ length: 12 }, (_, index) => index))('does not report an empty company when query %s fails', async (failedIndex) => {
+    for (let index = 0; index < 12; index++) enqueue({ data: [], count: 0, error: index === failedIndex ? { code: '57014', message: 'timeout' } : null })
     await expect(loadBooksFindings(client, 'company-1', '2026-09-14', 'user-1')).rejects.toMatchObject({ code: '57014' })
   })
 
@@ -100,6 +102,24 @@ describe('findings figures', () => {
     expect(findings.books).toMatchObject({ entries: 0, revenue: null, result: null, periodName: null, vatBalance: null, missingUnderlag: 0 })
     expect(findings.skv.ledgerSkattekonto).toBeNull()
     expect(findings.books.periods).toEqual([{ name: '2026', start: '2026-01-01', end: '2026-12-31', isClosed: false, continuityVerified: null }])
+  })
+
+  it('names only the revenue accounts the momsdeklaration cannot read without a momskod', async () => {
+    const account = (account_number: string, account_name: string, default_vat_rate: number | null = null) =>
+      ({ account_number, account_name, account_class: 3, default_vat_rate, default_vat_treatment: null })
+    enqueueReads({
+      revenueAccounts: [
+        account('3001', 'Försäljning inom Sverige, 25 % moms'),
+        account('3011', 'Försäljning varor, 25 % moms'),
+        account('3040', 'Konsulttjänster'),
+        account('3100', 'Momsfri försäljning'),
+        account('3540', 'Faktureringsavgifter', 0.25),
+        account('3740', 'Öres- och kronutjämning'),
+        account('3960', 'Valutakursvinster'),
+      ],
+    })
+    const findings = await loadBooksFindings(client, 'company-1', '2026-09-14', 'user-1')
+    expect(findings.books.revenueAccountsNeedingVatCode).toEqual(['3040'])
   })
 
   it('excludes inactive tax connections', async () => {

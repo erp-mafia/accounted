@@ -24,7 +24,8 @@ const VAT_PICKS: { key: VatPick; label: string }[] = [
 /**
  * Genomlysningen as a panel, not a step: what the books say, as verdict
  * lines under the theater once the import lands. Revenue accounts the
- * import brought in without a momskod can get one now, or later in the chart.
+ * import brought in that the momsdeklaration cannot read without a momskod
+ * can get one now, or later in the chart.
  * Imported years that ended before the latest one are NOT klarmarkerade
  * here: a closed year refuses further underlag linking (the period-lock
  * triggers), so closing is offered as an explicit step the user takes once
@@ -51,13 +52,18 @@ export function InsightPanel({ ctx, base = 200, summary = false }: { ctx: BooksC
   const [vatSet, setVatSet] = useState<Record<string, VatPick>>({})
   const [vatSaving, setVatSaving] = useState<Record<string, true>>({})
   const [vatFailed, setVatFailed] = useState<string | null>(null)
+  // Asked only for an imported revenue account the momsdeklaration cannot
+  // read as it stands (findings: revenueAccountsNeedingVatCode). An account
+  // it places by its number or name, such as 3001, is never asked about.
+  const needsVatCode = findings?.books.revenueAccountsNeedingVatCode
   const vatGaps = useMemo(() => {
-    if (state.importedAccounts.length === 0) return []
+    if (state.importedAccounts.length === 0 || !needsVatCode?.length) return []
     const imported = new Set(state.importedAccounts)
+    const needing = new Set(needsVatCode)
     return accounts
-      .filter((a) => a.account_number.startsWith('3') && imported.has(a.account_number) && !a.default_vat_treatment && !vatSet[a.account_number])
+      .filter((a) => needing.has(a.account_number) && imported.has(a.account_number) && !a.default_vat_treatment && !vatSet[a.account_number])
       .sort((a, b) => a.account_number.localeCompare(b.account_number))
-  }, [accounts, state.importedAccounts, vatSet])
+  }, [accounts, state.importedAccounts, vatSet, needsVatCode])
   const accountByNumber = useMemo(() => new Map(accounts.map((a) => [a.account_number, a])), [accounts])
 
   function openVat() {
@@ -114,13 +120,6 @@ export function InsightPanel({ ctx, base = 200, summary = false }: { ctx: BooksC
       out.push(vatGaps.length > 0 ? { tone: 'warn', text: t('v_vat_gaps', { count: vatGaps.length }) } : { tone: 'ok', text: t('v_vat_all') })
     }
     if (b.overdueInvoices > 0) out.push({ tone: 'warn', text: t('v_overdue', { count: b.overdueInvoices }), href: '/invoices?status=overdue' })
-    if (b.vatBalance !== null && Math.abs(b.vatBalance) >= 1) {
-      out.push({
-        tone: 'info',
-        text: b.vatBalance > 0 ? t('v_vat_owed', { amount: formatCurrency(b.vatBalance) }) : t('v_vat_receivable', { amount: formatCurrency(-b.vatBalance) }),
-        href: '/reports/vat',
-      })
-    }
     if (b.uncategorizedTransactions > 0) out.push({ tone: 'warn', text: t('v_uncategorized', { count: b.uncategorizedTransactions }), href: '/transactions' })
     return out
   }, [findings, vatGaps.length, state.importedAccounts.length, t])
