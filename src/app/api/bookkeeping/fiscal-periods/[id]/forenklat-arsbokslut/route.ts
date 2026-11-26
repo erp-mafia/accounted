@@ -24,7 +24,7 @@ export const GET = withRouteContext(
     return NextResponse.json({ data: outcome.data })
   },
   // The figures are live balances: never read them from a half-imported ledger.
-  { requireCompleteLedger: true },
+  { requireCompleteLedger: true, uuidParams: { id: 'FISCAL_PERIOD_NOT_FOUND' } },
 )
 
 /**
@@ -47,5 +47,5 @@ export const PATCH = withRouteContext(
     if (outcome.dryRun) return sessionFailureResponse({ ok: false, code: 'INTERNAL_ERROR' }, log, requestId)
     return NextResponse.json({ data: outcome.data })
   },
-  { requireWrite: true },
+  { requireWrite: true, uuidParams: { id: 'FISCAL_PERIOD_NOT_FOUND' } },
 )

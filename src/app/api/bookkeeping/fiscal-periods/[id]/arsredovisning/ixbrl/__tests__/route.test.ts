@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
+// Route path ids are uuids: the route answers its 404 to anything else before it reads.
+const PERIOD_1 = '967b285e-2dcb-5661-91f6-68a799845858'
+
 vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(),
 }))
@@ -19,11 +22,11 @@ import { GET as GET_VALIDATE } from '../validate/route'
 
 function mkReq(query = '') {
   return new Request(
-    `http://localhost/api/bookkeeping/fiscal-periods/period-1/arsredovisning/ixbrl${query}`,
+    `http://localhost/api/bookkeeping/fiscal-periods/${PERIOD_1}/arsredovisning/ixbrl${query}`,
   )
 }
 
-function mkParams(id = 'period-1') {
+function mkParams(id = PERIOD_1) {
   return { params: Promise.resolve({ id }) }
 }
 
@@ -59,6 +62,18 @@ describe('GET /api/bookkeeping/fiscal-periods/[id]/arsredovisning/ixbrl', () => 
     expect(res.status).toBe(404)
   })
 
+  it('answers 404 for an id that is not a uuid, before it reads or leases the ledger', async () => {
+    // Postgres refused `new` in the period filter, and the route answered 500.
+    const supabase = authedSupabase()
+
+    const res = await GET(mkReq(), mkParams('new'))
+
+    expect(res.status).toBe(404)
+    expect((await res.json()).error.code).toBe('PERIOD_NOT_FOUND')
+    expect(buildIxbrlInput).not.toHaveBeenCalled()
+    expect(supabase.rpc).not.toHaveBeenCalledWith('acquire_sie_period_read', expect.anything())
+  })
+
   it('returns the generated XHTML inline for iframe preview', async () => {
     authedSupabase()
     vi.mocked(buildIxbrlInput).mockResolvedValue(makeInput())
@@ -85,7 +100,7 @@ describe('GET /api/bookkeeping/fiscal-periods/[id]/arsredovisning/ixbrl', () => 
     expect(vi.mocked(buildIxbrlInput)).toHaveBeenCalledWith(
       expect.anything(),
       'company-1',
-      'period-1',
+      PERIOD_1,
       { proposedDividend: 50000 },
     )
   })

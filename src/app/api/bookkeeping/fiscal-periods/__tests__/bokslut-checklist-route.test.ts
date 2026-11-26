@@ -7,6 +7,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import { createQueuedMockSupabase, createMockRequest, parseJsonResponse } from '@/tests/helpers'
 
+// Route path ids are uuids: the route answers its 404 to anything else before it reads.
+const FY_2026 = 'bb30235f-5bff-5126-9d29-5a67a835bccb'
+const NOPE_ID = 'de4ba771-91d4-59ed-8f99-a25a38e6dbeb'
+
 const { supabase, reset } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
@@ -39,7 +43,7 @@ import { GET, PATCH } from '../[id]/bokslut-checklist/route'
 
 const p = (id: string) => ({ params: Promise.resolve({ id }) }) as never
 const CHECKLIST = {
-  period: { id: 'fy-2026', name: 'Räkenskapsår 2026', period_start: '2026-01-01', period_end: '2026-12-31' },
+  period: { id: FY_2026, name: 'Räkenskapsår 2026', period_start: '2026-01-01', period_end: '2026-12-31' },
   items: [],
   summary: { total: 0, done: 0, not_applicable: 0, open: 0 },
 }
@@ -56,51 +60,51 @@ describe('bokslut checklist route', () => {
 
   it('401 without a session', async () => {
     requireAuthMock.mockResolvedValue({ error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }) })
-    const res = await GET(createMockRequest('http://localhost/x'), p('fy-2026'))
+    const res = await GET(createMockRequest('http://localhost/x'), p(FY_2026))
     expect(res.status).toBe(401)
   })
 
   it('GET returns the checklist for the period and 404s a foreign one', async () => {
-    const res = await GET(createMockRequest('http://localhost/x'), p('fy-2026'))
+    const res = await GET(createMockRequest('http://localhost/x'), p(FY_2026))
     expect(res.status).toBe(200)
     const { body } = await parseJsonResponse<{ data: { period: { id: string } } }>(res)
-    expect(body.data.period.id).toBe('fy-2026')
-    expect(buildMock).toHaveBeenCalledWith(supabase, 'company-1', 'user-1', 'fy-2026')
+    expect(body.data.period.id).toBe(FY_2026)
+    expect(buildMock).toHaveBeenCalledWith(supabase, 'company-1', 'user-1', FY_2026)
 
     buildMock.mockResolvedValue(null)
-    const missing = await GET(createMockRequest('http://localhost/x'), p('nope'))
+    const missing = await GET(createMockRequest('http://localhost/x'), p(NOPE_ID))
     expect(missing.status).toBe(404)
   })
 
   it('PATCH validates the body, ticks the item as the user, and returns the refreshed checklist', async () => {
     const res = await PATCH(
       createMockRequest('http://localhost/x', { method: 'PATCH', body: { item_key: 'inventory_valued', state: 'done', note: 'Inventerat' } }),
-      p('fy-2026'),
+      p(FY_2026),
     )
     expect(res.status).toBe(200)
-    expect(setMock).toHaveBeenCalledWith(supabase, 'company-1', 'user-1', 'fy-2026', { item_key: 'inventory_valued', state: 'done', note: 'Inventerat' })
+    expect(setMock).toHaveBeenCalledWith(supabase, 'company-1', 'user-1', FY_2026, { item_key: 'inventory_valued', state: 'done', note: 'Inventerat' })
     // Existence check without recomputing readiness, then the full rebuild.
-    expect(buildMock).toHaveBeenNthCalledWith(1, supabase, 'company-1', 'user-1', 'fy-2026', { readiness: null })
-    expect(buildMock).toHaveBeenNthCalledWith(2, supabase, 'company-1', 'user-1', 'fy-2026')
+    expect(buildMock).toHaveBeenNthCalledWith(1, supabase, 'company-1', 'user-1', FY_2026, { readiness: null })
+    expect(buildMock).toHaveBeenNthCalledWith(2, supabase, 'company-1', 'user-1', FY_2026)
 
-    const bad = await PATCH(createMockRequest('http://localhost/x', { method: 'PATCH', body: { item_key: 'inventory_valued', state: 'maybe' } }), p('fy-2026'))
+    const bad = await PATCH(createMockRequest('http://localhost/x', { method: 'PATCH', body: { item_key: 'inventory_valued', state: 'maybe' } }), p(FY_2026))
     expect(bad.status).toBe(400)
-    const notJson = await PATCH(new Request('http://localhost/x', { method: 'PATCH', body: '{' }) as never, p('fy-2026'))
+    const notJson = await PATCH(new Request('http://localhost/x', { method: 'PATCH', body: '{' }) as never, p(FY_2026))
     expect(notJson.status).toBe(400)
   })
 
   it('PATCH maps policy refusals to 400 + code, 404s a foreign period, and requires write permission', async () => {
     setMock.mockRejectedValue(new BokslutChecklistError('Okänt steg.', 'UNKNOWN_ITEM'))
-    const refused = await PATCH(createMockRequest('http://localhost/x', { method: 'PATCH', body: { item_key: 'nope', state: 'done' } }), p('fy-2026'))
+    const refused = await PATCH(createMockRequest('http://localhost/x', { method: 'PATCH', body: { item_key: 'nope', state: 'done' } }), p(FY_2026))
     expect(refused.status).toBe(400)
     expect((await parseJsonResponse<{ code: string }>(refused)).body.code).toBe('UNKNOWN_ITEM')
 
     buildMock.mockResolvedValue(null)
-    const missing = await PATCH(createMockRequest('http://localhost/x', { method: 'PATCH', body: { item_key: 'no_drafts', state: 'done' } }), p('nope'))
+    const missing = await PATCH(createMockRequest('http://localhost/x', { method: 'PATCH', body: { item_key: 'no_drafts', state: 'done' } }), p(NOPE_ID))
     expect(missing.status).toBe(404)
 
     requireWriteMock.mockResolvedValue({ ok: false, response: NextResponse.json({ error: 'Läsbehörighet' }, { status: 403 }) })
-    const forbidden = await PATCH(createMockRequest('http://localhost/x', { method: 'PATCH', body: { item_key: 'no_drafts', state: 'done' } }), p('fy-2026'))
+    const forbidden = await PATCH(createMockRequest('http://localhost/x', { method: 'PATCH', body: { item_key: 'no_drafts', state: 'done' } }), p(FY_2026))
     expect(forbidden.status).toBe(403)
   })
 })

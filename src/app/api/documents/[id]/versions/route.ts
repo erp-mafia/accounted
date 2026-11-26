@@ -55,7 +55,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       )
     }
   },
-  { requireWrite: true }
+  { requireWrite: true, uuidParams: { id: 'DOC_NOT_FOUND' } }
 )
 
 /**
@@ -95,5 +95,6 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     }
 
     return NextResponse.json({ data: versions })
-  }
+  },
+  { uuidParams: { id: 'DOC_NOT_FOUND' } },
 )
