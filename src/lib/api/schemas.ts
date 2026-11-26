@@ -6743,6 +6743,9 @@ export const CreateSalesOrderSchema = z.object({
   currency: CurrencySchema.optional(),
   your_reference: z.string().max(200).nullable().optional(),
   our_reference: z.string().max(200).nullable().optional(),
+  // Märkning for the order's invoices, the same 200 as on the invoice. Null
+  // or blank leaves each invoice to the customer card's.
+  invoice_marking: z.string().max(200).nullable().optional(),
   notes: z.string().max(4000).nullable().optional(),
   default_dimensions: DimensionsBagSchema.optional(),
   items: z.array(SalesOrderItemSchema).min(1, 'Minst en orderrad krävs').max(500),

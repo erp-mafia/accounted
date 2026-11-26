@@ -11630,6 +11630,7 @@ export const tools: McpTool[] = [
         source_invoice_id: { type: ['string', 'null'], description: 'Proforma or offert the order was converted from, if any' },
         your_reference: { type: ['string', 'null'] },
         our_reference: { type: ['string', 'null'] },
+        invoice_marking: { type: ['string', 'null'], description: "Märkning for the order's invoices; null: each takes the customer card's" },
         notes: { type: ['string', 'null'] },
         default_dimensions: { type: 'object', additionalProperties: { type: 'string' } },
         confirmed_at: { type: ['string', 'null'] },
@@ -11680,6 +11681,7 @@ export const tools: McpTool[] = [
         source_invoice_id: order.source_invoice_id ?? null,
         your_reference: order.your_reference ?? null,
         our_reference: order.our_reference ?? null,
+        invoice_marking: order.invoice_marking ?? null,
         notes: order.notes ?? null,
         default_dimensions: order.default_dimensions ?? {},
         confirmed_at: order.confirmed_at ?? null,
@@ -11721,6 +11723,7 @@ export const tools: McpTool[] = [
         currency: { type: 'string', enum: [...CURRENCIES] },
         our_reference: { type: 'string' },
         your_reference: { type: 'string' },
+        invoice_marking: { type: 'string', description: "Märkning (buyer marking/PO) for the order's invoices; omitted: the customer card's." },
         notes: { type: 'string' },
         ...STAGING_ARGS_PROPERTIES,
       },
@@ -11812,6 +11815,8 @@ export const tools: McpTool[] = [
         currency,
         ...(args.your_reference ? { your_reference: args.your_reference } : {}),
         ...(args.our_reference ? { our_reference: args.our_reference } : {}),
+        // Any value given reaches the schema: a wrong type is refused, not dropped.
+        ...(args.invoice_marking !== undefined ? { invoice_marking: args.invoice_marking } : {}),
         ...(args.notes ? { notes: args.notes } : {}),
         ...(resolvedDefaultDimensions && Object.keys(resolvedDefaultDimensions).length > 0
           ? { default_dimensions: resolvedDefaultDimensions }
@@ -11855,6 +11860,8 @@ export const tools: McpTool[] = [
           currency,
           order_date: params.order_date,
           requested_delivery_date: params.requested_delivery_date ?? null,
+          // Shown on the approval card: the Märkning the order's invoices carry.
+          ...(params.invoice_marking?.trim() ? { invoice_marking: params.invoice_marking.trim() } : {}),
           // Informational: an order is not a verifikat, so no period check.
           writes_verifikat: false,
           ...(dimensionResolutions.length > 0 ? { dimension_resolutions: dimensionResolutions } : {}),

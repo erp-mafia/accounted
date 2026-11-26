@@ -177,6 +177,9 @@ export default function SalesOrderForm({ mode, initial, formId, onSubmittingChan
   const [currency, setCurrency] = useState<string>(initial?.currency ?? 'SEK')
   const [yourReference, setYourReference] = useState<string>(initial?.your_reference ?? '')
   const [ourReference, setOurReference] = useState<string>(initial?.our_reference ?? '')
+  // The order's own Märkning. Left empty, each invoice from the order takes
+  // the customer card's when it is created.
+  const [invoiceMarking, setInvoiceMarking] = useState<string>(initial?.invoice_marking ?? '')
   const [notes, setNotes] = useState<string>(initial?.notes ?? '')
   const [lines, setLines] = useState<LineState[]>(() => {
     const items = [...(initial?.items ?? [])].sort((a, b) => a.sort_order - b.sort_order)
@@ -361,6 +364,7 @@ export default function SalesOrderForm({ mode, initial, formId, onSubmittingChan
       currency,
       your_reference: yourReference.trim() || null,
       our_reference: ourReference.trim() || null,
+      invoice_marking: invoiceMarking.trim() || null,
       notes: notes.trim() || null,
       items,
     }
@@ -473,6 +477,16 @@ export default function SalesOrderForm({ mode, initial, formId, onSubmittingChan
               id="so-our-ref"
               value={ourReference}
               onChange={(e) => setOurReference(e.target.value)}
+              maxLength={200}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="so-invoice-marking" optional>{t('invoice_marking_label')}</Label>
+            <Input
+              id="so-invoice-marking"
+              value={invoiceMarking}
+              onChange={(e) => setInvoiceMarking(e.target.value)}
+              placeholder={t('invoice_marking_placeholder')}
               maxLength={200}
             />
           </div>
