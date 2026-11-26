@@ -62,8 +62,12 @@ export interface FetchAllRowsOptions<T> {
  * balances. Order is purely for paging stability: callers that need a
  * different display order should re-sort after fetching.
  *
- * The callback receives `{ from, to }` range values: append `.range(from, to)`
- * to your query builder, AFTER a stable `.order()`:
+ * The callback receives `{ from, to }` range values: build the query inside
+ * it and append `.range(from, to)`, AFTER a stable `.order()`. A new query
+ * per call is part of the contract: the later pages of a long read are
+ * fetched side by side, and `.range()` changes a query in place, so pages
+ * ranged on one query made outside the callback all go out with the last
+ * page's range and the rows between them are never read.
  *
  * ```ts
  * const accounts = await fetchAllRows(({ from, to }) =>
@@ -81,7 +85,7 @@ export interface FetchAllRowsOptions<T> {
  *
  * ```ts
  * const lines = await fetchAllRows(
- *   ({ from, to }) => q.order('id').range(from, to),
+ *   ({ from, to }) => linesOf(entryId).order('id').range(from, to), // linesOf: a new query per call
  *   { dedupeBy: (r) => r.id },
  * )
  * ```
