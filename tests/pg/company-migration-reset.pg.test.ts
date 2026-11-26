@@ -376,7 +376,7 @@ describe('company migration reset RPCs (pg)', () => {
 
     const old = await seedCompany()
     await getPool().query(
-      `UPDATE public.companies SET created_at = now() - interval '31 days' WHERE id = $1`,
+      `UPDATE public.companies SET created_at = now() - interval '91 days' WHERE id = $1`,
       [old.companyId],
     )
     const oldPreview = await preview(old.userId, old.companyId)
@@ -384,6 +384,23 @@ describe('company migration reset RPCs (pg)', () => {
       code: 'migration_window_expired',
       count: 1,
     })
+
+    // The self-service window is 90 days from creation.
+    const recent = await seedCompany()
+    await getPool().query(
+      `UPDATE public.companies SET created_at = now() - interval '89 days' WHERE id = $1`,
+      [recent.companyId],
+    )
+    const recentPreview = await preview(recent.userId, recent.companyId)
+    expect(recentPreview.eligibility?.blockers.map((b) => b.code)).not.toContain(
+      'migration_window_expired',
+    )
+    const { rows: windowRows } = await getPool().query<{ days: number }>(
+      `SELECT extract(day FROM (public.company_migration_reset_snapshot($1)->>'window_ends_at')::timestamptz - created_at)::int AS days
+       FROM public.companies WHERE id = $1`,
+      [recent.companyId],
+    )
+    expect(windowRows[0]!.days).toBe(90)
 
     const sandbox = await seedCompany()
     await getPool().query(
@@ -498,7 +515,7 @@ describe('company migration reset RPCs (pg)', () => {
     )
     await getPool().query(
       `UPDATE public.companies
-       SET created_at = now() - interval '31 days', archived_at = now()
+       SET created_at = now() - interval '91 days', archived_at = now()
        WHERE id = $1`,
       [all.companyId],
     )
