@@ -4921,6 +4921,15 @@ export interface WebshopOrder {
    */
   customer_country: string | null
   /**
+   * The billing address the store sent with the order, on WooCommerce order
+   * rows (null on the other platforms' rows and on refund rows). A customer
+   * that the create-invoice route creates from the order gets it.
+   */
+  customer_address_line1: string | null
+  customer_address_line2: string | null
+  customer_postal_code: string | null
+  customer_city: string | null
+  /**
    * Shopify: true when the store reported that no line of the order needs
    * shipping (digital products, services), on the order row and its refund
    * rows. The country rules then book a sale abroad as services

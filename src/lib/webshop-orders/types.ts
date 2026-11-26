@@ -45,6 +45,14 @@ export interface WebshopOrderUpsert {
    */
   customer_country: string | null
   /**
+   * The billing address the store sent: WooCommerce order rows. Omitted by
+   * the other platforms and by refund rows, stored as null.
+   */
+  customer_address_line1?: string | null
+  customer_address_line2?: string | null
+  customer_postal_code?: string | null
+  customer_city?: string | null
+  /**
    * Shopify: no line of the order needs shipping (digital products,
    * services); a refund row takes its order's. Omitted by the other
    * platforms, stored as false.

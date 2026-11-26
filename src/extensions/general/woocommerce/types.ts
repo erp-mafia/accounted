@@ -142,6 +142,11 @@ export interface WooOrder {
     last_name?: string
     company?: string
     email?: string
+    /** Street lines, postal code and city; a customer created from the order gets them. */
+    address_1?: string
+    address_2?: string
+    postcode?: string
+    city?: string
     /** ISO 3166-1 alpha-2 (e.g. 'SE'); drives the 0%-sale export/EU hint. */
     country?: string
   }

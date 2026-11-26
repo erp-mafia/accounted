@@ -193,6 +193,13 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
               ?? (order.customer_country ? order.customer_country.toUpperCase() : 'SE'),
             contact_person: billingCompany ? billingName : null,
             email: billingEmail,
+            // The billing address the store sent with the order (WooCommerce
+            // rows; the other platforms send none). Only a customer created
+            // here gets it: a matched or chosen customer keeps its card.
+            address_line1: order.customer_address_line1,
+            address_line2: order.customer_address_line2,
+            postal_code: order.customer_postal_code,
+            city: order.customer_city,
             default_payment_terms: defaultPaymentTerms,
           })
           .select('*')
