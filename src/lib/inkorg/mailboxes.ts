@@ -9,6 +9,9 @@
  * Pure: the dialog reads the doors' states over HTTP and renders the rows.
  */
 import { INTAKE_SOURCES, type IntakeSourceId } from '@/lib/intake/sources'
+import type { ConnectionSummary } from '@/lib/digital-mailboxes/connections'
+import type { DigitalMailboxAvailability } from '@/lib/digital-mailboxes/providers'
+import { digitalMailboxRowView } from './digital-mailbox-row'
 
 /** The doors the dialog offers. Upload, MCP and the API are ways in, not mailboxes to connect. */
 export type MailboxDoor = Extract<IntakeSourceId, 'intake_email' | 'whatsapp' | 'peppol' | 'mailbox' | 'billo' | 'kivra'>
@@ -58,6 +61,14 @@ export function mailboxEntries(
   })
 }
 
+/** What GET /api/digital-mailboxes answers for one provider. */
+export interface DigitalMailboxAnswer {
+  available: DigitalMailboxAvailability
+  connection: ConnectionSummary | null
+  /** Kivra, while it is not connected for receiving: whether the company already has a company mailbox there. */
+  company_mailbox?: 'has' | 'none' | 'unknown'
+}
+
 /**
  * Whether Billo is left out of a list that offers Kivra and Billo as the
  * company's one digital mailbox (the onboarding's receipts step): a company
@@ -66,13 +77,17 @@ export function mailboxEntries(
  * answer is on its way Billo waits, so it never shows and then goes; a failed
  * read lists both, each with its own line.
  */
-export function billoLeftOutForKivra(input: {
-  read: 'loading' | 'ready' | 'failed'
-  kivraCompanyMailbox: 'has' | 'none' | 'unknown' | null
-  kivraConnected: boolean
-  billoConnected: boolean
-}): boolean {
-  if (input.read === 'loading') return true
-  if (input.read === 'failed' || input.billoConnected) return false
-  return input.kivraCompanyMailbox === 'has' || input.kivraConnected
+export function billoLeftOutForKivra(
+  state:
+    | { status: 'loading' }
+    | { status: 'failed' }
+    | { status: 'ready'; providers: { kivra: DigitalMailboxAnswer; billo: DigitalMailboxAnswer } },
+): boolean {
+  if (state.status === 'loading') return true
+  if (state.status === 'failed') return false
+  const { kivra, billo } = state.providers
+  // Connected is what the row shows (digitalMailboxRowView): a connection
+  // that ended leaves its row behind and reads as off, like one never made.
+  if (digitalMailboxRowView(billo.available, billo.connection).receive !== 'off') return false
+  return kivra.company_mailbox === 'has' || digitalMailboxRowView(kivra.available, kivra.connection).receive !== 'off'
 }
