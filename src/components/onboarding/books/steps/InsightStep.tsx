@@ -2,6 +2,7 @@
 
 import { useTranslations } from 'next-intl'
 import Question from '@/components/onboarding/journey/Question'
+import { yearsOfBooks } from '@/lib/onboarding/books-years'
 import { InsightPanel } from '../ui/InsightPanel'
 import type { BooksCtx } from '../context'
 import { Button } from '@/components/ui/button'
@@ -34,7 +35,7 @@ export function InsightStep({ ctx }: { ctx: BooksCtx }) {
         failed
           ? t('insight_title_failed')
           : findings && findings.books.entries > 0
-            ? t('insight_title', { count: findings.books.entries, years: findings.books.periods.length })
+            ? t('insight_title', { count: findings.books.entries, years: yearsOfBooks(findings.books) })
             : t('insight_title_empty')
       }
       sub={failed ? undefined : t('insight_sub')}

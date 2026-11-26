@@ -10,6 +10,7 @@ import { useBranding } from '@/lib/branding/brand-context'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { useFormat } from '@/lib/hooks/use-format'
 import { AI_CLIENTS } from '@/lib/onboarding/ai-clients'
+import { yearsOfBooks } from '@/lib/onboarding/books-years'
 import { AI_TASK_LABEL_KEY, aiTaskHref, foundTasksStartOpen, listAiTasks, type AiTaskCategory } from '@/lib/worklist/ai-task'
 import type { WorklistCounts } from '@/lib/worklist/types'
 import { AiTaskAction } from '@/components/dashboard/AiTaskAction'
@@ -84,7 +85,7 @@ export function DoneStep({ ctx, onLeave, leaving }: {
     [
       t('card_books'),
       b && b.entries > 0
-        ? t('card_books_value', { count: b.entries, years: b.periods.length })
+        ? t('card_books_value', { count: b.entries, years: yearsOfBooks(b) })
         : state.path === 'fresh'
           ? t('answer_fresh')
           : t('card_books_none'),

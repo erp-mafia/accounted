@@ -96,6 +96,8 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
   const [prepared, setPrepared] = useState(0)
   const [jobPhase, setJobPhase] = useState<JobPhase | null>(null)
   const [written, setWritten] = useState(0)
+  // How many of the written verifikat are opening balances (one per file that carries one).
+  const [openingWritten, setOpeningWritten] = useState(0)
   const [fileIdx, setFileIdx] = useState(0)
   const [created, setCreated] = useState(0)
   const [importError, setImportError] = useState<string | null>(null)
@@ -251,6 +253,7 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
     setImportError(null)
     setTick(0)
     setWritten(0)
+    setOpeningWritten(0)
     setPrepared(0)
     setReg(null)
     setJobPhase('preparing')
@@ -323,11 +326,12 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
               setTick(writtenSoFar + written)
               apiRef.current?.setFeedCap(Math.min(totalVouchers, writtenSoFar + written))
             })
-          : (res.ok ? data.result : data?.error?.details?.result)) as { success?: boolean; journalEntriesCreated?: number; errors?: string[] } | undefined
+          : (res.ok ? data.result : data?.error?.details?.result)) as { success?: boolean; journalEntriesCreated?: number; openingBalanceEntryId?: string | null; errors?: string[] } | undefined
         if (!res.ok && !result) throw new Error(getErrorMessage(data))
         if (!result?.success) throw new Error(result?.errors?.length ? result.errors.join(' ') : getErrorMessage(data))
         writtenSoFar += result.journalEntriesCreated ?? 0
         setWritten(writtenSoFar)
+        if (result.openingBalanceEntryId) setOpeningWritten((count) => count + 1)
         setTick(writtenSoFar)
         for (const a of p.accounts) importedAccounts.push(a.number)
         void invalidateReferenceData(['ref:accounts', 'ref:fiscal-periods'])
@@ -573,6 +577,7 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
           progress={regBusy || reg === 'done' ? undefined : {
             phase: importError ? 'failed' : phase === 'imported' ? 'complete' : jobPhase ?? 'checking',
             written: tick,
+            opening: openingWritten,
             total: totalVouchers,
             prepared,
             file: { current: fileIdx + 1, total: ordered.length },

@@ -16094,6 +16094,7 @@
     "progress_total": "{count} vouchers to import",
     "progress_wait": "Reading and preparing the file …",
     "progress_written": "{count} vouchers imported",
+    "progress_written_with_opening": "{count} vouchers imported, {opening, plural, one {1 of them the opening balance} other {# of them opening balances}}",
     "progress_file": "File {current} of {total}",
     "th_write_sub": "{tick} of {total}",
     "th_write_preparing": "Preparing {total} vouchers …",

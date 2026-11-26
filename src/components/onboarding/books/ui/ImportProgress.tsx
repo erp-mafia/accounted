@@ -8,12 +8,14 @@ import { importPercent, type JobPhase } from '../lib/job-progress'
 export interface ImportProgressProps {
   phase: JobPhase | 'complete' | 'failed'
   written: number
+  /** How many of the written verifikat are opening balances: named once the import is complete, so the count can be set against the file's own. */
+  opening?: number
   total: number
   prepared?: number
   file?: { current: number; total: number }
 }
 
-export function ImportProgress({ phase, written, total, prepared = 0, file }: ImportProgressProps) {
+export function ImportProgress({ phase, written, opening = 0, total, prepared = 0, file }: ImportProgressProps) {
   const t = useTranslations('books')
   const active = phase !== 'complete' && phase !== 'failed'
   const percent = phase === 'preparing' && written === 0
@@ -24,7 +26,9 @@ export function ImportProgress({ phase, written, total, prepared = 0, file }: Im
     ? prepared > 0
       ? t('progress_prepared', { count: prepared.toLocaleString('sv-SE') })
       : total > 0 ? t('progress_total', { count: total.toLocaleString('sv-SE') }) : t('progress_wait')
-    : t('progress_written', { count: written.toLocaleString('sv-SE') })
+    : phase === 'complete' && opening > 0
+      ? t('progress_written_with_opening', { count: written.toLocaleString('sv-SE'), opening })
+      : t('progress_written', { count: written.toLocaleString('sv-SE') })
 
   return (
     <div className="th-progress" data-phase={phase} aria-busy={active}>
