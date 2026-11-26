@@ -3322,6 +3322,7 @@
     "journey_fystart_reg_sub": "Bolagsverket registrerade er {date}.",
     "journey_fystart_ab_sub": "Registreringsdatumet hos Bolagsverket. Bara om verksamheten inte är registrerad där gäller datumet hos Skatteverket.",
     "journey_fystart_ef_sub": "Dagen du registrerade dig hos Skatteverket.",
+    "journey_fystart_ef_sub_unregistered": "Dagen firman gjorde sitt första köp eller sin första försäljning.",
     "journey_fystart_other": "Annat datum …",
     "journey_fyend_title": "När ska första året sluta?",
     "journey_fyend_sub": "Peka på ett alternativ för att se året.",
