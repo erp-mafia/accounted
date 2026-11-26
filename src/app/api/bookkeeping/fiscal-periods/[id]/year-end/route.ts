@@ -44,6 +44,7 @@ export const GET = withRouteContext(
       return errorResponseFromCode('YEAR_END_PREVIEW_FAILED', opLog, { requestId })
     }
   },
+  { uuidParams: { id: 'PERIOD_NOT_FOUND' } },
 )
 
 /** POST: actually run year-end closing. */
@@ -94,5 +95,5 @@ export const POST = withRouteContext(
       return errorResponse(err, opLog, { requestId })
     }
   },
-  { requireWrite: true },
+  { requireWrite: true, uuidParams: { id: 'PERIOD_NOT_FOUND' } },
 )

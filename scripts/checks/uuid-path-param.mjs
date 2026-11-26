@@ -28,12 +28,11 @@
  * route's path segments. The wrapper counts a declared parameter the request
  * lacks as no uuid, so such a name answers every request 404.
  *
- * UUID_PATH_PARAM_ALLOWED holds the routes that predate the guard. Three are
- * known to answer 500 to a malformed id and are marked. The rest did not
- * answer 500 when called with one (most answer 404 for any error), but the
- * writes among them were called with an empty body only, which their body
- * check refuses first. It may only shrink: give a route the option when it is
- * touched.
+ * UUID_PATH_PARAM_ALLOWED holds the routes that predate the guard. They did
+ * not answer 500 when called with a malformed id (most answer 404 for any
+ * error), but the writes among them were called with an empty body only,
+ * which their body check refuses first. It may only shrink: give a route the
+ * option when it is touched.
  */
 
 import fs from 'node:fs'
@@ -201,15 +200,8 @@ export const UUID_PATH_PARAM_ALLOWED = new Set([
   'app/api/bookkeeping/fiscal-periods/[id]/entry-count/route.ts',
   'app/api/bookkeeping/fiscal-periods/[id]/lock/route.ts',
   'app/api/bookkeeping/fiscal-periods/[id]/reopen-external/route.ts',
-  // Known to answer 500 to a malformed id, left out while another change edits
-  // the period close and reopen routes: give them the option next.
-  'app/api/bookkeeping/fiscal-periods/[id]/reopen/route.ts',
-  // Known 500, as reopen above.
-  'app/api/bookkeeping/fiscal-periods/[id]/reset/route.ts',
   'app/api/bookkeeping/fiscal-periods/[id]/route.ts',
   'app/api/bookkeeping/fiscal-periods/[id]/unlock/route.ts',
-  // Known 500, as reopen above.
-  'app/api/bookkeeping/fiscal-periods/[id]/year-end/route.ts',
   'app/api/bookkeeping/inventory-counts/[id]/bankid/route.ts',
   'app/api/bookkeeping/inventory-counts/[id]/book/route.ts',
   'app/api/bookkeeping/inventory-counts/[id]/pdf/route.ts',
