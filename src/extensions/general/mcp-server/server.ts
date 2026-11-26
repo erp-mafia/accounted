@@ -11815,7 +11815,8 @@ export const tools: McpTool[] = [
         currency,
         ...(args.your_reference ? { your_reference: args.your_reference } : {}),
         ...(args.our_reference ? { our_reference: args.our_reference } : {}),
-        ...(args.invoice_marking ? { invoice_marking: args.invoice_marking } : {}),
+        // Any value given reaches the schema: a wrong type is refused, not dropped.
+        ...(args.invoice_marking !== undefined ? { invoice_marking: args.invoice_marking } : {}),
         ...(args.notes ? { notes: args.notes } : {}),
         ...(resolvedDefaultDimensions && Object.keys(resolvedDefaultDimensions).length > 0
           ? { default_dimensions: resolvedDefaultDimensions }

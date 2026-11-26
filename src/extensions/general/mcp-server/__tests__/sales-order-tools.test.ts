@@ -304,6 +304,21 @@ describe('gnubok_create_sales_order', () => {
     expect(insert.operation_type).toBe('create_sales_order')
     expect(insert.params.invoice_marking).toBe('PO-4711')
   })
+
+  it('refuses a Märkning that is not text instead of staging the order without it', async () => {
+    for (const marking of [0, false]) {
+      const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+      enqueue({ data: makeCustomer({ id: CUSTOMER_ID, customer_type: 'swedish_business', vat_number_validated: false }) })
+
+      await expect(
+        byName('gnubok_create_sales_order').execute(
+          { customer_id: CUSTOMER_ID, invoice_marking: marking, items: [{ description: 'Konsulttimmar', quantity: 1, unit: 'tim', unit_price: 100 }] },
+          'company-1', 'user-1', supabase as never,
+        ),
+      ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' })
+      expect(findCalls('pending_operations', 'insert')).toEqual([])
+    }
+  })
 })
 
 describe('gnubok_transition_sales_order', () => {
