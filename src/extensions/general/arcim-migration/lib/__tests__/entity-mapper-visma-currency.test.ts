@@ -13,23 +13,23 @@ describe('mapSalesInvoice: a foreign Visma invoice', () => {
   const raw = {
     Id: 'eur-1',
     InvoiceNumber: 2001,
-    InvoiceDate: '2026-08-05',
+    InvoiceDate: '2026-03-10',
     CurrencyCode: 'EUR',
-    CurrencyRate: 10.9925,
-    TotalAmount: 274812.5,
-    TotalVatAmount: 54962.5,
-    TotalAmountInvoiceCurrency: 25000,
-    TotalVatAmountInvoiceCurrency: 5000,
+    CurrencyRate: 11.2,
+    TotalAmount: 112000,
+    TotalVatAmount: 22400,
+    TotalAmountInvoiceCurrency: 10000,
+    TotalVatAmountInvoiceCurrency: 2000,
     RemainingAmount: 0,
     RemainingAmountInvoiceCurrency: 0,
     PaymentStatus: 0,
     InvoiceCustomerName: 'Kund AB',
     Rows: [
-      { LineNumber: 1, Text: 'Konsulttjänst', Quantity: 1, UnitPrice: 20000, AmountNoVat: 20000, PercentVat: 25 },
+      { LineNumber: 1, Text: 'Konsulttjänst', Quantity: 1, UnitPrice: 8000, AmountNoVat: 8000, PercentVat: 25 },
     ],
   }
   const rates: FxRateIndex = new Map([
-    [fxRateKey('EUR', '2026-08-05'), { currency: 'EUR', rate: 10.9925, date: '2026-08-04' }],
+    [fxRateKey('EUR', '2026-03-10'), { currency: 'EUR', rate: 11.2, date: '2026-03-09' }],
   ])
 
   it('stores the euro amounts in the euro columns and the source SEK total in total_sek', () => {
@@ -39,10 +39,10 @@ describe('mapSalesInvoice: a foreign Visma invoice', () => {
 
     expect(fxUnresolved).toBeNull()
     expect(invoice.currency).toBe('EUR')
-    expect(invoice.subtotal).toBe(20000)
-    expect(invoice.vat_amount).toBe(5000)
-    expect(invoice.total).toBe(25000)
-    expect(invoice.exchange_rate).toBe(10.9925)
+    expect(invoice.subtotal).toBe(8000)
+    expect(invoice.vat_amount).toBe(2000)
+    expect(invoice.total).toBe(10000)
+    expect(invoice.exchange_rate).toBe(11.2)
     expect(invoice.total_sek).toBe(raw.TotalAmount)
     expect(invoice.vat_amount_sek).toBe(raw.TotalVatAmount)
   })

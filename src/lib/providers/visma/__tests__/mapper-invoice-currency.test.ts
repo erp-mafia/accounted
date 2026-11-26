@@ -13,19 +13,19 @@ import { mapVismaToSalesInvoice } from '../mapper';
 const euroInvoice = {
   Id: 'eur-1',
   InvoiceNumber: 2001,
-  InvoiceDate: '2026-08-05',
+  InvoiceDate: '2026-03-10',
   CurrencyCode: 'EUR',
-  CurrencyRate: 10.9925,
-  TotalAmount: 274812.5,
-  TotalVatAmount: 54962.5,
-  TotalAmountInvoiceCurrency: 25000,
-  TotalVatAmountInvoiceCurrency: 5000,
+  CurrencyRate: 11.2,
+  TotalAmount: 112000,
+  TotalVatAmount: 22400,
+  TotalAmountInvoiceCurrency: 10000,
+  TotalVatAmountInvoiceCurrency: 2000,
   RemainingAmount: 0,
   RemainingAmountInvoiceCurrency: 0,
   PaymentStatus: 0,
   InvoiceCustomerName: 'Kund AB',
   Rows: [
-    { LineNumber: 1, Text: 'Konsulttjänst', Quantity: 1, UnitPrice: 20000, AmountNoVat: 20000, PercentVat: 25 },
+    { LineNumber: 1, Text: 'Konsulttjänst', Quantity: 1, UnitPrice: 8000, AmountNoVat: 8000, PercentVat: 25 },
   ],
 };
 
@@ -34,9 +34,9 @@ describe('mapVismaToSalesInvoice: invoice currency', () => {
     const dto = mapVismaToSalesInvoice(euroInvoice);
 
     expect(dto.currencyCode).toBe('EUR');
-    expect(dto.legalMonetaryTotal.payableAmount).toEqual({ value: 25000, currencyCode: 'EUR' });
-    expect(dto.legalMonetaryTotal.lineExtensionAmount).toEqual({ value: 20000, currencyCode: 'EUR' });
-    expect(dto.taxTotal?.taxAmount).toEqual({ value: 5000, currencyCode: 'EUR' });
+    expect(dto.legalMonetaryTotal.payableAmount).toEqual({ value: 10000, currencyCode: 'EUR' });
+    expect(dto.legalMonetaryTotal.lineExtensionAmount).toEqual({ value: 8000, currencyCode: 'EUR' });
+    expect(dto.taxTotal?.taxAmount).toEqual({ value: 2000, currencyCode: 'EUR' });
   });
 
   it('agrees with its own rows', () => {
@@ -50,19 +50,19 @@ describe('mapVismaToSalesInvoice: invoice currency', () => {
     const dto = mapVismaToSalesInvoice({
       ...euroInvoice,
       PaymentStatus: 1,
-      RemainingAmount: 109925,
-      RemainingAmountInvoiceCurrency: 10000,
+      RemainingAmount: 44800,
+      RemainingAmountInvoiceCurrency: 4000,
     });
 
     expect(dto.paymentStatus?.paid).toBe(false);
-    expect(dto.paymentStatus?.balance).toEqual({ value: 10000, currencyCode: 'EUR' });
+    expect(dto.paymentStatus?.balance).toEqual({ value: 4000, currencyCode: 'EUR' });
   });
 
   it('leaves the net unknown when the invoice-currency VAT is missing, never mixing the families', () => {
     const { TotalVatAmountInvoiceCurrency: _omitted, ...withoutVat } = euroInvoice;
     const dto = mapVismaToSalesInvoice(withoutVat);
 
-    expect(dto.legalMonetaryTotal.payableAmount.value).toBe(25000);
+    expect(dto.legalMonetaryTotal.payableAmount.value).toBe(10000);
     expect(dto.legalMonetaryTotal.lineExtensionAmount).toBeUndefined();
     expect(dto.taxTotal).toBeUndefined();
   });
@@ -77,16 +77,16 @@ describe('mapVismaToSalesInvoice: invoice currency', () => {
 
   it('never takes a base-currency balance for a foreign invoice', () => {
     const { RemainingAmountInvoiceCurrency: _omitted, ...withoutTwin } = euroInvoice;
-    const dto = mapVismaToSalesInvoice({ ...withoutTwin, PaymentStatus: 1, RemainingAmount: 109925 });
+    const dto = mapVismaToSalesInvoice({ ...withoutTwin, PaymentStatus: 1, RemainingAmount: 44800 });
 
-    expect(dto.paymentStatus?.balance).toEqual({ value: 25000, currencyCode: 'EUR' });
+    expect(dto.paymentStatus?.balance).toEqual({ value: 10000, currencyCode: 'EUR' });
   });
 
   it('reads a SEK invoice from the base family even when only some twins are present', () => {
     const dto = mapVismaToSalesInvoice({
       Id: 'sek-2',
       InvoiceNumber: 2003,
-      InvoiceDate: '2026-08-05',
+      InvoiceDate: '2026-03-10',
       CurrencyCode: 'SEK',
       TotalAmount: 1250,
       TotalVatAmount: 250,
@@ -104,7 +104,7 @@ describe('mapVismaToSalesInvoice: invoice currency', () => {
     const sek = {
       Id: 'sek-1',
       InvoiceNumber: 2002,
-      InvoiceDate: '2026-08-05',
+      InvoiceDate: '2026-03-10',
       CurrencyCode: 'SEK',
       TotalAmount: 1250,
       TotalVatAmount: 250,
