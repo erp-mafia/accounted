@@ -13,7 +13,8 @@ import { isMembershipActive } from '@/lib/entitlements/multi-user'
 import { isInvoicerRole } from '@/lib/auth/invoicer-role'
 import { isUuid } from '@/lib/invariants/uuid'
 import { buildAuthorizeUrl, exchangeCodeForTokens, generatePkcePair } from './lib/oauth'
-import { skatteverketConnectorMode, startConnectorAuthorization } from './lib/connector-mode'
+import { ConnectorAuthorizationRefusedError, skatteverketConnectorMode, startConnectorAuthorization } from './lib/connector-mode'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { isConnectorState, verifyConnectorState } from '@/lib/connect/hosted/state'
 import {
   requireFlowInitiator,
@@ -648,6 +649,16 @@ export const skatteverketExtension: Extension = {
             connectorState = started.connectorState
             authorizeUrl = started.authorizeUrl
           } catch (err) {
+            // The connector key covers no more companies: a reason the person
+            // can act on, not a fault here, so it is said where they came from.
+            if (err instanceof ConnectorAuthorizationRefusedError && err.code === 'CONNECTOR_COMPANY_LIMIT') {
+              const message = getErrorEntry('CONNECTOR_COMPANY_LIMIT')?.message_sv
+              if (returnTo && message) {
+                log.warn('connector key covers no more companies', { companyId })
+                return NextResponse.redirect(`${origin}${withQueryParam(returnTo, 'skv_error', message)}`)
+              }
+              return errorResponseFromCode('CONNECTOR_COMPANY_LIMIT', log)
+            }
             log.error('connector authorize-url failed', err as Error, { companyId })
             return NextResponse.json(
               {

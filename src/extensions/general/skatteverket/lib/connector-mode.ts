@@ -115,6 +115,25 @@ export function parseConnectorCode(body: string): string | null {
   return null
 }
 
+/**
+ * The broker refused to start a consent. `code` is its connector code when
+ * the body carries one (CONNECTOR_COMPANY_LIMIT: the key covers no more
+ * companies), so the caller can tell a reason the person can act on from a
+ * fault; the message keeps the body for the server log.
+ */
+export class ConnectorAuthorizationRefusedError extends Error {
+  readonly code: string | null
+
+  constructor(
+    readonly status: number,
+    body: string,
+  ) {
+    super(`Connector authorize-url failed (${status}): ${body}`)
+    this.name = 'ConnectorAuthorizationRefusedError'
+    this.code = parseConnectorCode(body)
+  }
+}
+
 export interface ConnectorAuthorizationStart {
   authorizeUrl: string
   /** The HOSTED redirect_uri registered at SKV; must be sent verbatim in the token exchange. */
@@ -162,7 +181,7 @@ export async function startConnectorAuthorization(
   )
   if (!response.ok) {
     const text = await response.text().catch(() => '')
-    throw new Error(`Connector authorize-url failed (${response.status}): ${text}`)
+    throw new ConnectorAuthorizationRefusedError(response.status, text)
   }
   const json = (await response.json()) as {
     data?: { authorize_url?: string; redirect_uri?: string; connector_state?: string }

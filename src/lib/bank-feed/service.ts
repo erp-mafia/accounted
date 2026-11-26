@@ -274,6 +274,9 @@ type Failure = Extract<OperationOutcome<never>, { ok: false }>
 /** Connect's refusal when the company already holds its one bank connection (or an attempt in progress). */
 const CONNECTOR_QUOTA_EXCEEDED = 'CONNECTOR_QUOTA_EXCEEDED'
 
+/** Connect's refusal when the connector key already serves all the companies it covers. */
+const CONNECTOR_COMPANY_LIMIT = 'CONNECTOR_COMPANY_LIMIT'
+
 function isQuotaRefusal(error: unknown): boolean {
   return error instanceof BankFeedError && error.code === CONNECTOR_QUOTA_EXCEEDED
 }
@@ -285,6 +288,9 @@ function providerFailure(error: unknown, log?: Pick<OperationContext['log'], 'wa
     // One bank connection per company: another connection, or an attempt
     // still in progress, holds the place. Not the bank's refusal.
     if (error.code === CONNECTOR_QUOTA_EXCEEDED) return { ok: false, code: 'BANK_CONNECTION_IN_PROGRESS' }
+    // The connector key covers no more companies: Accounted adds the company
+    // to the key. Not the bank's refusal either.
+    if (error.code === CONNECTOR_COMPANY_LIMIT) return { ok: false, code: CONNECTOR_COMPANY_LIMIT }
     // The bank's own code reaches the log: the response names it only in
     // details, and the route logs the generic refusal.
     log?.warn('bank provider refused', { code: error.code, provider_code: error.providerCode, status: error.status, retryable: error.retryable })

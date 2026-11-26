@@ -56,6 +56,7 @@ vi.mock('@/lib/supabase/server', () => ({
 }))
 
 import { skatteverketExtension } from '../index'
+import { ConnectorAuthorizationRefusedError } from '../lib/connector-mode'
 import { buildAuthorizeUrl } from '../lib/oauth'
 import { storeTokens } from '../lib/token-store'
 import { requireCapability } from '@/lib/entitlements/has-capability'
@@ -157,6 +158,42 @@ describe('skatteverket /authorize: connector mode', () => {
     expect(res.status).toBe(502)
     const body = await (res as Response).json()
     expect(body.error).toMatch(/GNUBOK_CONNECTOR_KEY/)
+    expect(mockCreateFlow).not.toHaveBeenCalled()
+  })
+
+  const companyLimit = () =>
+    new ConnectorAuthorizationRefusedError(
+      403,
+      '{"error":"This connector key covers 21 companies; Accounted adds more on request","code":"CONNECTOR_COMPANY_LIMIT","retryable":false,"limit":21}',
+    )
+
+  it('says the key covers no more companies when the broker refuses a company past its limit, recording no flow', async () => {
+    mockStartAuth.mockRejectedValueOnce(companyLimit())
+    const res = await authorizeRoute().handler(
+      new Request('https://instans.example.se/api/extensions/ext/skatteverket/authorize'),
+      ctx,
+    )
+
+    expect(res.status).toBe(403)
+    const body = await (res as Response).json()
+    expect(JSON.stringify(body)).toContain('"CONNECTOR_COMPANY_LIMIT"')
+    expect(JSON.stringify(body)).toContain('Connector-nyckeln räcker inte till fler bolag.')
+    expect(JSON.stringify(body)).not.toContain('GNUBOK_CONNECTOR_KEY')
+    expect(mockCreateFlow).not.toHaveBeenCalled()
+  })
+
+  it('sends a page that started the flow back with the reason when the key covers no more companies', async () => {
+    mockStartAuth.mockRejectedValueOnce(companyLimit())
+    const res = await authorizeRoute().handler(
+      new Request('https://instans.example.se/api/extensions/ext/skatteverket/authorize?return_to=%2Fsettings%2Fskatteverket'),
+      ctx,
+    )
+
+    expect(res.status).toBe(307)
+    const location = new URL(res.headers.get('location') as string)
+    expect(location.origin).toBe('https://instans.example.se')
+    expect(location.pathname).toBe('/settings/skatteverket')
+    expect(location.searchParams.get('skv_error')).toMatch(/^Connector-nyckeln räcker inte till fler bolag\./)
     expect(mockCreateFlow).not.toHaveBeenCalled()
   })
 })

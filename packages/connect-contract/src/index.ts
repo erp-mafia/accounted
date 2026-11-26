@@ -54,6 +54,10 @@ import { z } from 'zod'
  * before (the old consent still counts toward the company's quota), and no
  * response changed. A version moved for them would only make every call of a
  * newer installation look ahead of a service not yet re-pinned.
+ *
+ * The refusal code CONNECTOR_COMPANY_LIMIT came later without a new version
+ * either (2026-11-26): `code` is a free string, so an older installation
+ * reads it as any other refusal.
  */
 
 export const CONTRACT_VERSION = '2026-10-17'
@@ -158,6 +162,10 @@ export const CONNECTOR_ERROR_CODES = [
   'CONNECTOR_PATH_NOT_ALLOWED',
   'CONNECTOR_NOT_OWNED',
   'CONNECTOR_QUOTA_EXCEEDED',
+  // A company new to the key past its number of companies (a key from the
+  // application form covers the companies listed for it); Accounted adds
+  // companies to the key, so retrying does not help until then.
+  'CONNECTOR_COMPANY_LIMIT',
   'CONNECTOR_RATE_LIMITED',
   'CONNECTOR_STATE_INVALID',
   'CONNECTOR_STATE_CONSUMED',

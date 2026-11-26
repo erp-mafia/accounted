@@ -187,6 +187,20 @@ describe('startBankFeedConsent', () => {
     expect(connect.revokeConsent).not.toHaveBeenCalled()
   })
 
+  it('says the connector key covers no more companies when Connect refuses a company past the key\'s limit', async () => {
+    const connect = fakeConnect({ createConsent: vi.fn().mockRejectedValue(new BankFeedRefusedError('This connector key covers 21 companies; Accounted adds more on request', { code: 'CONNECTOR_COMPANY_LIMIT', status: 403 })) })
+    mocks.door.mockResolvedValue({ ok: true, connect })
+    const { supabase } = stub({
+      ...orgAnswers(),
+      companies: [{ data: { entity_type: 'aktiebolag' }, error: null }],
+      bank_connections: [{ data: [], error: null }],
+    })
+    expect(await startBankFeedConsent({ ...ctx, supabase }, { bic: 'SWEDSESS', method: 'qr', signer, replaceConnectionId: null, now: NOW })).toEqual({ ok: false, code: 'CONNECTOR_COMPANY_LIMIT' })
+    // Not the per-company quota: nothing is freed and nothing asked again.
+    expect(connect.createConsent).toHaveBeenCalledTimes(1)
+    expect(connect.revokeConsent).not.toHaveBeenCalled()
+  })
+
   describe('when Connect refuses a new consent over the company\'s one bank connection (crm#1363)', () => {
     const quota = () => new BankFeedRefusedError('Bank connection quota reached for this company', { code: 'CONNECTOR_QUOTA_EXCEEDED', status: 403 })
     const created = { consentId: 'consent-1', consentStatus: 'received', validUntil: '2027-04-10' }
