@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  cardEditReplans,
   customerCardReference,
   customerChangedForReference,
   planMarkingPrefill,
@@ -141,5 +142,36 @@ describe('planMarkingPrefill (crm#1477)', () => {
       value: '',
       prefilled: null,
     })
+  })
+})
+
+describe('cardEditReplans', () => {
+  const card = { invoice_reference: 'PO-778', contact_person: 'Karin Ek', invoice_marking: '4500012345' }
+
+  it('plans neither again when the save left both sources alone', () => {
+    expect(cardEditReplans(card, { ...card })).toEqual({ reference: false, marking: false })
+  })
+
+  it('plans Er referens again only when its Fakturareferens changed', () => {
+    expect(cardEditReplans(card, { ...card, invoice_reference: 'PO-779' })).toEqual({ reference: true, marking: false })
+  })
+
+  it('follows the contact person only while the card has no Fakturareferens', () => {
+    expect(cardEditReplans(card, { ...card, contact_person: 'Per Lind' }).reference).toBe(false)
+    const noReference = { ...card, invoice_reference: null }
+    expect(cardEditReplans(noReference, { ...noReference, contact_person: 'Per Lind' }).reference).toBe(true)
+  })
+
+  it('plans Märkning again only when the card Märkning changed', () => {
+    expect(cardEditReplans(card, { ...card, invoice_marking: '4500067890' })).toEqual({ reference: false, marking: true })
+    expect(cardEditReplans(card, { ...card, invoice_marking: null })).toEqual({ reference: false, marking: true })
+  })
+
+  it('reads blank and surrounding space as no change', () => {
+    expect(cardEditReplans(card, { ...card, invoice_reference: ' PO-778 ', invoice_marking: '4500012345 ' })).toEqual({
+      reference: false,
+      marking: false,
+    })
+    expect(cardEditReplans({ invoice_marking: '' }, { invoice_marking: null }).marking).toBe(false)
   })
 })

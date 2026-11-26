@@ -7359,6 +7359,7 @@
   },
   "invoice_editor_form": {
     "new_customer": "New customer",
+    "edit_customer": "Edit customer",
     "customer_private": "Private person",
     "customer_eu": "EU business",
     "customer_non_eu": "Outside the EU",
