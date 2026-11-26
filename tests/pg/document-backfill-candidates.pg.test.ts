@@ -291,18 +291,24 @@ describe('document_backfill_candidates and document_retry_candidates', () => {
  * 3 000 held jobs, 0.5 s of a 0.55 s call). 20261126000300 walks an index
  * that holds every column the walk tests, and reads the voucher's period from
  * (company_id, id) INCLUDE (fiscal_period_id), where one company's vouchers
- * sit together, instead of from the primary key and the table. The answer
- * must not move: the shipped bodies of 20261112152731 and 20261123004000 run
- * next to the function on the same rows, in one statement so all see the same
- * snapshot and the same now().
+ * sit together, instead of from the primary key and the table; 20261126010000
+ * joins that voucher, so the planner prices the lookup for every document and
+ * takes the index. The answer must not move: the shipped bodies of
+ * 20261112152731, 20261123004000 and 20261126000300 run next to the function
+ * on the same rows, in one statement so all see the same snapshot and the
+ * same now().
  *
  * The documents, their jobs (some due an hour ago), the locks and the reset
  * are seeded inside a transaction that is rolled back: no other suite's
  * backfill or claim_document_jobs call ever sees them.
  */
-describe('document_backfill_candidates reads each check once per call (20261123004000, 20261126000300)', () => {
+describe('document_backfill_candidates reads each check once per call (20261123004000, 20261126000300, 20261126010000)', () => {
   const shippedBodies = Object.fromEntries(
-    ['20261112152731_document_read_candidates_skip_open_jobs.sql', '20261123004000_document_backfill_candidates_checks_once_per_call.sql'].map(
+    [
+      '20261112152731_document_read_candidates_skip_open_jobs.sql',
+      '20261123004000_document_backfill_candidates_checks_once_per_call.sql',
+      '20261126000300_document_backfill_candidates_index_only.sql',
+    ].map(
       (migration) => [
         migration,
         readFileSync(new URL(`../../supabase/migrations/${migration}`, import.meta.url), 'utf8')
@@ -451,8 +457,13 @@ describe('document_backfill_candidates reads each check once per call (202611230
           client.off('notice', onNotice)
         }
       },
-      // auto_explain's settings are the superuser's to set: before the role changes.
-      ['log_min_duration = 0', 'log_nested_statements = on', 'log_analyze = on', 'log_format = json', 'log_level = notice'].map((s) => `SET LOCAL auto_explain.${s}`),
+      [
+        // auto_explain's settings are the superuser's to set: before the role changes.
+        ...['log_min_duration = 0', 'log_nested_statements = on', 'log_analyze = on', 'log_format = json', 'log_level = notice'].map((s) => `SET LOCAL auto_explain.${s}`),
+        // Production's join: a lookup per document. On these near-empty tables a hash of the vouchers or a scan of a
+        // whole table costs the same as that, so they are priced out to show the shape production plans.
+        ...['enable_hashjoin', 'enable_mergejoin', 'enable_seqscan', 'enable_bitmapscan'].map((s) => `SET LOCAL ${s} = off`),
+      ],
     )
     const plan = notices.filter((m) => m.includes('"Plan"') && m.includes('document_jobs')).map((m) => (JSON.parse(m.slice(m.indexOf('{'))) as { Plan: Node }).Plan)[0]!
     const scans: Node[] = []
@@ -466,17 +477,17 @@ describe('document_backfill_candidates reads each check once per call (202611230
       expect(loops(relation), relation).toEqual([1])
       expect(scans.find((s) => s['Relation Name'] === relation)!['Parent Relationship'], relation).toBe('SubPlan')
     }
-    // The voucher is read per document that passed the cheaper tests, never in a join: by company and id for each of
-    // them, and by primary key alone only where that found nothing (no voucher, or another company's).
+    // The voucher is read per document that passed the cheaper tests: joined by company and id for each of them, and
+    // by primary key alone, in a subquery, only where the join found nothing (no voucher, or another company's).
     const vouchers = scans.filter((s) => s['Relation Name'] === 'journal_entries')
     const byCompany = vouchers.filter((s) => /company_id/.test(`${s['Index Cond'] ?? ''} ${s.Filter ?? ''}`))
     expect(vouchers).toHaveLength(2)
     expect(byCompany).toHaveLength(1)
-    for (const s of vouchers) expect(s['Parent Relationship']).toBe('SubPlan')
-    const own = byCompany[0]!['Actual Loops']!
-    const other = vouchers.find((s) => s !== byCompany[0])!['Actual Loops']!
-    expect(own).toBeGreaterThan(1)
-    expect(other).toBeLessThan(own)
+    const other = vouchers.find((s) => s !== byCompany[0])!
+    expect(byCompany[0]!['Parent Relationship']).toBe('Inner')
+    expect(other['Parent Relationship']).toBe('SubPlan')
+    expect(byCompany[0]!['Actual Loops']).toBeGreaterThan(1)
+    expect(other['Actual Loops']).toBeLessThan(byCompany[0]!['Actual Loops']!)
     // The walk is one scan, and so is the read of the rows it picked.
     expect(loops('document_attachments')).toEqual([1, 1])
   })
