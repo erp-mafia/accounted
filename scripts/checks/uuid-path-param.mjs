@@ -50,7 +50,8 @@ export const NOT_A_UUID = {
 }
 
 const WRAPPER_CALL_RE = /\bwithRouteContext\s*(?:<[^(]*?>)?\(/g
-const escape = (name) => name.replace(/[$]/g, '\\$&')
+/** A name as a regular expression that matches exactly it. */
+const escape = (name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 /** The path segments of a route file whose name says they hold an id. */
 function idSegments(rel) {
