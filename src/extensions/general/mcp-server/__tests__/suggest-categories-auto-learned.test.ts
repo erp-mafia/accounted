@@ -7,13 +7,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createQueuedMockSupabase, makeTransaction } from '@/tests/helpers'
 
-const { proposeMock, counterparts } = vi.hoisted(() => ({ proposeMock: vi.fn(), counterparts: vi.fn() }))
+const { proposeMock, counterparts, switchedOff } = vi.hoisted(() => ({ proposeMock: vi.fn(), counterparts: vi.fn(), switchedOff: vi.fn() }))
 vi.mock('@/lib/transactions/propose', () => ({
   proposeForTransactions: (...args: unknown[]) => proposeMock(...args),
 }))
 vi.mock('@/lib/bookkeeping/counterparty-templates', async (importActual) => ({
   ...(await importActual<typeof import('@/lib/bookkeeping/counterparty-templates')>()),
   findCounterpartyTemplatesBatch: counterparts,
+  readSwitchedOffRulesByName: switchedOff,
 }))
 vi.mock('@/lib/transactions/salary-run-payouts', async (importActual) => ({
   ...(await importActual<typeof import('@/lib/transactions/salary-run-payouts')>()),
@@ -45,6 +46,7 @@ const rule = (overrides: Record<string, unknown>) => ({
   source: 'auto',
   user_description: null,
   template_id: null,
+  created_at: '2026-01-01T00:00:00Z',
   ...overrides,
 })
 const learned = () => rule({})
@@ -53,8 +55,14 @@ const described = () =>
 
 type Suggestion = { category: string; account: string | null; source: string }
 
-async function hints(rules: unknown[]): Promise<Suggestion[]> {
+/** paused: the names of the counterparty rules the company switched off (money out, as the learned row), or a failed read of them. */
+async function hints(rules: unknown[], paused: string[] | 'read fails' = []): Promise<Suggestion[]> {
   counterparts.mockResolvedValue(new Map())
+  if (paused === 'read fails') switchedOff.mockRejectedValue(new Error('read failed'))
+  else
+    switchedOff.mockResolvedValue(
+      new Map(paused.map((name) => [name, [{ debit_account: '5410', credit_account: '1930' }]])),
+    )
   proposeMock.mockResolvedValue({ proposals: {}, assistant_reads: {}, direct_booking: { enabled: true } })
   const { supabase, enqueue } = createQueuedMockSupabase()
   enqueue({ data: [row], error: null }) // transactions
@@ -92,5 +100,25 @@ describe('gnubok_suggest_categories: auto-learned mapping rows in suggestions', 
     expect(await hints([learned(), described()])).toEqual([
       expect.objectContaining({ source: 'mapping_rule', account: '6200', category: 'expense_telecom' }),
     ])
+  })
+})
+
+describe('gnubok_suggest_categories: a counterparty rule the company paused', () => {
+  it('silences the auto-learned row its merchant names', async () => {
+    expect(await hints([learned()], ['zqxw vrpt'])).toEqual([])
+  })
+
+  it('a paused rule of another counterparty silences nothing', async () => {
+    expect(await hints([learned()], ['zqxw'])).toEqual([expect.objectContaining({ source: 'mapping_rule', account: '5410' })])
+  })
+
+  it('leaves a described row a hint', async () => {
+    expect(await hints([learned(), described()], ['zqxw vrpt'])).toEqual([
+      expect.objectContaining({ source: 'mapping_rule', account: '6200', category: 'expense_telecom' }),
+    ])
+  })
+
+  it('a failed read leaves the auto-learned row a hint, as stored', async () => {
+    expect(await hints([learned()], 'read fails')).toEqual([expect.objectContaining({ source: 'mapping_rule', account: '5410' })])
   })
 })

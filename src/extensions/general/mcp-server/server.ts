@@ -191,7 +191,7 @@ import { invoicePayableRefusal } from '@/lib/invoices/invoice-payable'
 import { resolveInvoicePaymentAccount, resolveInvoiceSettlementAccount } from '@/lib/invoices/invoice-payee'
 import { isPaidAtIssueAccount } from '@/lib/invoices/paid-at-issue'
 import { supplierInvoiceReference } from '@/lib/bookkeeping/supplier-invoice-description'
-import { contradictsLearnedDirection, findCounterpartyTemplatesBatch, formatCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
+import { contradictsLearnedDirection, findCounterpartyTemplatesBatch, formatCounterpartyName, readSwitchedOffRulesByName, type SwitchedOffCounterpartyRule } from '@/lib/bookkeeping/counterparty-templates'
 import { counterpartyTemplateKey } from '@/lib/rules/service'
 import { escapeLikePattern } from '@/lib/supabase/like-pattern'
 import { bankRowRefusalCode, decideBankRowRebooking } from '@/lib/transactions/is-booked'
@@ -707,7 +707,7 @@ import { voucherOwnerOrNull } from '@/lib/core/bookkeeping/voucher-owner'
 import { negatesOriginal } from '@/lib/core/bookkeeping/correction-shape'
 import { getSuggestedCategories, buildMerchantHistory, merchantHistoryFor } from '@/lib/transactions/category-suggestions'
 import { proposeForTransactions } from '@/lib/transactions/propose'
-import { mappingRulesRead } from '@/lib/bookkeeping/mapping-engine'
+import { isAutoLearnedMappingRule, mappingRulesBesideSwitchedOff, mappingRulesRead } from '@/lib/bookkeeping/mapping-engine'
 import {
   findSalaryRunPayouts,
   salaryPayoutLinkProposal,
@@ -14136,8 +14136,21 @@ export const tools: McpTool[] = [
         .eq('is_active', true)
         .order('priority', { ascending: false })
 
-      // Without the company's auto-learned rows where they are not read.
-      const readMappingRules = mappingRulesRead(companyId, (mappingRules ?? []) as MappingRule[])
+      // Without the company's auto-learned rows where they are not read, and
+      // beside its switched-off counterparty rules, read when a learned row is
+      // left: a learned row whose rule was paused is no hint. A failed read
+      // leaves the learned rows as stored.
+      const keptMappingRules = mappingRulesRead(companyId, (mappingRules ?? []) as MappingRule[])
+      const switchedOffByName = keptMappingRules.some(isAutoLearnedMappingRule)
+        ? await readSwitchedOffRulesByName(supabase, companyId).catch((err: unknown) => {
+            log.warn('switched-off counterparty rules read failed; learned rows are hints as stored', {
+              companyId,
+              error: err instanceof Error ? err.message : String(err),
+            })
+            return new Map<string, SwitchedOffCounterpartyRule[]>()
+          })
+        : new Map<string, SwitchedOffCounterpartyRule[]>()
+      const readMappingRules = mappingRulesBesideSwitchedOff(keptMappingRules, switchedOffByName)
 
       // Build category history from past categorizations
       // Counterparty-keyed history: the engine only surfaces history tied to

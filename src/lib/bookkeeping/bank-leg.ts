@@ -80,8 +80,16 @@ export function bankSideOf(transactionAmount: number): BankSide {
  * its debit.
  */
 export function mappingRuleAccount(rule: { debit_account?: string | null; credit_account?: string | null }): string | null {
-  const { debit_account: debit, credit_account: credit } = rule
-  return (isCashLedger(debit) && credit && !isCashLedger(credit) ? credit : debit) ?? null
+  return (pairLearnedOnMoneyIn(rule) ? rule.credit_account : rule.debit_account) ?? null
+}
+
+/**
+ * Whether a learned pair was booked on money in: the bank its debit, the
+ * account its credit (a 19xx debit against a credit that is not one). A
+ * pair between two own 19xx ledgers is not.
+ */
+export function pairLearnedOnMoneyIn(pair: { debit_account?: string | null; credit_account?: string | null }): boolean {
+  return isCashLedger(pair.debit_account) && !!pair.credit_account && !isCashLedger(pair.credit_account)
 }
 
 /**
