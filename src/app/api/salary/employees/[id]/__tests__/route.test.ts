@@ -26,6 +26,9 @@ import { EXTRA_TAX_ONE_FORM } from '@/lib/salary/extra-tax'
 import { NextResponse } from 'next/server'
 import { createQueuedMockSupabase, createMockRequest, parseJsonResponse } from '@/tests/helpers'
 
+// Route path ids are uuids: the route answers its 404 to anything else before it reads.
+const EMP_1 = 'fcd49043-9489-5813-aacd-a04b3e121e68'
+
 const { supabase, enqueue, reset, findCall } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
@@ -55,7 +58,7 @@ vi.mock('@/lib/salary/invalidate-calculation', async (original) => ({
   invalidateRunCalculation: vi.fn(async () => null),
 }))
 
-const params = { params: Promise.resolve({ id: 'emp-1' }) } as never
+const params = { params: Promise.resolve({ id: EMP_1 }) } as never
 
 // Obviously synthetic fixtures. STORED_PNR is only ever masked, so it needs no
 // check digit; NEW_PNR goes through validatePersonnummer, so its Luhn check
@@ -65,7 +68,7 @@ const STORED_CIPHERTEXT = encryptPersonnummer(STORED_PNR)
 const NEW_PNR = '190001010008'
 
 const EXISTING_ROW = {
-  id: 'emp-1',
+  id: EMP_1,
   company_id: 'company-1',
   first_name: 'Test',
   last_name: 'Testsson',
@@ -116,11 +119,11 @@ function employeeSupabase(
 }
 
 function patchRequest(body: Record<string, unknown>) {
-  return createMockRequest('/api/salary/employees/emp-1', { method: 'PATCH', body })
+  return createMockRequest(`/api/salary/employees/${EMP_1}`, { method: 'PATCH', body })
 }
 
 function deleteRequest() {
-  return createMockRequest('/api/salary/employees/emp-1', { method: 'DELETE' })
+  return createMockRequest(`/api/salary/employees/${EMP_1}`, { method: 'DELETE' })
 }
 
 // The PostgREST error for employees_jamkning_dates_check (#2256), as
@@ -136,7 +139,7 @@ const CHECK_CONSTRAINT_ERROR = {
 // What DELETE reads before it writes: the id plus the jämkning columns the
 // refusal sentence is derived from. This one has no beslut.
 const DELETE_READ_ROW = {
-  id: 'emp-1',
+  id: EMP_1,
   first_name: 'Test',
   last_name: 'Testsson',
   is_active: true,
@@ -176,13 +179,13 @@ describe('DELETE /api/salary/employees/[id]', () => {
 
   it('soft-deletes the employee (happy path)', async () => {
     enqueue({ data: DELETE_READ_ROW })
-    enqueue({ data: { id: 'emp-1' } })
+    enqueue({ data: { id: EMP_1 } })
 
     const response = await DELETE(deleteRequest(), params)
     const { status, body } = await parseJsonResponse<{ data: { id: string; is_active: boolean } }>(response)
 
     expect(status).toBe(200)
-    expect(body.data).toEqual({ id: 'emp-1', is_active: false })
+    expect(body.data).toEqual({ id: EMP_1, is_active: false })
     // Soft delete only (BFL 7 kap retention): the write flips is_active and
     // touches nothing else, in particular not the jämkning columns.
     expect(findCall('employees', 'update')).toEqual([{ is_active: false }])
@@ -246,7 +249,7 @@ describe('personnummer contract on /api/salary/employees/[id]', () => {
   })
 
   it('GET returns the mask under personnummer_masked and drops the ciphertext', async () => {
-    const response = await GET(createMockRequest('/api/salary/employees/emp-1'), params)
+    const response = await GET(createMockRequest(`/api/salary/employees/${EMP_1}`), params)
     const { status, body } = await parseJsonResponse<{ data: Record<string, unknown> }>(response)
 
     expect(status).toBe(200)

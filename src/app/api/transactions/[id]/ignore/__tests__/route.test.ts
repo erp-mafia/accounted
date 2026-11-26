@@ -7,6 +7,10 @@ import {
   createQueuedMockSupabase,
 } from '@/tests/helpers'
 
+// Route path ids are uuids: the route answers its 404 to anything else before it reads.
+const TX_1 = 'e77e16f0-544a-5f10-907d-220f9ff244c7'
+const TX_999 = '76612a8d-8419-5e1f-a902-30ac9aca602c'
+
 const { supabase: mockSupabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
@@ -51,8 +55,8 @@ describe('POST /api/transactions/[id]/ignore', () => {
       error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
     })
 
-    const request = createMockRequest('/api/transactions/tx-1/ignore', { method: 'POST' })
-    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const request = createMockRequest(`/api/transactions/${TX_1}/ignore`, { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: TX_1 }))
     const { status, body } = await parseJsonResponse(response)
 
     expect(status).toBe(401)
@@ -65,8 +69,8 @@ describe('POST /api/transactions/[id]/ignore', () => {
       response: NextResponse.json({ error: 'Forbidden' }, { status: 403 }),
     })
 
-    const request = createMockRequest('/api/transactions/tx-1/ignore', { method: 'POST' })
-    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const request = createMockRequest(`/api/transactions/${TX_1}/ignore`, { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: TX_1 }))
     const { status, body } = await parseJsonResponse(response)
 
     expect(status).toBe(403)
@@ -78,8 +82,8 @@ describe('POST /api/transactions/[id]/ignore', () => {
   it('returns 404 when transaction not found', async () => {
     enqueue({ data: null, error: null }) // maybeSingle: no row
 
-    const request = createMockRequest('/api/transactions/tx-999/ignore', { method: 'POST' })
-    const response = await POST(request, createMockRouteParams({ id: 'tx-999' }))
+    const request = createMockRequest(`/api/transactions/${TX_999}/ignore`, { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: TX_999 }))
     const { status, body } = await parseJsonResponse(response)
 
     expect(status).toBe(404)
@@ -87,10 +91,10 @@ describe('POST /api/transactions/[id]/ignore', () => {
   })
 
   it('returns 409 when the transaction is already booked', async () => {
-    enqueue({ data: { id: 'tx-1', journal_entry_id: 'je-1', is_booked: true, is_ignored: false }, error: null })
+    enqueue({ data: { id: TX_1, journal_entry_id: 'je-1', is_booked: true, is_ignored: false }, error: null })
 
-    const request = createMockRequest('/api/transactions/tx-1/ignore', { method: 'POST' })
-    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const request = createMockRequest(`/api/transactions/${TX_1}/ignore`, { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: TX_1 }))
     const { status, body } = await parseJsonResponse<{ error: string }>(response)
 
     expect(status).toBe(409)
@@ -101,10 +105,10 @@ describe('POST /api/transactions/[id]/ignore', () => {
   it('returns 409 for a bulk-booked row whose verifikat lives in transaction_voucher_links (issue #1661)', async () => {
     // journal_entry_id stays NULL for N>1 bulk bookings: the old bare check
     // would have let this row be ignored while a verifikat still carries it.
-    enqueue({ data: { id: 'tx-1', journal_entry_id: null, is_booked: true, is_ignored: false }, error: null })
+    enqueue({ data: { id: TX_1, journal_entry_id: null, is_booked: true, is_ignored: false }, error: null })
 
-    const request = createMockRequest('/api/transactions/tx-1/ignore', { method: 'POST' })
-    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const request = createMockRequest(`/api/transactions/${TX_1}/ignore`, { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: TX_1 }))
     const { status, body } = await parseJsonResponse<{ error: string }>(response)
 
     expect(status).toBe(409)
@@ -113,10 +117,10 @@ describe('POST /api/transactions/[id]/ignore', () => {
   })
 
   it('is idempotent when the transaction is already ignored', async () => {
-    enqueue({ data: { id: 'tx-1', journal_entry_id: null, is_booked: false, is_ignored: true }, error: null })
+    enqueue({ data: { id: TX_1, journal_entry_id: null, is_booked: false, is_ignored: true }, error: null })
 
-    const request = createMockRequest('/api/transactions/tx-1/ignore', { method: 'POST' })
-    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const request = createMockRequest(`/api/transactions/${TX_1}/ignore`, { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: TX_1 }))
     const { status, body } = await parseJsonResponse(response)
 
     expect(status).toBe(200)
@@ -125,11 +129,11 @@ describe('POST /api/transactions/[id]/ignore', () => {
   })
 
   it('marks the transaction ignored (happy path)', async () => {
-    enqueue({ data: { id: 'tx-1', journal_entry_id: null, is_booked: false, is_ignored: false }, error: null }) // fetch
+    enqueue({ data: { id: TX_1, journal_entry_id: null, is_booked: false, is_ignored: false }, error: null }) // fetch
     enqueue({ data: null, error: null }) // update
 
-    const request = createMockRequest('/api/transactions/tx-1/ignore', { method: 'POST' })
-    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const request = createMockRequest(`/api/transactions/${TX_1}/ignore`, { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: TX_1 }))
     const { status, body } = await parseJsonResponse(response)
 
     expect(status).toBe(200)
@@ -138,11 +142,11 @@ describe('POST /api/transactions/[id]/ignore', () => {
   })
 
   it('returns 500 when the update fails', async () => {
-    enqueue({ data: { id: 'tx-1', journal_entry_id: null, is_booked: false, is_ignored: false }, error: null }) // fetch
+    enqueue({ data: { id: TX_1, journal_entry_id: null, is_booked: false, is_ignored: false }, error: null }) // fetch
     enqueue({ data: null, error: { message: 'db down' } }) // update fails
 
-    const request = createMockRequest('/api/transactions/tx-1/ignore', { method: 'POST' })
-    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const request = createMockRequest(`/api/transactions/${TX_1}/ignore`, { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: TX_1 }))
     const { status, body } = await parseJsonResponse(response)
 
     expect(status).toBe(500)
@@ -158,8 +162,8 @@ describe('DELETE /api/transactions/[id]/ignore', () => {
       error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
     })
 
-    const request = createMockRequest('/api/transactions/tx-1/ignore', { method: 'DELETE' })
-    const response = await DELETE(request, createMockRouteParams({ id: 'tx-1' }))
+    const request = createMockRequest(`/api/transactions/${TX_1}/ignore`, { method: 'DELETE' })
+    const response = await DELETE(request, createMockRouteParams({ id: TX_1 }))
     const { status, body } = await parseJsonResponse(response)
 
     expect(status).toBe(401)
@@ -172,8 +176,8 @@ describe('DELETE /api/transactions/[id]/ignore', () => {
       response: NextResponse.json({ error: 'Forbidden' }, { status: 403 }),
     })
 
-    const request = createMockRequest('/api/transactions/tx-1/ignore', { method: 'DELETE' })
-    const response = await DELETE(request, createMockRouteParams({ id: 'tx-1' }))
+    const request = createMockRequest(`/api/transactions/${TX_1}/ignore`, { method: 'DELETE' })
+    const response = await DELETE(request, createMockRouteParams({ id: TX_1 }))
     const { status, body } = await parseJsonResponse(response)
 
     expect(status).toBe(403)
@@ -183,8 +187,8 @@ describe('DELETE /api/transactions/[id]/ignore', () => {
   it('returns 404 when transaction not found', async () => {
     enqueue({ data: null, error: null })
 
-    const request = createMockRequest('/api/transactions/tx-999/ignore', { method: 'DELETE' })
-    const response = await DELETE(request, createMockRouteParams({ id: 'tx-999' }))
+    const request = createMockRequest(`/api/transactions/${TX_999}/ignore`, { method: 'DELETE' })
+    const response = await DELETE(request, createMockRouteParams({ id: TX_999 }))
     const { status, body } = await parseJsonResponse(response)
 
     expect(status).toBe(404)
@@ -192,11 +196,11 @@ describe('DELETE /api/transactions/[id]/ignore', () => {
   })
 
   it('clears the ignore flag (happy path)', async () => {
-    enqueue({ data: { id: 'tx-1', journal_entry_id: null, is_booked: false, is_ignored: true }, error: null }) // fetch
+    enqueue({ data: { id: TX_1, journal_entry_id: null, is_booked: false, is_ignored: true }, error: null }) // fetch
     enqueue({ data: null, error: null }) // update
 
-    const request = createMockRequest('/api/transactions/tx-1/ignore', { method: 'DELETE' })
-    const response = await DELETE(request, createMockRouteParams({ id: 'tx-1' }))
+    const request = createMockRequest(`/api/transactions/${TX_1}/ignore`, { method: 'DELETE' })
+    const response = await DELETE(request, createMockRouteParams({ id: TX_1 }))
     const { status, body } = await parseJsonResponse(response)
 
     expect(status).toBe(200)
@@ -205,11 +209,11 @@ describe('DELETE /api/transactions/[id]/ignore', () => {
   })
 
   it('returns 500 when the update fails', async () => {
-    enqueue({ data: { id: 'tx-1', journal_entry_id: null, is_booked: false, is_ignored: true }, error: null }) // fetch
+    enqueue({ data: { id: TX_1, journal_entry_id: null, is_booked: false, is_ignored: true }, error: null }) // fetch
     enqueue({ data: null, error: { message: 'db down' } }) // update fails
 
-    const request = createMockRequest('/api/transactions/tx-1/ignore', { method: 'DELETE' })
-    const response = await DELETE(request, createMockRouteParams({ id: 'tx-1' }))
+    const request = createMockRequest(`/api/transactions/${TX_1}/ignore`, { method: 'DELETE' })
+    const response = await DELETE(request, createMockRouteParams({ id: TX_1 }))
     const { status, body } = await parseJsonResponse(response)
 
     expect(status).toBe(500)

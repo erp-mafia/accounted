@@ -11,6 +11,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import { createQueuedMockSupabase, createMockRequest, parseJsonResponse } from '@/tests/helpers'
 
+// Route path ids are uuids: the route answers its 404 to anything else before it reads.
+const ASSET_1 = '050c55e7-6819-5316-bf30-fea729a331a0'
+
 const { supabase, enqueue, reset } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
@@ -61,7 +64,7 @@ import { POST } from '../route'
 const mockGetAsset = vi.mocked(getAsset)
 const mockUpdateAsset = vi.mocked(updateAsset)
 const mockCreateAsset = vi.mocked(createAsset)
-const routeParams = { params: Promise.resolve({ id: 'asset-1' }) }
+const routeParams = { params: Promise.resolve({ id: ASSET_1 }) }
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -79,7 +82,7 @@ describe('GET /api/assets/[id]', () => {
       error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
     })
 
-    const res = await GET(createMockRequest('/api/assets/asset-1'), routeParams)
+    const res = await GET(createMockRequest(`/api/assets/${ASSET_1}`), routeParams)
     expect(res.status).toBe(401)
   })
 
@@ -87,7 +90,7 @@ describe('GET /api/assets/[id]', () => {
     mockGetAsset.mockResolvedValue(null)
 
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
-      await GET(createMockRequest('/api/assets/asset-1'), routeParams)
+      await GET(createMockRequest(`/api/assets/${ASSET_1}`), routeParams)
     )
 
     expect(status).toBe(404)
@@ -361,7 +364,7 @@ describe('POST /api/assets', () => {
 
 describe('PATCH /api/assets/[id]', () => {
   it('rejects legacy per-asset tax depreciation methods with 400', async () => {
-    const req = createMockRequest('/api/assets/asset-1', {
+    const req = createMockRequest(`/api/assets/${ASSET_1}`, {
       method: 'PATCH',
       body: { depreciation_method: 'declining_balance_30' },
     })
@@ -373,7 +376,7 @@ describe('PATCH /api/assets/[id]', () => {
   })
 
   it('rejects an invalid body (non-positive acquisition_cost) with 400', async () => {
-    const req = createMockRequest('/api/assets/asset-1', {
+    const req = createMockRequest(`/api/assets/${ASSET_1}`, {
       method: 'PATCH',
       body: { acquisition_cost: -5 },
     })
@@ -388,9 +391,9 @@ describe('PATCH /api/assets/[id]', () => {
     enqueue({ data: { accounting_framework: 'k2' } })
     frameworkOnDateMock.mockResolvedValue('k2')
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    mockGetAsset.mockResolvedValue({ id: 'asset-1', acquisition_cost: 100000 } as any)
+    mockGetAsset.mockResolvedValue({ id: ASSET_1, acquisition_cost: 100000 } as any)
 
-    const req = createMockRequest('/api/assets/asset-1', {
+    const req = createMockRequest(`/api/assets/${ASSET_1}`, {
       method: 'PATCH',
       body: {
         k3_components: [{ name: 'Stomme', cost: 100000, useful_life_months: 600 }],
@@ -413,8 +416,8 @@ describe('PATCH /api/assets/[id]', () => {
     enqueue({ data: { accounting_framework: 'k3' } })
     frameworkOnDateMock.mockResolvedValue('k2')
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    mockGetAsset.mockResolvedValue({ id: 'asset-1', acquisition_cost: 100000, acquisition_date: '2026-03-01' } as any)
-    const req = createMockRequest('/api/assets/asset-1', {
+    mockGetAsset.mockResolvedValue({ id: ASSET_1, acquisition_cost: 100000, acquisition_date: '2026-03-01' } as any)
+    const req = createMockRequest(`/api/assets/${ASSET_1}`, {
       method: 'PATCH',
       body: { k3_components: [{ name: 'Stomme', cost: 100000, useful_life_months: 600 }] },
     })
@@ -445,11 +448,11 @@ describe('PATCH /api/assets/[id]', () => {
     enqueue({ data: { accounting_framework: 'k3' } })
     frameworkOnDateMock.mockResolvedValue('k3')
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    mockGetAsset.mockResolvedValue({ id: 'asset-1', acquisition_cost: 100000 } as any)
+    mockGetAsset.mockResolvedValue({ id: ASSET_1, acquisition_cost: 100000 } as any)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    mockUpdateAsset.mockResolvedValue({ id: 'asset-1', acquisition_cost: 120000 } as any)
+    mockUpdateAsset.mockResolvedValue({ id: ASSET_1, acquisition_cost: 120000 } as any)
 
-    const req = createMockRequest('/api/assets/asset-1', {
+    const req = createMockRequest(`/api/assets/${ASSET_1}`, {
       method: 'PATCH',
       body: {
         acquisition_cost: 120000,
@@ -470,9 +473,9 @@ describe('PATCH /api/assets/[id]', () => {
     enqueue({ data: { accounting_framework: 'k3' } })
     frameworkOnDateMock.mockResolvedValue('k3')
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    mockGetAsset.mockResolvedValue({ id: 'asset-1', acquisition_cost: 100000 } as any)
+    mockGetAsset.mockResolvedValue({ id: ASSET_1, acquisition_cost: 100000 } as any)
 
-    const req = createMockRequest('/api/assets/asset-1', {
+    const req = createMockRequest(`/api/assets/${ASSET_1}`, {
       method: 'PATCH',
       body: {
         acquisition_cost: 120000,
@@ -493,14 +496,14 @@ describe('PATCH /api/assets/[id]', () => {
     enqueue({ data: { accounting_framework: 'k2', entity_type: 'aktiebolag' } })
     frameworkOnDateMock.mockResolvedValue('k2')
     mockGetAsset.mockResolvedValue({
-      id: 'asset-1',
+      id: ASSET_1,
       category: 'immaterial',
       bas_asset_account: '1030',
       bas_accumulated_account: '1039',
       bas_expense_account: '7813',
     } as never)
 
-    const req = createMockRequest('/api/assets/asset-1', {
+    const req = createMockRequest(`/api/assets/${ASSET_1}`, {
       method: 'PATCH',
       body: { bas_asset_account: '1010' },
     })
@@ -523,14 +526,14 @@ describe('PATCH /api/assets/[id]', () => {
     enqueue({ data: { accounting_framework: 'k2' } })
     frameworkOnDateMock.mockResolvedValue('k2')
     mockGetAsset.mockResolvedValue({
-      id: 'asset-1',
+      id: ASSET_1,
       category: 'equipment',
       bas_asset_account: '1220',
       bas_accumulated_account: '1229',
       bas_expense_account: '7832',
     } as never)
 
-    const req = createMockRequest('/api/assets/asset-1', {
+    const req = createMockRequest(`/api/assets/${ASSET_1}`, {
       method: 'PATCH',
       body: {
         category: 'immaterial',
@@ -558,14 +561,14 @@ describe('PATCH /api/assets/[id]', () => {
     enqueue({ data: { accounting_framework: 'k2', entity_type: 'aktiebolag' } })
     frameworkOnDateMock.mockResolvedValue('k2')
     mockGetAsset.mockResolvedValue({
-      id: 'asset-1',
+      id: ASSET_1,
       category: 'immaterial',
       bas_asset_account: '1030',
       bas_accumulated_account: '1039',
       bas_expense_account: '7813',
     } as never)
 
-    const req = createMockRequest('/api/assets/asset-1', {
+    const req = createMockRequest(`/api/assets/${ASSET_1}`, {
       method: 'PATCH',
       body: { bas_asset_account: '1370' },
     })
@@ -596,20 +599,20 @@ describe('PATCH /api/assets/[id]', () => {
     enqueue({ data: { accounting_framework: 'k2' } })
     frameworkOnDateMock.mockResolvedValue('k2')
     mockGetAsset.mockResolvedValue({
-      id: 'asset-1',
+      id: ASSET_1,
       category: 'equipment',
       bas_asset_account: '1220',
       bas_accumulated_account: '1229',
       bas_expense_account: '7832',
     } as never)
     mockUpdateAsset.mockResolvedValue({
-      id: 'asset-1',
+      id: ASSET_1,
       category: 'immaterial',
       bas_asset_account: '1090',
       bas_accumulated_account: '1099',
     } as never)
 
-    const req = createMockRequest('/api/assets/asset-1', {
+    const req = createMockRequest(`/api/assets/${ASSET_1}`, {
       method: 'PATCH',
       body: { category: 'immaterial' },
     })
@@ -623,7 +626,7 @@ describe('PATCH /api/assets/[id]', () => {
     expect(body.data.bas_accumulated_account).toBe('1099')
     // The route forwards the bare category patch: updateAsset realigns the
     // triple itself (asset-service.test.ts pins the realigned pair).
-    expect(mockUpdateAsset).toHaveBeenCalledWith(supabase, 'company-1', 'asset-1', {
+    expect(mockUpdateAsset).toHaveBeenCalledWith(supabase, 'company-1', ASSET_1, {
       category: 'immaterial',
     }, { userId: 'user-1' })
   })
@@ -632,15 +635,15 @@ describe('PATCH /api/assets/[id]', () => {
     enqueue({ data: { accounting_framework: 'k2' } })
     frameworkOnDateMock.mockResolvedValue('k2')
     mockGetAsset.mockResolvedValue({
-      id: 'asset-1',
+      id: ASSET_1,
       category: 'immaterial',
       bas_asset_account: '1010',
       bas_accumulated_account: '1019',
       bas_expense_account: '7811',
     } as never)
-    mockUpdateAsset.mockResolvedValue({ id: 'asset-1', bas_asset_account: '1030' } as never)
+    mockUpdateAsset.mockResolvedValue({ id: ASSET_1, bas_asset_account: '1030' } as never)
 
-    const req = createMockRequest('/api/assets/asset-1', {
+    const req = createMockRequest(`/api/assets/${ASSET_1}`, {
       method: 'PATCH',
       body: { bas_asset_account: '1030', bas_accumulated_account: '1039' },
     })
@@ -655,15 +658,15 @@ describe('PATCH /api/assets/[id]', () => {
     enqueue({ data: { accounting_framework: 'k3' } })
     frameworkOnDateMock.mockResolvedValue('k3')
     mockGetAsset.mockResolvedValue({
-      id: 'asset-1',
+      id: ASSET_1,
       category: 'immaterial',
       bas_asset_account: '1030',
       bas_accumulated_account: '1039',
       bas_expense_account: '7813',
     } as never)
-    mockUpdateAsset.mockResolvedValue({ id: 'asset-1', bas_asset_account: '1010' } as never)
+    mockUpdateAsset.mockResolvedValue({ id: ASSET_1, bas_asset_account: '1010' } as never)
 
-    const req = createMockRequest('/api/assets/asset-1', {
+    const req = createMockRequest(`/api/assets/${ASSET_1}`, {
       method: 'PATCH',
       body: { bas_asset_account: '1010', bas_accumulated_account: '1019' },
     })
@@ -679,9 +682,9 @@ describe('PATCH /api/assets/[id]', () => {
     // it would resolve a null company (treated as K2) and 404 on the missing
     // asset. A 200 therefore proves the name-only patch never hit the gate,
     // which keeps legacy K2 assets already sitting on 1010 editable.
-    mockUpdateAsset.mockResolvedValue({ id: 'asset-1', name: 'Nytt namn' } as never)
+    mockUpdateAsset.mockResolvedValue({ id: ASSET_1, name: 'Nytt namn' } as never)
 
-    const req = createMockRequest('/api/assets/asset-1', {
+    const req = createMockRequest(`/api/assets/${ASSET_1}`, {
       method: 'PATCH',
       body: { name: 'Nytt namn' },
     })
@@ -695,19 +698,19 @@ describe('PATCH /api/assets/[id]', () => {
   // R1: an asset already on 1010 is marked as own development from the
   // edit form; the service writes it through the audited door.
   it('passes the own development mark to the service, and 400 for a non-boolean', async () => {
-    mockUpdateAsset.mockResolvedValue({ id: 'asset-1', own_development: true } as never)
-    const req = createMockRequest('/api/assets/asset-1', { method: 'PATCH', body: { own_development: true } })
+    mockUpdateAsset.mockResolvedValue({ id: ASSET_1, own_development: true } as never)
+    const req = createMockRequest(`/api/assets/${ASSET_1}`, { method: 'PATCH', body: { own_development: true } })
     expect((await parseJsonResponse(await PATCH(req, routeParams))).status).toBe(200)
     expect(mockUpdateAsset.mock.calls[0][3]).toEqual({ own_development: true })
 
-    const bad = createMockRequest('/api/assets/asset-1', { method: 'PATCH', body: { own_development: 'ja' } })
+    const bad = createMockRequest(`/api/assets/${ASSET_1}`, { method: 'PATCH', body: { own_development: 'ja' } })
     expect((await parseJsonResponse(await PATCH(bad, routeParams))).status).toBe(400)
   })
 
   it('answers 400 with the reason when the asset is not on 1010-1019', async () => {
     const { AssetOwnDevelopmentAccountError } = await import('@/lib/bokslut/assets/asset-service')
     mockUpdateAsset.mockRejectedValue(new AssetOwnDevelopmentAccountError())
-    const req = createMockRequest('/api/assets/asset-1', { method: 'PATCH', body: { own_development: true } })
+    const req = createMockRequest(`/api/assets/${ASSET_1}`, { method: 'PATCH', body: { own_development: true } })
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(await PATCH(req, routeParams))
     expect(status).toBe(400)
     expect(body.error.code).toBe('OWN_DEVELOPMENT_ACCOUNT')

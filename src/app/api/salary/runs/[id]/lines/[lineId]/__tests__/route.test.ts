@@ -7,6 +7,10 @@ import {
   createMockRouteParams,
 } from '@/tests/helpers'
 
+// Route path ids are uuids: the route answers its 404 to anything else before it reads.
+const LINE_1 = '2d533c08-c547-5272-8f4a-9a83da8a91cb'
+const RUN_1 = 'ebdc9458-7643-58fb-bdd9-6b0e8334baa0'
+
 vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 vi.mock('@/lib/auth/require-auth', () => ({ requireAuth: vi.fn() }))
 vi.mock('@/lib/company/context', () => ({
@@ -39,7 +43,7 @@ function authed() {
   return { supabase, enqueueMany }
 }
 
-const params = () => createMockRouteParams({ id: 'run-1', lineId: 'line-1' })
+const params = () => createMockRouteParams({ id: RUN_1, lineId: LINE_1 })
 
 describe('PATCH /api/salary/runs/[id]/lines/[lineId]', () => {
   beforeEach(() => {
@@ -54,7 +58,7 @@ describe('PATCH /api/salary/runs/[id]/lines/[lineId]', () => {
       error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
     })
     const response = await PATCH(
-      createMockRequest('/api/salary/runs/run-1/lines/line-1', { method: 'PATCH', body: { amount: 100 } }),
+      createMockRequest(`/api/salary/runs/${RUN_1}/lines/${LINE_1}`, { method: 'PATCH', body: { amount: 100 } }),
       params(),
     )
     expect(response.status).toBe(401)
@@ -67,7 +71,7 @@ describe('PATCH /api/salary/runs/[id]/lines/[lineId]', () => {
       response: NextResponse.json({ error: 'Forbidden' }, { status: 403 }),
     } as never)
     const response = await PATCH(
-      createMockRequest('/api/salary/runs/run-1/lines/line-1', { method: 'PATCH', body: { amount: 100 } }),
+      createMockRequest(`/api/salary/runs/${RUN_1}/lines/${LINE_1}`, { method: 'PATCH', body: { amount: 100 } }),
       params(),
     )
     expect(response.status).toBe(403)
@@ -76,25 +80,25 @@ describe('PATCH /api/salary/runs/[id]/lines/[lineId]', () => {
   it('updates a line on a draft run', async () => {
     const { enqueueMany } = authed()
     enqueueMany([
-      { data: { id: 'run-1', status: 'draft' } }, // salary_runs lookup
+      { data: { id: RUN_1, status: 'draft' } }, // salary_runs lookup
       // The shared service verifies the line belongs to this run before
       // writing (loadLineInRun join check).
-      { data: { id: 'line-1', amount: 50, salary_run_employee: { salary_run_id: 'run-1' } } },
-      { data: { id: 'line-1', amount: 100 } }, // update returning
+      { data: { id: LINE_1, amount: 50, salary_run_employee: { salary_run_id: RUN_1 } } },
+      { data: { id: LINE_1, amount: 100 } }, // update returning
     ])
     const response = await PATCH(
-      createMockRequest('/api/salary/runs/run-1/lines/line-1', { method: 'PATCH', body: { amount: 100 } }),
+      createMockRequest(`/api/salary/runs/${RUN_1}/lines/${LINE_1}`, { method: 'PATCH', body: { amount: 100 } }),
       params(),
     )
     const { status, body } = await parseJsonResponse<{ data: { id: string } }>(response)
     expect(status).toBe(200)
-    expect(body.data.id).toBe('line-1')
+    expect(body.data.id).toBe(LINE_1)
   })
 
   it('has nothing to update in a patch of flags: they are the type\'s (agent feedback seq 947288)', async () => {
     authed()
     const response = await PATCH(
-      createMockRequest('/api/salary/runs/run-1/lines/line-1', { method: 'PATCH', body: { is_avgift_basis: false } }),
+      createMockRequest(`/api/salary/runs/${RUN_1}/lines/${LINE_1}`, { method: 'PATCH', body: { is_avgift_basis: false } }),
       params(),
     )
     expect(response.status).toBe(400)
@@ -114,7 +118,7 @@ describe('DELETE /api/salary/runs/[id]/lines/[lineId]', () => {
       error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
     })
     const response = await DELETE(
-      createMockRequest('/api/salary/runs/run-1/lines/line-1', { method: 'DELETE' }),
+      createMockRequest(`/api/salary/runs/${RUN_1}/lines/${LINE_1}`, { method: 'DELETE' }),
       params(),
     )
     expect(response.status).toBe(401)
@@ -127,7 +131,7 @@ describe('DELETE /api/salary/runs/[id]/lines/[lineId]', () => {
       response: NextResponse.json({ error: 'Forbidden' }, { status: 403 }),
     } as never)
     const response = await DELETE(
-      createMockRequest('/api/salary/runs/run-1/lines/line-1', { method: 'DELETE' }),
+      createMockRequest(`/api/salary/runs/${RUN_1}/lines/${LINE_1}`, { method: 'DELETE' }),
       params(),
     )
     expect(response.status).toBe(403)
@@ -136,13 +140,13 @@ describe('DELETE /api/salary/runs/[id]/lines/[lineId]', () => {
   it('deletes a line on a draft run', async () => {
     const { enqueueMany } = authed()
     enqueueMany([
-      { data: { id: 'run-1', status: 'draft' } }, // salary_runs lookup
+      { data: { id: RUN_1, status: 'draft' } }, // salary_runs lookup
       // Run-membership verification added by the shared service.
-      { data: { id: 'line-1', amount: 50, salary_run_employee: { salary_run_id: 'run-1' } } },
+      { data: { id: LINE_1, amount: 50, salary_run_employee: { salary_run_id: RUN_1 } } },
       { data: null }, // delete (error null)
     ])
     const response = await DELETE(
-      createMockRequest('/api/salary/runs/run-1/lines/line-1', { method: 'DELETE' }),
+      createMockRequest(`/api/salary/runs/${RUN_1}/lines/${LINE_1}`, { method: 'DELETE' }),
       params(),
     )
     const { status, body } = await parseJsonResponse<{ data: { deleted: boolean } }>(response)
@@ -170,7 +174,7 @@ describe('PATCH /api/salary/runs/[id]/lines/[lineId]: text rows and 0 kr rows', 
   }
 
   const TEXT_LINE = {
-    id: 'line-1',
+    id: LINE_1,
     item_type: 'text',
     description: 'Lön enligt kollektivavtal',
     quantity: null,
@@ -189,7 +193,7 @@ describe('PATCH /api/salary/runs/[id]/lines/[lineId]: text rows and 0 kr rows', 
     calculation_source: null,
     source_benefit_id: null,
     source_recurring_line_id: null,
-    salary_run_employee: { salary_run_id: 'run-1' },
+    salary_run_employee: { salary_run_id: RUN_1 },
   }
   const BONUS_LINE = {
     ...TEXT_LINE,
@@ -204,7 +208,7 @@ describe('PATCH /api/salary/runs/[id]/lines/[lineId]: text rows and 0 kr rows', 
 
   async function patch(body: unknown) {
     const response = await PATCH(
-      createMockRequest('/api/salary/runs/run-1/lines/line-1', { method: 'PATCH', body }),
+      createMockRequest(`/api/salary/runs/${RUN_1}/lines/${LINE_1}`, { method: 'PATCH', body }),
       params(),
     )
     return parseJsonResponse<{ data?: { id: string }; error?: string; code?: string }>(response)
@@ -223,7 +227,7 @@ describe('PATCH /api/salary/runs/[id]/lines/[lineId]: text rows and 0 kr rows', 
   it('updates the words of a text row and keeps it words only (200)', async () => {
     const { enqueueMany, findCall } = authedWithCalls()
     enqueueMany([
-      { data: { id: 'run-1', status: 'draft' } },
+      { data: { id: RUN_1, status: 'draft' } },
       { data: TEXT_LINE },
       { data: { ...TEXT_LINE, description: 'Ny text på två rader' } },
     ])
@@ -232,7 +236,7 @@ describe('PATCH /api/salary/runs/[id]/lines/[lineId]: text rows and 0 kr rows', 
     const { status, body } = await patch({ description: ' Ny text\n på två rader ', is_taxable: true, account_number: '7210' })
 
     expect(status).toBe(200)
-    expect(body.data?.id).toBe('line-1')
+    expect(body.data?.id).toBe(LINE_1)
     expect(findCall('salary_line_items', 'update')?.[0]).toEqual({
       description: 'Ny text på två rader',
       account_number: null,
@@ -246,7 +250,7 @@ describe('PATCH /api/salary/runs/[id]/lines/[lineId]: text rows and 0 kr rows', 
 
   it('returns 400 for an amount on a text row, and writes nothing', async () => {
     const { enqueueMany, findCall } = authedWithCalls()
-    enqueueMany([{ data: { id: 'run-1', status: 'draft' } }, { data: TEXT_LINE }])
+    enqueueMany([{ data: { id: RUN_1, status: 'draft' } }, { data: TEXT_LINE }])
     const { status, body } = await patch({ amount: 250 })
     expect(status).toBe(400)
     expect(body.code).toBe('VALIDATION_ERROR')
@@ -256,7 +260,7 @@ describe('PATCH /api/salary/runs/[id]/lines/[lineId]: text rows and 0 kr rows', 
 
   it('returns 400 when a money row is patched to 0 kr', async () => {
     const { enqueueMany, findCall } = authedWithCalls()
-    enqueueMany([{ data: { id: 'run-1', status: 'draft' } }, { data: BONUS_LINE }])
+    enqueueMany([{ data: { id: RUN_1, status: 'draft' } }, { data: BONUS_LINE }])
     const { status, body } = await patch({ amount: 0 })
     expect(status).toBe(400)
     expect(body.code).toBe('VALIDATION_ERROR')
@@ -270,7 +274,7 @@ describe('PATCH /api/salary/runs/[id]/lines/[lineId]: text rows and 0 kr rows', 
       [TEXT_LINE, 'bonus'],
     ] as const) {
       const { enqueueMany } = authedWithCalls()
-      enqueueMany([{ data: { id: 'run-1', status: 'draft' } }, { data: line }])
+      enqueueMany([{ data: { id: RUN_1, status: 'draft' } }, { data: line }])
       const { status, body } = await patch({ item_type: itemType })
       expect(status).toBe(400)
       expect(body.error).toMatch(/kan inte göras om till eller från en textrad/)
@@ -288,7 +292,7 @@ describe('PATCH /api/salary/runs/[id]/lines/[lineId]: text rows and 0 kr rows', 
   it('returns 404 for a text row of another run', async () => {
     const { enqueueMany } = authedWithCalls()
     enqueueMany([
-      { data: { id: 'run-1', status: 'draft' } },
+      { data: { id: RUN_1, status: 'draft' } },
       { data: { ...TEXT_LINE, salary_run_employee: { salary_run_id: 'run-2' } } },
     ])
     const { status, body } = await patch({ description: 'Ny text' })

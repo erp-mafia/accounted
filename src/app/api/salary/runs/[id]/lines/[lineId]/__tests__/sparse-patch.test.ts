@@ -14,6 +14,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createMockRequest, parseJsonResponse, createMockRouteParams } from '@/tests/helpers'
 
+// Route path ids are uuids: the route answers its 404 to anything else before it reads.
+const LINE_1 = '2d533c08-c547-5272-8f4a-9a83da8a91cb'
+const RUN_1 = 'ebdc9458-7643-58fb-bdd9-6b0e8334baa0'
+
 vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 vi.mock('@/lib/auth/require-auth', () => ({ requireAuth: vi.fn() }))
 vi.mock('@/lib/company/context', () => ({
@@ -33,7 +37,7 @@ import { requireAuth } from '@/lib/auth/require-auth'
 import { requireWritePermission } from '@/lib/auth/require-write'
 import { updatePayslipLine } from '@/lib/salary/payslip-lines'
 
-const params = () => createMockRouteParams({ id: 'run-1', lineId: 'line-1' })
+const params = () => createMockRouteParams({ id: RUN_1, lineId: LINE_1 })
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -45,13 +49,13 @@ beforeEach(() => {
   vi.mocked(requireWritePermission).mockResolvedValue({ ok: true } as never)
   vi.mocked(updatePayslipLine).mockResolvedValue({
     ok: true,
-    data: { id: 'line-1' } as never,
+    data: { id: LINE_1 } as never,
   })
 })
 
 async function patch(body: unknown) {
   return PATCH(
-    createMockRequest('/api/salary/runs/run-1/lines/line-1', { method: 'PATCH', body }),
+    createMockRequest(`/api/salary/runs/${RUN_1}/lines/${LINE_1}`, { method: 'PATCH', body }),
     params(),
   )
 }

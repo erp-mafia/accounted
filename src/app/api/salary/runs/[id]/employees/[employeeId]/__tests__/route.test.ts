@@ -7,6 +7,11 @@ import {
   createMockRouteParams,
 } from '@/tests/helpers'
 
+// Route path ids are uuids: the route answers its 404 to anything else before it reads.
+const EMP_1 = 'fcd49043-9489-5813-aacd-a04b3e121e68'
+const RUN_1 = 'ebdc9458-7643-58fb-bdd9-6b0e8334baa0'
+const RUN_X_ID = 'b72a999c-cb77-523a-bab6-6a0105418bd8'
+
 // ── Mocks ────────────────────────────────────────────────────
 // The route is wrapped in withRouteContext. We inject a queued Supabase mock
 // through requireAuth and mock the company/write helpers the wrapper uses.
@@ -49,6 +54,20 @@ describe('GET /api/salary/runs/[id]/employees/[employeeId]', () => {
     vi.mocked(requireWritePermission).mockResolvedValue({ ok: true } as never)
   })
 
+  it('answers 404 for a run or an employee id that is not a uuid, before any query', async () => {
+    // Postgres refused `new` in the uuid filter, and the route answered 500.
+    const { findCalls } = authed()
+
+    const badRun = await GET(createMockRequest(`/api/salary/runs/new/employees/${EMP_1}`), createMockRouteParams({ id: 'new', employeeId: EMP_1 }))
+    const badEmployee = await GET(createMockRequest(`/api/salary/runs/${RUN_1}/employees/new`), createMockRouteParams({ id: RUN_1, employeeId: 'new' }))
+
+    expect(badRun.status).toBe(404)
+    expect((await parseJsonResponse<{ error: { code: string } }>(badRun)).body.error.code).toBe('SALARY_RUN_NOT_FOUND')
+    expect(badEmployee.status).toBe(404)
+    expect((await parseJsonResponse<{ error: { code: string } }>(badEmployee)).body.error.code).toBe('SALARY_RUN_EMPLOYEE_NOT_FOUND')
+    expect(findCalls('salary_run_employees', 'select')).toEqual([])
+  })
+
   it('masks the embedded employee: no ciphertext, no personnummer_last4', async () => {
     // The embed is employees(*), so personnummer_last4 rides along from the DB.
     // The mask is YYYYMMDD-XXXX: mask + last4 in the same payload would
@@ -62,7 +81,7 @@ describe('GET /api/salary/runs/[id]/employees/[employeeId]', () => {
           id: 'sre-1',
           gross_salary: 30000,
           employee: {
-            id: 'emp-1',
+            id: EMP_1,
             first_name: 'Test',
             last_name: 'Testsson',
             personnummer: encryptPersonnummer(STORED_PNR),
@@ -75,8 +94,8 @@ describe('GET /api/salary/runs/[id]/employees/[employeeId]', () => {
     ])
 
     const response = await GET(
-      createMockRequest('/api/salary/runs/run-1/employees/emp-1'),
-      createMockRouteParams({ id: 'run-1', employeeId: 'emp-1' }),
+      createMockRequest(`/api/salary/runs/${RUN_1}/employees/${EMP_1}`),
+      createMockRouteParams({ id: RUN_1, employeeId: EMP_1 }),
     )
     const { status, body } = await parseJsonResponse<{
       data: { employee: Record<string, unknown> }
@@ -103,13 +122,13 @@ describe('PATCH /api/salary/runs/[id]/employees/[employeeId]: monthly salary edi
       error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
     })
 
-    const request = createMockRequest('/api/salary/runs/run-1/employees/emp-1', {
+    const request = createMockRequest(`/api/salary/runs/${RUN_1}/employees/${EMP_1}`, {
       method: 'PATCH',
       body: { monthly_salary: 30000 },
     })
     const response = await PATCH(
       request,
-      createMockRouteParams({ id: 'run-1', employeeId: 'emp-1' }),
+      createMockRouteParams({ id: RUN_1, employeeId: EMP_1 }),
     )
     expect(response.status).toBe(401)
   })
@@ -121,13 +140,13 @@ describe('PATCH /api/salary/runs/[id]/employees/[employeeId]: monthly salary edi
       response: NextResponse.json({ error: 'Forbidden' }, { status: 403 }),
     } as never)
 
-    const request = createMockRequest('/api/salary/runs/run-1/employees/emp-1', {
+    const request = createMockRequest(`/api/salary/runs/${RUN_1}/employees/${EMP_1}`, {
       method: 'PATCH',
       body: { monthly_salary: 30000 },
     })
     const response = await PATCH(
       request,
-      createMockRouteParams({ id: 'run-1', employeeId: 'emp-1' }),
+      createMockRouteParams({ id: RUN_1, employeeId: EMP_1 }),
     )
     expect(response.status).toBe(403)
   })
@@ -135,21 +154,21 @@ describe('PATCH /api/salary/runs/[id]/employees/[employeeId]: monthly salary edi
   it('updates the per-run monthly salary while the run is a draft', async () => {
     const { enqueueMany } = authed()
     enqueueMany([
-      { data: { id: 'run-1', status: 'draft' } }, // service: salary_runs draft gate
+      { data: { id: RUN_1, status: 'draft' } }, // service: salary_runs draft gate
       {
-        data: { id: 'sre-1', employee_id: 'emp-1', employment_degree: 100, salary_type: 'monthly', monthly_salary: 25000 },
+        data: { id: 'sre-1', employee_id: EMP_1, employment_degree: 100, salary_type: 'monthly', monthly_salary: 25000 },
       }, // service: salary_run_employees select
       { data: null }, // service: salary_run_employees update
       { data: null }, // service: salary_line_items Grundlön refresh
     ])
 
-    const request = createMockRequest('/api/salary/runs/run-1/employees/emp-1', {
+    const request = createMockRequest(`/api/salary/runs/${RUN_1}/employees/${EMP_1}`, {
       method: 'PATCH',
       body: { monthly_salary: 30000 },
     })
     const response = await PATCH(
       request,
-      createMockRouteParams({ id: 'run-1', employeeId: 'emp-1' }),
+      createMockRouteParams({ id: RUN_1, employeeId: EMP_1 }),
     )
     const { status, body } = await parseJsonResponse<{ data: { monthly_salary: number } }>(response)
 
@@ -160,19 +179,19 @@ describe('PATCH /api/salary/runs/[id]/employees/[employeeId]: monthly salary edi
   it('allows a zero monthly salary (nollkörning) on a draft', async () => {
     const { enqueueMany } = authed()
     enqueueMany([
-      { data: { id: 'run-1', status: 'draft' } },
-      { data: { id: 'sre-1', employee_id: 'emp-1', employment_degree: 100, salary_type: 'monthly', monthly_salary: 25000 } },
+      { data: { id: RUN_1, status: 'draft' } },
+      { data: { id: 'sre-1', employee_id: EMP_1, employment_degree: 100, salary_type: 'monthly', monthly_salary: 25000 } },
       { data: null },
       { data: null },
     ])
 
-    const request = createMockRequest('/api/salary/runs/run-1/employees/emp-1', {
+    const request = createMockRequest(`/api/salary/runs/${RUN_1}/employees/${EMP_1}`, {
       method: 'PATCH',
       body: { monthly_salary: 0 },
     })
     const response = await PATCH(
       request,
-      createMockRouteParams({ id: 'run-1', employeeId: 'emp-1' }),
+      createMockRouteParams({ id: RUN_1, employeeId: EMP_1 }),
     )
     const { status } = await parseJsonResponse(response)
 
@@ -182,16 +201,16 @@ describe('PATCH /api/salary/runs/[id]/employees/[employeeId]: monthly salary edi
   it('rejects a monthly salary edit when the run is no longer a draft', async () => {
     const { enqueueMany } = authed()
     enqueueMany([
-      { data: { id: 'run-1', status: 'review' } }, // not a draft
+      { data: { id: RUN_1, status: 'review' } }, // not a draft
     ])
 
-    const request = createMockRequest('/api/salary/runs/run-1/employees/emp-1', {
+    const request = createMockRequest(`/api/salary/runs/${RUN_1}/employees/${EMP_1}`, {
       method: 'PATCH',
       body: { monthly_salary: 30000 },
     })
     const response = await PATCH(
       request,
-      createMockRouteParams({ id: 'run-1', employeeId: 'emp-1' }),
+      createMockRouteParams({ id: RUN_1, employeeId: EMP_1 }),
     )
     const { status, body } = await parseJsonResponse<{ error: string }>(response)
 
@@ -202,13 +221,13 @@ describe('PATCH /api/salary/runs/[id]/employees/[employeeId]: monthly salary edi
   it('rejects mixing a salary edit with a tax override in one request', async () => {
     authed()
 
-    const request = createMockRequest('/api/salary/runs/run-1/employees/emp-1', {
+    const request = createMockRequest(`/api/salary/runs/${RUN_1}/employees/${EMP_1}`, {
       method: 'PATCH',
       body: { monthly_salary: 30000, tax_withheld_override: 5000, reason: 'test' },
     })
     const response = await PATCH(
       request,
-      createMockRouteParams({ id: 'run-1', employeeId: 'emp-1' }),
+      createMockRouteParams({ id: RUN_1, employeeId: EMP_1 }),
     )
     const { status } = await parseJsonResponse(response)
 
@@ -223,7 +242,7 @@ describe('PATCH /api/salary/runs/[id]/employees/[employeeId]: hourly total hours
   })
 
   const draftRun = {
-    id: 'run-1',
+    id: RUN_1,
     status: 'draft',
     period_year: 2026,
     period_month: 9,
@@ -232,7 +251,7 @@ describe('PATCH /api/salary/runs/[id]/employees/[employeeId]: hourly total hours
   }
   const hourlyRow = {
     id: 'sre-1',
-    employee_id: 'emp-1',
+    employee_id: EMP_1,
     employment_degree: 100,
     salary_type: 'hourly',
     monthly_salary: 0,
@@ -242,8 +261,8 @@ describe('PATCH /api/salary/runs/[id]/employees/[employeeId]: hourly total hours
 
   function patch(body: Record<string, unknown>) {
     return PATCH(
-      createMockRequest('/api/salary/runs/run-1/employees/emp-1', { method: 'PATCH', body }),
-      createMockRouteParams({ id: 'run-1', employeeId: 'emp-1' }),
+      createMockRequest(`/api/salary/runs/${RUN_1}/employees/${EMP_1}`, { method: 'PATCH', body }),
+      createMockRouteParams({ id: RUN_1, employeeId: EMP_1 }),
     )
   }
 
@@ -357,11 +376,11 @@ describe('PATCH /api/salary/runs/[id]/employees/[employeeId]: tax/avgifter overr
       error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
     })
     const response = await PATCH(
-      createMockRequest('/api/salary/runs/run-1/employees/emp-1', {
+      createMockRequest(`/api/salary/runs/${RUN_1}/employees/${EMP_1}`, {
         method: 'PATCH',
         body: { tax_withheld_override: 9000, reason: 'test' },
       }),
-      createMockRouteParams({ id: 'run-1', employeeId: 'emp-1' }),
+      createMockRouteParams({ id: RUN_1, employeeId: EMP_1 }),
     )
     expect(response.status).toBe(401)
   })
@@ -370,24 +389,24 @@ describe('PATCH /api/salary/runs/[id]/employees/[employeeId]: tax/avgifter overr
     const { enqueueMany } = authed()
     enqueueMany([{ data: null }])
     const response = await PATCH(
-      createMockRequest('/api/salary/runs/run-x/employees/emp-1', {
+      createMockRequest(`/api/salary/runs/${RUN_X_ID}/employees/${EMP_1}`, {
         method: 'PATCH',
         body: { tax_withheld_override: 9000, reason: 'test' },
       }),
-      createMockRouteParams({ id: 'run-x', employeeId: 'emp-1' }),
+      createMockRouteParams({ id: RUN_X_ID, employeeId: EMP_1 }),
     )
     expect(response.status).toBe(404)
   })
 
   it('refuses an override outside review', async () => {
     const { enqueueMany, findCalls } = authed()
-    enqueueMany([{ data: { id: 'run-1', status: 'draft' } }])
+    enqueueMany([{ data: { id: RUN_1, status: 'draft' } }])
     const response = await PATCH(
-      createMockRequest('/api/salary/runs/run-1/employees/emp-1', {
+      createMockRequest(`/api/salary/runs/${RUN_1}/employees/${EMP_1}`, {
         method: 'PATCH',
         body: { tax_withheld_override: 9000, reason: 'test' },
       }),
-      createMockRouteParams({ id: 'run-1', employeeId: 'emp-1' }),
+      createMockRouteParams({ id: RUN_1, employeeId: EMP_1 }),
     )
     expect(response.status).toBe(400)
     expect(findCalls('salary_runs', 'update')).toHaveLength(0)
@@ -399,11 +418,11 @@ describe('PATCH /api/salary/runs/[id]/employees/[employeeId]: tax/avgifter overr
     for (const avgifter_amount_override of [null, 141.39, undefined]) {
       const { findCalls } = authed()
       const response = await PATCH(
-        createMockRequest('/api/salary/runs/run-1/employees/emp-1', {
+        createMockRequest(`/api/salary/runs/${RUN_1}/employees/${EMP_1}`, {
           method: 'PATCH',
           body: { avgifter_basis_override: 0, avgifter_amount_override, reason: 'Under 1 000 kr i år' },
         }),
-        createMockRouteParams({ id: 'run-1', employeeId: 'emp-1' }),
+        createMockRouteParams({ id: RUN_1, employeeId: EMP_1 }),
       )
       const { status, body } = await parseJsonResponse<{ error: string }>(response)
       expect(status).toBe(400)
@@ -419,11 +438,11 @@ describe('PATCH /api/salary/runs/[id]/employees/[employeeId]: tax/avgifter overr
     for (const avgifter_amount_override of [undefined, null, 9426]) {
       const { findCalls } = authed()
       const response = await PATCH(
-        createMockRequest('/api/salary/runs/run-1/employees/emp-1', {
+        createMockRequest(`/api/salary/runs/${RUN_1}/employees/${EMP_1}`, {
           method: 'PATCH',
           body: { avgifter_basis_override: 30000, avgifter_amount_override, reason: 'Delvis underlag' },
         }),
-        createMockRouteParams({ id: 'run-1', employeeId: 'emp-1' }),
+        createMockRouteParams({ id: RUN_1, employeeId: EMP_1 }),
       )
       const { status, body } = await parseJsonResponse<{ error: string }>(response)
       expect(status).toBe(400)
@@ -440,14 +459,14 @@ describe('PATCH /api/salary/runs/[id]/employees/[employeeId]: tax/avgifter overr
     ]) {
       const { enqueueMany, findCalls } = authed()
       enqueueMany([
-        { data: { id: 'run-1', status: 'review' } },
+        { data: { id: RUN_1, status: 'review' } },
         { data: { ...SRE_AFTER, avgifter_basis_override: body.avgifter_basis_override } },
         { data: [] },
-        { data: [{ id: 'run-1' }] },
+        { data: [{ id: RUN_1 }] },
       ])
       const response = await PATCH(
-        createMockRequest('/api/salary/runs/run-1/employees/emp-1', { method: 'PATCH', body }),
-        createMockRouteParams({ id: 'run-1', employeeId: 'emp-1' }),
+        createMockRequest(`/api/salary/runs/${RUN_1}/employees/${EMP_1}`, { method: 'PATCH', body }),
+        createMockRouteParams({ id: RUN_1, employeeId: EMP_1 }),
       )
       expect(response.status).toBe(200)
       const updates = findCalls('salary_run_employees', 'update')
@@ -459,7 +478,7 @@ describe('PATCH /api/salary/runs/[id]/employees/[employeeId]: tax/avgifter overr
   it('refreshes the stored run totals from the effective per-employee figures', async () => {
     const { enqueueMany, findCalls } = authed()
     enqueueMany([
-      { data: { id: 'run-1', status: 'review' } }, // salary_runs status gate
+      { data: { id: RUN_1, status: 'review' } }, // salary_runs status gate
       { data: SRE_AFTER }, // salary_run_employees override update
       {
         // refreshRunTotals: roster read (one page)
@@ -490,15 +509,15 @@ describe('PATCH /api/salary/runs/[id]/employees/[employeeId]: tax/avgifter overr
           },
         ],
       },
-      { data: [{ id: 'run-1' }] }, // salary_runs totals update (status review matched)
+      { data: [{ id: RUN_1 }] }, // salary_runs totals update (status review matched)
     ])
 
     const response = await PATCH(
-      createMockRequest('/api/salary/runs/run-1/employees/emp-1', {
+      createMockRequest(`/api/salary/runs/${RUN_1}/employees/${EMP_1}`, {
         method: 'PATCH',
         body: { tax_withheld_override: 9000, avgifter_amount_override: 0, avgifter_basis_override: 0, reason: 'test' },
       }),
-      createMockRouteParams({ id: 'run-1', employeeId: 'emp-1' }),
+      createMockRouteParams({ id: RUN_1, employeeId: EMP_1 }),
     )
     const { status, body } = await parseJsonResponse<{
       data: { tax_withheld_override: number; run_totals: Record<string, number> }
@@ -520,23 +539,23 @@ describe('PATCH /api/salary/runs/[id]/employees/[employeeId]: tax/avgifter overr
     expect(runUpdates[0][0]).toEqual(expected)
     // Scoped to the run and the company.
     const runEqs = findCalls('salary_runs', 'eq').map((a) => a.join('='))
-    expect(runEqs).toEqual(expect.arrayContaining(['id=run-1', 'company_id=company-1', 'status=review']))
+    expect(runEqs).toEqual(expect.arrayContaining([`id=${RUN_1}`, 'company_id=company-1', 'status=review']))
   })
 
   it('keeps the saved override (200) and returns run_totals null when the run left review before the totals write', async () => {
     const { enqueueMany } = authed()
     enqueueMany([
-      { data: { id: 'run-1', status: 'review' } },
+      { data: { id: RUN_1, status: 'review' } },
       { data: SRE_AFTER },
       { data: [] }, // roster read
       { data: [] }, // salary_runs update matched no review run
     ])
     const response = await PATCH(
-      createMockRequest('/api/salary/runs/run-1/employees/emp-1', {
+      createMockRequest(`/api/salary/runs/${RUN_1}/employees/${EMP_1}`, {
         method: 'PATCH',
         body: { tax_withheld_override: 9000, reason: 'test' },
       }),
-      createMockRouteParams({ id: 'run-1', employeeId: 'emp-1' }),
+      createMockRouteParams({ id: RUN_1, employeeId: EMP_1 }),
     )
     const { status, body } = await parseJsonResponse<{ data: { run_totals: unknown } }>(response)
     expect(status).toBe(200)
@@ -546,16 +565,16 @@ describe('PATCH /api/salary/runs/[id]/employees/[employeeId]: tax/avgifter overr
   it('does not fail the request when the totals refresh fails after the override was saved', async () => {
     const { enqueueMany } = authed()
     enqueueMany([
-      { data: { id: 'run-1', status: 'review' } },
+      { data: { id: RUN_1, status: 'review' } },
       { data: SRE_AFTER },
       { data: null, error: { message: 'statement timeout', code: '57014' } }, // roster read fails
     ])
     const response = await PATCH(
-      createMockRequest('/api/salary/runs/run-1/employees/emp-1', {
+      createMockRequest(`/api/salary/runs/${RUN_1}/employees/${EMP_1}`, {
         method: 'PATCH',
         body: { tax_withheld_override: 9000, reason: 'test' },
       }),
-      createMockRouteParams({ id: 'run-1', employeeId: 'emp-1' }),
+      createMockRouteParams({ id: RUN_1, employeeId: EMP_1 }),
     )
     const { status, body } = await parseJsonResponse<{ data: { tax_withheld_override: number; run_totals: unknown } }>(response)
     expect(status).toBe(200)

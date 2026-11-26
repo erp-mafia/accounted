@@ -2,6 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import { createMockRouteParams, parseJsonResponse, createQueuedMockSupabase } from '@/tests/helpers'
 
+// Route path ids are uuids: the route answers its 404 to anything else before it reads.
+const REG_1 = '3a06742f-699c-5b49-8480-c0d3c37ded87'
+
 const { supabase, enqueue, reset } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
@@ -27,7 +30,7 @@ vi.mock('@/lib/processing-history/append', () => ({
 import { DELETE } from '../route'
 
 describe('DELETE /api/settings/oauth-clients/[id]', () => {
-  const routeParams = createMockRouteParams({ id: 'reg-1' })
+  const routeParams = createMockRouteParams({ id: REG_1 })
 
   beforeEach(() => {
     vi.clearAllMocks()
@@ -73,7 +76,7 @@ describe('DELETE /api/settings/oauth-clients/[id]', () => {
 
   it('revokes the registration and appends an audit event on the happy path', async () => {
     enqueue({
-      data: [{ id: 'reg-1', redirect_uri: 'https://app.example.com/cb', client_name: 'My App' }],
+      data: [{ id: REG_1, redirect_uri: 'https://app.example.com/cb', client_name: 'My App' }],
     })
 
     const response = await DELETE(new Request('http://localhost/x', { method: 'DELETE' }), routeParams)
