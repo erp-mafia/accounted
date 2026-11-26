@@ -18200,6 +18200,9 @@
     "subscription_starting_none_left": "Ni har använt {used} av {included} bankbetalningar som ingår i {month}. Fler kostar {price} st och går att begära efter abonnemangets första dragning.",
     "start_subscription": "Starta abonnemang"
   },
+  "bank_held_payment": {
+    "open_payments": "Öppna Betalningar"
+  },
   "payments_page": {
     "title": "Betalningar",
     "new_skattekonto_payment": "Ny betalning till Skatteverket",

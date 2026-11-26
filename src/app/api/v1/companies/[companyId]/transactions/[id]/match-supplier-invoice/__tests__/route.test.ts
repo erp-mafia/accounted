@@ -825,3 +825,85 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-supplier-invo
     expect(mockCreatePaymentEntry).not.toHaveBeenCalled()
   })
 })
+
+// A payment the bank holds for the invoice (Betala via banken): this row may
+// be that payment, so the match books, and the answer says what still goes
+// out (lib/payments/orders/signed-payment.ts). The door has no dry run.
+describe('POST /api/v1/companies/:companyId/transactions/:id/match-supplier-invoice: a payment the bank holds', () => {
+  const url = `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/match-supplier-invoice`
+  const ORDER = {
+    id: 'order-1',
+    supplier_invoice_id: SI_ID,
+    status: 'accepted',
+    requested_execution_date: '2026-06-30',
+    amount: 1000,
+    currency: 'SEK',
+    payee_name: 'Leverantoren AB',
+    supplier_invoice: { supplier_invoice_number: 'F-2026001' },
+  }
+
+  function seed(orders: { data: unknown; error?: unknown }) {
+    const mock = createTableMockSupabase({
+      supplier_invoice_payments: { data: { id: 'pay-1' }, error: null },
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: { data: TRANSACTION, error: null },
+      supplier_invoices: [
+        { data: REGISTERED_INVOICE, error: null },
+        { data: [{ id: SI_ID }], error: null },
+      ],
+      company_settings: { data: { accounting_method: 'accrual' }, error: null },
+      payment_orders: { data: orders.data, error: orders.error ?? null },
+    })
+    mockServiceClient.mockReturnValue(mock.supabase)
+    return mock
+  }
+
+  it('books the match and warns in meta.warnings that a signed payment still goes out on its date', async () => {
+    const { findCalls } = seed({ data: [ORDER] })
+
+    const response = await matchSupplierInvoice(makeRequest(url, { supplier_invoice_id: SI_ID }), detailParams(COMPANY_ID, TX_ID))
+    const body = await response.json()
+
+    expect(response.status).toBe(200)
+    expect(body.data.invoice_status).toBe('paid')
+    expect(mockCreatePaymentEntry).toHaveBeenCalledTimes(1)
+    expect(body.meta.warnings).toHaveLength(1)
+    expect(body.meta.warnings[0].code).toBe('SI_SIGNED_BANK_PAYMENT')
+    expect(body.meta.warnings[0].message_sv).toContain('med betalningsdag 2026-06-30')
+    expect(body.meta.warnings[0].message_en).toContain('with payment date 2026-06-30')
+    // Asked inside the company, for this invoice.
+    expect(findCalls('payment_orders', 'eq')).toContainEqual(['company_id', COMPANY_ID])
+    expect(findCalls('payment_orders', 'in')).toContainEqual(['supplier_invoice_id', [SI_ID]])
+  })
+
+  it('says an unsigned one is cancelled at the bank', async () => {
+    seed({ data: [{ ...ORDER, status: 'submitted' }] })
+
+    const response = await matchSupplierInvoice(makeRequest(url, { supplier_invoice_id: SI_ID }), detailParams(COMPANY_ID, TX_ID))
+    const body = await response.json()
+
+    expect(response.status).toBe(200)
+    expect(body.meta.warnings.map((w: { code: string }) => w.code)).toEqual(['SI_UNSIGNED_BANK_PAYMENT'])
+  })
+
+  it('answers no warning when the bank holds no payment for the invoice', async () => {
+    seed({ data: [] })
+
+    const response = await matchSupplierInvoice(makeRequest(url, { supplier_invoice_id: SI_ID }), detailParams(COMPANY_ID, TX_ID))
+    const body = await response.json()
+
+    expect(response.status).toBe(200)
+    expect(body.meta.warnings).toBeUndefined()
+  })
+
+  it('books and says so when the orders could not be read', async () => {
+    seed({ data: null, error: { message: 'timeout' } })
+
+    const response = await matchSupplierInvoice(makeRequest(url, { supplier_invoice_id: SI_ID }), detailParams(COMPANY_ID, TX_ID))
+    const body = await response.json()
+
+    expect(response.status).toBe(200)
+    expect(mockCreatePaymentEntry).toHaveBeenCalledTimes(1)
+    expect(body.meta.warnings.map((w: { code: string }) => w.code)).toEqual(['SI_BANK_PAYMENT_CHECK_FAILED'])
+  })
+})

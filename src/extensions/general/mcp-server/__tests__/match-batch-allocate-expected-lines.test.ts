@@ -47,6 +47,13 @@ vi.mock('@/lib/supplier-invoices/registration-first', () => ({
     warnings: [],
   })),
 }))
+// The bank payment read (lib/payments/orders/signed-payment.ts) has its own
+// suites (its module's, and operations/match-batch-bank-payment): mocked so it
+// consumes no slot in the queued Supabase mock.
+vi.mock('@/lib/payments/orders/signed-payment', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/payments/orders/signed-payment')>()),
+  checkBankHeldPayments: vi.fn(async () => ({ payments: [], warnings: [], failed: false })),
+}))
 import { createQueuedMockSupabase } from '@/tests/helpers'
 
 const { mockDetectSet } = vi.hoisted(() => ({ mockDetectSet: vi.fn() }))

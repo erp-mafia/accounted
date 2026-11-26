@@ -18,6 +18,7 @@ import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/l
 import { readV1JsonBody } from '@/lib/api/v1/body'
 import { MatchSupplierInvoiceSchema } from '@/lib/api/schemas'
 import { bookSupplierBankMatch } from '@/lib/invoices/book-supplier-bank-match'
+import { checkBankHeldPayments } from '@/lib/payments/orders/signed-payment'
 import type { SupplierInvoice } from '@/types'
 
 const MatchSIResponse = z.object({
@@ -53,6 +54,7 @@ registerEndpoint({
     'A posted verifikat that already books this payment (same SEK amount on the transaction\'s settlement account within 7 days, linked to no other transaction, e.g. a payment booked by hand) is refused with 409 MATCH_SI_POSSIBLE_DUPLICATE and nothing is written; details.candidate names it. Link the supplier invoice to that verifikat instead (POST /supplier-invoices/{id}/link-to-voucher), or, when the transaction is a separate payment, resend with force: true and expected_journal_entry_id set to details.candidate.journal_entry_id (a fresh Idempotency-Key). A stale id returns 409 MATCH_SI_FORCE_CANDIDATE_MISMATCH.',
     'Transaction must be negative (amount < 0). Positive returns MATCH_SI_NOT_EXPENSE.',
     'Supplier invoice must NOT be paid/credited already. paid/credited returns MATCH_SI_ALREADY_PAID; registered/approved/partially_paid/overdue are matchable.',
+    'A payment the bank holds for the invoice (Betala via banken) is not refused: this row may be that payment. The answer\'s meta.warnings says so: SI_SIGNED_BANK_PAYMENT when a signed payment still goes out on its date, so unless this row is that payment the supplier is paid twice (cancel the order with POST /payment-orders/{id}/cancel, or match another row; GET /payment-orders lists it); SI_UNSIGNED_BANK_PAYMENT when it waits unsigned: it never executes, and the status sync asks the bank to cancel it once the invoice no longer needs paying; SI_BANK_PAYMENT_CHECK_FAILED when the orders could not be read. This endpoint has no dry run: POST /transactions/{id}/match-batch with one supplier_invoice allocation previews the same warnings.',
     'Idempotency-Key is mandatory.',
   ],
   example: {
@@ -142,6 +144,13 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
+    // A payment the bank holds for this invoice (Betala via banken) stops
+    // nothing: this row may be that payment. It may as well be another debit,
+    // and a signed payment still goes out on its date, so the answer says so
+    // in meta.warnings. Read before anything is written.
+    const bankPayments = await checkBankHeldPayments(ctx.supabase, ctx.companyId!, [invoice.id], 'bank_row')
+    if (bankPayments.failed) txLog.warn('match-supplier-invoice: bank payment orders could not be read', bankPayments.error)
+
     // The booking is the dashboard door's own function (bookSupplierBankMatch):
     // the booked-row gate, the payment plan, the registration a deferring
     // company books first, the verifikat, the row claim, the ledger update,
@@ -181,7 +190,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         bank_fee_sek: customLines ? 0 : outcome.plan.bankFeeSek,
         registration_journal_entry_id: outcome.registrationJournalEntryId,
       },
-      { requestId: ctx.requestId },
+      { requestId: ctx.requestId, ...(bankPayments.warnings.length > 0 ? { warnings: bankPayments.warnings } : {}) },
     )
   },
   { requireIdempotencyKey: true },

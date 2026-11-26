@@ -62,6 +62,7 @@ import {
 } from '@/lib/transactions/batch-duplicates'
 import type { BatchDuplicateRow } from '@/components/transactions/BatchDuplicateDialog'
 import type { ConfirmOpts, MatchAlreadyBooked } from '@/components/transactions/InvoiceMatchDialog'
+import { BankHeldPaymentNotes, useBankHeldPaymentWarnings } from '@/components/payments/BankHeldPaymentNotes'
 
 import { DialogLoadingSkeleton } from '@/components/ui/dialog-loading-skeleton'
 import type { BookingTemplate } from '@/lib/bookkeeping/booking-templates'
@@ -469,6 +470,13 @@ export default function TransactionsPage() {
     }>
   } | null>(null)
   const [siMatchProcessing, setSiMatchProcessing] = useState(false)
+  // A payment the bank holds for a suggested supplier invoice (Betala via
+  // banken): the row may be that payment, or another debit while a signed
+  // one still goes out on its date. Said in the dialog before "Matcha".
+  const siMatchBankPaymentWarnings = useBankHeldPaymentWarnings(
+    siMatchSuggestion?.candidates.map((c) => c.supplier_invoice_id) ?? [],
+    'bank_row',
+  )
 
   // Prong B (customer side): prompt to match against an unpaid customer
   // invoice instead of categorizing direct to 1510 on an inbound bank tx.
@@ -5412,6 +5420,7 @@ export default function TransactionsPage() {
               fakturan istället för att bokföra direkt på leverantörsskuldskontot, annars skapas en
               dubblerad verifikation som måste stornas (BFL 5 kap 5 §).
             </p>
+            <BankHeldPaymentNotes warnings={siMatchBankPaymentWarnings} />
             <div className="space-y-2 rounded-lg p-3 bg-control shadow-raised">
               {siMatchSuggestion?.candidates.map((c) => (
                 <div key={c.supplier_invoice_id} className="flex items-center justify-between gap-3 text-sm">

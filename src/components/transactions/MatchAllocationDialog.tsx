@@ -32,6 +32,7 @@ import {
   POPOVER_SURFACE_CLASS,
 } from '@/components/ui/popover-surface'
 import { useToast } from '@/components/ui/use-toast'
+import { BankHeldPaymentNotes, useBankHeldPaymentWarnings } from '@/components/payments/BankHeldPaymentNotes'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatAmount, formatCurrency, formatDate, cn, isValidExchangeRate, chunk } from '@/lib/utils'
 import { useComboboxNavigation } from '@/lib/hooks/use-combobox-navigation'
@@ -677,6 +678,13 @@ export default function MatchAllocationDialog({
   const pickable = useMemo(
     () => candidates.filter((c) => !drafts[c.id]).sort((a, b) => a.dueDate.localeCompare(b.dueDate)),
     [candidates, drafts],
+  )
+  // A payment the bank holds for a picked supplier invoice (Betala via
+  // banken): this row may be that payment, or another debit while a signed
+  // one still goes out on its date. Said before the confirm, never a block.
+  const bankPaymentWarnings = useBankHeldPaymentWarnings(
+    open ? pickedRows.filter((c) => c.kind === 'supplier_invoice').map((c) => c.id) : [],
+    'bank_row',
   )
 
   // The picker. The field shows while asked for and while nothing is picked;
@@ -1736,6 +1744,11 @@ export default function MatchAllocationDialog({
               </div>
             )}
           </section>
+
+          {/* A payment the bank holds for a picked supplier invoice: the way
+              out (cancel it under Betalningar, or another row) before the
+              confirm. */}
+          <BankHeldPaymentNotes warnings={bankPaymentWarnings} />
 
           {/* Where the split stands, as one line. Undershoot blocks too: the
               verifikat's bank line must equal the bank's actual receipt or

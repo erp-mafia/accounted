@@ -18200,6 +18200,9 @@
     "subscription_starting_none_left": "You have used {used} of the {included} bank payments included in {month}. More cost {price} each and can be requested after your subscription's first charge.",
     "start_subscription": "Start a subscription"
   },
+  "bank_held_payment": {
+    "open_payments": "Open Payments"
+  },
   "payments_page": {
     "title": "Payments",
     "new_skattekonto_payment": "New payment to Skatteverket",

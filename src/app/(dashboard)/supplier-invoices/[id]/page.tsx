@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useAccounts } from '@/lib/reference-data/hooks'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -45,6 +45,7 @@ const PaymentFileDialog = dynamic(() => import('@/components/supplier-invoices/P
 const PayViaBankDialog = dynamic(() => import('@/components/payments/PayViaBankDialog'), { ssr: false })
 import { fetchPaymentsAvailability } from '@/components/payments/payments-client'
 import { SupplierPayeeAlertLine } from '@/components/payments/SupplierPayeeAlertLine'
+import { readBankHeldPaymentSentences } from '@/components/payments/BankHeldPaymentNotes'
 import { AccountChip } from '@/components/ui/account-chip'
 import { CategoryPopover } from '@/components/transactions/CategoryPopover'
 import TemplatePicker from '@/components/transactions/TemplatePicker'
@@ -215,6 +216,7 @@ export default function SupplierInvoiceDetailPage() {
   const company = useCompanyOptional()?.company ?? null
   const { toast } = useToast()
   const t = useTranslations('supplier_invoice_detail')
+  const locale = useLocale()
   const tAttest = useTranslations('supplier_invoice_attest')
   const tCommon = useTranslations('common')
   // The list page's "Betald {date}" label, so the header reads like the row.
@@ -451,9 +453,17 @@ export default function SupplierInvoiceDetailPage() {
     // accounted#58: a deferring company's unbooked invoice is booked first,
     // on its own date, then reversed by the credit.
     const booksFirst = !!invoice && supplierCreditBooksOriginalFirst(companySettings, invoice)
+    // A payment the bank holds for the invoice (Betala via banken), said
+    // before the confirm: a signed one still goes out, so the credit is
+    // refused until it is cancelled; an unsigned one is cancelled at the bank.
+    const bankPaymentNotes =
+      company && invoiceIdParam ? await readBankHeldPaymentSentences(company.id, [invoiceIdParam], 'other', locale) : []
     const ok = await confirmAction({
       title: t('credit_confirm_title'),
-      description: t(booksFirst ? 'credit_confirm_description_books_first' : 'credit_confirm_description'),
+      description: [
+        t(booksFirst ? 'credit_confirm_description_books_first' : 'credit_confirm_description'),
+        ...bankPaymentNotes,
+      ].join('\n\n'),
       confirmLabel: t('credit_confirm_label'),
       variant: 'warning',
     })
