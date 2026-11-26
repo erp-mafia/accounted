@@ -71,13 +71,18 @@ async function asServiceRole() {
     [JSON.stringify({ role: 'service_role' })])
   await client.query('SET LOCAL ROLE service_role')
 }
+type Refusal = { code: string; message: string }
+/** The changed-attempt refusal: the actor check shares its code with others, so the message pins it. */
+const CHANGED: Refusal = { code: 'PT409', message: 'BANK_CALLBACK_CHANGED' }
+const ACTOR_DENIED: Refusal = { code: '42501', message: 'BANK_CALLBACK_ACTOR_DENIED' }
+
 /** Both functions refuse the actor, and the row is as it was. */
-async function expectRefused(actor: string, codes: { read: string; finalize: string }) {
+async function expectRefused(actor: string, refusals: { read: Refusal; finalize: Refusal }) {
   const expected = await token(); const before = await row()
   await client.query('SAVEPOINT refusal')
-  await expect(read(actor)).rejects.toMatchObject({ code: codes.read })
+  await expect(read(actor)).rejects.toMatchObject(refusals.read)
   await client.query('ROLLBACK TO SAVEPOINT refusal')
-  await expect(finalize(actor, expected)).rejects.toMatchObject({ code: codes.finalize })
+  await expect(finalize(actor, expected)).rejects.toMatchObject(refusals.finalize)
   await client.query('ROLLBACK TO SAVEPOINT refusal')
   expect(await row()).toEqual(before)
 }
@@ -102,11 +107,11 @@ describe('a bank login belongs to whoever started it', () => {
 
   it('refuses a member who neither started the login nor holds the connection', async () => {
     await startedBy(colleague)
-    await expectRefused(bystander, { read: 'PT409', finalize: 'PT409' })
+    await expectRefused(bystander, { read: CHANGED, finalize: CHANGED })
   })
 
   it('refuses a colleague on a login nobody is recorded as starting', async () => {
-    await expectRefused(colleague, { read: 'PT409', finalize: 'PT409' })
+    await expectRefused(colleague, { read: CHANGED, finalize: CHANGED })
   })
 
   it.each(['viewer', 'removed'])('refuses a starter who is %s by the time the bank answers', async kind => {
@@ -116,7 +121,7 @@ describe('a bank login belongs to whoever started it', () => {
     } else {
       await client.query('DELETE FROM company_members WHERE company_id=$1 AND user_id=$2', [holder.companyId, colleague])
     }
-    await expectRefused(colleague, { read: 'PT409', finalize: '42501' })
+    await expectRefused(colleague, { read: CHANGED, finalize: ACTOR_DENIED })
   })
 
   it('keeps a login staged without a starter with its holder', async () => {
@@ -148,7 +153,7 @@ describe('a bank login belongs to whoever started it', () => {
     await startedBy(colleague)
     const expected = (await read(colleague)).token; const before = await row()
     await client.query('SAVEPOINT refusal')
-    await expect(finalize(colleague, expected, claimed)).rejects.toMatchObject({ code: 'PT409' })
+    await expect(finalize(colleague, expected, claimed)).rejects.toMatchObject({ code: 'PT409', message: 'BANK_CALLBACK_MIRROR_CLAIMED' })
     await client.query('ROLLBACK TO SAVEPOINT refusal')
     expect(await row()).toEqual(before)
     expect(before).toMatchObject({ user_id: holder.userId, oauth_user_id: colleague, session_id: oldSession })
