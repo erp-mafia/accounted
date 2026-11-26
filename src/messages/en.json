@@ -10782,6 +10782,11 @@
     "skv_reconnect_cta": "Reconnect",
     "dialog_match_invoice": "Match with invoice",
     "dialog_pick_supplier_invoice": "Match with supplier invoice",
+    "si_match_suggestion_body": "There is an open supplier invoice of the same amount from the same supplier. Match the payment to that invoice instead of booking it straight to accounts payable, or a duplicate voucher is created that has to be reversed (BFL 5 kap 5 §).",
+    "si_match_suggestion_supplier": "Supplier",
+    "si_match_suggestion_remaining": "{amount} left",
+    "si_match_suggestion_match": "Match",
+    "si_match_suggestion_book_anyway": "Book to accounts payable anyway",
     "dialog_match_salary_run": "Match with salary {period}",
     "rot_rut_payout_matched_title": "ROT/RUT payout matched",
     "rot_rut_payout_matched_description": "The payout from Skatteverket was booked against request {name}",
@@ -18200,6 +18205,10 @@
     "subscription_none_left": "You have used {used} of the {included} bank payments included in {month}. More cost {price} each and need a subscription.",
     "subscription_starting_none_left": "You have used {used} of the {included} bank payments included in {month}. More cost {price} each and can be requested after your subscription's first charge.",
     "start_subscription": "Start a subscription"
+  },
+  "bank_held_payment": {
+    "check_failed": "Could not check whether the bank holds a payment of the invoice. Look under Payments before you go on.",
+    "open_payments": "Open Payments"
   },
   "payments_page": {
     "title": "Payments",

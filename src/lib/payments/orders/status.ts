@@ -47,6 +47,19 @@ export const SIGNED_PAYMENT_ORDER_STATUSES: ReadonlySet<PaymentOrderStatus> = ne
   'accepted',
 ])
 
+/**
+ * The statuses of an order whose payment the bank holds, or may hold:
+ * unsigned ('submitted': created at the bank, or being created) or signed, or
+ * being signed (SIGNED_PAYMENT_ORDER_STATUSES). The status sync reads each of
+ * them at the bank (sync.ts), and the database leaves them to the bank when
+ * their invoice closes (cancel_open_payment_orders_for_closed_invoice, migration
+ * 20261010090000 section 7): it records invoice_closed on them and cancels
+ * none. A signed one still executes on its date; an unsigned one never does,
+ * and the status sync asks the bank to cancel it. checkBankHeldPayments
+ * (signed-payment.ts) tells a person or an agent about them.
+ */
+export const BANK_HELD_PAYMENT_ORDER_STATUSES: readonly PaymentOrderStatus[] = ['submitted', ...SIGNED_PAYMENT_ORDER_STATUSES]
+
 /** Ended without the bank paying it. */
 const ENDED_UNPAID_PAYMENT_ORDER_STATUSES: ReadonlySet<string> = new Set(['rejected', 'cancelled', 'failed'])
 

@@ -13,6 +13,8 @@ import { useToast } from '@/components/ui/use-toast'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import LinkVoucherPicker from '@/components/invoices/LinkVoucherPicker'
 import { RegistrationFirstCard, type RegistrationEntryPreview } from '@/components/supplier-invoices/RegistrationFirstCard'
+import { BankHeldPaymentNotes, useBankHeldPaymentWarnings } from '@/components/payments/BankHeldPaymentNotes'
+import { SIGNED_BANK_PAYMENT_WARNING } from '@/lib/payments/orders/bank-held-codes'
 import { PaymentPreviewLinesCard, usePaymentPreviewEditor } from '@/components/bookkeeping/PaymentPreviewLinesCard'
 import type { LineDimensions } from '@/components/bookkeeping/payment-line-dimensions'
 import type { PaymentPreviewLine } from '@/components/bookkeeping/payment-preview-lines'
@@ -105,6 +107,14 @@ export function SupplierPaymentDialog({
   >(null)
   const editor = usePaymentPreviewEditor(markPaidPreview?.lines, markPaidPreview?.document_dimensions)
   const { stopEditing } = editor
+  // A payment the bank holds for the invoice (Betala via banken): a signed
+  // one still goes out on its date, so a payment or a verifikat beside it is
+  // refused until it is cancelled; an unsigned one is cancelled at the bank
+  // once the invoice is paid. Read on every opening.
+  const { warnings: bankPaymentWarnings, failed: bankPaymentCheckFailed } = useBankHeldPaymentWarnings(
+    open ? [invoice.id] : [],
+    'other',
+  )
 
   // Every opening starts from the invoice as it is now: what is still owed,
   // today and the last-used account. Closing drops the edited grid and the
@@ -242,6 +252,17 @@ export function SupplierPaymentDialog({
           <DialogHeader>
             <DialogTitle>{t('pay_dialog_title')}</DialogTitle>
           </DialogHeader>
+          <BankHeldPaymentNotes
+            warnings={
+              // The new payment's preview refuses a signed one in its own
+              // words (SI_BANK_PAYMENT_UNDER_WAY), with the same way out:
+              // said once. The existing verifikat's tab has no preview.
+              payTab === 'new'
+                ? bankPaymentWarnings.filter((warning) => warning.code !== SIGNED_BANK_PAYMENT_WARNING)
+                : bankPaymentWarnings
+            }
+            failed={bankPaymentCheckFailed}
+          />
           <Tabs value={payTab} onValueChange={(v) => setPayTab(v as 'new' | 'existing')}>
             <TabsList className="grid w-full grid-cols-2">
               <TabsTrigger value="new">{t('tab_new_payment')}</TabsTrigger>

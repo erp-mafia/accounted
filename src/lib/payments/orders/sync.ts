@@ -79,7 +79,13 @@ import {
 } from './debit-match'
 import { paymentAccountContext } from './debtor'
 import { cancelForClosedInvoice, endFailedSigning, unpayableOrders } from './release'
-import { SCHEDULED_PAYMENT_AHEAD_DAYS, SCHEDULED_PAYMENT_READ_EVERY_MS, UNANSWERED_SIGNING_MINUTES, type PaymentOrderStatus } from './status'
+import {
+  BANK_HELD_PAYMENT_ORDER_STATUSES,
+  SCHEDULED_PAYMENT_AHEAD_DAYS,
+  SCHEDULED_PAYMENT_READ_EVERY_MS,
+  UNANSWERED_SIGNING_MINUTES,
+  type PaymentOrderStatus,
+} from './status'
 import { logPaymentOrderEvents, signingTargetOf, type PaymentOrderBatchRow, type PaymentOrderBatchStatus, type PaymentOrderRow } from './types'
 
 /**
@@ -124,7 +130,7 @@ const DEBIT_READ_SLACK_DAYS = 3
  * cancelled when its invoice closed. Its signing's kept IP address stays
  * while one of its orders is in one of these.
  */
-const AT_THE_BANK: readonly PaymentOrderStatus[] = ['submitted', 'awaiting_signature', 'awaiting_second_signer', 'accepted']
+const AT_THE_BANK = BANK_HELD_PAYMENT_ORDER_STATUSES
 
 /** Statuses only a finished signing reaches. */
 const SIGNED: ReadonlySet<PaymentOrderStatus> = new Set(['awaiting_second_signer', 'accepted', 'executed'])
