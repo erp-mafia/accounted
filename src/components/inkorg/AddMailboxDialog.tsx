@@ -27,7 +27,7 @@ import type { DigitalMailboxProviderId } from '@/lib/digital-mailboxes/types'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { getErrorMessage, getResponseErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { digitalMailboxRowView, type DigitalMailboxRowView, type DigitalMailboxSending } from '@/lib/inkorg/digital-mailbox-row'
-import { mailboxEntries, type MailboxDoor } from '@/lib/inkorg/mailboxes'
+import { billoLeftOutForKivra, mailboxEntries, type MailboxDoor } from '@/lib/inkorg/mailboxes'
 import { formatDateTime } from '@/lib/utils'
 import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 import { DoorMark } from './door-icon'
@@ -74,6 +74,7 @@ export function MailboxList({
   receiveOnly = false,
   connectVariant,
   connectLabel,
+  oneDigitalMailbox = false,
 }: {
   doors?: readonly MailboxDoor[]
   /** Leaves out the sending line of Kivra and Billo: the list is only about what comes in. */
@@ -82,6 +83,8 @@ export function MailboxList({
   connectVariant?: 'default' | 'outline'
   /** The words on the buttons that connect Kivra and Billo; each row's own when left out. */
   connectLabel?: string
+  /** Kivra and Billo are offered as one choice: Billo is left out for a company Kivra already has (billoLeftOutForKivra). */
+  oneDigitalMailbox?: boolean
 } = {}) {
   const t = useTranslations('inkorg')
   const digital = useDigitalMailboxes(true, { companyMailbox: true })
@@ -90,6 +93,12 @@ export function MailboxList({
   const receives = (provider: DigitalMailboxProviderId) =>
     digital.state.status !== 'ready' || digital.state.providers[provider].available.receive
   const kivraCompanyMailbox = digital.state.status === 'ready' ? (digital.state.providers.kivra.company_mailbox ?? null) : null
+  const billoLeftOut = oneDigitalMailbox && billoLeftOutForKivra({
+    read: digital.state.status,
+    kivraCompanyMailbox,
+    kivraConnected: digital.state.status === 'ready' && digital.state.providers.kivra.connection !== null,
+    billoConnected: digital.state.status === 'ready' && digital.state.providers.billo.connection !== null,
+  })
   const entries = mailboxEntries(
     {
       whatsapp: ENABLED_EXTENSION_IDS.has('whatsapp-inbox'),
@@ -98,7 +107,7 @@ export function MailboxList({
       billo: receives('billo'),
     },
     kivraCompanyMailbox,
-  ).filter((entry) => !doors || doors.includes(entry.door))
+  ).filter((entry) => (!doors || doors.includes(entry.door)) && (entry.door !== 'billo' || !billoLeftOut))
 
   return (
     <ul className="border-t-hairline">

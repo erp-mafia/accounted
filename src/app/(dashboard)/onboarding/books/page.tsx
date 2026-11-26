@@ -5,6 +5,7 @@ import { isSkatteverketOmbudEnabled } from '@/lib/skatteverket/ombud-access'
 import { isOnboardingSourcesEnabled, sourcesFlowAvailable } from '@/lib/onboarding/sources-rollout'
 import { getActiveCompanyId } from '@/lib/company/context'
 import { resolveBooksResume, type LatestImportJob } from '@/lib/onboarding-books/resume'
+import { digitalMailboxAvailability } from '@/lib/digital-mailboxes/providers'
 import BooksJourney from '@/components/onboarding/books/BooksJourney'
 
 export const dynamic = 'force-dynamic'
@@ -59,6 +60,7 @@ export default async function BooksPage({
   // An unavailable read is not an empty company. Let the route boundary retry.
   if (jobError || entriesError) throw new Error('Unable to load onboarding progress')
   const resume = resolveBooksResume((latestJob as LatestImportJob | null) ?? null, postedEntries ?? 0)
+  const mailboxes = digitalMailboxAvailability(companyId)
 
   return (
     <BooksJourney
@@ -77,6 +79,7 @@ export default async function BooksPage({
       hasSkatteverket={ENABLED_EXTENSION_IDS.has('skatteverket')}
       skvOmbud={await isSkatteverketOmbudEnabled()}
       sourcesFlow={sourcesFlowAvailable(ENABLED_EXTENSION_IDS) && isOnboardingSourcesEnabled(user.id)}
+      hasMailboxes={mailboxes.kivra.receive || mailboxes.billo.receive}
     />
   )
 }

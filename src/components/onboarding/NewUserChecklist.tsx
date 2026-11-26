@@ -26,8 +26,7 @@ import {
 } from '@/lib/onboarding/checklist'
 import { persistUiState } from '@/lib/ui-state/client'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
-import { useAssistantAvailable, useCapability, useCompanyOptional } from '@/contexts/CompanyContext'
-import { CAPABILITY } from '@/lib/entitlements/keys'
+import { useAssistantAvailable, useCompanyOptional } from '@/contexts/CompanyContext'
 import { PROVIDER_DISPLAY_NAMES } from '@/lib/providers/unfinished-connect'
 import type { ProviderName } from '@/lib/providers/types'
 import type { InitialSetupPath, InitialSetupState } from '@/types'
@@ -118,7 +117,6 @@ export default function NewUserChecklist({
   const router = useRouter()
   const showError = useErrorToast()
   const { formatDateLong } = useFormat()
-  const hasAi = useCapability(CAPABILITY.ai)
   const assistantAvailable = useAssistantAvailable()
   // Only owner/admin can record the setup state (company_settings RLS). A
   // member still gets every step as plain navigation: see
@@ -318,7 +316,7 @@ export default function NewUserChecklist({
   }
   const goReceipts = () => {
     captureSetup('onboarding_setup_step_started', { step: 'receipts' })
-    router.push(hasAi ? '/e/general/invoice-inbox' : '/settings/billing')
+    router.push('/e/general/invoice-inbox')
   }
   // Product call 2026-08-27: the closing CTA is "Anslut till Claude".
   // A user who finishes the hosted onboarding lands in Claude with everything

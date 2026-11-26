@@ -211,6 +211,9 @@
 .jny-bankid.is-fold .jny-bankid-txt { max-width: 0; opacity: 0; white-space: nowrap; }
 @keyframes skv-go { to { opacity: 0; transform: translateX(150px); } }
 .skv-body .jny-qsub { transition: opacity 300ms var(--ease-out); }
+/* appointed with no line under the title (the sources arrangement): the button, or a note, keeps the distance that line gave */
+.skv-body > .jny-bankid:first-child { margin-top: 18px; }
+.skv-body > .jny-attn:first-child { margin-top: 0; }
 .skv-body.is-away .jny-qsub { opacity: 0; }
 .jny-qactions .is-away { opacity: 0; transition: opacity 300ms var(--ease-out); pointer-events: none; }
 .skv-stage { display: flex; justify-content: center; margin: 2px auto 0; animation: jnyQIn 300ms var(--ease-emphasized); }

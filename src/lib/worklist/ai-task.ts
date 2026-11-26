@@ -82,15 +82,9 @@ export const AI_TASK_LABEL_KEY = {
 } as const satisfies Record<AiTaskCategory, string>
 
 /** Every agent-able row with something on it, in render order. */
-export function listAiTasks(
-  counts: WorklistCounts['counts'],
-  opts: { hasAi: boolean },
-): AiTask[] {
+export function listAiTasks(counts: WorklistCounts['counts']): AiTask[] {
   const out: AiTask[] = []
   for (const category of AI_TASK_ORDER) {
-    // The Dokumentinkorg row is hidden for non-payers (paid AI surface), so
-    // it is not "on the list" for them either.
-    if (category === 'inbox_document' && !opts.hasAi) continue
     const count = counts[category] ?? 0
     if (count > 0) out.push({ category, count })
   }

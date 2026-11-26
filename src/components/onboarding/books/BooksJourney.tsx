@@ -10,6 +10,8 @@ import { useOnboardingStepEvent } from '@/lib/hooks/use-onboarding-step-event'
 import { reconcileBooksDraft } from '@/lib/onboarding-books/resume'
 import { booksSkip, skipShown } from '@/lib/onboarding-books/skip'
 import { useBranding } from '@/lib/branding/brand-context'
+import { useCompany } from '@/contexts/CompanyContext'
+import { isLegalPersonOrgNumber } from '@/lib/invariants/org-number'
 import { booksReducer, hasStepBehind, initialState, stationCount, stationOf, type BooksEntry, type BooksFlags } from '@/lib/onboarding-books/reducer'
 import JourneyOrb, { type OrbState } from '@/components/onboarding/journey/JourneyOrb'
 import JourneyTrack from '@/components/onboarding/journey/JourneyTrack'
@@ -55,6 +57,8 @@ interface BooksJourneyProps {
   skvOmbud?: boolean
   /** The arrangement with the AI and the receipts as steps of their own (lib/onboarding/sources-rollout). */
   sourcesFlow?: boolean
+  /** This deployment receives from Kivra or Billo for the company (digitalMailboxAvailability). */
+  hasMailboxes?: boolean
 }
 
 /**
@@ -72,6 +76,7 @@ export default function BooksJourney(props: BooksJourneyProps) {
   const t = useTranslations('books')
   const router = useRouter()
   const { appName } = useBranding()
+  const { company } = useCompany()
   const flags = useMemo<BooksFlags>(
     () => ({
       hasMigration: props.hasMigration,
@@ -79,8 +84,11 @@ export default function BooksJourney(props: BooksJourneyProps) {
       hasSkatteverket: props.hasSkatteverket,
       skvOmbud: props.skvOmbud ?? false,
       sourcesFlow: props.sourcesFlow ?? false,
+      // Kivra and Billo hold a company mailbox only for a legal person's
+      // number (lib/digital-mailboxes/connect.ts refuses the rest).
+      hasDocs: (props.hasMailboxes ?? false) && isLegalPersonOrgNumber(company?.org_number),
     }),
-    [props.hasMigration, props.hasBanking, props.hasSkatteverket, props.skvOmbud, props.sourcesFlow],
+    [props.hasMigration, props.hasBanking, props.hasSkatteverket, props.skvOmbud, props.sourcesFlow, props.hasMailboxes, company?.org_number],
   )
   const entry = useMemo<BooksEntry>(
     () => ({

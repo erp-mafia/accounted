@@ -108,9 +108,9 @@ describe('outside every rollout: what an area shrinks to', () => {
     expect(areaCreate(gateAreas(NAV_V3_AREAS, (item) => passesNavGates(item, ctx)).find((area) => area.id === 'company')!)).toBeUndefined()
   })
 
-  it('Dokument is the Underlag inbox alone with the plan capability, and off the rail without it', () => {
+  it('Dokument is the Underlag inbox alone, on every plan', () => {
     expect(rows(rolloutsOff(), 'documents')).toEqual(['/e/general/invoice-inbox'])
-    expect(rows(rolloutsOff({ capabilities: [] }), 'documents')).toEqual([])
+    expect(rows(rolloutsOff({ capabilities: [] }), 'documents')).toEqual(['/e/general/invoice-inbox'])
   })
 
   it('Agenter keeps Kompetens as a view of the wiki while the Agenter page is closed', () => {
