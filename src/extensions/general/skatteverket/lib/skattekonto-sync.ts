@@ -463,15 +463,22 @@ export async function syncSkattekonto(
       .map(tx => tx.transaktionsidentitet)
       .filter((id): id is number => id != null),
   )
-  const mergedEntries = [...byKey.values()].filter(
+  const allEntries = [...byKey.values()]
+  const traceOf = (entries: SkattekontoSkippedRowEntry[]): SkattekontoSkippedRowsRecord => ({
+    updatedAt: now,
+    truncated: entries.length > MAX_SKIPPED_ROWS_RETAINED || undefined,
+    rows: entries.slice(0, MAX_SKIPPED_ROWS_RETAINED),
+  })
+  const mergedEntries = allEntries.filter(
     e => e.row.transaktionsidentitet == null || !resolvedIds.has(e.row.transaktionsidentitet),
   )
-  const skippedRecord: SkattekontoSkippedRowsRecord = {
-    updatedAt: now,
-    truncated: mergedEntries.length > MAX_SKIPPED_ROWS_RETAINED || undefined,
-    rows: mergedEntries.slice(0, MAX_SKIPPED_ROWS_RETAINED),
-  }
-  await ctx.settings.set(SKIPPED_ROWS_KEY, skippedRecord)
+  const skippedRecord = traceOf(mergedEntries)
+  // Written in two steps when an entry resolves: now with every entry, the
+  // resolved ones too, and once the upsert has stored their rows without
+  // them. A sync that fails in between keeps both the new skipped rows and a
+  // resolved row's only record.
+  const resolvesEntries = mergedEntries.length !== allEntries.length
+  await ctx.settings.set(SKIPPED_ROWS_KEY, resolvesEntries ? traceOf(allEntries) : skippedRecord)
   if (skipped > 0) {
     log.warn('skipped transaktioner rows missing required fields', {
       companyId: ctx.companyId,
@@ -660,6 +667,8 @@ export async function syncSkattekonto(
       throw new Error(`Kunde inte spara skattekonto-transaktioner: ${error.message}`)
     }
   }
+  // The rows of the resolved entries are stored: they leave the trace.
+  if (resolvesEntries) await ctx.settings.set(SKIPPED_ROWS_KEY, skippedRecord)
 
   // SKV's kommande list is its whole current forecast, so a stored upcoming
   // row this response no longer carries was withdrawn at Skatteverket (a debit

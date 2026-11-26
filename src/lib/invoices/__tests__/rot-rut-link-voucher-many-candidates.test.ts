@@ -80,4 +80,22 @@ describe('listRotRutPayoutVoucherCandidates: many verifikat credit 1513', () => 
     ])
     expect(unmodelled).toEqual([])
   })
+
+  it('reads every settled begäran of a slice past the 1000-row cap, so no used verifikat is offered again', async () => {
+    // Verifikat 249 settled a thousand begäran; 248 settled one, read after them.
+    const settled = [
+      ...range(1000).map((n) => ({ id: uuid(n, '10000000'), company_id: COMPANY, settlement_journal_entry_id: entryId(249) })),
+      { id: uuid(1, 'ffffffff'), company_id: COMPANY, settlement_journal_entry_id: entryId(248) },
+    ]
+    const { supabase, unmodelled } = createGatewaySupabase({ ...books([]), rot_rut_payout_requests: settled })
+
+    const { data, error } = await listRotRutPayoutVoucherCandidates(supabase, COMPANY, '2026-08-25')
+
+    expect(error).toBeNull()
+    const offered = data.map((c) => c.voucher_number)
+    expect(offered).toContain(250)
+    expect(offered).not.toContain(249)
+    expect(offered).not.toContain(248)
+    expect(unmodelled).toEqual([])
+  })
 })

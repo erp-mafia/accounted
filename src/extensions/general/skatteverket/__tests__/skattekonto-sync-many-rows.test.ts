@@ -33,7 +33,7 @@ vi.mock('@/lib/reconciliation/skattekonto-reconciliation', async (importOriginal
   getSkattekontoReconciliationStatus: vi.fn().mockResolvedValue(null),
 }))
 
-import { syncSkattekonto } from '../lib/skattekonto-sync'
+import { syncSkattekonto, SKATTEKONTO_SKIPPED_ROWS_KEY } from '../lib/skattekonto-sync'
 import type { ExtensionContext } from '@/lib/extensions/types'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
@@ -140,6 +140,35 @@ describe('syncSkattekonto: a response larger than one URL holds', () => {
 
     await expect(syncSkattekonto(makeCtx(supabase))).rejects.toThrow('Kunde inte läsa sparade skattekonto-transaktioner')
 
+    expect(upserts(requests)).toEqual([])
+  })
+
+  it('keeps a skipped row in the trace while a failed sync leaves its now complete row unstored', async () => {
+    // Skipped by an earlier sync for a missing amount; complete in this response.
+    const complete = booked(1)
+    const previousTrace = {
+      updatedAt: '2026-08-01T00:00:00.000Z',
+      rows: [{
+        status: 'booked', missing: ['beloppSkatteverket'], row: { ...complete, beloppSkatteverket: null },
+        firstSeenAt: '2026-08-01T00:00:00.000Z', lastSeenAt: '2026-08-01T00:00:00.000Z',
+      }],
+    }
+    getTransaktionerMock.mockResolvedValue({ tidigareTransaktioner: [complete], kommandeTransaktioner: [], listed: true })
+    const { supabase, requests } = createGatewaySupabase(
+      { ...storedBooks(), skattekonto_transactions: [] },
+      { refuse: (request) => request.table === 'skattekonto_transactions' && request.method === 'GET' && inListOf(request, 'dedup_key').length > 0 },
+    )
+    const ctx = makeCtx(supabase)
+    ;(ctx.settings.get as ReturnType<typeof vi.fn>).mockImplementation((key: string) =>
+      Promise.resolve(key === SKATTEKONTO_SKIPPED_ROWS_KEY ? previousTrace : null),
+    )
+
+    await expect(syncSkattekonto(ctx)).rejects.toThrow('Kunde inte läsa sparade skattekonto-transaktioner')
+
+    const traceWrites = (ctx.settings.set as ReturnType<typeof vi.fn>).mock.calls.filter(([key]) => key === SKATTEKONTO_SKIPPED_ROWS_KEY)
+    expect(traceWrites.at(-1)?.[1]).toMatchObject({
+      rows: [expect.objectContaining({ row: expect.objectContaining({ transaktionsidentitet: complete.transaktionsidentitet }) })],
+    })
     expect(upserts(requests)).toEqual([])
   })
 })

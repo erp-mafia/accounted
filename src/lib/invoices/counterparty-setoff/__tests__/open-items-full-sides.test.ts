@@ -11,6 +11,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { loadCounterpartyBalance } from '../open-items'
+import { paymentInFlightSupplierInvoiceIds } from '../state'
 import { createGatewaySupabase, GATEWAY_URL_LIMIT, inListOf } from '@/tests/gateway-supabase'
 
 const COMPANY = '5b0c3c1e-0000-4000-8000-000000000001'
@@ -107,6 +108,28 @@ describe('loadCounterpartyBalance: a full side of open items', () => {
     expect(requestsTo('collection_cases').map((r) => inListOf(r, 'invoice_id').length)).toEqual(slices)
     expect(requestsTo('payment_orders').map((r) => inListOf(r, 'supplier_invoice_id').length)).toEqual(slices)
     expect(requestsTo('supplier_payment_batch_items').map((r) => inListOf(r, 'supplier_invoice_id').length)).toEqual(slices)
+    expect(unmodelled).toEqual([])
+  })
+})
+
+describe('paymentInFlightSupplierInvoiceIds: an invoice with many settled payment orders', () => {
+  it('still sees an open order the settled ones would push past the 1000-row cap', async () => {
+    const settledMany = supplierInvoiceId(1)
+    const payingNow = supplierInvoiceId(2)
+    // A thousand settled orders of one invoice first, then the open order of another.
+    const settled = Array.from({ length: 1000 }, (_, i) => ({
+      id: uuid(i + 1, '33333333'), company_id: COMPANY, supplier_invoice_id: settledMany, status: 'executed',
+      supplier_invoice_payment_id: uuid(i + 1, '44444444'),
+    }))
+    const open = { id: uuid(1, '55555555'), company_id: COMPANY, supplier_invoice_id: payingNow, status: 'approved', supplier_invoice_payment_id: null }
+    const { supabase, unmodelled } = createGatewaySupabase({ payment_orders: [...settled, open] })
+
+    const inFlight = await paymentInFlightSupplierInvoiceIds(supabase, COMPANY, [
+      { id: settledMany, bank_entered_at: null },
+      { id: payingNow, bank_entered_at: null },
+    ])
+
+    expect([...inFlight]).toEqual([payingNow])
     expect(unmodelled).toEqual([])
   })
 })

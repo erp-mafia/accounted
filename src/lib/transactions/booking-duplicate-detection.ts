@@ -442,50 +442,51 @@ export async function detectBookedDuplicateTransaction(
   //
   // In slices of ID_READ_CHUNK, each paged: the window holds up to 500 rows,
   // the ids travel in the GET query string (the gateway refuses a long one),
-  // and one split or batch-matched row carries hundreds of anchors. A slice
-  // that cannot be read is logged, and the scan decides on the anchors read
-  // so far: a missing anchor can only hide a sibling, never make one, so a
-  // sibling booked through its own pointer is still flagged.
+  // and one split or batch-matched row carries hundreds of anchors. Each read
+  // fails on its own: one that cannot be read is logged and adds no rows, and
+  // the scan decides on the anchors that were read. A missing anchor can only
+  // hide a sibling, never make one, so a sibling booked through its own
+  // pointer, or anchored in another table, is still flagged.
   const unanchoredIds = matches.filter((r) => r.journal_entry_id == null).map((r) => r.id)
   type AnchorRow = { transaction_id: string | null; journal_entry_id: string | null }
   const paymentRows: AnchorRow[] = []
   const voucherLinkRows: { transaction_id: string; journal_entry_id: string }[] = []
-  try {
-    for (const ids of chunk(unanchoredIds, ID_READ_CHUNK)) {
-      const [vl, ip, sp] = await Promise.all([
-        fetchAllRows<{ transaction_id: string; journal_entry_id: string }>(({ from, to }) =>
-          supabase
-            .from('transaction_voucher_links')
-            .select('transaction_id, journal_entry_id')
-            .eq('company_id', companyId)
-            .in('transaction_id', ids)
-            .order('id', { ascending: true })
-            .range(from, to),
-        ),
-        fetchAllRows<AnchorRow>(({ from, to }) =>
-          supabase
-            .from('invoice_payments')
-            .select('transaction_id, journal_entry_id')
-            .eq('company_id', companyId)
-            .in('transaction_id', ids)
-            .order('id', { ascending: true })
-            .range(from, to),
-        ),
-        fetchAllRows<AnchorRow>(({ from, to }) =>
-          supabase
-            .from('supplier_invoice_payments')
-            .select('transaction_id, journal_entry_id')
-            .eq('company_id', companyId)
-            .in('transaction_id', ids)
-            .order('id', { ascending: true })
-            .range(from, to),
-        ),
-      ])
-      voucherLinkRows.push(...vl)
-      paymentRows.push(...ip, ...sp)
+  for (const ids of chunk(unanchoredIds, ID_READ_CHUNK)) {
+    const [vl, ip, sp] = await Promise.allSettled([
+      fetchAllRows<{ transaction_id: string; journal_entry_id: string }>(({ from, to }) =>
+        supabase
+          .from('transaction_voucher_links')
+          .select('transaction_id, journal_entry_id')
+          .eq('company_id', companyId)
+          .in('transaction_id', ids)
+          .order('id', { ascending: true })
+          .range(from, to),
+      ),
+      fetchAllRows<AnchorRow>(({ from, to }) =>
+        supabase
+          .from('invoice_payments')
+          .select('transaction_id, journal_entry_id')
+          .eq('company_id', companyId)
+          .in('transaction_id', ids)
+          .order('id', { ascending: true })
+          .range(from, to),
+      ),
+      fetchAllRows<AnchorRow>(({ from, to }) =>
+        supabase
+          .from('supplier_invoice_payments')
+          .select('transaction_id, journal_entry_id')
+          .eq('company_id', companyId)
+          .in('transaction_id', ids)
+          .order('id', { ascending: true })
+          .range(from, to),
+      ),
+    ])
+    for (const read of [vl, ip, sp]) {
+      if (read.status === 'rejected') log.warn('sibling anchors partly unreadable: deciding on the anchors read', read.reason)
     }
-  } catch (err) {
-    log.warn('sibling anchors partly unreadable: deciding on the anchors read', err)
+    if (vl.status === 'fulfilled') voucherLinkRows.push(...vl.value)
+    if (ip.status === 'fulfilled') paymentRows.push(...ip.value)
+    if (sp.status === 'fulfilled') paymentRows.push(...sp.value)
   }
 
   const booked = matches

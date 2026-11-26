@@ -25,6 +25,7 @@ import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/accou
 import { accountClass } from '@/lib/invariants/account-number'
 import { VAT_OUTPUT_ACCOUNTS } from '@/lib/reports/vat-declaration'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { ID_READ_CHUNK } from '@/lib/supabase/read-in-slices'
 import { chunk } from '@/lib/utils'
 
@@ -223,7 +224,7 @@ export async function listRotRutPayoutVoucherCandidates(
   const entries: CandidateEntryRow[] = []
   const usedIds = new Set<string | null>()
   for (const slice of chunk(ids, ID_READ_CHUNK)) {
-    const [{ data: entryRows, error: entryError }, { data: used, error: usedError }] = await Promise.all([
+    const [{ data: entryRows, error: entryError }, used] = await Promise.all([
       supabase
         .from('journal_entries')
         .select(
@@ -233,16 +234,26 @@ export async function listRotRutPayoutVoucherCandidates(
         .eq('status', 'posted')
         .is('reversed_by_id', null)
         .in('id', slice),
-      supabase
-        .from('rot_rut_payout_requests')
-        .select('settlement_journal_entry_id')
-        .eq('company_id', companyId)
-        .in('settlement_journal_entry_id', slice),
+      // Paged: one verifikat can settle several begäran, so a slice can pass
+      // PostgREST's 1000 rows, and a used verifikat left unread would be
+      // offered again.
+      fetchAllRows<{ settlement_journal_entry_id: string | null }>(({ from, to }) =>
+        supabase
+          .from('rot_rut_payout_requests')
+          .select('settlement_journal_entry_id')
+          .eq('company_id', companyId)
+          .in('settlement_journal_entry_id', slice)
+          .order('id', { ascending: true })
+          .range(from, to),
+      ).then(
+        (rows) => ({ rows, error: null }),
+        (error: unknown) => ({ rows: [], error }),
+      ),
     ])
     if (entryError) return { data: [], error: entryError }
-    if (usedError) return { data: [], error: usedError }
+    if (used.error) return { data: [], error: used.error }
     entries.push(...((entryRows ?? []) as CandidateEntryRow[]))
-    for (const r of (used ?? []) as Array<{ settlement_journal_entry_id: string | null }>) usedIds.add(r.settlement_journal_entry_id)
+    for (const r of used.rows) usedIds.add(r.settlement_journal_entry_id)
   }
 
   const candidates = entries

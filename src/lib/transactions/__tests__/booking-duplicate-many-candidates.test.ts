@@ -176,4 +176,26 @@ describe('detectBookedDuplicateTransaction: many bulk-booked siblings in the win
       msg: 'sibling anchors partly unreadable: deciding on the anchors read',
     }))
   })
+
+  it('keeps the anchors of the reads that succeed when another read of the same slice fails', async () => {
+    // Every payment-row read fails; the voucher links, read beside it, still
+    // anchor the bulk-booked siblings, so the closest one is flagged.
+    const siblings = Array.from({ length: 150 }, (_, i) => swish(i + 1, i === 149 ? '2026-03-20' : '2026-03-18'))
+    const { supabase } = createGatewaySupabase(
+      {
+        transactions: siblings,
+        transaction_voucher_links: siblings.map((s, i) => link(uuid(i + 1, '11111111'), s.id as string, BULK_ENTRY)),
+        journal_entries: [bulkEntry],
+      },
+      { refuse: (request) => request.table === 'invoice_payments' },
+    )
+
+    const twin = await detectBookedDuplicateTransaction(supabase, COMPANY, outgoing)
+
+    expect(twin).toMatchObject({ transaction_id: uuid(150, 'cccccccc'), journal_entry_id: BULK_ENTRY })
+    expect(detectionLogs).toContainEqual(expect.objectContaining({
+      level: 'warn',
+      msg: 'sibling anchors partly unreadable: deciding on the anchors read',
+    }))
+  })
 })

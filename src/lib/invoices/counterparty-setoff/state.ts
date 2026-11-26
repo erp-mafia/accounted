@@ -135,7 +135,11 @@ export async function paymentInFlightSupplierInvoiceIds(
 
   // In slices of ID_READ_CHUNK: the counterparty balance asks for up to
   // OPEN_ITEM_LIMIT open supplier invoices, and the ids travel in the GET
-  // query string, which the gateway refuses past its limit.
+  // query string, which the gateway refuses past its limit. Settled orders are
+  // left out in the query, before PostgREST's 1000-row cap: an invoice gathers
+  // settled orders without a bound, and an open one cut off by the cap would
+  // let a set-off pay a debt the bank is paying. Every open order has no
+  // settlement (payment_orders_settlement_only_when_executed).
   for (const slice of chunk(ids, ID_READ_CHUNK)) {
     const [orders, batchItems] = await Promise.all([
       supabase
@@ -143,7 +147,8 @@ export async function paymentInFlightSupplierInvoiceIds(
         .select('supplier_invoice_id, status, supplier_invoice_payment_id')
         .eq('company_id', companyId)
         .in('supplier_invoice_id', slice)
-        .in('status', [...OPEN_PAYMENT_ORDER_CANDIDATE_STATUSES]),
+        .in('status', [...OPEN_PAYMENT_ORDER_CANDIDATE_STATUSES])
+        .is('supplier_invoice_payment_id', null),
       supabase
         .from('supplier_payment_batch_items')
         .select('supplier_invoice_id, batch:supplier_payment_batches!inner(status)')
