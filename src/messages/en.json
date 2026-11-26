@@ -12165,7 +12165,7 @@
     "ai_kvittojakten_prompt": "Run Kvittojakten in Accounted: call get_task with kind \"agent:kvittojakten\" and client \"{client}\" and follow what it returns. Find the missing supporting documents in my mail, bring them into Accounted and propose links for me to approve. If no mailbox is connected here, say so right away and tell me what to do.",
     "first_thing_in_label": "Already in",
     "first_thing_in_books": "The books",
-    "first_thing_in_bank": "The bank",
+    "first_thing_in_bank": "The bank rows",
     "first_thing_connect_title": "Start here: connect the bank.",
     "first_thing_connect_why": "The bank rows are then fetched every day. One minute with BankID.",
     "first_thing_connect_action": "Connect the bank",

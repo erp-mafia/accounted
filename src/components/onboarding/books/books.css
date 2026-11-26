@@ -304,6 +304,8 @@
 .imp-tools .jny-qhelp { vertical-align: middle; }
 /* one column of actions: the primary alone, the quiet choice under it */
 .jny-qactions.is-stack { flex-direction: column; gap: 14px; }
+/* the way on standing over the detail under it: air on both sides of the button */
+.jny-qactions.is-first { margin-top: 22px; margin-bottom: 24px; }
 /* Tillbaka for the whole act: the page's top left corner, level with the rail, one place on every step */
 /* Once the books are in, the step has its own way on: the skip is not offered beside it. */
 .bks:has(.bks-host.is-done) .bks-skip { visibility: hidden; }
