@@ -871,6 +871,9 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-supplier-invo
     expect(body.meta.warnings[0].code).toBe('SI_SIGNED_BANK_PAYMENT')
     expect(body.meta.warnings[0].message_sv).toContain('med betalningsdag 2026-06-30')
     expect(body.meta.warnings[0].message_en).toContain('with payment date 2026-06-30')
+    // The order to cancel (POST /payment-orders/{id}/cancel) and its invoice.
+    expect(body.meta.warnings[0].payment_order_id).toBe('order-1')
+    expect(body.meta.warnings[0].supplier_invoice_id).toBe(SI_ID)
     // Asked inside the company, for this invoice.
     expect(findCalls('payment_orders', 'eq')).toContainEqual(['company_id', COMPANY_ID])
     expect(findCalls('payment_orders', 'in')).toContainEqual(['supplier_invoice_id', [SI_ID]])

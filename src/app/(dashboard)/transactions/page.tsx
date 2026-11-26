@@ -62,7 +62,6 @@ import {
 } from '@/lib/transactions/batch-duplicates'
 import type { BatchDuplicateRow } from '@/components/transactions/BatchDuplicateDialog'
 import type { ConfirmOpts, MatchAlreadyBooked } from '@/components/transactions/InvoiceMatchDialog'
-import { BankHeldPaymentNotes, useBankHeldPaymentWarnings } from '@/components/payments/BankHeldPaymentNotes'
 
 import { DialogLoadingSkeleton } from '@/components/ui/dialog-loading-skeleton'
 import type { BookingTemplate } from '@/lib/bookkeeping/booking-templates'
@@ -184,6 +183,12 @@ const MatchVoucherDialog = dynamic(
 )
 const InvoicePicker = dynamic(() => import('@/components/transactions/InvoicePicker'), { loading: InlineDialogContentLoading })
 const MatchAllocationDialog = dynamic(() => import('@/components/transactions/MatchAllocationDialog'), { loading: DialogLoadingSkeleton })
+// A payment the bank holds for a suggested supplier invoice (Betala via
+// banken): said in the suggestion before "Matcha", which waits for the read.
+// Loaded with the suggestion, so the read stays out of this page's first load.
+const BankHeldPaymentGate = dynamic(() =>
+  import('@/components/payments/BankHeldPaymentNotes').then((module) => module.BankHeldPaymentGate),
+)
 const BulkBookDialog = dynamic(() => import('@/components/transactions/BulkBookDialog'), { loading: DialogLoadingSkeleton })
 const TransactionBookingDialog = dynamic(() => import('@/components/transactions/TransactionBookingDialog'), { loading: DialogLoadingSkeleton })
 const TransactionAttachDocumentDialog = dynamic(
@@ -470,13 +475,6 @@ export default function TransactionsPage() {
     }>
   } | null>(null)
   const [siMatchProcessing, setSiMatchProcessing] = useState(false)
-  // A payment the bank holds for a suggested supplier invoice (Betala via
-  // banken): the row may be that payment, or another debit while a signed
-  // one still goes out on its date. Said in the dialog before "Matcha".
-  const siMatchBankPaymentWarnings = useBankHeldPaymentWarnings(
-    siMatchSuggestion?.candidates.map((c) => c.supplier_invoice_id) ?? [],
-    'bank_row',
-  )
 
   // Prong B (customer side): prompt to match against an unpaid customer
   // invoice instead of categorizing direct to 1510 on an inbound bank tx.
@@ -5420,28 +5418,31 @@ export default function TransactionsPage() {
               fakturan istället för att bokföra direkt på leverantörsskuldskontot, annars skapas en
               dubblerad verifikation som måste stornas (BFL 5 kap 5 §).
             </p>
-            <BankHeldPaymentNotes warnings={siMatchBankPaymentWarnings} />
-            <div className="space-y-2 rounded-lg p-3 bg-control shadow-raised">
-              {siMatchSuggestion?.candidates.map((c) => (
-                <div key={c.supplier_invoice_id} className="flex items-center justify-between gap-3 text-sm">
-                  <div className="min-w-0">
-                    <div className="font-medium">
-                      {c.supplier_name || 'Leverantör'}
-                      {c.invoice_number ? ` · ${c.invoice_number}` : null}
+            <BankHeldPaymentGate supplierInvoiceIds={siMatchSuggestion.candidates.map((c) => c.supplier_invoice_id)} via="bank_row">
+              {(bankPaymentPending) => (
+                <div className="space-y-2 rounded-lg p-3 bg-control shadow-raised">
+                  {siMatchSuggestion.candidates.map((c) => (
+                    <div key={c.supplier_invoice_id} className="flex items-center justify-between gap-3 text-sm">
+                      <div className="min-w-0">
+                        <div className="font-medium">
+                          {c.supplier_name || 'Leverantör'}
+                          {c.invoice_number ? ` · ${c.invoice_number}` : null}
+                        </div>
+                        <div className="text-xs text-muted-foreground tabular-nums">
+                          {formatDate(c.invoice_date)} · kvar {formatCurrency(c.remaining_amount, c.currency)}
+                        </div>
+                      </div>
+                      <Button
+                        onClick={() => handleMatchSuggestedSupplierInvoice(siMatchSuggestion.transactionId, c.supplier_invoice_id)}
+                        disabled={siMatchProcessing || bankPaymentPending}
+                      >
+                        Matcha
+                      </Button>
                     </div>
-                    <div className="text-xs text-muted-foreground tabular-nums">
-                      {formatDate(c.invoice_date)} · kvar {formatCurrency(c.remaining_amount, c.currency)}
-                    </div>
-                  </div>
-                  <Button
-                    onClick={() => handleMatchSuggestedSupplierInvoice(siMatchSuggestion.transactionId, c.supplier_invoice_id)}
-                    disabled={siMatchProcessing}
-                  >
-                    Matcha
-                  </Button>
+                  ))}
                 </div>
-              ))}
-            </div>
+              )}
+            </BankHeldPaymentGate>
             <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
               <Button variant="outline" onClick={() => setSiMatchSuggestion(null)}>
                 Avbryt

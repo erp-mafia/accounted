@@ -244,8 +244,9 @@ export default function InvoiceMatchDialog({
   const supplierInvoiceId = transaction?.potential_supplier_invoice?.id ?? null
   // A payment the bank holds for the supplier invoice (Betala via banken):
   // this row may be that payment, or another debit while a signed one still
-  // goes out on its date. Said before the confirm, never a block.
-  const bankPaymentWarnings = useBankHeldPaymentWarnings(
+  // goes out on its date. Said before the confirm, never a block; the
+  // confirm only waits for the read (bankPayments.pending).
+  const bankPayments = useBankHeldPaymentWarnings(
     open && isSupplierInvoice && supplierInvoiceId && !targetBlocked ? [supplierInvoiceId] : [],
     'bank_row',
   )
@@ -539,6 +540,8 @@ export default function InvoiceMatchDialog({
   const confirmDisabled =
     isConfirming ||
     isCheckingDuplicate ||
+    // What the bank holds for the invoice is said before the confirm.
+    bankPayments.pending ||
     // A booked row: the plain match is refused again; the soft block's own
     // button is the only way on.
     !!alreadyBooked ||
@@ -603,7 +606,7 @@ export default function InvoiceMatchDialog({
                     <Button
                       variant="outline"
                       onClick={() => handleConfirm({ storno_existing: true })}
-                      disabled={isConfirming || !editor.validation.isValid}
+                      disabled={isConfirming || bankPayments.pending || !editor.validation.isValid}
                     >
                       {t('already_booked_storno_and_match', { label: alreadyBooked.voucher })}
                     </Button>
@@ -674,7 +677,7 @@ export default function InvoiceMatchDialog({
                           expected_journal_entry_id: candidate.journal_entry_id,
                         })
                       }
-                      disabled={isConfirming || !editor.validation.isValid}
+                      disabled={isConfirming || bankPayments.pending || !editor.validation.isValid}
                       className="-ml-2.5 text-muted-foreground"
                     >
                       {t('create_new_anyway')}
@@ -710,7 +713,7 @@ export default function InvoiceMatchDialog({
             {/* A payment the bank holds for the supplier invoice: the way out
                 (cancel it under Betalningar, or another row) before the
                 confirm. */}
-            <BankHeldPaymentNotes warnings={bankPaymentWarnings} />
+            <BankHeldPaymentNotes warnings={bankPayments.warnings} />
 
             {/* The bank row and the invoice it pays, side by side: the
                 payment as the headline number, the invoice as one line. Both

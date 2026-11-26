@@ -111,7 +111,7 @@ export function SupplierPaymentDialog({
   // one still goes out on its date, so a payment or a verifikat beside it is
   // refused until it is cancelled; an unsigned one is cancelled at the bank
   // once the invoice is paid. Read on every opening.
-  const bankPaymentWarnings = useBankHeldPaymentWarnings(open ? [invoice.id] : [], 'other')
+  const { warnings: bankPaymentWarnings } = useBankHeldPaymentWarnings(open ? [invoice.id] : [], 'other')
 
   // Every opening starts from the invoice as it is now: what is still owed,
   // today and the last-used account. Closing drops the edited grid and the

@@ -161,6 +161,8 @@ describe('transactions.match-batch and a payment the bank holds for a supplier i
       bankHeldPaymentWarning((preview.bank_payments as Parameters<typeof bankHeldPaymentWarning>[0][])[0]!, 'bank_row'),
     ])
     expect((preview.warnings as Array<{ code: string }>)[0]!.code).toBe(SIGNED_BANK_PAYMENT_WARNING)
+    // The order to cancel (POST /payment-orders/{id}/cancel) and its invoice.
+    expect((preview.warnings as unknown[])[0]).toMatchObject({ payment_order_id: 'order-1', supplier_invoice_id: SI_ID })
     // The verifikat is still previewed: a warning, not a refusal.
     expect(preview.expected_lines).toEqual(expect.any(Array))
     expect(findCall('payment_orders', 'in')).toEqual(['supplier_invoice_id', [SI_ID]])
@@ -176,6 +178,7 @@ describe('transactions.match-batch and a payment the bank holds for a supplier i
     expect((answer as { warnings?: Array<{ code: string }> }).warnings?.map((w) => w.code)).toEqual([
       UNSIGNED_BANK_PAYMENT_WARNING,
     ])
+    expect((answer as { warnings?: unknown[] }).warnings?.[0]).toMatchObject({ payment_order_id: 'order-1', supplier_invoice_id: SI_ID })
   })
 
   it('says nothing when the bank holds no payment for the invoices', async () => {

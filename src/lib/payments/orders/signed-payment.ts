@@ -32,7 +32,7 @@ import type { OperationOutcome, OperationWarning } from '@/lib/operations/types'
 import type { SupabaseDataClient } from '@/lib/supabase/data-client'
 import { readInSlices } from '@/lib/supabase/read-in-slices'
 import { formatCurrency } from '@/lib/utils'
-import { SIGNED_PAYMENT_ORDER_STATUSES, type PaymentOrderStatus } from './status'
+import { BANK_HELD_PAYMENT_ORDER_STATUSES, SIGNED_PAYMENT_ORDER_STATUSES, type PaymentOrderStatus } from './status'
 
 export interface SignedBankPayment {
   id: string
@@ -66,17 +66,6 @@ export function signedBankPaymentDetails(payment: SignedBankPayment): Record<str
     requested_execution_date: payment.requested_execution_date,
   }
 }
-
-/**
- * Every status in which the bank holds the order's payment, or may: unsigned
- * ('submitted': created at the bank, or being created) or signed, or being
- * signed (SIGNED_PAYMENT_ORDER_STATUSES). The orders the database leaves to
- * the bank when their invoice closes (cancel_open_payment_orders_for_closed_invoice,
- * migration 20261010090000 section 7): it records invoice_closed on them and
- * cancels none. A signed one still executes on its date; an unsigned one never
- * does, and the status sync asks the bank to cancel it (cancelForClosedInvoice).
- */
-const BANK_HELD_PAYMENT_ORDER_STATUSES: readonly PaymentOrderStatus[] = ['submitted', ...SIGNED_PAYMENT_ORDER_STATUSES]
 
 /** A payment the bank holds for a supplier invoice, as a person or an agent is told of it. */
 export interface BankHeldPayment {
@@ -174,11 +163,25 @@ export const UNSIGNED_BANK_PAYMENT_WARNING = 'SI_UNSIGNED_BANK_PAYMENT'
 export const BANK_PAYMENT_CHECK_FAILED_WARNING = 'SI_BANK_PAYMENT_CHECK_FAILED'
 
 /**
+ * A warning about a payment the bank holds, naming the order and its invoice,
+ * so a client can act on it (POST /payment-orders/{id}/cancel) and a dialog
+ * can keep it beside the invoice it is about. The warning that the check could
+ * not run names neither.
+ */
+export interface BankHeldPaymentWarning extends OperationWarning {
+  payment_order_id?: string
+  supplier_invoice_id?: string
+}
+
+/**
  * What a person or an agent is told about a payment the bank holds, before
  * the invoice is paid or closed another way: a warning, never a refusal. One
  * sentence in each language, for the API's warnings and the dialogs alike.
+ * "Signed or being signed", as the refusal SI_BANK_PAYMENT_UNDER_WAY says it:
+ * awaiting_signature and awaiting_second_signer are not fully signed yet.
  */
-export function bankHeldPaymentWarning(payment: BankHeldPayment, via: BankHeldPaymentVia): OperationWarning {
+export function bankHeldPaymentWarning(payment: BankHeldPayment, via: BankHeldPaymentVia): BankHeldPaymentWarning {
+  const ids = { payment_order_id: payment.payment_order_id, supplier_invoice_id: payment.supplier_invoice_id }
   const amount = formatCurrency(payment.amount, payment.currency)
   const number = payment.supplier_invoice_number?.trim()
   const invoiceSv = number ? `Leverantörsfaktura ${number}` : 'Fakturan'
@@ -188,21 +191,24 @@ export function bankHeldPaymentWarning(payment: BankHeldPayment, via: BankHeldPa
       code: UNSIGNED_BANK_PAYMENT_WARNING,
       message_sv: `${invoiceSv} har en osignerad betalning på ${amount} hos banken. Utan signering går inga pengar, och banken ombeds sedan att avbryta den.`,
       message_en: `${invoiceEn} has an unsigned payment of ${amount} at the bank. No money leaves without a signature, and the bank is then asked to cancel it.`,
+      ...ids,
     }
   }
   const date = payment.requested_execution_date
-  const signedSv = `${invoiceSv} har en betalning på ${amount} som är signerad hos banken, med betalningsdag ${date}.`
-  const signedEn = `${invoiceEn} has a payment of ${amount} signed at the bank, with payment date ${date}.`
+  const signedSv = `${invoiceSv} har en betalning på ${amount} via banken som är signerad eller signeras just nu, med betalningsdag ${date}.`
+  const signedEn = `${invoiceEn} has a bank payment of ${amount} that is signed or being signed, with payment date ${date}.`
   return via === 'bank_row'
     ? {
         code: SIGNED_BANK_PAYMENT_WARNING,
         message_sv: `${signedSv} Är den här bankraden inte den betalningen betalar banken ändå: avbryt betalningen under Betalningar eller i banken, eller välj en annan rad.`,
         message_en: `${signedEn} If this bank row is not that payment, the bank pays anyway: cancel the payment under Payments or in the bank, or pick another row.`,
+        ...ids,
       }
     : {
         code: SIGNED_BANK_PAYMENT_WARNING,
         message_sv: `${signedSv} Banken genomför den ändå: avbryt den under Betalningar först, eller matcha dragningen mot fakturan när pengarna har gått.`,
         message_en: `${signedEn} The bank makes it anyway: cancel it under Payments first, or match its debit to the invoice once the money has left.`,
+        ...ids,
       }
 }
 
@@ -211,7 +217,7 @@ export interface BankHeldPaymentCheck {
   /** The payments the bank holds, one per invoice that has one. */
   payments: BankHeldPayment[]
   /** One per payment (bankHeldPaymentWarning), or the one saying that the check could not run. */
-  warnings: OperationWarning[]
+  warnings: BankHeldPaymentWarning[]
   /** The read failed: payments is empty because nothing could be read, not because nothing is held. */
   failed: boolean
   /** Why it failed, for the caller's log. */
@@ -219,36 +225,57 @@ export interface BankHeldPaymentCheck {
 }
 
 /**
+ * The check that could not run (a failed read, or one that did not answer in
+ * time): said as a warning of its own, never as "nothing held".
+ */
+function failedBankHeldPaymentCheck(error: unknown): BankHeldPaymentCheck {
+  return {
+    error,
+    payments: [],
+    warnings: [
+      {
+        code: BANK_PAYMENT_CHECK_FAILED_WARNING,
+        message_sv:
+          'Det gick inte att kontrollera om banken har en betalning av fakturan. Titta under Betalningar innan du fortsätter.',
+        message_en: 'Could not check whether the bank holds a payment of the invoice. Look under Payments before you go on.',
+      },
+    ],
+    failed: true,
+  }
+}
+
+/** The read, or a rejection once timeoutMs has passed without its answer (none without a timeoutMs). */
+function answerWithin<T>(read: Promise<T>, timeoutMs: number | undefined): Promise<T> {
+  if (timeoutMs === undefined) return read
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`bank payment orders: no answer within ${timeoutMs} ms`)), timeoutMs)
+  })
+  return Promise.race([read, late]).finally(() => clearTimeout(timer))
+}
+
+/**
  * The payments the bank holds for these supplier invoices and what to say of
  * them, for every door that pays or closes an invoice while one may stand.
  * Never throws: a failed read is a warning of its own, so the action goes on
- * and nobody takes a check that did not run for a clean one.
+ * and nobody takes a check that did not run for a clean one. A dialog passes
+ * `timeoutMs`, so a read that hangs holds its confirm no longer: past it the
+ * check reads as not run.
  */
 export async function checkBankHeldPayments(
   supabase: SupabaseDataClient,
   companyId: string,
   supplierInvoiceIds: readonly string[],
   via: BankHeldPaymentVia,
+  options: { timeoutMs?: number } = {},
 ): Promise<BankHeldPaymentCheck> {
   let held: Map<string, BankHeldPayment>
   try {
-    held = await findBankHeldPayments(supabase, companyId, supplierInvoiceIds)
+    held = await answerWithin(findBankHeldPayments(supabase, companyId, supplierInvoiceIds), options.timeoutMs)
   } catch (error) {
     // Said, not swallowed: the failure is a warning of its own, and the error
     // goes back to the caller for its log.
-    return {
-      error,
-      payments: [],
-      warnings: [
-        {
-          code: BANK_PAYMENT_CHECK_FAILED_WARNING,
-          message_sv:
-            'Det gick inte att kontrollera om banken har en betalning av fakturan. Titta under Betalningar innan du fortsätter.',
-          message_en: 'Could not check whether the bank holds a payment of the invoice. Look under Payments before you go on.',
-        },
-      ],
-      failed: true,
-    }
+    return failedBankHeldPaymentCheck(error)
   }
   // In the order the invoices were given: a dialog's rows, a request's allocations.
   const payments = [...new Set(supplierInvoiceIds)].flatMap((id) => held.get(id) ?? [])

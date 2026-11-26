@@ -195,14 +195,26 @@ describe('bankHeldPaymentWarning', () => {
     const warning = bankHeldPaymentWarning(SIGNED, 'bank_row')
 
     expect(warning.code).toBe(SIGNED_BANK_PAYMENT_WARNING)
+    // Signed or being signed, in the refusal's words (SI_BANK_PAYMENT_UNDER_WAY):
+    // awaiting_signature and awaiting_second_signer are not fully signed yet.
     expect(warning.message_sv).toBe(
-      `Leverantörsfaktura F-1001 har en betalning på ${formatCurrency(12500, 'SEK')} som är signerad hos banken, med betalningsdag 2026-12-01. ` +
+      `Leverantörsfaktura F-1001 har en betalning på ${formatCurrency(12500, 'SEK')} via banken som är signerad eller signeras just nu, med betalningsdag 2026-12-01. ` +
         'Är den här bankraden inte den betalningen betalar banken ändå: avbryt betalningen under Betalningar eller i banken, eller välj en annan rad.',
     )
     expect(warning.message_en).toBe(
-      `Supplier invoice F-1001 has a payment of ${formatCurrency(12500, 'SEK')} signed at the bank, with payment date 2026-12-01. ` +
+      `Supplier invoice F-1001 has a bank payment of ${formatCurrency(12500, 'SEK')} that is signed or being signed, with payment date 2026-12-01. ` +
         'If this bank row is not that payment, the bank pays anyway: cancel the payment under Payments or in the bank, or pick another row.',
     )
+    expect(getErrorEntry('SI_BANK_PAYMENT_UNDER_WAY')?.message_sv).toContain('signerad eller signeras just nu')
+    expect(getErrorEntry('SI_BANK_PAYMENT_UNDER_WAY')?.message_en).toContain('signed or being signed')
+  })
+
+  it('names the order and its invoice, so a client can cancel it (POST /payment-orders/{id}/cancel)', () => {
+    for (const payment of [SIGNED, UNSIGNED]) {
+      for (const via of ['bank_row', 'other'] as const) {
+        expect(bankHeldPaymentWarning(payment, via)).toMatchObject({ payment_order_id: 'order-1', supplier_invoice_id: 'si-1' })
+      }
+    }
   })
 
   it('a signed payment beside a payment registered by hand, a verifikat or a credit: cancel it first, or match its debit', () => {
@@ -229,7 +241,7 @@ describe('bankHeldPaymentWarning', () => {
   it('names an invoice without a number as the invoice', () => {
     const warning = bankHeldPaymentWarning({ ...SIGNED, supplier_invoice_number: '  ' }, 'bank_row')
     expect(warning.message_sv.startsWith('Fakturan har en betalning på')).toBe(true)
-    expect(warning.message_en.startsWith('The invoice has a payment of')).toBe(true)
+    expect(warning.message_en.startsWith('The invoice has a bank payment of')).toBe(true)
   })
 
   it('writes no en or em dash in either language', () => {
@@ -278,5 +290,27 @@ describe('checkBankHeldPayments', () => {
     expect(check.warnings[0]).toMatchObject({ code: BANK_PAYMENT_CHECK_FAILED_WARNING })
     expect(check.warnings[0]!.message_sv).toContain('Betalningar')
     expect(check.warnings[0]!.message_en).toContain('Payments')
+    // About no order and no invoice in particular.
+    expect(check.warnings[0]).not.toHaveProperty('payment_order_id')
+    expect(check.warnings[0]).not.toHaveProperty('supplier_invoice_id')
+  })
+
+  it('a read that does not answer within timeoutMs is a check that did not run: a dialog waits no longer', async () => {
+    setTable('payment_orders', () => new Promise(() => {}))
+
+    const check = await checkBankHeldPayments(client, 'company-1', ['si-1'], 'bank_row', { timeoutMs: 20 })
+
+    expect(check.failed).toBe(true)
+    expect(check.warnings.map((w) => w.code)).toEqual([BANK_PAYMENT_CHECK_FAILED_WARNING])
+    expect(String(check.error)).toContain('no answer within 20 ms')
+  })
+
+  it('a read that answers within timeoutMs is used as it is', async () => {
+    setTable('payment_orders', { data: [ORDER_ROW] })
+
+    const check = await checkBankHeldPayments(client, 'company-1', ['si-1'], 'bank_row', { timeoutMs: 1_000 })
+
+    expect(check.failed).toBe(false)
+    expect(check.payments).toEqual([SIGNED])
   })
 })

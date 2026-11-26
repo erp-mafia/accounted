@@ -54,9 +54,16 @@ vi.mock('@/lib/supplier-invoices/registration-first', () => ({
 // The bank payment read (lib/payments/orders/signed-payment.ts) has its own
 // suites (its module's, and operations/match-batch-bank-payment): mocked so it
 // consumes no slot in the queued Supabase mock.
+const { mockCheckBankHeldPayments } = vi.hoisted(() => ({
+  mockCheckBankHeldPayments: vi.fn(async (..._args: unknown[]): Promise<Record<string, unknown>> => ({
+    payments: [],
+    warnings: [],
+    failed: false,
+  })),
+}))
 vi.mock('@/lib/payments/orders/signed-payment', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/payments/orders/signed-payment')>()),
-  checkBankHeldPayments: vi.fn(async () => ({ payments: [], warnings: [], failed: false })),
+  checkBankHeldPayments: mockCheckBankHeldPayments,
 }))
 import { eventBus } from '@/lib/events/bus'
 import { createQueuedMockSupabase } from '@/tests/helpers'
@@ -599,5 +606,101 @@ describe('commitPendingOperation: match_batch_allocate events', () => {
       entryDate: '2026-05-21',
       trigger: 'payment',
     })
+  })
+})
+
+// The approval runs the write again, and with it the read of what the bank
+// holds: a payment signed since the proposal was staged is said in the
+// approval's result, not dropped with the rest of the answer.
+describe('commitPendingOperation: match_batch_allocate and a payment the bank holds', () => {
+  it('keeps the warnings the write answers beside its data in the result', async () => {
+    const warning = {
+      code: 'SI_SIGNED_BANK_PAYMENT',
+      message_sv: 'Leverantörsfaktura F-1 har en betalning via banken som är signerad eller signeras just nu.',
+      message_en: 'Supplier invoice F-1 has a bank payment that is signed or being signed.',
+      payment_order_id: 'order-1',
+      supplier_invoice_id: SI_ID,
+    }
+    mockCheckBankHeldPayments.mockResolvedValueOnce({ payments: [], warnings: [warning], failed: false })
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: {
+        ok: true,
+        journal_entry_id: 'je-batch-1',
+        voucher_series: 'A',
+        voucher_number: 42,
+        tx_id: TX_ID,
+        allocations: [
+          {
+            kind: 'supplier_invoice',
+            supplier_invoice_id: SI_ID,
+            payment_id: 'sip-1',
+            status: 'paid',
+            paid_amount: 1000,
+            remaining_amount: 0,
+            amount: 1000,
+          },
+        ],
+        total_allocated: 1000,
+        leftover: 0,
+      },
+      error: null,
+    }) // match_batch_allocate RPC
+    enqueue(POSTED_RELOAD) // the engine door reloads the posted verifikat
+    enqueue({ data: null, error: null }) // dispatcher finalize update
+
+    const op = makePendingOp({
+      transaction_id: TX_ID,
+      allocations: [{ kind: 'supplier_invoice', supplier_invoice_id: SI_ID, amount: 1000 }],
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(mockCheckBankHeldPayments).toHaveBeenCalledWith(supabase, 'company-1', [SI_ID], 'bank_row')
+    expect(result.data).toMatchObject({ journal_entry_id: 'je-batch-1', warnings: [warning] })
+    const finalized = findCalls('pending_operations', 'update').find(
+      ([row]) => (row as { status?: string }).status === 'committed',
+    )?.[0] as { result_data?: Record<string, unknown> } | undefined
+    expect(finalized?.result_data).toMatchObject({ warnings: [warning] })
+  })
+
+  it('adds nothing when the write answers no warning', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: {
+        ok: true,
+        journal_entry_id: 'je-batch-1',
+        voucher_series: 'A',
+        voucher_number: 42,
+        tx_id: TX_ID,
+        allocations: [
+          {
+            kind: 'supplier_invoice',
+            supplier_invoice_id: SI_ID,
+            payment_id: 'sip-1',
+            status: 'paid',
+            paid_amount: 1000,
+            remaining_amount: 0,
+            amount: 1000,
+          },
+        ],
+        total_allocated: 1000,
+        leftover: 0,
+      },
+      error: null,
+    }) // match_batch_allocate RPC
+    enqueue(POSTED_RELOAD) // the engine door reloads the posted verifikat
+    enqueue({ data: null, error: null }) // dispatcher finalize update
+
+    const op = makePendingOp({
+      transaction_id: TX_ID,
+      allocations: [{ kind: 'supplier_invoice', supplier_invoice_id: SI_ID, amount: 1000 }],
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(result.data).not.toHaveProperty('warnings')
   })
 })
