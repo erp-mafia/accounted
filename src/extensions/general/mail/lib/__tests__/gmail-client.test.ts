@@ -8,6 +8,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { clearMessageCache, getMailboxAddress, getMessageSummary } from '../gmail-client'
+import { MAIL_HTML_FIXTURES } from '@/tests/fixtures/mail-html'
 
 const mockFetch = vi.fn()
 vi.stubGlobal('fetch', (...args: unknown[]) => mockFetch(...args))
@@ -145,5 +146,46 @@ describe('getMailboxAddress', () => {
   it('returns null when the profile carries no address', async () => {
     respond({ messagesTotal: 0 })
     expect(await getMailboxAddress('token')).toBeNull()
+  })
+})
+
+describe('the body text of a message', () => {
+  function respondWithHtml(html: string) {
+    respond({ id: 'm-html', payload: { headers: HEADERS, mimeType: 'text/html', body: { data: Buffer.from(html, 'utf8').toString('base64url') } } })
+  }
+
+  const READ: Record<string, string> = {
+    'an Outlook invoice mail':
+      'Hej, Bifogat finns faktura 2025-0042 f&ouml;r november. Att betala: 12 500,00 kr inkl. moms. F&ouml;rfallodag 2025-12-31. Bankgiro 123-4567, OCR 20250042. Med v&auml;nliga h&auml;lsningar Anna Exempel Exempel Leverant&ouml;r AB',
+    'a web shop receipt':
+      'Ditt kvitto fr&aring;n Exempelbutiken Tack f&ouml;r ditt k&ouml;p! Ordernummer: 100-2381 Kontorsstol Ergo & fotst&ouml;d 2&#160;990,00 kr Frakt 49,00 kr Totalt 3&#160;039,00 kr Varav moms 25 %: 607,80 kr',
+    'a receipt forwarded from Gmail':
+      '---------- Forwarded message --------- Från: Exempel Hosting &lt;faktura@hosting.example&gt; Date: tis 25 nov. 2025 kl 09:14 Subject: Kvitto för betalning #48213 To: &lt;ekonomi@foretaget.example&gt; Hej! Vi har tagit emot din betalning på 1 249,00 kr för perioden 2025-11-01 till 2025-11-30. Webbhotell Bas: 999,00 kr Domän foretaget.example: 250,00 kr Kortet slutar på 4242. Detta mejl kan inte besvaras.',
+    'a page saved from a supplier portal':
+      'Faktura 7781 window.dataLayer = window.dataLayer || []; if (a d) { track(\'view\') } .no-print{display:none} Exempel Leverant&ouml;r AB Faktura 7781 Fakturadatum: 2025-11-03 Förfallodag: 2025-12-03 Konsulttimmar, 10 h 9&#x00A0;500,00 Moms 25 % 2 375,00 Summa att betala: 11 875,00 SEK Bet.villkor 30 dagar netto. Dr&ouml;jsm&aring;lsr&auml;nta enligt r&auml;ntelagen. <!-- generated 2025-11-03T08:00:00Z',
+  }
+
+  it.each(MAIL_HTML_FIXTURES)('reads %s as before', async (name, html) => {
+    respondWithHtml(html)
+    const candidate = await getMessageSummary('token', 'm-html', 'conn-1', 'invoice@example.se')
+    expect(candidate.bodyText).toBe(READ[name])
+  })
+
+  // Each of these took seconds per 100 KB, searching the rest of the body
+  // again from every opening. The bound is checked after each size, the
+  // smaller first, so a slow step fails here instead of hanging the run.
+  it.each([
+    ['style blocks that never end', '<style'],
+    ['tags without their >', '<'],
+  ])('answers at once for a body made of %s', async (_, unit) => {
+    let spent = 0
+    for (const kb of [256, 1024]) {
+      clearMessageCache()
+      respondWithHtml(unit.repeat(Math.floor((kb * 1024) / unit.length)))
+      const started = Date.now()
+      await getMessageSummary('token', 'm-html', 'conn-1', 'invoice@example.se')
+      spent += Date.now() - started
+      expect(spent).toBeLessThan(2000)
+    }
   })
 })

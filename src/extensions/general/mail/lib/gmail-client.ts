@@ -2,6 +2,7 @@
  * The thin slice of the Gmail API the hunt needs: search, read headers, fetch
  * an attachment. Nothing here writes, because the granted scope cannot.
  */
+import { replaceUpToLastCloser } from '@/lib/documents/html-markup'
 import type { MailCandidate } from '@/lib/mail-search/service'
 
 const API = 'https://gmail.googleapis.com/gmail/v1/users/me'
@@ -54,10 +55,9 @@ function collectBodyText(part: GmailPart | undefined, out: string[]): void {
 function readableBody(msg: GmailMessage): string {
   const chunks: string[] = []
   collectBodyText(msg.payload, chunks)
-  return chunks
-    .join('\n')
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
+  // Markup that is never closed is read in time that grows with the body (html-markup.ts).
+  const withoutStyles = replaceUpToLastCloser(chunks.join('\n'), /<style[\s\S]*?<\/style>/gi, ' ', /<\/style>/gi)
+  return replaceUpToLastCloser(withoutStyles, /<[^>]+>/g, ' ', '>')
     .replace(/&nbsp;|&zwnj;|&#847;/gi, ' ')
     .replace(/&amp;/gi, '&')
     .replace(/\s+/g, ' ')

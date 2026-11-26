@@ -1,3 +1,4 @@
+import { replaceBlocks, replaceUpToLastCloser } from '@/lib/documents/html-markup'
 import type { ReadPage } from './types'
 
 /** Plain text and HTML bodies (mail underlag). HTML is reduced to its text. */
@@ -35,12 +36,12 @@ const NAMED_ENTITIES: Record<string, string> = {
  * decoded twice.
  */
 export function htmlToText(html: string): string {
-  const withoutTags = html
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script[^>]*>/gi, ' ')
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style[^>]*>/gi, ' ')
-    .replace(/<!--[\s\S]*?--!?>/g, ' ')
-    .replace(/<br\b[^>]*>|<\/(?:p|div|li|tr|h[1-6]|table|section|article)\s*>/gi, '\n')
-    .replace(/<[^>]*>/g, ' ')
+  // Markup that is never closed is read in time that grows with the body (html-markup.ts).
+  const withoutScripts = replaceBlocks(html, ['script'], 'attributes', ' ')
+  const withoutStyles = replaceBlocks(withoutScripts, ['style'], 'attributes', ' ')
+  const withoutComments = replaceUpToLastCloser(withoutStyles, /<!--[\s\S]*?--!?>/g, ' ', /--!?>/g)
+  const withBreaks = replaceUpToLastCloser(withoutComments, /<br\b[^>]*>|<\/(?:p|div|li|tr|h[1-6]|table|section|article)\s*>/gi, '\n', '>')
+  const withoutTags = replaceUpToLastCloser(withBreaks, /<[^>]*>/g, ' ', '>')
   return decodeEntities(withoutTags)
     .replace(/[ \t ]+/g, ' ')
     .split('\n')
