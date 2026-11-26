@@ -3,7 +3,7 @@ import { createQueuedMockSupabase } from '@/tests/helpers'
 
 const bulkMock = vi.fn()
 vi.mock('../lib/skattekonto-match', () => ({
-  findMatchSuggestionsBulk: (...args: unknown[]) => bulkMock(...args),
+  findMatchSuggestionsBulkOrNull: (...args: unknown[]) => bulkMock(...args),
 }))
 
 import { refreshSkattekontoProposals } from '../lib/skattekonto-proposals'

@@ -582,6 +582,18 @@ function unambiguousCombinedMatches<R extends CombinableRow>(
  * never candidates.
  */
 export async function findMatchSuggestionsBulk(
+  ...args: Parameters<typeof findMatchSuggestionsBulkOrNull>
+): Promise<Map<string, SkattekontoMatchCandidate>> {
+  return (await findMatchSuggestionsBulkOrNull(...args)) ?? new Map()
+}
+
+/**
+ * findMatchSuggestionsBulk's answer, or null when a read it needs failed. An
+ * empty answer means that no row has a candidate. A caller that stores the
+ * answer tells the two apart: stored as "no candidates", a read that failed
+ * would clear every proposal (refreshSkattekontoProposals).
+ */
+export async function findMatchSuggestionsBulkOrNull(
   supabase: SupabaseClient,
   companyId: string,
   rows: Array<{
@@ -592,15 +604,15 @@ export async function findMatchSuggestionsBulk(
     journal_entry_id: string | null
   }>,
   skattekontoAccount?: SkattekontoLedgerAccount,
-): Promise<Map<string, SkattekontoMatchCandidate>> {
+): Promise<Map<string, SkattekontoMatchCandidate> | null> {
   const unmatched = rows.filter(r => !r.journal_entry_id)
   if (unmatched.length === 0) return new Map()
   let account: SkattekontoLedgerAccount
   try {
     account = skattekontoAccount ?? (await resolveSkattekontoAccount(supabase, companyId))
   } catch {
-    // Same posture as a failed candidate search: no suggestions.
-    return new Map()
+    // Same posture as a failed candidate search: no answer.
+    return null
   }
 
   const dates = unmatched.map(r => r.transaktionsdatum).sort()
@@ -630,8 +642,8 @@ export async function findMatchSuggestionsBulk(
       filterLines: (q: EntryLinesQuery) => q.eq('account_number', account),
     })
   } catch {
-    // Unchanged posture: a candidate-search failure yields no suggestions.
-    return new Map()
+    // Unchanged posture: a candidate-search failure yields no answer.
+    return null
   }
 
   // SKV rows already linked to a candidate entry, with their amounts: an
@@ -645,7 +657,7 @@ export async function findMatchSuggestionsBulk(
     linked = await readLinkedSkvRows(supabase, companyId, candidateEntryIds)
   } catch {
     // Read as "none linked", a taken verifikat would be proposed again.
-    return new Map()
+    return null
   }
 
   // AGI period extraction across the batch.
@@ -667,7 +679,7 @@ export async function findMatchSuggestionsBulk(
       : new Set()
   } catch {
     // Without the storno and settlement checks no candidate is safe to propose.
-    return new Map()
+    return null
   }
 
   const entryViews = buildEntryViews(
