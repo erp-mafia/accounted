@@ -75,6 +75,15 @@ describe('mapVismaToSalesInvoice: invoice currency', () => {
     expect(dto.paymentStatus?.balance).toEqual({ value: 0, currencyCode: 'EUR' });
   });
 
+  it('derives the status of a foreign invoice from the same balance it reports', () => {
+    const { PaymentStatus: _ps, ...withoutStatus } = euroInvoice;
+    const dto = mapVismaToSalesInvoice({ ...withoutStatus, RemainingAmount: 0, RemainingAmountInvoiceCurrency: 4000 });
+
+    expect(dto.paymentStatus?.paid).toBe(false);
+    expect(dto.paymentStatus?.balance).toEqual({ value: 4000, currencyCode: 'EUR' });
+    expect(dto.status).not.toBe('paid');
+  });
+
   it('never takes a base-currency balance for a foreign invoice', () => {
     const { RemainingAmountInvoiceCurrency: _omitted, ...withoutTwin } = euroInvoice;
     const dto = mapVismaToSalesInvoice({ ...withoutTwin, PaymentStatus: 1, RemainingAmount: 44800 });

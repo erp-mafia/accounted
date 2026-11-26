@@ -123,9 +123,16 @@ function openBalance(
   return remaining ?? (paid ? 0 : total);
 }
 
-function deriveInvoiceStatus(raw: Record<string, unknown>): InvoiceStatusCode {
-  const remaining = readRemaining(raw);
-  const total = raw['TotalAmount'] as number ?? 0;
+/**
+ * `remaining` and `total` are the figures the invoice's balance is read from
+ * (salesInvoiceAmounts), so the status and the balance never disagree on a
+ * foreign invoice whose two families do.
+ */
+function deriveInvoiceStatus(
+  raw: Record<string, unknown>,
+  remaining: number | null,
+  total: number,
+): InvoiceStatusCode {
   const ps = raw['PaymentStatus'] as number | undefined;
   if (ps === CUSTOMER_PS_PAID) return 'paid';
   if (ps === CUSTOMER_PS_OVERDUE) return 'overdue';
@@ -291,7 +298,7 @@ export function mapVismaToSalesInvoice(raw: Record<string, unknown>): SalesInvoi
     issueDate: (raw['InvoiceDate'] as string) ?? '',
     dueDate: raw['DueDate'] as string | undefined,
     currencyCode: currency,
-    status: doc.status ?? deriveInvoiceStatus(raw),
+    status: doc.status ?? deriveInvoiceStatus(raw, remaining, total),
     invoiceTypeCode: doc.invoiceTypeCode,
     supplier: buildParty(''),
     customer: buildParty(
