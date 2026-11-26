@@ -22854,7 +22854,7 @@ export const tools: McpTool[] = [
         carried_to_run_id: {
           type: 'string',
           description:
-            'For days on dates a paid, booked or declared salary run already read (late days): the next ordinary salary run that is neither paid nor declared, a draft with the employee on it (a correction draft only when named and its AGI is not filed). It deducts them, shows the dates on the payslip and reports them in its AGI. A refusal SALARY_REGISTER_DATES_LOCKED_BY_RUN with reason late_day_needs_later_run names it in later_salary_run. Days no paid or declared run read ignore it.',
+            'For days on dates a paid, booked or declared salary run already read, or a monthly-paid employee\'s absence between two runs\' windows behind one (late days): the next ordinary salary run that is neither paid nor declared, a draft with the employee on it (a correction draft only when named and its AGI is not filed). It deducts them, shows the dates on the payslip and reports them in its AGI. A refusal SALARY_REGISTER_DATES_LOCKED_BY_RUN with reason late_day_needs_later_run names it in later_salary_run. Other days ignore it.',
         },
       },
       required: ['employee_id', 'from', 'to', 'absence_type'],
