@@ -351,6 +351,18 @@ describe('buildLedgerContext', () => {
     expect(ctx.explicit_rules.map((r) => r.match)).toEqual(['KORTKÖP ICA MAXI'])
   })
 
+  it('lists a rule learned on money in by the account it books, not the bank', async () => {
+    enqueueAll(mock, {
+      rules: [
+        { rule_name: 'Learned: Shop payout', merchant_pattern: 'Shop payout', description_pattern: null, debit_account: '1930', credit_account: '3001', vat_treatment: null },
+        { rule_name: 'Learned: Telia', merchant_pattern: 'Telia', description_pattern: null, debit_account: '6212', credit_account: '1930', vat_treatment: null },
+      ],
+    })
+    const ctx = await buildLedgerContext(mock.supabase as unknown as SupabaseClient, COMPANY_ID, NOW)
+
+    expect(ctx.explicit_rules.map((r) => r.account_number)).toEqual(['3001', '6212'])
+  })
+
   it('reads every active mapping row of the company while its auto-learned rows are read', async () => {
     enqueueAll(mock)
     await buildLedgerContext(mock.supabase as unknown as SupabaseClient, COMPANY_ID, NOW)

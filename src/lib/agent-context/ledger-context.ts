@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
 import { addMonthsIso, todayIsoStockholm } from '@/lib/dates/iso'
 import { mappingPatternNamesCounterparty } from '@/lib/bookkeeping/counterparty-templates'
+import { mappingRuleAccount } from '@/lib/bookkeeping/bank-leg'
 import { AUTO_LEARNED_MAPPING_SOURCE, readsAutoLearnedMappingRules } from '@/lib/bookkeeping/mapping-engine'
 
 // Ledger context: derived booking patterns for the Accounted://ledger/context
@@ -173,7 +174,7 @@ function share(agree: number, seen: number): number {
 function explicitRulesRead(supabase: SupabaseClient, companyId: string, autoLearned: boolean) {
   const rules = supabase
     .from('mapping_rules')
-    .select('rule_name, merchant_pattern, description_pattern, debit_account, vat_treatment')
+    .select('rule_name, merchant_pattern, description_pattern, debit_account, credit_account, vat_treatment')
     .eq('company_id', companyId)
     .eq('is_active', true)
   return (autoLearned ? rules : rules.neq('source', AUTO_LEARNED_MAPPING_SOURCE))
@@ -187,6 +188,7 @@ interface ExplicitRuleRow {
   merchant_pattern: string | null
   description_pattern: string | null
   debit_account: string | null
+  credit_account?: string | null
   vat_treatment: string | null
 }
 
@@ -203,7 +205,7 @@ export function explicitRulesFrom(rows: ReadonlyArray<ExplicitRuleRow> | null | 
     .map((r) => ({
       rule_name: r.rule_name,
       match: r.merchant_pattern ?? r.description_pattern ?? '',
-      account_number: r.debit_account,
+      account_number: mappingRuleAccount(r),
       vat_treatment: r.vat_treatment,
       source: 'mapping_rule' as const,
     }))

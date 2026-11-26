@@ -71,6 +71,20 @@ export function bankSideOf(transactionAmount: number): BankSide {
 }
 
 /**
+ * The account a learned mapping rule books a row to: the leg that is not the
+ * bank's. A rule keeps the legs it was booked with (saveUserMappingRule), so
+ * one learned on money out holds its account as the debit and one learned on
+ * money in holds the bank as the debit and its account as the credit. It is
+ * read the same whichever way a row moves: a refund on a purchase rule is
+ * still the purchase account. A rule between two own 19xx ledgers is read as
+ * its debit.
+ */
+export function mappingRuleAccount(rule: { debit_account?: string | null; credit_account?: string | null }): string | null {
+  const { debit_account: debit, credit_account: credit } = rule
+  return (isCashLedger(debit) && credit && !isCashLedger(credit) ? credit : debit) ?? null
+}
+
+/**
  * Put the bank leg of a debit/credit pair on the settlement ledger.
  *
  * Only a cash-ledger leg on the bank side moves (or one of the company's card

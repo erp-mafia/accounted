@@ -10,6 +10,7 @@ import {
 import { BOOKING_TEMPLATES, findMatchingTemplates, getTemplateById, templateAppliesToForm, type BookingTemplate } from '@/lib/bookkeeping/booking-templates'
 import { proposalFromTemplate, type BookingProposal } from '@/lib/bookkeeping/proposal'
 import { isSkatteverketPayment } from '@/lib/bookkeeping/skatteverket-payment'
+import { isCashLedger, mappingRuleAccount } from '@/lib/bookkeeping/bank-leg'
 import { ruleReviewFlags } from './direct-booking'
 import type {
   Transaction,
@@ -169,21 +170,22 @@ export function getSuggestedCategories(
     if (!rule.is_active) continue
 
     const matches = mappingRuleMatches(rule, transaction)
+    const ruleAccount = mappingRuleAccount(rule)
 
-    if (matches && rule.debit_account && !rule.default_private) {
+    if (matches && ruleAccount && !rule.default_private) {
       // Reverse-lookup: find category from debit account. A rule booking on
       // an account outside the fixed maps (company-custom accounts like VMB)
       // must still surface: the account itself is the signal, and callers
       // reach it via account_override. Fall back to the direction's generic
       // category instead of silently dropping the rule.
-      const mapped = accountToCategory(rule.debit_account, transaction.amount)
+      const mapped = accountToCategory(ruleAccount, transaction.amount)
       const category = mapped ?? (transaction.amount < 0 ? 'expense_other' : 'income_other')
       if (!seen.has(category)) {
         seen.add(category)
         const suggestion: SuggestedCategory = {
           category: category as TransactionCategory,
           label: CATEGORY_LABELS[category] || category,
-          account: rule.debit_account,
+          account: ruleAccount,
           confidence: rule.confidence_score || 0.8,
           source: 'mapping_rule',
         }
@@ -192,7 +194,7 @@ export function getSuggestedCategories(
           reasons.push(`Matchad på din beskrivning: ${rule.user_description}`)
         }
         if (!mapped) {
-          reasons.push(`Regeln bokför på konto ${rule.debit_account} (utanför standardkategorierna)`)
+          reasons.push(`Regeln bokför på konto ${ruleAccount} (utanför standardkategorierna)`)
         }
         if (reasons.length > 0) {
           suggestion.match_reason = reasons.join('. ')
@@ -359,9 +361,13 @@ export function matchedRuleProposals(
   for (const rule of mappingRules) {
     if (!rule.is_active || rule.default_private) continue
     if (!mappingRuleMatches(rule, transaction)) continue
+    // A rule whose account is a bank ledger (a transfer between own accounts)
+    // names no catalog template: every template that books to the bank on its
+    // other side is other money, a loan, an owner's deposit or share capital.
+    const ruleAccount = mappingRuleAccount(rule)
     const template =
       (rule.template_id ? getTemplateById(rule.template_id) : undefined) ??
-      (rule.debit_account ? templateForAccount(rule.debit_account, direction, entityType) : undefined)
+      (ruleAccount && !isCashLedger(ruleAccount) ? templateForAccount(ruleAccount, direction, entityType) : undefined)
     if (!template || seen.has(template.id)) continue
     seen.add(template.id)
     results.push({

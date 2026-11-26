@@ -346,3 +346,75 @@ describe('mapping rules learned from a generic bank text (crm#1707)', () => {
     expect(getSuggestedCategories(deposit, [generic], {}).some((s) => s.source === 'mapping_rule')).toBe(false)
   })
 })
+
+describe('a rule learned on an incoming row is read by its counter leg', () => {
+  // saveUserMappingRule stores the booked legs as they were: on money in, the
+  // bank is the debit and the account the row was booked to is the credit.
+  const incomingRule = (over: Record<string, unknown> = {}) =>
+    ({
+      id: 'rule-in', user_id: null, company_id: 'co-1', rule_name: 'Learned: Shop payout', rule_type: 'merchant_name', priority: 10,
+      mcc_codes: null, merchant_pattern: 'Shop payout', description_pattern: null, amount_min: null, amount_max: null,
+      debit_account: '1930', credit_account: '3001', vat_treatment: null, vat_debit_account: null, vat_credit_account: null,
+      risk_level: 'NONE', default_private: false, requires_review: false, confidence_score: 0.95,
+      capitalization_threshold: null, capitalized_debit_account: null, source: 'auto',
+      user_description: null, template_id: null, is_active: true, created_at: '', updated_at: '',
+      ...over,
+    }) as never
+  const payout = tx({ merchant_name: 'Shop payout', description: 'Shop payout', amount: 8180.1 })
+
+  it('proposes a template that credits the rule account, never one that pays money out of the bank', async () => {
+    const out = await getSuggestedTemplates(payout, 'aktiebolag', [incomingRule()])
+    const fromRule = out.filter((s: SuggestedTemplate) => s.source === 'rule')
+    expect(fromRule.length).toBe(1)
+    expect(fromRule[0].credit_account).toBe('3001')
+    expect(fromRule[0].template_id).not.toBe('financial_loan_repayment')
+    expect(out.some((s: SuggestedTemplate) => s.debit_account === '2350')).toBe(false)
+  })
+
+  it('suggests the rule account as the category account, not the bank', () => {
+    const result = getSuggestedCategories(payout, [incomingRule()], {})
+    expect(result.length).toBe(1)
+    expect(result[0]).toMatchObject({ account: '3001', source: 'mapping_rule' })
+  })
+
+  it('a purchase rule on a refund reads the purchase account, never the bank', async () => {
+    const refund = tx({ merchant_name: 'Telia', description: 'Telia', amount: 300 })
+    const purchaseRule = incomingRule({ merchant_pattern: 'Telia', debit_account: '6212', credit_account: '1930' })
+    for (const form of ['aktiebolag', 'enskild_firma'] as const) {
+      const out = await getSuggestedTemplates(refund, form, [purchaseRule])
+      expect(out.some((s: SuggestedTemplate) => s.source === 'rule' && (s.debit_account === '2350' || s.credit_account === '1930'))).toBe(false)
+    }
+    expect(getSuggestedCategories(refund, [purchaseRule], {})[0]).toMatchObject({ account: '6212', source: 'mapping_rule' })
+    // A row of 0 kr is read the same way.
+    expect(getSuggestedCategories(tx({ merchant_name: 'Telia', amount: 0 }), [purchaseRule], {})[0]?.account).toBe('6212')
+  })
+
+  it('an income rule on money out reads the income account, never the bank', async () => {
+    const back = tx({ merchant_name: 'Shop payout', description: 'Shop payout', amount: -500 })
+    for (const form of ['aktiebolag', 'enskild_firma'] as const) {
+      const out = await getSuggestedTemplates(back, form, [incomingRule()])
+      expect(out.some((s: SuggestedTemplate) => s.source === 'rule' && s.debit_account === '1930')).toBe(false)
+    }
+    expect(getSuggestedCategories(back, [incomingRule()], {})[0]).toMatchObject({ account: '3001', source: 'mapping_rule' })
+  })
+
+  it('a rule between two own bank ledgers proposes no catalog template either way', async () => {
+    for (const legs of [{ debit_account: '1940', credit_account: '1930' }, { debit_account: '1930', credit_account: '1940' }]) {
+      const transfer = incomingRule({ merchant_pattern: 'Sparkonto', ...legs })
+      for (const amount of [-1000, 1000]) {
+        for (const form of ['aktiebolag', 'enskild_firma'] as const) {
+          const out = await getSuggestedTemplates(tx({ merchant_name: 'Sparkonto', description: 'Sparkonto', amount }), form, [transfer])
+          expect(out.some((s: SuggestedTemplate) => s.source === 'rule')).toBe(false)
+        }
+      }
+    }
+  })
+
+  it('an outgoing rule still reads its debit leg', async () => {
+    const purchase = tx({ merchant_name: 'Telia', description: 'Telia', amount: -2487.5 })
+    const outgoing = incomingRule({ merchant_pattern: 'Telia', debit_account: '6212', credit_account: '1930' })
+    const out = await getSuggestedTemplates(purchase, 'aktiebolag', [outgoing])
+    expect(out.find((s: SuggestedTemplate) => s.source === 'rule')?.debit_account).toBe('6212')
+    expect(getSuggestedCategories(purchase, [outgoing], {})[0]).toMatchObject({ account: '6212', source: 'mapping_rule' })
+  })
+})
