@@ -7,62 +7,19 @@
  * URL for a bank feed's ids; the gateway refused such a request before
  * PostgREST saw it, and the stored-id read ignored the refusal, so the rows of
  * that slice were decided as if none of them were stored. The fake gateway
- * below builds the URL the way supabase-js does and refuses one past a
- * self-hosted Kong's 8 KB, the stricter of the two limits (hosted Supabase's
- * is about 16 KB).
+ * (tests/gateway-supabase.ts) refuses a URL past a self-hosted Kong's 8 KB,
+ * the stricter of the two limits (hosted Supabase's is about 16 KB).
  */
 import { describe, expect, it } from 'vitest'
 import { fetchStoredEnrichmentRows, fetchStoredExternalIds } from '../ingest'
+import { createGatewaySupabase, GATEWAY_URL_LIMIT as URL_LIMIT, type GatewayRequest } from '@/tests/gateway-supabase'
 
 type Row = Record<string, unknown>
-type Answer = { data: Row[] | null; error: { message: string; code?: string } | null }
 
 const COMPANY = '5b0c3c1e-0000-4000-8000-000000000001'
-const URL_LIMIT = 8 * 1024
 
-interface Request {
-  url: string
-  inValues: number
-}
-
-function gatewaySupabase(rows: Row[], refuse?: (request: Request, index: number) => boolean) {
-  const requests: Request[] = []
-  const from = (table: string) => {
-    const params = new URLSearchParams()
-    const keep: Array<(row: Row) => boolean> = []
-    let inValues = 0
-    const builder = {
-      select(columns: string) {
-        params.append('select', columns)
-        return builder
-      },
-      eq(column: string, value: unknown) {
-        params.append(column, `eq.${String(value)}`)
-        keep.push((row) => row[column] === value)
-        return builder
-      },
-      in(column: string, values: readonly string[]) {
-        // supabase-js quotes a value holding a comma or a parenthesis.
-        const listed = values.map((v) => (/[,()]/.test(v) ? `"${v}"` : v))
-        params.append(column, `in.(${listed.join(',')})`)
-        inValues += values.length
-        keep.push((row) => values.includes(row[column] as string))
-        return builder
-      },
-      then(resolve: (answer: Answer) => void) {
-        const request = { url: `https://abcdefghijklmnopqrst.supabase.co/rest/v1/${table}?${params}`, inValues }
-        requests.push(request)
-        if (request.url.length > URL_LIMIT) return resolve({ data: null, error: { message: 'Request-URI Too Large' } })
-        if (refuse?.(request, requests.length - 1)) {
-          return resolve({ data: null, error: { message: 'canceling statement due to statement timeout', code: '57014' } })
-        }
-        resolve({ data: structuredClone(rows.filter((row) => keep.every((test) => test(row)))), error: null })
-      },
-    }
-    return builder
-  }
-  return { supabase: { from } as never, requests }
-}
+const gatewaySupabase = (rows: Row[], refuse?: (request: GatewayRequest, index: number) => boolean) =>
+  createGatewaySupabase({ transactions: rows }, { refuse })
 
 /** A bank feed's stable id, as the Enable Banking and Open Payments syncs build it. */
 const feedId = (n: number) => `eb_SE4550000000058398257466_2026-11-${String(10 + (n % 20)).padStart(2, '0')}_${125000 + n}_0`

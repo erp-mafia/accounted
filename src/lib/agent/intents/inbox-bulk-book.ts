@@ -1,4 +1,7 @@
 import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
+import { dbError } from '@/lib/errors/db-error'
+import { ID_READ_CHUNK } from '@/lib/supabase/read-in-slices'
+import { chunk } from '@/lib/utils'
 import { defineAgentIntent } from './types'
 import { SONNET_MODEL, EFFORT_STANDARD } from '@/lib/agent/composer/client'
 
@@ -120,17 +123,37 @@ export const inboxBulkBook = defineAgentIntent<InboxBulkBookArgs, CapturedInboxB
   thinking: { effort: EFFORT_STANDARD },
 
   capture: async ({ item_ids }, { supabase, companyId }) => {
-    const ids = Array.isArray(item_ids) ? item_ids.filter((x): x is string => typeof x === 'string') : []
+    // Each id once: an id repeated in two slices would come back twice.
+    const ids = Array.isArray(item_ids) ? [...new Set(item_ids.filter((x): x is string => typeof x === 'string'))] : []
     if (ids.length === 0) return { items: [], bookable_count: 0 }
 
-    const { data: rows } = await supabase
-      .from('invoice_inbox_items')
-      .select('id, matched_transaction_id, created_journal_entry_id, created_supplier_invoice_id, extracted_data')
-      .eq('company_id', companyId)
-      .in('id', ids)
+    // In slices of ID_READ_CHUNK: the ids travel in the GET query string, which
+    // the gateway refuses past its limit, and a range selection sends up to
+    // about 500 items (the intent arguments are capped at 20 000 characters).
+    // A read that fails throws, and the invoke route answers it as a failed
+    // capture, which the sheet shows. Unchecked, a failed item read told the
+    // agent that nothing could be read, and a failed bank read dropped every
+    // bank amount without a word.
+    interface ItemRow {
+      id: string
+      matched_transaction_id: string | null
+      created_journal_entry_id: string | null
+      created_supplier_invoice_id: string | null
+      extracted_data: unknown
+    }
+    const rows: ItemRow[] = []
+    for (const slice of chunk(ids, ID_READ_CHUNK)) {
+      const { data, error } = await supabase
+        .from('invoice_inbox_items')
+        .select('id, matched_transaction_id, created_journal_entry_id, created_supplier_invoice_id, extracted_data')
+        .eq('company_id', companyId)
+        .in('id', slice)
+      if (error) throw dbError(error)
+      rows.push(...((data ?? []) as ItemRow[]))
+    }
 
     const txIds = Array.from(
-      new Set((rows ?? []).map((r) => r.matched_transaction_id).filter(Boolean) as string[]),
+      new Set(rows.map((r) => r.matched_transaction_id).filter(Boolean) as string[]),
     )
     interface TxRow {
       id: string
@@ -142,16 +165,18 @@ export const inboxBulkBook = defineAgentIntent<InboxBulkBookArgs, CapturedInboxB
       description: string | null
     }
     const txById = new Map<string, TxRow>()
-    if (txIds.length > 0) {
-      const { data: txs } = await supabase
+    // Sliced the same way: up to one bank row per item.
+    for (const slice of chunk(txIds, ID_READ_CHUNK)) {
+      const { data: txs, error } = await supabase
         .from('transactions')
         .select('id, date, amount, currency, amount_sek, exchange_rate, description')
         .eq('company_id', companyId)
-        .in('id', txIds)
+        .in('id', slice)
+      if (error) throw dbError(error)
       for (const t of ((txs ?? []) as TxRow[])) txById.set(t.id, t)
     }
 
-    const items: CapturedInboxItem[] = (rows ?? []).map((r) => {
+    const items: CapturedInboxItem[] = rows.map((r) => {
       const ex = (r.extracted_data ?? {}) as {
         supplier?: { name?: string | null }
         invoice?: { invoiceDate?: string | null; currency?: string | null }

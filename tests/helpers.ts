@@ -1102,7 +1102,7 @@ interface MockOrder {
 }
 
 /** Two values in one order column, as Postgres compares them. */
-function compareLikePostgres(x: unknown, y: unknown, { ascending, nullsFirst }: MockOrder): number {
+export function compareLikePostgres(x: unknown, y: unknown, { ascending, nullsFirst }: MockOrder): number {
   const xNull = x === null || x === undefined
   const yNull = y === null || y === undefined
   if (xNull || yNull) return xNull === yNull ? 0 : xNull === nullsFirst ? -1 : 1

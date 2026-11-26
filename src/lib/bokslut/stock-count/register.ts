@@ -2,6 +2,8 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { sumOre } from '@/lib/money'
+import { ID_READ_CHUNK } from '@/lib/supabase/read-in-slices'
+import { chunk } from '@/lib/utils'
 import { StockCountError, stockCountErrorFromDb } from './errors'
 import { type SaveStockCountBody, SaveStockCountSchema } from './schemas'
 import { categoryTotals, stockRowValue, type CategoryTotal, type StockCategory } from './valuation'
@@ -171,9 +173,17 @@ function assertDates(period: FiscalPeriodRef, body: { count_date: string; roll_f
 async function assertArticles(supabase: SupabaseClient, companyId: string, articleIds: string[]): Promise<void> {
   const unique = [...new Set(articleIds)]
   if (unique.length === 0) return
-  const { data, error } = await supabase.from('articles').select('id').eq('company_id', companyId).in('id', unique)
-  if (error) throw error
-  const found = new Set(((data ?? []) as Array<{ id: string }>).map((a) => a.id))
+  // In slices of ID_READ_CHUNK: a count holds up to STOCK_COUNT_MAX_ROWS
+  // rows, each on its own article, and the ids travel in the GET query
+  // string, which the gateway refuses past its limit. One read would also
+  // stop at PostgREST's 1000 rows and call the rest missing. Reads by
+  // primary key: a slice answers at most ID_READ_CHUNK rows.
+  const found = new Set<string>()
+  for (const ids of chunk(unique, ID_READ_CHUNK)) {
+    const { data, error } = await supabase.from('articles').select('id').eq('company_id', companyId).in('id', ids)
+    if (error) throw error
+    for (const article of (data ?? []) as Array<{ id: string }>) found.add(article.id)
+  }
   const missing = unique.filter((id) => !found.has(id))
   if (missing.length > 0) throw new StockCountError('STOCK_COUNT_ARTICLE_NOT_FOUND', { article_ids: missing })
 }

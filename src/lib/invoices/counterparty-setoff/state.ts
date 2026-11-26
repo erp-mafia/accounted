@@ -9,6 +9,8 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { isOpenPaymentOrder, OPEN_PAYMENT_ORDER_CANDIDATE_STATUSES } from '@/lib/payments/orders/status'
+import { ID_READ_CHUNK } from '@/lib/supabase/read-in-slices'
+import { chunk } from '@/lib/utils'
 import type { SetoffInvoiceFacts, SetoffSupplierInvoiceFacts } from './plan'
 
 /** An invoice as the set-off reads it (every select of it here names these columns as a literal, for the phantom-column guard). */
@@ -98,14 +100,23 @@ export async function openCollectionInvoiceIds(
   invoiceIds: readonly string[],
 ): Promise<Set<string>> {
   if (invoiceIds.length === 0) return new Set()
-  const { data, error } = await supabase
-    .from('collection_cases')
-    .select('invoice_id')
-    .eq('company_id', companyId)
-    .eq('is_open', true)
-    .in('invoice_id', [...invoiceIds])
-  if (error) throw new Error(`counterparty set-off: collection case lookup failed: ${error.message}`)
-  return new Set((data ?? []).map((r) => (r as { invoice_id: string }).invoice_id))
+  // In slices of ID_READ_CHUNK: the counterparty balance asks for up to
+  // OPEN_ITEM_LIMIT open invoices, and the ids travel in the GET query
+  // string, which the gateway refuses past its limit. An invoice has one
+  // open case at most (collection_cases_one_open_per_invoice): a slice
+  // answers at most ID_READ_CHUNK rows.
+  const open = new Set<string>()
+  for (const ids of chunk(invoiceIds, ID_READ_CHUNK)) {
+    const { data, error } = await supabase
+      .from('collection_cases')
+      .select('invoice_id')
+      .eq('company_id', companyId)
+      .eq('is_open', true)
+      .in('invoice_id', ids)
+    if (error) throw new Error(`counterparty set-off: collection case lookup failed: ${error.message}`)
+    for (const r of data ?? []) open.add((r as { invoice_id: string }).invoice_id)
+  }
+  return open
 }
 
 /**
@@ -122,27 +133,37 @@ export async function paymentInFlightSupplierInvoiceIds(
   const ids = rows.map((r) => r.id)
   if (ids.length === 0) return inFlight
 
-  const [orders, batchItems] = await Promise.all([
-    supabase
-      .from('payment_orders')
-      .select('supplier_invoice_id, status, supplier_invoice_payment_id')
-      .eq('company_id', companyId)
-      .in('supplier_invoice_id', ids)
-      .in('status', [...OPEN_PAYMENT_ORDER_CANDIDATE_STATUSES]),
-    supabase
-      .from('supplier_payment_batch_items')
-      .select('supplier_invoice_id, batch:supplier_payment_batches!inner(status)')
-      .eq('company_id', companyId)
-      .in('supplier_invoice_id', ids)
-      .eq('batch.status', 'created'),
-  ])
-  if (orders.error) throw new Error(`counterparty set-off: payment order lookup failed: ${orders.error.message}`)
-  if (batchItems.error) throw new Error(`counterparty set-off: payment file lookup failed: ${batchItems.error.message}`)
-  for (const order of (orders.data ?? []) as Array<{ supplier_invoice_id: string; status: string; supplier_invoice_payment_id: string | null }>) {
-    if (isOpenPaymentOrder(order)) inFlight.add(order.supplier_invoice_id)
-  }
-  for (const item of (batchItems.data ?? []) as Array<{ supplier_invoice_id: string }>) {
-    inFlight.add(item.supplier_invoice_id)
+  // In slices of ID_READ_CHUNK: the counterparty balance asks for up to
+  // OPEN_ITEM_LIMIT open supplier invoices, and the ids travel in the GET
+  // query string, which the gateway refuses past its limit. Settled orders are
+  // left out in the query, before PostgREST's 1000-row cap: an invoice gathers
+  // settled orders without a bound, and an open one cut off by the cap would
+  // let a set-off pay a debt the bank is paying. Every open order has no
+  // settlement (payment_orders_settlement_only_when_executed).
+  for (const slice of chunk(ids, ID_READ_CHUNK)) {
+    const [orders, batchItems] = await Promise.all([
+      supabase
+        .from('payment_orders')
+        .select('supplier_invoice_id, status, supplier_invoice_payment_id')
+        .eq('company_id', companyId)
+        .in('supplier_invoice_id', slice)
+        .in('status', [...OPEN_PAYMENT_ORDER_CANDIDATE_STATUSES])
+        .is('supplier_invoice_payment_id', null),
+      supabase
+        .from('supplier_payment_batch_items')
+        .select('supplier_invoice_id, batch:supplier_payment_batches!inner(status)')
+        .eq('company_id', companyId)
+        .in('supplier_invoice_id', slice)
+        .eq('batch.status', 'created'),
+    ])
+    if (orders.error) throw new Error(`counterparty set-off: payment order lookup failed: ${orders.error.message}`)
+    if (batchItems.error) throw new Error(`counterparty set-off: payment file lookup failed: ${batchItems.error.message}`)
+    for (const order of (orders.data ?? []) as Array<{ supplier_invoice_id: string; status: string; supplier_invoice_payment_id: string | null }>) {
+      if (isOpenPaymentOrder(order)) inFlight.add(order.supplier_invoice_id)
+    }
+    for (const item of (batchItems.data ?? []) as Array<{ supplier_invoice_id: string }>) {
+      inFlight.add(item.supplier_invoice_id)
+    }
   }
   return inFlight
 }
