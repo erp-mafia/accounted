@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { CAPABILITY } from '@/lib/entitlements/keys'
 
 const { hasCapabilityMock, definitionMock } = vi.hoisted(() => ({
   hasCapabilityMock: vi.fn(),
@@ -163,27 +162,19 @@ describe('companyInboxReads: the rule\'s reads for one company', () => {
     expect(await companyInboxReads(supabase, 'company-1', sandbox(false)).sandboxLocked()).toBe(false)
   })
 
-  it('reads the capability the extension needs for the company, and only when asked', async () => {
-    const reads = companyInboxReads(supabase, 'company-1', sandbox(false))
-    expect(hasCapabilityMock).not.toHaveBeenCalled()
-    expect(await reads.hasCapability()).toBe(true)
-    expect(hasCapabilityMock).toHaveBeenCalledWith(supabase, 'company-1', CAPABILITY.ai)
+  it('needs no capability: a company on any plan holds it, and nothing is read', async () => {
     hasCapabilityMock.mockResolvedValue(false)
-    expect(await companyInboxReads(supabase, 'company-1', sandbox(false)).hasCapability()).toBe(false)
-  })
-
-  it('holds no capability without a company, and reads nothing for it', async () => {
-    expect(await companyInboxReads(supabase, null, sandbox(false)).hasCapability()).toBe(false)
+    expect(await companyInboxReads(supabase, 'company-1', sandbox(false)).hasCapability()).toBe(true)
+    expect(await companyInboxReads(supabase, null, sandbox(false)).hasCapability()).toBe(true)
     expect(hasCapabilityMock).not.toHaveBeenCalled()
   })
 
-  it('answers the new page for a listed, paying company and the reason for every other', async () => {
+  it('answers the new page for a listed company on any plan and the reason for every other', async () => {
     vi.stubEnv('INKORG_V2_COMPANY_IDS', 'company-1')
+    hasCapabilityMock.mockResolvedValue(false)
     expect(await whyNotNewInbox(companyInboxReads(supabase, 'company-1', sandbox(false)))).toBeNull()
     expect(await whyNotNewInbox(companyInboxReads(supabase, 'company-2', sandbox(false)))).toBe('outside_rollout')
     expect(await whyNotNewInbox(companyInboxReads(supabase, 'company-1', sandbox(true)))).toBe('sandbox_lock')
-    hasCapabilityMock.mockResolvedValue(false)
-    expect(await whyNotNewInbox(companyInboxReads(supabase, 'company-1', sandbox(false)))).toBe('no_capability')
     definitionMock.mockReturnValue(undefined)
     expect(await whyNotNewInbox(companyInboxReads(supabase, 'company-1', sandbox(false)))).toBe('no_extension')
   })

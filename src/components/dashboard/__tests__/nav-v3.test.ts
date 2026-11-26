@@ -363,9 +363,10 @@ describe('the tree', () => {
       areaCreate(gateAreas(NAV_V3_AREAS, passes).find((a) => a.id === 'documents')!)
     expect(upload((item) => !item.hiddenWithInkorgV2)?.href).toBe('/inkorg')
     expect(upload((item) => !item.requiresInkorgV2)?.href).toBe('/e/general/invoice-inbox')
-    expect(upload((item) => !item.requiredCapability)).toMatchObject({ href: '/arkiv?upload', requiresArkiv: true })
+    const noInbox = (item: NavGateFlags) => item.href !== '/inkorg' && item.href !== '/e/general/invoice-inbox'
+    expect(upload(noInbox)).toMatchObject({ href: '/arkiv?upload', requiresArkiv: true })
     // Att göra's upload is the inbox's alone: no inbox, no button.
-    expect(areaCreate(gateAreas(NAV_V3_AREAS, (item) => !item.requiredCapability).find((a) => a.id === 'todo')!)).toBeUndefined()
+    expect(areaCreate(gateAreas(NAV_V3_AREAS, noInbox).find((a) => a.id === 'todo')!)).toBeUndefined()
     // Nytt avtal follows the Avtal row's gate.
     expect(areaCreate(gateAreas(NAV_V3_AREAS, (item) => !item.requiresCommitments).find((a) => a.id === 'company')!)).toBeUndefined()
   })

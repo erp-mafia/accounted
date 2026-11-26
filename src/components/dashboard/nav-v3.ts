@@ -51,7 +51,6 @@ import {
   type Icon,
   MapIcon,
 } from '@/components/icons'
-import { EXTENSION_REQUIRED_CAPABILITY } from '@/lib/entitlements/keys'
 import type { NavGateFlags } from './nav-v2'
 
 /**
@@ -140,8 +139,6 @@ export interface NavV3Area {
   owns?: readonly string[]
 }
 
-const INBOX_CAPABILITY = EXTENSION_REQUIRED_CAPABILITY['general/invoice-inbox']
-
 /**
  * Uploading underlag: the shell opens the inbox's own upload where the
  * person is (DashboardNav, useInboxUpload), since a browser only opens a
@@ -151,8 +148,8 @@ const INBOX_CAPABILITY = EXTENSION_REQUIRED_CAPABILITY['general/invoice-inbox']
  */
 function inboxUpload(labelKey: string): NavV3Create[] {
   return [
-    { href: '/inkorg', module: 'inbox', labelKey, symbol: 'upload', action: 'upload-inbox', requiresInkorgV2: true, requiredCapability: INBOX_CAPABILITY },
-    { href: '/e/general/invoice-inbox', module: 'inbox', labelKey, symbol: 'upload', action: 'upload-inbox', requiredCapability: INBOX_CAPABILITY, hiddenWithInkorgV2: true },
+    { href: '/inkorg', module: 'inbox', labelKey, symbol: 'upload', action: 'upload-inbox', requiresInkorgV2: true },
+    { href: '/e/general/invoice-inbox', module: 'inbox', labelKey, symbol: 'upload', action: 'upload-inbox', hiddenWithInkorgV2: true },
   ]
 }
 
@@ -261,8 +258,8 @@ export const NAV_V3_AREAS: NavV3Area[] = [
         items: [
           // Inkommande is the company's one inbox: the new Inkorg page inside
           // its rollout, the Underlag workspace outside it. Never both.
-          { href: '/inkorg', module: 'inbox', labelKey: 'v3_incoming', icon: InboxIcon, requiresInkorgV2: true, requiredCapability: INBOX_CAPABILITY },
-          { href: '/e/general/invoice-inbox', module: 'inbox', labelKey: 'v3_incoming', icon: InboxIcon, requiredCapability: INBOX_CAPABILITY, hiddenWithInkorgV2: true },
+          { href: '/inkorg', module: 'inbox', labelKey: 'v3_incoming', icon: InboxIcon, requiresInkorgV2: true },
+          { href: '/e/general/invoice-inbox', module: 'inbox', labelKey: 'v3_incoming', icon: InboxIcon, hiddenWithInkorgV2: true },
           { href: '/arkiv', module: 'inbox', labelKey: 'v3_archive', icon: ArchiveBoxIcon, requiresArkiv: true },
           { href: '/arkiv/historik', module: 'inbox', labelKey: 'arkiv_history', icon: ClockIcon, requiresArkiv: true },
           { href: '/arkiv/signeringar', module: 'inbox', labelKey: 'arkiv_signings', icon: PencilSquareIcon, requiresArkiv: true, requiresSigning: true },

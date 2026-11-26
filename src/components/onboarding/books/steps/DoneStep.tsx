@@ -4,10 +4,9 @@ import { useCallback, useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { ChevronDownIcon, ChevronRightIcon } from '@/components/icons'
 import useSWR from 'swr'
-import { useBookingScreenEnabled, useCapability, useCompany } from '@/contexts/CompanyContext'
+import { useBookingScreenEnabled, useCompany } from '@/contexts/CompanyContext'
 import { toBookDoor } from '@/lib/bookkeeping/to-book'
 import { useBranding } from '@/lib/branding/brand-context'
-import { CAPABILITY } from '@/lib/entitlements/keys'
 import { useFormat } from '@/lib/hooks/use-format'
 import { AI_CLIENTS } from '@/lib/onboarding/ai-clients'
 import { yearsOfBooks } from '@/lib/onboarding/books-years'
@@ -50,7 +49,6 @@ export function DoneStep({ ctx, onLeave, leaving }: {
   const { appName } = useBranding()
   const { formatDateLong } = useFormat()
   const { findings, state } = ctx
-  const hasAi = useCapability(CAPABILITY.ai)
   const bookingScreen = useBookingScreenEnabled()
   // null until the toggle is clicked: the list then follows what it holds (foundTasksStartOpen).
   const [toggled, setToggled] = useState<boolean | null>(null)
@@ -70,7 +68,7 @@ export function DoneStep({ ctx, onLeave, leaving }: {
   }, [mutate])
   const { connection, connected, preferredClient, onConnect } = useAiConnection(findings)
   const connectionKey = connected.join(',')
-  const tasks = worklist && !error ? listAiTasks(worklist.counts, { hasAi }) : []
+  const tasks = worklist && !error ? listAiTasks(worklist.counts) : []
   const open = toggled ?? foundTasksStartOpen(tasks)
 
   // Refresh the same queue Hem uses when OAuth finishes or the user returns

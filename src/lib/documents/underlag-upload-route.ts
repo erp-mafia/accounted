@@ -2,12 +2,10 @@
  * Which upload a screen uses for an underlag it attaches itself (a receipt
  * on an utlägg, the underlag on a new leverantörsfaktura).
  *
- * The document inbox reads the file with AI and is a paid service: the
- * extension dispatcher refuses every one of its routes for a company without
- * the AI capability (EXTENSION_REQUIRED_CAPABILITY). Attaching a file needs
- * no reading, and POST /api/documents stores it for any company, so the
- * screen picks the plain upload up front instead of sending a request that
- * is refused (for #206).
+ * The document inbox reads the file with AI only for a company with the AI
+ * capability; without it the file would land in the inbox unread. Attaching a
+ * file needs no reading, and POST /api/documents stores it for any company, so
+ * such a company gets the plain upload (for #206).
  */
 
 export type UnderlagUploadRoute = 'inbox' | 'documents'
