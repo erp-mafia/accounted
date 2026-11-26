@@ -277,6 +277,14 @@ export default function SupplierInvoiceDetailPage() {
   // newest request may write state.
   const fetchSeqRef = useRef(0)
 
+  // The invoice the page shows now. handleCredit reads the bank's payments
+  // before its confirm opens, and a pager step during that read must not open
+  // the confirm, which names no invoice, over a different one.
+  const shownInvoiceIdRef = useRef(String(params.id))
+  useEffect(() => {
+    shownInvoiceIdRef.current = String(params.id)
+  }, [params.id])
+
   // Resolves to the invoice it committed, or null when it committed none (an
   // error, or a newer fetch owns the page), so a caller can act on fresh data.
   async function fetchInvoice(): Promise<SupplierInvoice | null> {
@@ -457,9 +465,20 @@ export default function SupplierInvoiceDetailPage() {
     // A payment the bank holds for the invoice (Betala via banken), said
     // before the confirm: a signed one still goes out, so the credit is
     // refused until it is cancelled; an unsigned one is cancelled at the bank.
-    const bankPaymentNotes = invoiceIdParam
-      ? await readBankHeldPaymentSentences([invoiceIdParam], 'other', locale, tBankHeld('check_failed'))
-      : []
+    // The read waits up to 2 s: the menu shows it working, and a step to
+    // another invoice meanwhile drops this credit instead of confirming it
+    // over that invoice.
+    const creditFor = String(params.id)
+    let bankPaymentNotes: string[] = []
+    setProcessingAction('credit')
+    try {
+      bankPaymentNotes = invoiceIdParam
+        ? await readBankHeldPaymentSentences([invoiceIdParam], 'other', locale, tBankHeld('check_failed'))
+        : []
+    } finally {
+      setProcessingAction(null)
+    }
+    if (shownInvoiceIdRef.current !== creditFor) return
     const ok = await confirmAction({
       title: t('credit_confirm_title'),
       description: [

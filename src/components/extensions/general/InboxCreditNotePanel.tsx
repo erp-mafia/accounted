@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { LateReveal, Skeleton } from '@/components/ui/skeleton'
@@ -49,6 +49,13 @@ export function InboxCreditNotePanel({
   const [attempt, setAttempt] = useState(0)
   const [picked, setPicked] = useState<string>('')
   const [busy, setBusy] = useState(false)
+  // The item the panel shows now: the panel stays mounted when the rail
+  // selects another item, and a credit's bank read must not open the confirm
+  // for the earlier item over the next one.
+  const shownItemIdRef = useRef(itemId)
+  useEffect(() => {
+    shownItemIdRef.current = itemId
+  }, [itemId])
   const readingKey = JSON.stringify(extracted?.totals ?? null) + JSON.stringify(extracted?.invoice ?? null)
 
   useEffect(() => {
@@ -82,12 +89,21 @@ export function InboxCreditNotePanel({
       // A payment the bank holds for the invoice (Betala via banken), said
       // before the confirm: a signed one still goes out, so the credit is
       // refused until it is cancelled; an unsigned one is cancelled at the bank.
-      const bankPaymentNotes = await readBankHeldPaymentSentences(
-        [invoice.supplier_invoice_id],
-        'other',
-        locale,
-        tBankHeld('check_failed'),
-      )
+      // The read waits up to 2 s: the button shows it working, and a switch
+      // to another item meanwhile drops this credit.
+      let bankPaymentNotes: string[] = []
+      setBusy(true)
+      try {
+        bankPaymentNotes = await readBankHeldPaymentSentences(
+          [invoice.supplier_invoice_id],
+          'other',
+          locale,
+          tBankHeld('check_failed'),
+        )
+      } finally {
+        setBusy(false)
+      }
+      if (shownItemIdRef.current !== itemId) return
       await confirm(
         {
           title: t('credit_note_confirm_title', { number }),
