@@ -16,13 +16,14 @@
 -- invoice in the company with no fortnox_number that holds the löpnummer as
 -- its supplier number with the record's date, currency, total and kind (the
 -- reading repair_fortnox_supplier_invoice_numbers, 20261013133930, makes of
--- these rows). It is adopted when its card is one the older path would have
--- chosen for this invoice: the org number the invoice gives, or the name it
--- gives with no other org number. An adopted invoice keeps its card and its
--- header and gets the löpnummer and the record's source map, as on the
--- resolved card. One on any other card, which may be another supplier's own
--- invoice, and two such invoices are refused as MIGRATION_INVOICE_AMBIGUOUS
--- for a person to decide. The candidate is read FOR UPDATE.
+-- these rows). It is adopted when its card names the record's supplier: by
+-- org number (the one the invoice gives, else the one the resolved card has
+-- from Fortnox's register), or by the name the invoice gives with no other
+-- org number. An adopted invoice keeps its card and its header and gets the
+-- löpnummer and the record's source map, as on the resolved card. One on any
+-- other card, which may be another supplier's own invoice, and two such
+-- invoices are refused as MIGRATION_INVOICE_AMBIGUOUS for a person to decide.
+-- The candidate is read FOR UPDATE.
 --
 -- Nothing else changes: the body is copied verbatim from 20261012161644
 -- (identical to production) with that one block added; privileges are kept by
@@ -159,8 +160,9 @@ BEGIN
         -- as the supplier number. The löpnummer is the company's own series at
         -- Fortnox, and only the same header makes an invoice holding it this
         -- record, as repair_fortnox_supplier_invoice_numbers reads it. Such an
-        -- invoice is adopted only on a card that import would have chosen for
-        -- this invoice: the org number the invoice gives, or the name it gives
+        -- invoice is adopted only on a card that names the record's supplier:
+        -- its org number (the one the invoice gives, else the one the resolved
+        -- card has from Fortnox's register), or the name the invoice gives
         -- with no other org number. One on any other card may be another
         -- supplier's own invoice, and two cannot be told apart: both are
         -- refused for a person, never guessed at and never stored twice.
@@ -172,9 +174,11 @@ BEGIN
             AND is_credit_note=COALESCE((row_data->>'is_credit_note')::boolean,false) LIMIT 2 FOR UPDATE) elsewhere;
           IF cardinality(ids)>1 THEN RAISE EXCEPTION 'MIGRATION_INVOICE_AMBIGUOUS'; END IF;
           IF ids[1] IS NOT NULL AND NOT EXISTS(SELECT 1 FROM supplier_invoices si JOIN suppliers s ON s.id=si.supplier_id
-            WHERE si.id=ids[1] AND (public.party_org_key(s.org_number)=public.party_org_key(r->'party'->>'org_number')
-              OR (lower(btrim(regexp_replace(s.name,'\s+',' ','g')))=lower(btrim(regexp_replace(r->'party'->>'name','\s+',' ','g')))
-                AND (public.party_org_key(s.org_number) IS NULL OR public.party_org_key(r->'party'->>'org_number') IS NULL)))) THEN
+            CROSS JOIN LATERAL (SELECT COALESCE(public.party_org_key(r->'party'->>'org_number'),
+              (SELECT public.party_org_key(p.org_number) FROM suppliers p WHERE p.id=party)) AS org_key) named
+            WHERE si.id=ids[1] AND (public.party_org_key(s.org_number)=named.org_key
+              OR (NULLIF(lower(btrim(regexp_replace(s.name,'\s+',' ','g'))),'')=lower(btrim(regexp_replace(r->'party'->>'name','\s+',' ','g')))
+                AND (public.party_org_key(s.org_number) IS NULL OR named.org_key IS NULL)))) THEN
             RAISE EXCEPTION 'MIGRATION_INVOICE_AMBIGUOUS';
           END IF;
           target:=ids[1];

@@ -8,19 +8,21 @@
 -- name the invoice gives. The background import keeps each Fortnox supplier on
 -- a card of its own, so it can resolve the record's supplier to another card
 -- than the one holding the invoice. The invoice is still that invoice: adopted,
--- never inserted a second time. An invoice on a card that path would not have
--- chosen, or two of them, are refused; the resolved card is asked first.
+-- never inserted a second time. An invoice on a card that does not name the
+-- record's supplier, or two of them, are refused; the resolved card is asked
+-- first.
 BEGIN;
 DO $$
 DECLARE
   u uuid:=gen_random_uuid(); company uuid:=gen_random_uuid(); consent uuid:=gen_random_uuid(); worker uuid:=gen_random_uuid();
   j public.migration_jobs; n bigint; rec jsonb;
-  folded uuid; stub uuid; other uuid; stranger uuid; namesake uuid; second_card uuid; telecom uuid;
-  lease_march uuid; lease_april uuid; credit uuid; strangers_own uuid; namesakes uuid; own_first uuid; later_copy uuid;
-  number_holder uuid; held_elsewhere uuid;
-  ch_sup_a uuid; ch_sup_b uuid; ch_sup_t uuid;
-  lessor jsonb; register_telco jsonb; invoice_telco jsonb; base jsonb;
-  probe record;
+  folded uuid; stub uuid; other uuid; stranger uuid; namesake uuid; network_card uuid;
+  second_card uuid; telecom uuid; network uuid;
+  lease_march uuid; lease_april uuid; credit uuid; network_invoice uuid; later_copy uuid; held_elsewhere uuid;
+  own_first uuid; number_holder uuid;
+  ch_sup_a uuid; ch_sup_b uuid; ch_sup_t uuid; ch_sup_n uuid;
+  lessor jsonb; invoice_lessor jsonb; register_telco jsonb; invoice_telco jsonb; register_network jsonb; invoice_network jsonb;
+  base jsonb; probe record;
 BEGIN
   INSERT INTO auth.users(id,email,instance_id) VALUES(u,u||'@test.invalid','00000000-0000-0000-0000-000000000000');
   INSERT INTO companies(id,name,entity_type,created_by) VALUES(company,'Fortnox invoice on another card test','aktiebolag',u);
@@ -34,12 +36,15 @@ BEGIN
   SET LOCAL ROLE service_role;
 
   -- What the older import left, with no source map: one card for a lessor
-  -- Fortnox holds twice under one org number, a card named as an invoice
-  -- named its supplier, and its invoices with the löpnummer as their number.
-  -- Beside them, a card of the lessor's name with no org number, and cards
-  -- that path would not have chosen for the lessor.
+  -- Fortnox holds twice under one org number, a card named (in its own case
+  -- and spacing) as an invoice named its supplier, a card with the org number
+  -- an invoice gives, and invoices with the löpnummer as their number. Beside
+  -- them, a card of the lessor's name with no org number, and cards that do
+  -- not name the lessor: another supplier, and a namesake with another org
+  -- number.
   INSERT INTO suppliers(user_id,company_id,name,org_number) VALUES(u,company,'Leasing AB','5566778822') RETURNING id INTO folded;
-  INSERT INTO suppliers(user_id,company_id,name) VALUES(u,company,'Telefoni AB') RETURNING id INTO stub;
+  INSERT INTO suppliers(user_id,company_id,name) VALUES(u,company,'TELEFONI  AB ') RETURNING id INTO stub;
+  INSERT INTO suppliers(user_id,company_id,name,org_number) VALUES(u,company,'NV Drift AB','5562222220') RETURNING id INTO network_card;
   INSERT INTO suppliers(user_id,company_id,name) VALUES(u,company,'Leasing AB') RETURNING id INTO other;
   INSERT INTO suppliers(user_id,company_id,name,org_number) VALUES(u,company,'Byrå AB','5569999990') RETURNING id INTO stranger;
   INSERT INTO suppliers(user_id,company_id,name,org_number) VALUES(u,company,'Leasing AB','5561111110') RETURNING id INTO namesake;
@@ -53,21 +58,23 @@ BEGIN
       'status',CASE WHEN f.credit THEN 'credited' ELSE 'overdue' END,'is_credit_note',f.credit))
   FROM (VALUES
     -- 1. The lessor's invoices on the folded card, a credit note on the card
-    -- named as the invoice names its supplier.
+    -- named as the invoice names its supplier, an invoice on the card with
+    -- the org number the invoice gives.
     ('lease_march',folded,'501','2026-03-02','SEK',1250,false),
     ('lease_april',folded,'502','2026-04-02','SEK',1250,false),
     ('credit',stub,'503','2026-01-10','SEK',500,true),
+    ('network_invoice',network_card,'504','2026-01-20','SEK',750,false),
     -- 2. The löpnummer on another header, one field at a time.
-    ('other_date',stub,'601','2026-02-01','SEK',1250,false),
-    ('other_total',stub,'602','2026-03-02','SEK',1300,false),
-    ('other_currency',stub,'603','2026-03-02','EUR',1250,false),
-    ('other_kind',stub,'604','2026-03-02','SEK',1250,true),
-    -- 3. One löpnummer and header on two cards the older path could have
-    -- chosen for the lessor's invoice: its org number, and its name.
+    ('other_date',folded,'601','2026-02-01','SEK',1250,false),
+    ('other_total',folded,'602','2026-03-02','SEK',1300,false),
+    ('other_currency',folded,'603','2026-03-02','EUR',1250,false),
+    ('other_kind',folded,'604','2026-03-02','SEK',1250,true),
+    -- 3. One löpnummer and header on two cards that name the lessor: by its
+    -- org number, and by its name.
     ('twin_a',folded,'701','2026-03-02','SEK',1250,false),
     ('twin_b',other,'701','2026-03-02','SEK',1250,false),
-    -- 4. Another supplier's own invoice, and a namesake with another org
-    -- number: the older path would not have put the lessor's invoice there.
+    -- 4. Another supplier's own invoice, and a namesake's with another org
+    -- number.
     ('strangers_own',stranger,'702','2026-03-02','SEK',1250,false),
     ('namesakes',namesake,'703','2026-03-02','SEK',1250,false),
     -- 5. On the folded card, beside invoices on the resolved card below.
@@ -77,43 +84,50 @@ BEGIN
   SELECT id INTO lease_march FROM fixture_invoice WHERE label='lease_march';
   SELECT id INTO lease_april FROM fixture_invoice WHERE label='lease_april';
   SELECT id INTO credit FROM fixture_invoice WHERE label='credit';
-  SELECT id INTO strangers_own FROM fixture_invoice WHERE label='strangers_own';
-  SELECT id INTO namesakes FROM fixture_invoice WHERE label='namesakes';
+  SELECT id INTO network_invoice FROM fixture_invoice WHERE label='network_invoice';
   SELECT id INTO later_copy FROM fixture_invoice WHERE label='later_copy';
   SELECT id INTO held_elsewhere FROM fixture_invoice WHERE label='held_elsewhere';
 
+  -- The register as Fortnox lists it, and each invoice's supplier as the
+  -- invoice gives it (entity-mapper.ts mappedParty): the name, and an org
+  -- number only where the invoice carries one.
+  lessor:=jsonb_build_object('name','Leasing AB','org_number','5566778822');
+  invoice_lessor:=jsonb_build_object('name','Leasing AB','org_number',NULL);
+  register_telco:=jsonb_build_object('name','Telefoni Huvudkontor','org_number','5560000001');
+  invoice_telco:=jsonb_build_object('name','Telefoni AB','org_number',NULL);
+  register_network:=jsonb_build_object('name','Nätverk AB','org_number',NULL);
+  invoice_network:=jsonb_build_object('name','Nätverk Sverige AB','org_number','5562222220');
   -- The shape entity-mapper.ts mapSupplierInvoice hands the worker: the
-  -- supplier's own number, the löpnummer is the chunk's source id, and the
-  -- party is the supplier as the invoice gives it.
+  -- supplier's own number, the löpnummer is the chunk's source id.
   base:=jsonb_build_object('invoice_date','2026-03-02','due_date','2026-04-01','currency','SEK','subtotal',1000,
     'subtotal_sek',1000,'vat_amount',250,'vat_amount_sek',250,'total',1250,'total_sek',1250,
     'vat_treatment','standard_25','status','overdue','remaining_amount',1250,'is_credit_note',false,'payment_reference',NULL);
-  lessor:=jsonb_build_object('name','Leasing AB','org_number','5566778822');
-  register_telco:=jsonb_build_object('name','Telefoni Huvudkontor','org_number','5560000001');
-  invoice_telco:=jsonb_build_object('name','Telefoni AB','org_number',NULL);
 
   j:=create_provider_migration_job(company,u,consent,ARRAY['suppliers','supplierInvoices'],NULL);
   j:=claim_provider_migration_job(worker,j.id);
   PERFORM save_provider_migration_page(j.id,worker,j.attempt,'suppliers',1,
     '[{"source_id":"sup-a","payload":"c","payload_hash":"h"},{"source_id":"sup-b","payload":"c","payload_hash":"h"},
-      {"source_id":"sup-t","payload":"c","payload_hash":"h"}]',NULL);
+      {"source_id":"sup-t","payload":"c","payload_hash":"h"},{"source_id":"sup-n","payload":"c","payload_hash":"h"}]',NULL);
   SELECT jsonb_agg(jsonb_build_object('source_id',s,'payload','c','payload_hash','h')) INTO rec
-    FROM unnest(ARRAY['501','502','503','601','602','603','604','701','702','703','801','802']) AS s;
+    FROM unnest(ARRAY['501','502','503','504','601','602','603','604','701','702','703','801','802']) AS s;
   PERFORM save_provider_migration_page(j.id,worker,j.attempt,'supplierInvoices',1,rec,NULL);
   SELECT id INTO ch_sup_a FROM migration_job_chunks WHERE job_id=j.id AND source_id='sup-a';
   SELECT id INTO ch_sup_b FROM migration_job_chunks WHERE job_id=j.id AND source_id='sup-b';
   SELECT id INTO ch_sup_t FROM migration_job_chunks WHERE job_id=j.id AND source_id='sup-t';
+  SELECT id INTO ch_sup_n FROM migration_job_chunks WHERE job_id=j.id AND source_id='sup-n';
 
   -- The first Fortnox supplier of the org number takes the folded card, the
-  -- second gets a card of its own, the telecom supplier is new.
+  -- second gets a card of its own, the other two are new.
   PERFORM commit_provider_migration_records(j.id,worker,j.attempt,jsonb_build_array(
     jsonb_build_object('id',ch_sup_a,'row',lessor),jsonb_build_object('id',ch_sup_b,'row',lessor),
-    jsonb_build_object('id',ch_sup_t,'row',register_telco)));
+    jsonb_build_object('id',ch_sup_t,'row',register_telco),jsonb_build_object('id',ch_sup_n,'row',register_network)));
   ASSERT (SELECT target_id=folded FROM migration_job_chunks WHERE id=ch_sup_a),'fixture: the first lessor did not take the folded card';
   SELECT target_id INTO second_card FROM migration_job_chunks WHERE id=ch_sup_b;
   SELECT target_id INTO telecom FROM migration_job_chunks WHERE id=ch_sup_t;
-  ASSERT second_card IS NOT NULL AND second_card NOT IN (folded,namesake),'fixture: the second lessor did not get a card of its own';
-  ASSERT telecom IS NOT NULL AND telecom NOT IN (folded,stub,other,stranger,namesake),'fixture: the telecom supplier was not new';
+  SELECT target_id INTO network FROM migration_job_chunks WHERE id=ch_sup_n;
+  ASSERT second_card IS NOT NULL AND second_card NOT IN (folded,other,namesake),'fixture: the second lessor did not get a card of its own';
+  ASSERT telecom IS NOT NULL AND telecom<>stub AND network IS NOT NULL AND network<>network_card,
+    'fixture: the telecom and network suppliers were not new';
 
   -- On the resolved card: the record of 801 under the supplier's own number,
   -- and the supplier's number of 802 on the same date for another amount.
@@ -128,20 +142,23 @@ BEGIN
 
   CREATE TEMP TABLE fixture_record(source text PRIMARY KEY, party_source text, party jsonb, overrides jsonb) ON COMMIT DROP;
   INSERT INTO fixture_record VALUES
-    ('501','sup-b',lessor,jsonb_build_object('supplier_invoice_number','LEAS-1')),
-    ('502','sup-b',lessor,jsonb_build_object('supplier_invoice_number','LEAS-2','invoice_date','2026-04-02','due_date','2026-05-02')),
+    ('501','sup-b',invoice_lessor,jsonb_build_object('supplier_invoice_number','LEAS-1')),
+    ('502','sup-b',invoice_lessor,jsonb_build_object('supplier_invoice_number','LEAS-2','invoice_date','2026-04-02','due_date','2026-05-02')),
     ('503','sup-t',invoice_telco,jsonb_build_object('supplier_invoice_number','TEL-K1','invoice_date','2026-01-10',
       'due_date','2026-02-09','subtotal',400,'subtotal_sek',400,'vat_amount',100,'vat_amount_sek',100,'total',500,
       'total_sek',500,'status','credited','remaining_amount',0,'is_credit_note',true)),
-    ('601','sup-b',lessor,jsonb_build_object('supplier_invoice_number','LEAS-11')),
-    ('602','sup-b',lessor,jsonb_build_object('supplier_invoice_number','LEAS-12')),
-    ('603','sup-b',lessor,jsonb_build_object('supplier_invoice_number','LEAS-13')),
-    ('604','sup-b',lessor,jsonb_build_object('supplier_invoice_number','LEAS-14')),
-    ('701','sup-b',lessor,jsonb_build_object('supplier_invoice_number','LEAS-15')),
-    ('702','sup-b',lessor,jsonb_build_object('supplier_invoice_number','LEAS-16')),
-    ('703','sup-b',lessor,jsonb_build_object('supplier_invoice_number','LEAS-17')),
-    ('801','sup-b',lessor,jsonb_build_object('supplier_invoice_number','LEAS-21','invoice_date','2026-06-01','due_date','2026-07-01')),
-    ('802','sup-b',lessor,jsonb_build_object('supplier_invoice_number','LEAS-22','invoice_date','2026-07-01','due_date','2026-07-31'));
+    ('504','sup-n',invoice_network,jsonb_build_object('supplier_invoice_number','NET-1','invoice_date','2026-01-20',
+      'due_date','2026-02-19','subtotal',600,'subtotal_sek',600,'vat_amount',150,'vat_amount_sek',150,'total',750,
+      'total_sek',750,'remaining_amount',750)),
+    ('601','sup-b',invoice_lessor,jsonb_build_object('supplier_invoice_number','LEAS-11')),
+    ('602','sup-b',invoice_lessor,jsonb_build_object('supplier_invoice_number','LEAS-12')),
+    ('603','sup-b',invoice_lessor,jsonb_build_object('supplier_invoice_number','LEAS-13')),
+    ('604','sup-b',invoice_lessor,jsonb_build_object('supplier_invoice_number','LEAS-14')),
+    ('701','sup-b',invoice_lessor,jsonb_build_object('supplier_invoice_number','LEAS-15')),
+    ('702','sup-b',invoice_lessor,jsonb_build_object('supplier_invoice_number','LEAS-16')),
+    ('703','sup-b',invoice_lessor,jsonb_build_object('supplier_invoice_number','LEAS-17')),
+    ('801','sup-b',invoice_lessor,jsonb_build_object('supplier_invoice_number','LEAS-21','invoice_date','2026-06-01','due_date','2026-07-01')),
+    ('802','sup-b',invoice_lessor,jsonb_build_object('supplier_invoice_number','LEAS-22','invoice_date','2026-07-01','due_date','2026-07-31'));
   FOR probe IN SELECT * FROM fixture_record ORDER BY source LOOP
     PERFORM commit_provider_migration_records(j.id,worker,j.attempt,jsonb_build_array(jsonb_build_object(
       'id',(SELECT id FROM migration_job_chunks WHERE job_id=j.id AND source_id=probe.source),
@@ -151,15 +168,19 @@ BEGIN
     SELECT c.source_id AS source, c.state, c.error_code, c.target_id, (c.receipt->>'imported')::boolean AS imported
     FROM migration_job_chunks c WHERE c.job_id=j.id AND c.resource='supplierInvoices';
 
-  -- 1. The invoices the company holds, on the folded card and on the card
-  -- named as the invoice named its supplier: adopted, with the löpnummer and
-  -- the source map from now on, each on its own card and header.
+  -- 1. The invoices the company holds on a card that names the record's
+  -- supplier: by the org number Fortnox's register gives it (the invoice gives
+  -- none), by the name the invoice gives, or by the org number the invoice
+  -- gives. Adopted, each on its own card and header, with the löpnummer and
+  -- the source map from now on.
   ASSERT (SELECT state='imported' AND target_id=lease_march AND NOT imported FROM outcome WHERE source='501'),
     'an invoice on the folded card was stored a second time';
   ASSERT (SELECT state='imported' AND target_id=lease_april AND NOT imported FROM outcome WHERE source='502'),
     'the next invoice on the folded card was stored a second time';
   ASSERT (SELECT state='imported' AND target_id=credit AND NOT imported FROM outcome WHERE source='503'),
     'a credit note on the card named as the invoice names its supplier was stored a second time';
+  ASSERT (SELECT state='imported' AND target_id=network_invoice AND NOT imported FROM outcome WHERE source='504'),
+    'an invoice on the card with the org number the invoice gives was stored a second time';
   ASSERT (SELECT fortnox_number='501' AND supplier_id=folded AND supplier_invoice_number='501' AND total=1250
     FROM supplier_invoices WHERE id=lease_march),'the adopted invoice did not keep its card and header or get its löpnummer';
   ASSERT (SELECT fortnox_number='503' AND supplier_id=stub AND is_credit_note FROM supplier_invoices WHERE id=credit),
@@ -177,13 +198,13 @@ BEGIN
     WHERE id IN (SELECT id FROM fixture_invoice WHERE label LIKE 'other\_%')),'an invoice of another header was taken for a record';
 
   -- 3. and 4. Two candidates, another supplier's own invoice and a namesake's
-  -- with another org number: refused for a person, nothing written to them
-  -- and nothing stored a second time.
+  -- with another org number than the register gives the lessor: refused for
+  -- a person, nothing written to them and nothing stored a second time.
   ASSERT (SELECT bool_and(state='needs_attention' AND error_code='MIGRATION_INVOICE_AMBIGUOUS') FROM outcome
-    WHERE source IN ('701','702','703')),'a löpnummer held where the older import would not have put the record was not refused';
+    WHERE source IN ('701','702','703')),'a löpnummer held on a card that does not name the record''s supplier was not refused';
   ASSERT (SELECT bool_and(fortnox_number IS NULL) FROM supplier_invoices
     WHERE id IN (SELECT id FROM fixture_invoice WHERE label IN ('twin_a','twin_b','strangers_own','namesakes'))),
-    'an invoice on a card the older import would not have chosen was taken for a record';
+    'an invoice on a card that does not name the record''s supplier was taken for a record';
   ASSERT NOT EXISTS(SELECT 1 FROM migration_source_records WHERE company_id=company AND resource='supplierInvoices'
     AND source_id IN ('701','702','703')),'a refused record got a source map';
 
@@ -200,6 +221,6 @@ BEGIN
     'the invoice holding the supplier''s number was changed';
 
   SELECT count(*) INTO n FROM supplier_invoices WHERE company_id=company;
-  ASSERT n=19,'supplier invoices were duplicated or dropped';
+  ASSERT n=20,'supplier invoices were duplicated or dropped';
 END $$;
 ROLLBACK;
