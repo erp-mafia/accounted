@@ -22,6 +22,10 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { formatCurrency } from '@/lib/utils'
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
+import { refundLedgerAmount } from '@/lib/invoices/credit-note-refund-plan'
+import { readCreditNoteBookedOre } from '@/lib/invoices/credit-note-booked-ore'
+import { createClient } from '@/lib/supabase/client'
+import { useCompany } from '@/contexts/CompanyContext'
 import type { InvoiceWithRelations } from '@/components/invoices/types'
 
 /** The receivable the credit note left the customer's credit on (1510). */
@@ -37,8 +41,8 @@ interface RefundCreditNoteDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   creditNote: InvoiceWithRelations
-  /** What the customer has tillgodo (planCreditNoteRefund), in kronor. */
-  owed: number
+  /** What the customer has tillgodo (planCreditNoteRefund), in kronor, and whether paying it settles the credit. */
+  plan: { owed: number; settlesCredit: boolean }
   onSuccess: () => void
 }
 
@@ -46,17 +50,22 @@ interface RefundCreditNoteDialogProps {
  * "Registrera återbetalning" on a kreditfaktura (follow-up of crm#1435): the
  * day the money left and the account it left from. Books Dr 1510 / Cr that
  * account for the whole amount owed through the mark-paid door, which
- * records the refund on the credit note.
+ * records the refund on the credit note. When the credit note's verifikat
+ * booked the öresavrundning, the amount is what 1510 carries for the credit
+ * (refundLedgerAmount), the figure the door refunds.
  */
 export default function RefundCreditNoteDialog({
   open,
   onOpenChange,
   creditNote,
-  owed,
+  plan,
   onSuccess,
 }: RefundCreditNoteDialogProps) {
   const t = useTranslations('credit_note_refund_dialog')
   const { toast } = useToast()
+  const { company } = useCompany()
+  const [bookedOre, setBookedOre] = useState<number | null>(null)
+  const [oreReadFailed, setOreReadFailed] = useState(false)
   const { cashAccounts } = useCashAccounts({ enabledOnly: true })
   const [refundDate, setRefundDate] = useState(() => todayIsoStockholm())
   const [cashAccountId, setCashAccountId] = useState<string>('')
@@ -78,10 +87,35 @@ export default function RefundCreditNoteDialog({
     if (!open) setBooked(null)
   }, [open])
 
+  // The öresavrundning the credit note's own verifikat booked: the door
+  // refunds what 1510 carries, so the rows shown and sent are that figure.
+  // Until it is read no amount is shown or sent; a failed read says so and
+  // keeps the dialog from booking, since guessing 0 would quote the wrong
+  // figure for a rounded credit note.
+  useEffect(() => {
+    if (!open || !company?.id) return
+    let cancelled = false
+    setBookedOre(null)
+    setOreReadFailed(false)
+    readCreditNoteBookedOre(createClient(), company.id, creditNote).then(
+      (ore) => {
+        if (!cancelled) setBookedOre(ore)
+      },
+      () => {
+        if (!cancelled) setOreReadFailed(true)
+      },
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [open, company?.id, creditNote])
+
+  const owed = bookedOre === null ? null : refundLedgerAmount(plan, bookedOre)
+
   const account = useMemo(() => cashAccounts.find((a) => a.id === cashAccountId) ?? null, [cashAccounts, cashAccountId])
 
   const submit = async (force: boolean) => {
-    if (!account) return
+    if (!account || owed === null) return
     setIsSubmitting(true)
     try {
       const response = await fetch(`/api/invoices/${creditNote.id}/mark-paid`, {
@@ -128,7 +162,9 @@ export default function RefundCreditNoteDialog({
             {t('title')}
             {creditNote.invoice_number ? <span data-ph-mask="">{` ${creditNote.invoice_number}`}</span> : null}
           </DialogTitle>
-          <DialogDescription>{t('description', { amount: formatCurrency(owed, 'SEK') })}</DialogDescription>
+          <DialogDescription>
+            {owed === null ? null : t('description', { amount: formatCurrency(owed, 'SEK') })}
+          </DialogDescription>
         </DialogHeader>
 
         {booked ? (
@@ -137,6 +173,8 @@ export default function RefundCreditNoteDialog({
               vouchers: booked.map((c) => c.voucher ?? c.entry_date).join(', '),
             })}
           </AttnLine>
+        ) : oreReadFailed ? (
+          <AttnLine>{t('ore_read_failed')}</AttnLine>
         ) : (
           <div className="space-y-4">
             <div className="space-y-1.5">
@@ -166,7 +204,7 @@ export default function RefundCreditNoteDialog({
                 </SelectContent>
               </Select>
             </div>
-            {account && (
+            {account && owed !== null && (
               <div className="rounded-lg bg-secondary/40 px-4 py-3 text-sm bg-control shadow-raised">
                 <div className="flex justify-between gap-4">
                   <span>{t('line_debit', { account: RECEIVABLE_ACCOUNT })}</span>
@@ -185,7 +223,11 @@ export default function RefundCreditNoteDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting}>
             {t('cancel')}
           </Button>
-          <Button onClick={() => submit(booked !== null)} disabled={!account || !refundDate} loading={isSubmitting}>
+          <Button
+            onClick={() => submit(booked !== null)}
+            disabled={!account || !refundDate || owed === null || owed <= 0}
+            loading={isSubmitting}
+          >
             {booked ? t('book_anyway') : t('confirm')}
           </Button>
         </DialogFooter>

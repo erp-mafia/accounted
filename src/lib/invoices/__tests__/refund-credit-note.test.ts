@@ -283,6 +283,249 @@ describe('refundCreditNote', () => {
   })
 })
 
+describe('refundCreditNote when the credit note\'s verifikat booked the öresavrundning', () => {
+  // A credit of 999,75 whose verifikat mirrors an original issued at the
+  // rounded "Att betala": Cr 1510 1 000 / Dr 3740 0,25. The customer paid
+  // 1 000 for the original, and 1510 carries -1 000 for the credit.
+  const ORE_CREDIT: RefundCreditNoteRow = { ...CREDIT_NOTE, total: -999.75, vat_amount: -199.95 }
+  const ORE_LINES = [
+    { account_number: '1510', debit_amount: 0, credit_amount: 1000 },
+    { account_number: '3001', debit_amount: 799.8, credit_amount: 0 },
+    { account_number: '2611', debit_amount: 199.95, credit_amount: 0 },
+    { account_number: '3740', debit_amount: 0.25, credit_amount: 0 },
+  ]
+
+  function enqueueOreReads(
+    original: { total: number; paid_amount: number | null } = { total: 999.75, paid_amount: 999.75 },
+    liveEntryId: string | null = 'je-credit',
+  ) {
+    enqueueReads(original)
+    enqueue({ data: { entry_id: liveEntryId, exhausted: false } }) // live_journal_entry
+    if (liveEntryId) enqueue({ data: { id: liveEntryId, status: 'posted', lines: ORE_LINES } }) // its lines
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    mockCheckPeriodLock.mockResolvedValue({ locked: false, fiscal_period_id: 'fp-1' })
+    mockFindFiscalPeriod.mockResolvedValue('fp-1')
+    mockPostJournalEntry.mockResolvedValue({ id: 'je-refund' })
+    mockRecordRow.mockResolvedValue({ ok: true, id: 'row-1' })
+    mockRemoveRow.mockResolvedValue(true)
+  })
+
+  it('pays back what 1510 carries and records the credit note settled at its total', async () => {
+    enqueueOreReads()
+    enqueue({ data: [] }) // already-booked guard: nothing
+    enqueue({ data: [{ id: 'cn-1' }] }) // compare-and-set
+
+    const result = await refundCreditNote(supabase as never, 'company-1', 'user-1', {
+      creditNote: ORE_CREDIT,
+      refundDate: '2026-10-26',
+      settlementAccountNumber: '1930',
+    })
+
+    expect(result).toMatchObject({ ok: true, amount: 1000, owedAfter: 0, paidAmount: -999.75, refundedAt: '2026-10-26T12:00:00Z' })
+    const { input, event } = mockPostJournalEntry.mock.calls[0][0] as {
+      input: { lines: unknown[] }
+      event: () => { facts?: Record<string, unknown> }
+    }
+    expect(input.lines).toEqual([
+      expect.objectContaining({ account_number: '1510', debit_amount: 1000, credit_amount: 0 }),
+      expect.objectContaining({ account_number: '1930', debit_amount: 0, credit_amount: 1000 }),
+    ])
+    expect(mockRecordRow).toHaveBeenCalledWith(supabase, expect.objectContaining({ newPaidAmount: -999.75 }))
+    expect(findCalls('invoices', 'update')[0][0]).toEqual({ paid_amount: -999.75, paid_at: '2026-10-26T12:00:00Z' })
+    expect(JSON.stringify(event())).toContain('999.75')
+    // The verifikat is read as the ledger holds it, inside the company.
+    expect(supabase.rpc).toHaveBeenCalledWith('live_journal_entry', { p_company_id: 'company-1', p_entry_id: 'je-credit' })
+    expect(findCalls('journal_entries', 'eq')).toContainEqual(['company_id', 'company-1'])
+  })
+
+  it('reads the correction a storno left, not the reversed verifikat', async () => {
+    enqueueOreReads(undefined, 'je-correction')
+    enqueue({ data: [] })
+    enqueue({ data: [{ id: 'cn-1' }] })
+
+    const result = await refundCreditNote(supabase as never, 'company-1', 'user-1', {
+      creditNote: ORE_CREDIT,
+      refundDate: '2026-10-26',
+      settlementAccountNumber: '1930',
+    })
+    expect(result).toMatchObject({ ok: true, amount: 1000 })
+    expect(findCalls('journal_entries', 'eq')).toContainEqual(['id', 'je-correction'])
+  })
+
+  it('pays back the credit note\'s own figure when its verifikat is not live', async () => {
+    enqueueOreReads(undefined, null)
+    enqueue({ data: [] })
+    enqueue({ data: [{ id: 'cn-1' }] })
+
+    const result = await refundCreditNote(supabase as never, 'company-1', 'user-1', {
+      creditNote: ORE_CREDIT,
+      refundDate: '2026-10-26',
+      settlementAccountNumber: '1930',
+    })
+    expect(result).toMatchObject({ ok: true, amount: 999.75, paidAmount: -999.75 })
+  })
+
+  it('leaves the öre to the last of two part refunds', async () => {
+    enqueueOreReads()
+    enqueue({ data: [] })
+    enqueue({ data: [{ id: 'cn-1' }] })
+    const first = await refundCreditNote(supabase as never, 'company-1', 'user-1', {
+      creditNote: ORE_CREDIT,
+      refundDate: '2026-10-26',
+      settlementAccountNumber: '1930',
+      customLines: [
+        { account_number: '1510', debit_amount: 400, credit_amount: 0 },
+        { account_number: '1930', debit_amount: 0, credit_amount: 400 },
+      ],
+    })
+    expect(first).toMatchObject({ ok: true, amount: 400, owedAfter: 599.75, paidAmount: -400, refundedAt: null })
+
+    reset()
+    enqueueOreReads()
+    enqueue({ data: [] })
+    enqueue({ data: [{ id: 'cn-1' }] })
+    const last = await refundCreditNote(supabase as never, 'company-1', 'user-1', {
+      creditNote: { ...ORE_CREDIT, paid_amount: -400 },
+      refundDate: '2026-10-27',
+      settlementAccountNumber: '1930',
+    })
+    // 400 + 600 = the 1 000 1510 carries; 400 + 599,75 = the credit's 999,75.
+    expect(last).toMatchObject({ ok: true, amount: 600, owedAfter: 0, paidAmount: -999.75 })
+  })
+
+  it('takes the person\'s own rows for what 1510 carries, and no more', async () => {
+    enqueueOreReads()
+    enqueue({ data: [] })
+    enqueue({ data: [{ id: 'cn-1' }] })
+    const taken = await refundCreditNote(supabase as never, 'company-1', 'user-1', {
+      creditNote: ORE_CREDIT,
+      refundDate: '2026-10-26',
+      settlementAccountNumber: '1930',
+      customLines: [
+        { account_number: '1510', debit_amount: 1000, credit_amount: 0 },
+        { account_number: '1930', debit_amount: 0, credit_amount: 1000 },
+      ],
+    })
+    expect(taken).toMatchObject({ ok: true, amount: 1000, owedAfter: 0, paidAmount: -999.75 })
+
+    reset()
+    enqueueOreReads()
+    const refused = await refundCreditNote(supabase as never, 'company-1', 'user-1', {
+      creditNote: ORE_CREDIT,
+      refundDate: '2026-10-26',
+      settlementAccountNumber: '1930',
+      customLines: [
+        { account_number: '1510', debit_amount: 1000.5, credit_amount: 0 },
+        { account_number: '1930', debit_amount: 0, credit_amount: 1000.5 },
+      ],
+    })
+    expect(refused).toEqual({ ok: false, code: 'CREDIT_NOTE_REFUND_EXCEEDS_OWED', details: { owed: 1000, amount: 1000.5 } })
+  })
+
+  it.each([
+    ['the kundreskontra\'s figure', 999.75],
+    ['an amount between the two', 999.9],
+  ])('refuses the person\'s rows at %s: they would close the credit with öre on 1510', async (_label, amount) => {
+    enqueueOreReads()
+    const result = await refundCreditNote(supabase as never, 'company-1', 'user-1', {
+      creditNote: ORE_CREDIT,
+      refundDate: '2026-10-26',
+      settlementAccountNumber: '1930',
+      customLines: [
+        { account_number: '1510', debit_amount: amount, credit_amount: 0 },
+        { account_number: '1930', debit_amount: 0, credit_amount: amount },
+      ],
+    })
+    expect(result).toEqual({ ok: false, code: 'CREDIT_NOTE_REFUND_ORE_LEFT', details: { owed: 1000, amount } })
+    expect(mockPostJournalEntry).not.toHaveBeenCalled()
+  })
+
+  describe('a credit rounded down: Cr 1510 1 000 / Cr 3740 0,25 on 1 000,25', () => {
+    const DOWN_CREDIT: RefundCreditNoteRow = { ...CREDIT_NOTE, total: -1000.25, vat_amount: -200.05 }
+    const DOWN_LINES = [
+      { account_number: '1510', debit_amount: 0, credit_amount: 1000 },
+      { account_number: '3001', debit_amount: 800.2, credit_amount: 0 },
+      { account_number: '2611', debit_amount: 200.05, credit_amount: 0 },
+      { account_number: '3740', debit_amount: 0, credit_amount: 0.25 },
+    ]
+    const enqueueDown = (paid: number | null = null) => {
+      enqueueReads({ total: 1000.25, paid_amount: 1000.25 })
+      enqueue({ data: { entry_id: 'je-credit', exhausted: false } })
+      enqueue({ data: { id: 'je-credit', status: 'posted', lines: DOWN_LINES } })
+      return { ...DOWN_CREDIT, paid_amount: paid }
+    }
+
+    it('pays back the 1 000 1510 carries and records 1 000,25 settled', async () => {
+      const creditNote = enqueueDown()
+      enqueue({ data: [] })
+      enqueue({ data: [{ id: 'cn-1' }] })
+      const result = await refundCreditNote(supabase as never, 'company-1', 'user-1', {
+        creditNote,
+        refundDate: '2026-10-26',
+        settlementAccountNumber: '1930',
+      })
+      expect(result).toMatchObject({ ok: true, amount: 1000, owedAfter: 0, paidAmount: -1000.25 })
+    })
+
+    it('refuses rows at the kundreskontra\'s 1 000,25: more than 1510 carries', async () => {
+      const creditNote = enqueueDown()
+      const result = await refundCreditNote(supabase as never, 'company-1', 'user-1', {
+        creditNote,
+        refundDate: '2026-10-26',
+        settlementAccountNumber: '1930',
+        customLines: [
+          { account_number: '1510', debit_amount: 1000.25, credit_amount: 0 },
+          { account_number: '1930', debit_amount: 0, credit_amount: 1000.25 },
+        ],
+      })
+      expect(result).toEqual({ ok: false, code: 'CREDIT_NOTE_REFUND_EXCEEDS_OWED', details: { owed: 1000, amount: 1000.25 } })
+    })
+
+    it('pays out nothing once earlier refunds took all of what 1510 carries', async () => {
+      // An earlier refund of 1 000 recorded as a part refund left 0,25 open on
+      // the credit note, but 1510 carries nothing more for it.
+      const creditNote = enqueueDown(-1000)
+      const result = await refundCreditNote(supabase as never, 'company-1', 'user-1', {
+        creditNote,
+        refundDate: '2026-10-26',
+        settlementAccountNumber: '1930',
+      })
+      expect(result).toMatchObject({ ok: false, code: 'CREDIT_NOTE_REFUND_NOTHING_OWED' })
+      expect(mockPostJournalEntry).not.toHaveBeenCalled()
+    })
+  })
+
+  it('reads nothing more for a credit note in whole kronor', async () => {
+    enqueueReads()
+    enqueue({ data: [] })
+    enqueue({ data: [{ id: 'cn-1' }] })
+    const result = await refundCreditNote(supabase as never, 'company-1', 'user-1', {
+      creditNote: CREDIT_NOTE,
+      refundDate: '2026-10-26',
+      settlementAccountNumber: '1930',
+    })
+    expect(result).toMatchObject({ ok: true, amount: 10500 })
+    expect(supabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('refuses with nothing written when the verifikat cannot be read', async () => {
+    enqueueReads({ total: 999.75, paid_amount: 999.75 })
+    enqueue({ error: { message: 'timeout', code: '57014' } })
+
+    const result = await refundCreditNote(supabase as never, 'company-1', 'user-1', {
+      creditNote: ORE_CREDIT,
+      refundDate: '2026-10-26',
+      settlementAccountNumber: '1930',
+    })
+    expect(result).toMatchObject({ ok: false, code: 'DB_ERROR' })
+    expect(mockPostJournalEntry).not.toHaveBeenCalled()
+  })
+})
+
 describe('buildCreditNoteRefundLines', () => {
   const note = { invoice_number: 'KR-7', customer: null, default_dimensions: {} }
 

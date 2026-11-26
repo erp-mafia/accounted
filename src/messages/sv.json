@@ -8525,7 +8525,8 @@
     "book_anyway": "Registrera ändå",
     "confirm": "Bokför återbetalning",
     "cancel": "Avbryt",
-    "failed_title": "Återbetalningen kunde inte registreras"
+    "failed_title": "Återbetalningen kunde inte registreras",
+    "ore_read_failed": "Verifikatet för kreditfakturan kunde inte läsas, så beloppet att betala tillbaka är inte känt. Stäng och försök igen."
   },
   "invoice_payment_dialog": {
     "title": "Bokför betalning",

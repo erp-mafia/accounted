@@ -8525,7 +8525,8 @@
     "book_anyway": "Record anyway",
     "confirm": "Book refund",
     "cancel": "Cancel",
-    "failed_title": "The refund could not be recorded"
+    "failed_title": "The refund could not be recorded",
+    "ore_read_failed": "The credit note's voucher could not be read, so the amount to pay back is not known. Close and try again."
   },
   "invoice_payment_dialog": {
     "title": "Post payment",
