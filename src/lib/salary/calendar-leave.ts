@@ -47,6 +47,21 @@ export function calendarLeaveDeduction(input: CalendarLeaveInput): number {
     throw new Error('Ogiltig period eller arbetsschema för kalenderdagsavdrag')
   }
 
+  // A window over more than one calendar month (explicit dates, or one that
+  // also reads the month the previous run left unread) is priced month by
+  // month, so a full month away still deducts exactly one monthly salary.
+  if (periodStart.slice(0, 7) !== periodEnd.slice(0, 7)) {
+    let total = 0
+    let partStart = periodStart
+    while (partStart <= periodEnd) {
+      const monthEnd = toIso(Date.UTC(Number(partStart.slice(0, 4)), Number(partStart.slice(5, 7)), 0))
+      const partEnd = monthEnd < periodEnd ? monthEnd : periodEnd
+      total += calendarLeaveDeduction({ ...input, periodStart: partStart, periodEnd: partEnd })
+      partStart = toIso(toMs(partEnd) + DAY_MS)
+    }
+    return roundOre(total)
+  }
+
   // One extent per date: several rows on the same date add up, capped at a
   // full day, and a row without hours counts as a full day (the same reading
   // derive-absence-line-items applies to every other deduction).
@@ -96,8 +111,11 @@ export function calendarLeaveDeduction(input: CalendarLeaveInput): number {
   const calendarRate = roundOre((monthlySalary * 12) / 365)
   let deduction = 0
   for (const episode of episodes) {
+    // An episode counts when its span reaches into the period, even when the
+    // period holds only its weekend days (a part of a window over two months
+    // can be just a Saturday): those calendar days are this period's.
+    if (episode[episode.length - 1].date < periodStart || episode[0].date > periodEnd) continue
     const inPeriod = episode.filter(d => d.date >= periodStart && d.date <= periodEnd)
-    if (inPeriod.length === 0) continue
     const workdaysInEpisode = episode.filter(d => isWorkday(toMs(d.date))).length
     if (!input.calendarFromStart && workdaysInEpisode <= 5) {
       deduction += roundOre(dailyRate * inPeriod.reduce((sum, d) => sum + d.extent, 0))

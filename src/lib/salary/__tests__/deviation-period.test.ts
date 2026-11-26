@@ -170,6 +170,144 @@ describe('resolveDeviationWindowForNewRun', () => {
   })
 })
 
+describe('resolveDeviationWindowForNewRun: no days between two runs', () => {
+  const octoberReadSeptember = {
+    period_year: 2026,
+    period_month: 10,
+    deviation_period_start: '2026-09-01',
+    deviation_period_end: '2026-09-30',
+  }
+
+  it('after a switch to same_month, November also reads October, which October\'s run left unread', async () => {
+    const db = mockDb({
+      company_settings: { data: { salary_deviation_period: 'same_month' } },
+      salary_runs: { data: [octoberReadSeptember] },
+    })
+    const resolved = await resolveDeviationWindowForNewRun(db, 'c1', { periodYear: 2026, periodMonth: 11 })
+    expect(resolved).toEqual({
+      window: { start: '2026-10-01', end: '2026-11-30' },
+      source: 'setting',
+      setting: 'same_month',
+    })
+  })
+
+  it('a run that follows on from the month before keeps the setting\'s window', async () => {
+    const sameMonth = mockDb({
+      company_settings: { data: { salary_deviation_period: 'same_month' } },
+      salary_runs: { data: [{ ...octoberReadSeptember, deviation_period_start: '2026-10-01', deviation_period_end: '2026-10-31' }] },
+    })
+    expect((await resolveDeviationWindowForNewRun(sameMonth, 'c1', { periodYear: 2026, periodMonth: 11 })).window).toEqual({
+      start: '2026-11-01',
+      end: '2026-11-30',
+    })
+
+    const previousMonthSetting = mockDb({
+      company_settings: { data: { salary_deviation_period: 'previous_month' } },
+      salary_runs: { data: [octoberReadSeptember] },
+    })
+    expect(
+      (await resolveDeviationWindowForNewRun(previousMonthSetting, 'c1', { periodYear: 2026, periodMonth: 11 })).window,
+    ).toEqual({ start: '2026-10-01', end: '2026-10-31' })
+
+    const legacy = mockDb({
+      company_settings: { data: { salary_deviation_period: 'same_month' } },
+      salary_runs: { data: [{ ...octoberReadSeptember, deviation_period_start: null, deviation_period_end: null }] },
+    })
+    expect((await resolveDeviationWindowForNewRun(legacy, 'c1', { periodYear: 2026, periodMonth: 11 })).window).toEqual({
+      start: '2026-11-01',
+      end: '2026-11-30',
+    })
+  })
+
+  it('a window that would overlap the month before is left to the overlap guard', async () => {
+    const db = mockDb({
+      company_settings: { data: { salary_deviation_period: 'previous_month' } },
+      salary_runs: { data: [{ ...octoberReadSeptember, deviation_period_start: '2026-10-01', deviation_period_end: '2026-10-31' }] },
+    })
+    expect((await resolveDeviationWindowForNewRun(db, 'c1', { periodYear: 2026, periodMonth: 11 })).window).toEqual({
+      start: '2026-10-01',
+      end: '2026-10-31',
+    })
+  })
+
+  it('without a run for the month before, or with explicit dates, the window is as asked', async () => {
+    const noRun = mockDb({ company_settings: { data: { salary_deviation_period: 'same_month' } }, salary_runs: { data: [] } })
+    expect((await resolveDeviationWindowForNewRun(noRun, 'c1', { periodYear: 2026, periodMonth: 11 })).window).toEqual({
+      start: '2026-11-01',
+      end: '2026-11-30',
+    })
+
+    const explicit = mockDb({
+      company_settings: { data: { salary_deviation_period: 'same_month' } },
+      salary_runs: { data: [octoberReadSeptember] },
+    })
+    const resolved = await resolveDeviationWindowForNewRun(explicit, 'c1', {
+      periodYear: 2026,
+      periodMonth: 11,
+      explicitStart: '2026-11-01',
+      explicitEnd: '2026-11-30',
+    })
+    expect(resolved.window).toEqual({ start: '2026-11-01', end: '2026-11-30' })
+  })
+
+  it('keeps the setting\'s window when closing the gap would pass two months', async () => {
+    const db = mockDb({
+      company_settings: { data: { salary_deviation_period: 'same_month' } },
+      salary_runs: { data: [{ ...octoberReadSeptember, deviation_period_start: '2026-08-01', deviation_period_end: '2026-08-31' }] },
+    })
+    expect((await resolveDeviationWindowForNewRun(db, 'c1', { periodYear: 2026, periodMonth: 11 })).window).toEqual({
+      start: '2026-11-01',
+      end: '2026-11-30',
+    })
+  })
+
+  it('reads only this company\'s run of the month before, across the new year too', async () => {
+    const filters: Array<[string, unknown]> = []
+    const runs = chain({
+      data: [{ period_year: 2026, period_month: 12, deviation_period_start: '2026-11-01', deviation_period_end: '2026-11-30' }],
+    })
+    runs.eq = (column: string, value: unknown) => {
+      filters.push([column, value])
+      return runs
+    }
+    const db = {
+      from: (table: string) =>
+        table === 'salary_runs' ? runs : chain({ data: { salary_deviation_period: 'same_month' } }),
+    } as unknown as SupabaseClient
+    const resolved = await resolveDeviationWindowForNewRun(db, 'c1', { periodYear: 2027, periodMonth: 1 })
+    // December read November; January also reads December: 62 days, the cap.
+    expect(resolved.window).toEqual({ start: '2026-12-01', end: '2027-01-31' })
+    expect(filters).toEqual([
+      ['company_id', 'c1'],
+      ['period_year', 2026],
+      ['period_month', 12],
+    ])
+  })
+
+  it('takes the latest end over an original and its correction', async () => {
+    const db = mockDb({
+      company_settings: { data: { salary_deviation_period: 'same_month' } },
+      salary_runs: {
+        data: [octoberReadSeptember, { ...octoberReadSeptember, deviation_period_start: '2026-09-01', deviation_period_end: '2026-10-15' }],
+      },
+    })
+    expect((await resolveDeviationWindowForNewRun(db, 'c1', { periodYear: 2026, periodMonth: 11 })).window).toEqual({
+      start: '2026-10-16',
+      end: '2026-11-30',
+    })
+  })
+
+  it('surfaces a failed read of the previous run', async () => {
+    const db = mockDb({
+      company_settings: { data: { salary_deviation_period: 'same_month' } },
+      salary_runs: { error: { message: 'boom' } },
+    })
+    await expect(resolveDeviationWindowForNewRun(db, 'c1', { periodYear: 2026, periodMonth: 11 })).rejects.toThrow(
+      /Failed to load the previous salary run/,
+    )
+  })
+})
+
 describe('assertNoDeviationOverlap', () => {
   const augustLegacyRun = {
     id: 'run-aug',

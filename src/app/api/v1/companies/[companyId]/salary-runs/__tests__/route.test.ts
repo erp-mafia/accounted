@@ -214,8 +214,10 @@ describe('POST /api/v1/companies/:companyId/salary-runs', () => {
       mockServiceClient.mockReturnValue(
         createTableMockSupabase({
           company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-          // 1. overlap guard reads live runs, 2. the insert returns the row
+          // 1. the previous month's run (where its window ended), 2. overlap
+          // guard reads live runs, 3. the insert returns the row
           salary_runs: [
+            { data: [], error: null },
             { data: [], error: null },
             { data: { ...SAMPLE_RUN, user_id: USER_ID, company_id: COMPANY_ID }, error: null },
           ],
@@ -255,7 +257,9 @@ describe('POST /api/v1/companies/:companyId/salary-runs', () => {
           data: { default_voucher_series_per_source_type: { salary_payment: 'K' } },
           error: null,
         },
+        // 1. the previous month's run, 2. overlap guard, 3. the insert
         salary_runs: [
+          { data: [], error: null },
           { data: [], error: null },
           { data: { ...SAMPLE_RUN, voucher_series: 'K' }, error: null },
         ],
@@ -375,8 +379,10 @@ describe('POST /api/v1/companies/:companyId/salary-runs', () => {
       createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         salary_runs: [
-          // 1. overlap guard, 2. the insert trips the live-run unique index,
-          // 3. the shared create service reads back the run that won.
+          // 1. the previous month's run (where its window ended), 2. overlap
+          // guard, 3. the insert trips the live-run unique index, 4. the
+          // shared create service reads back the run that won.
+          { data: [], error: null },
           { data: [], error: null },
           { data: null, error: { code: '23505', message: 'duplicate' } },
           { data: { id: RUN_ID, status: 'review' }, error: null },
