@@ -16,7 +16,7 @@
  * Arelle discovery order:
  *   1. `arelleCmdLine` on PATH (pip install arelle-release)
  *   2. `python -m arelle.CntlrCmdLine`
- *   3. docker image `arelle/arelle` (mounts the file + taxonomy package)
+ *   3. docker image `arelleproject/arelle` (mounts the file + taxonomy package)
  *
  * Arelle is asked for inconsistent duplicate facts (--validateDuplicateFacts
  * inconsistent): a concept tagged more than once for the same context must
@@ -119,17 +119,21 @@ if (available('arelleCmdLine', ['--version'])) {
       `${dirname(file)}:/data`,
       '-v',
       `${dirname(TAXONOMY_PACKAGE)}:/taxonomy`,
-      'arelle/arelle',
+      'arelleproject/arelle',
+      // The image's entrypoint execs the command it is given, so Arelle is
+      // started the way the image's docs start it.
+      'python',
+      'arelleCmdLine.py',
       ...arelleArgs(`/data/${basename(file)}`, `/taxonomy/${basename(TAXONOMY_PACKAGE)}`),
     ],
-    'docker image arelle/arelle',
+    'docker image arelleproject/arelle',
   )
 }
 
 if (status === null) {
   console.log(
     'Arelle is not installed: skipping schema validation.\n' +
-      'Install with: pip install arelle-release  (or use the arelle/arelle docker image).',
+      'Install with: pip install arelle-release  (or use the arelleproject/arelle docker image).',
   )
   process.exit(0)
 }
