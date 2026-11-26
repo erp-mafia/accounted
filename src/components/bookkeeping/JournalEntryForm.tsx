@@ -2,7 +2,7 @@
 
 import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
-import { useRouter } from 'next/navigation'
+import Link from 'next/link'
 import { useTranslations, useLocale } from 'next-intl'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -224,7 +224,6 @@ export default function JournalEntryForm({
 }: Props) {
   const { canWrite } = useCanWrite()
   const { toast } = useToast()
-  const router = useRouter()
   const { company } = useCompany()
   const t = useTranslations('journal_form')
   // Reused only for the bilingual entity-type labels the shared TemplateForm
@@ -1333,11 +1332,8 @@ export default function JournalEntryForm({
           }),
           variant: 'destructive',
           action: journalEntryId ? (
-            <ToastAction
-              altText={t('toast_open_entry')}
-              onClick={() => router.push(`/bookkeeping/${journalEntryId}`)}
-            >
-              {t('toast_open_entry')}
+            <ToastAction altText={t('toast_open_entry')} asChild>
+              <Link href={`/bookkeeping/${journalEntryId}`}>{t('toast_open_entry')}</Link>
             </ToastAction>
           ) : undefined,
         })
@@ -1458,11 +1454,8 @@ export default function JournalEntryForm({
           }),
           variant: 'destructive',
           action: journalEntryId ? (
-            <ToastAction
-              altText={t('toast_open_entry')}
-              onClick={() => router.push(`/bookkeeping/${journalEntryId}`)}
-            >
-              {t('toast_open_entry')}
+            <ToastAction altText={t('toast_open_entry')} asChild>
+              <Link href={`/bookkeeping/${journalEntryId}`}>{t('toast_open_entry')}</Link>
             </ToastAction>
           ) : undefined,
         })
