@@ -20,5 +20,5 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
       data: { id, deleted: true, reversal_entry_id: outcome.data.reversal_entry_id },
     })
   },
-  { requireWrite: true },
+  { requireWrite: true, uuidParams: { id: 'EXPENSE_CLAIM_NOT_FOUND' } },
 )

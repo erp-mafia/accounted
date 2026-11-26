@@ -21,6 +21,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     return NextResponse.json({ data: result.data })
   },
+  { uuidParams: { id: 'EMPLOYEE_NOT_FOUND' } },
 )
 
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
@@ -46,5 +47,5 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       { status: 201 },
     )
   },
-  { requireWrite: true },
+  { requireWrite: true, uuidParams: { id: 'EMPLOYEE_NOT_FOUND' } },
 )

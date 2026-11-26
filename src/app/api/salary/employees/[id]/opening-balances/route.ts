@@ -42,6 +42,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
       locked_by_run_id: locks.data.get(employeeId) ?? null,
     })
   },
+  { uuidParams: { id: 'EMPLOYEE_NOT_FOUND' } },
 )
 
 export const PUT = withRouteContext<{ params: Promise<{ id: string }> }>(
@@ -65,5 +66,5 @@ export const PUT = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     return NextResponse.json({ data: result.data.rows[0] })
   },
-  { requireWrite: true },
+  { requireWrite: true, uuidParams: { id: 'EMPLOYEE_NOT_FOUND' } },
 )

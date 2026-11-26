@@ -42,7 +42,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       return NextResponse.json({ error: getUserErrorMessage(err) }, { status: 500 })
     }
   },
-  { requireWrite: true },
+  { requireWrite: true, uuidParams: { id: 'TX_CATEGORIZE_TX_NOT_FOUND' } },
 )
 
 /**
@@ -67,5 +67,5 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
       return NextResponse.json({ error: getUserErrorMessage(err) }, { status: 500 })
     }
   },
-  { requireWrite: true },
+  { requireWrite: true, uuidParams: { id: 'TX_CATEGORIZE_TX_NOT_FOUND' } },
 )

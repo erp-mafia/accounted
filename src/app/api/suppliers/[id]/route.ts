@@ -74,6 +74,7 @@ export const GET = withRouteContext(
 
     return NextResponse.json({ data: { ...supplier, stats } })
   },
+  { uuidParams: { id: 'SUPPLIER_NOT_FOUND' } },
 )
 
 // The same service as the v1 PATCH and gnubok_update_supplier
@@ -98,7 +99,7 @@ export const PUT = withRouteContext(
 
     return NextResponse.json({ data: outcome.data })
   },
-  { requireWrite: true },
+  { requireWrite: true, uuidParams: { id: 'SUPPLIER_NOT_FOUND' } },
 )
 
 export const DELETE = withRouteContext(
@@ -141,5 +142,5 @@ export const DELETE = withRouteContext(
 
     return NextResponse.json({ success: true })
   },
-  { requireWrite: true },
+  { requireWrite: true, uuidParams: { id: 'SUPPLIER_NOT_FOUND' } },
 )

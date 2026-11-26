@@ -9,7 +9,10 @@ import { NextResponse } from 'next/server'
 import { createQueuedMockSupabase, createMockRequest, createMockRouteParams, parseJsonResponse } from '@/tests/helpers'
 import { eventBus } from '@/lib/events'
 
-const { supabase, enqueue, reset } = createQueuedMockSupabase()
+// Route path ids are uuids: the route answers its 404 to anything else before it reads.
+const ARTICLE_ID = '672e115f-dd27-5863-afc4-ba0d0f95abcc'
+
+const { supabase, enqueue, reset, calls } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
 vi.mock('@/lib/auth/require-auth', () => ({
@@ -41,22 +44,40 @@ describe('GET/PATCH/DELETE /api/articles/[id]', () => {
   it('GET returns 404 when the article is not found', async () => {
     enqueue({ data: null, error: { code: 'PGRST116', message: 'not found' } })
 
-    const response = await GET(createMockRequest('/api/articles/a1'), createMockRouteParams({ id: 'a1' }))
+    const response = await GET(createMockRequest(`/api/articles/${ARTICLE_ID}`), createMockRouteParams({ id: ARTICLE_ID }))
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
 
     expect(status).toBe(404)
     expect(body.error.code).toBe('ARTICLE_NOT_FOUND')
   })
 
-  it('PATCH updates a field and returns the row', async () => {
-    enqueue({ data: { id: 'a1', name: 'Konsulttimme', price_excl_vat: 1500 } })
+  it('answers 404 for an id that is not a uuid, before any query, on every method', async () => {
+    // Postgres refused `new` in the id filter: GET answered INTERNAL_ERROR and
+    // DELETE ARTICLE_DELETE_FAILED, both as a 500.
+    const params = createMockRouteParams({ id: 'new' })
+    const responses = [
+      await GET(createMockRequest('/api/articles/new'), params),
+      await PATCH(createMockRequest('/api/articles/new', { method: 'PATCH', body: { price_excl_vat: 1500 } }), params),
+      await DELETE(createMockRequest('/api/articles/new', { method: 'DELETE' }), params),
+    ]
 
-    const request = createMockRequest('/api/articles/a1', {
+    for (const response of responses) {
+      const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+      expect(status).toBe(404)
+      expect(body.error.code).toBe('ARTICLE_NOT_FOUND')
+    }
+    expect(calls).toEqual([])
+  })
+
+  it('PATCH updates a field and returns the row', async () => {
+    enqueue({ data: { id: ARTICLE_ID, name: 'Konsulttimme', price_excl_vat: 1500 } })
+
+    const request = createMockRequest(`/api/articles/${ARTICLE_ID}`, {
       method: 'PATCH',
       body: { price_excl_vat: 1500 },
     })
 
-    const response = await PATCH(request, createMockRouteParams({ id: 'a1' }))
+    const response = await PATCH(request, createMockRouteParams({ id: ARTICLE_ID }))
     const { status, body } = await parseJsonResponse<{ data: { price_excl_vat: number } }>(response)
 
     expect(status).toBe(200)
@@ -66,14 +87,14 @@ describe('GET/PATCH/DELETE /api/articles/[id]', () => {
   // The article detail page's Inaktivera/Aktivera button sends nothing but the
   // flag, so an active-only body must be a valid sparse update on its own.
   it('PATCH toggles active on its own without any other field', async () => {
-    enqueue({ data: { id: 'a1', name: 'Konsulttimme', active: false } })
+    enqueue({ data: { id: ARTICLE_ID, name: 'Konsulttimme', active: false } })
 
-    const request = createMockRequest('/api/articles/a1', {
+    const request = createMockRequest(`/api/articles/${ARTICLE_ID}`, {
       method: 'PATCH',
       body: { active: false },
     })
 
-    const response = await PATCH(request, createMockRouteParams({ id: 'a1' }))
+    const response = await PATCH(request, createMockRouteParams({ id: ARTICLE_ID }))
     const { status, body } = await parseJsonResponse<{ data: { active: boolean } }>(response)
 
     expect(status).toBe(200)
@@ -89,12 +110,12 @@ describe('GET/PATCH/DELETE /api/articles/[id]', () => {
     // account → activatable via the activate-and-retry dialog flow.
     enqueue({ data: null })
 
-    const request = createMockRequest('/api/articles/a1', {
+    const request = createMockRequest(`/api/articles/${ARTICLE_ID}`, {
       method: 'PATCH',
       body: { revenue_account: '3999' },
     })
 
-    const response = await PATCH(request, createMockRouteParams({ id: 'a1' }))
+    const response = await PATCH(request, createMockRouteParams({ id: ARTICLE_ID }))
     const { status, body } = await parseJsonResponse<{
       error: { code: string; account_numbers: string[] }
     }>(response)
@@ -108,12 +129,12 @@ describe('GET/PATCH/DELETE /api/articles/[id]', () => {
     // No chart row and 3041 is not in the BAS reference → invalid, no dialog.
     enqueue({ data: null })
 
-    const request = createMockRequest('/api/articles/a1', {
+    const request = createMockRequest(`/api/articles/${ARTICLE_ID}`, {
       method: 'PATCH',
       body: { revenue_account: '3041' },
     })
 
-    const response = await PATCH(request, createMockRouteParams({ id: 'a1' }))
+    const response = await PATCH(request, createMockRouteParams({ id: ARTICLE_ID }))
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
 
     expect(status).toBe(400)
@@ -128,8 +149,8 @@ describe('GET/PATCH/DELETE /api/articles/[id]', () => {
     })
 
     const response = await DELETE(
-      createMockRequest('/api/articles/a1', { method: 'DELETE' }),
-      createMockRouteParams({ id: 'a1' }),
+      createMockRequest(`/api/articles/${ARTICLE_ID}`, { method: 'DELETE' }),
+      createMockRouteParams({ id: ARTICLE_ID }),
     )
 
     expect(response.status).toBe(401)
@@ -139,8 +160,8 @@ describe('GET/PATCH/DELETE /api/articles/[id]', () => {
     enqueue({ data: null, error: { code: 'PGRST116', message: 'not found' } })
 
     const response = await DELETE(
-      createMockRequest('/api/articles/a1', { method: 'DELETE' }),
-      createMockRouteParams({ id: 'a1' }),
+      createMockRequest(`/api/articles/${ARTICLE_ID}`, { method: 'DELETE' }),
+      createMockRouteParams({ id: ARTICLE_ID }),
     )
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
 
@@ -149,12 +170,12 @@ describe('GET/PATCH/DELETE /api/articles/[id]', () => {
   })
 
   it('DELETE rejects an article used on an invoice line', async () => {
-    enqueue({ data: { id: 'a1' }, error: null })
+    enqueue({ data: { id: ARTICLE_ID }, error: null })
     enqueue({ data: null, error: null, count: 1 })
 
     const response = await DELETE(
-      createMockRequest('/api/articles/a1', { method: 'DELETE' }),
-      createMockRouteParams({ id: 'a1' }),
+      createMockRequest(`/api/articles/${ARTICLE_ID}`, { method: 'DELETE' }),
+      createMockRouteParams({ id: ARTICLE_ID }),
     )
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
 
@@ -164,14 +185,14 @@ describe('GET/PATCH/DELETE /api/articles/[id]', () => {
   })
 
   it('DELETE permanently removes an unused article', async () => {
-    enqueue({ data: { id: 'a1' }, error: null })
+    enqueue({ data: { id: ARTICLE_ID }, error: null })
     enqueue({ data: null, error: null, count: 0 })
     enqueue({ data: null, error: null, count: 1 })
 
     const emitSpy = vi.spyOn(eventBus, 'emit')
     const response = await DELETE(
-      createMockRequest('/api/articles/a1', { method: 'DELETE' }),
-      createMockRouteParams({ id: 'a1' }),
+      createMockRequest(`/api/articles/${ARTICLE_ID}`, { method: 'DELETE' }),
+      createMockRouteParams({ id: ARTICLE_ID }),
     )
     const { status, body } = await parseJsonResponse<{ success: boolean }>(response)
 
@@ -182,7 +203,7 @@ describe('GET/PATCH/DELETE /api/articles/[id]', () => {
     expect(supabase.from).toHaveBeenNthCalledWith(3, 'articles')
     expect(emitSpy).toHaveBeenCalledWith({
       type: 'article.deleted',
-      payload: { articleId: 'a1', companyId: 'company-1', userId: 'user-1' },
+      payload: { articleId: ARTICLE_ID, companyId: 'company-1', userId: 'user-1' },
     })
   })
 })

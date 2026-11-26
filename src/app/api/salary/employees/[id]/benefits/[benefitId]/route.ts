@@ -25,7 +25,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string; benefitId:
     const outcome = result.data
     return NextResponse.json({ data: outcome.committed ? outcome.row : outcome.preview })
   },
-  { requireWrite: true },
+  { requireWrite: true, uuidParams: { id: 'EMPLOYEE_NOT_FOUND', benefitId: 'NOT_FOUND' } },
 )
 
 export const DELETE = withRouteContext<{ params: Promise<{ id: string; benefitId: string }> }>(
@@ -49,5 +49,5 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string; benefitId
     }
     return NextResponse.json({ data: { id: benefitId, deleted, deactivated } })
   },
-  { requireWrite: true },
+  { requireWrite: true, uuidParams: { id: 'EMPLOYEE_NOT_FOUND', benefitId: 'NOT_FOUND' } },
 )

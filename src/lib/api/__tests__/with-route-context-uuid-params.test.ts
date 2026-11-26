@@ -177,7 +177,7 @@ describe('the codes the session routes declare', () => {
 
   const declared = routeFiles(join(process.cwd(), 'src/app/api')).flatMap((file) =>
     [...readFileSync(file, 'utf8').matchAll(/uuidParams:\s*\{([^}]*)\}/g)].flatMap((m) =>
-      [...m[1].matchAll(/(\w+):\s*'([A-Z0-9_]+)'/g)].map(([, param, code]) => ({ file, param, code })),
+      [...m[1].matchAll(/['"]?(\w+)['"]?\s*:\s*'([A-Z0-9_]+)'/g)].map(([, param, code]) => ({ file, param, code })),
     ),
   )
 

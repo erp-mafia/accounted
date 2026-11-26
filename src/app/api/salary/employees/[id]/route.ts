@@ -32,6 +32,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     return NextResponse.json({ data: maskEmployeeForResponse(employee) })
   },
+  { uuidParams: { id: 'EMPLOYEE_NOT_FOUND' } },
 )
 
 export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
@@ -75,7 +76,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     return NextResponse.json({ data: result.data.row })
   },
-  { requireWrite: true },
+  { requireWrite: true, uuidParams: { id: 'EMPLOYEE_NOT_FOUND' } },
 )
 
 export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
@@ -92,5 +93,5 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     return NextResponse.json({ data: { id: result.data.employee.id, is_active: false } })
   },
-  { requireWrite: true },
+  { requireWrite: true, uuidParams: { id: 'EMPLOYEE_NOT_FOUND' } },
 )

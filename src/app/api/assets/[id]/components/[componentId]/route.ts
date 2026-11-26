@@ -26,7 +26,7 @@ export const PATCH = withRouteContext<Params>(
       return errorResponse(err, log, { requestId })
     }
   },
-  { requireWrite: true },
+  { requireWrite: true, uuidParams: { id: 'ASSET_NOT_FOUND', componentId: 'ASSET_COMPONENT_NOT_FOUND' } },
 )
 
 /** Remove a component that never reached the books. */
@@ -42,5 +42,5 @@ export const DELETE = withRouteContext<Params>(
       return errorResponse(err, log, { requestId })
     }
   },
-  { requireWrite: true },
+  { requireWrite: true, uuidParams: { id: 'ASSET_NOT_FOUND', componentId: 'ASSET_COMPONENT_NOT_FOUND' } },
 )

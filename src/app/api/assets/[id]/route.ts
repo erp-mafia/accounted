@@ -43,6 +43,7 @@ export const GET = withRouteContext(
       return errorResponse(err, log, { requestId })
     }
   },
+  { uuidParams: { id: 'ASSET_NOT_FOUND' } },
 )
 
 export const PATCH = withRouteContext(
@@ -182,7 +183,7 @@ export const PATCH = withRouteContext(
       return errorResponse(err, log, { requestId })
     }
   },
-  { requireWrite: true },
+  { requireWrite: true, uuidParams: { id: 'ASSET_NOT_FOUND' } },
 )
 
 /**
@@ -208,5 +209,5 @@ export const DELETE = withRouteContext(
       return errorResponse(err, log, { requestId })
     }
   },
-  { requireWrite: true },
+  { requireWrite: true, uuidParams: { id: 'ASSET_NOT_FOUND' } },
 )
