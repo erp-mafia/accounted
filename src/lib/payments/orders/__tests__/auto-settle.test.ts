@@ -46,12 +46,25 @@ vi.mock('@/lib/invoices/duplicate-payment-detection', async (importOriginal) => 
   detectDuplicatePaymentVoucher: (...args: unknown[]) => mockDetectDuplicate(...args),
 }))
 
+// The service writer a caller that passes none gets (a bank ingest); the
+// tests that reach it set it, an Error to make creating it throw.
+const mock = vi.hoisted(() => ({ writer: null as unknown }))
+vi.mock('@/lib/supabase/server', () => ({
+  createServiceClient: () => {
+    if (mock.writer instanceof Error) throw mock.writer
+    return mock.writer
+  },
+}))
+
 import {
   bookRegistrationBeforeSettlement,
   planRegistrationBeforeSettlement,
 } from '@/lib/supplier-invoices/registration-first'
+import { createIngestClaims, type IngestBatch } from '@/lib/transactions/ingest-matcher'
+import type { IngestResult, RawTransaction, Transaction } from '@/types'
 import { loadOpenPaymentOrders, settleOrderWithDebit } from '../auto-settle'
-import { ARCIM, arcimDebit, arcimInvoice, arcimOrder } from './fixtures'
+import { paymentOrderIngestMatcher } from '../ingest-matcher'
+import { ARCIM, arcimDebit, arcimInvoice, arcimOrder, asSession } from './fixtures'
 
 const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), child: vi.fn() } as unknown as Logger
 let db: ReturnType<typeof createTableMockSupabase>
@@ -64,6 +77,7 @@ function payload(table: string, method: 'insert' | 'update'): Record<string, unk
   return db.findCall(table, method)?.[0] as Record<string, unknown> | undefined
 }
 
+/** As the status sync settles: one service client reads, books and writes the link. */
 async function settle(overrides: { confidence?: number; basis?: 'end_to_end_id' | 'amount_account_date' | 'payee' } = {}) {
   return settleOrderWithDebit(db.supabase as unknown as SupabaseClient, {
     order: { id: ARCIM.orderId, company_id: ARCIM.companyId },
@@ -71,30 +85,37 @@ async function settle(overrides: { confidence?: number; basis?: 'end_to_end_id' 
     confidence: overrides.confidence ?? 0.98,
     basis: overrides.basis ?? 'payee',
     log,
+    writer: db.supabase as unknown as SupabaseClient,
   })
 }
 
-/** Every table answer the happy path reads, in call order; tests override what they change. */
-function seed(options: { order?: Record<string, unknown>; linkedAfter?: boolean } = {}) {
+/**
+ * Every table answer the happy path reads, in call order; tests override what
+ * they change. `session`: the client is a person's, which may not write the
+ * order or its events (asSession).
+ */
+function seed(options: { order?: Record<string, unknown>; linkedAfter?: boolean; debit?: Transaction; session?: boolean } = {}) {
   const order = arcimOrder(options.order)
-  db = createTableMockSupabase({
+  const answers = {
     payment_orders: [
       { data: order }, // read again before booking
       { data: { id: order.id, status: order.status, supplier_invoice_payment_id: options.linkedAfter === false ? null : 'sip-1' } },
       { data: [{ id: order.id }] }, // the link, when this code writes it
     ],
-    transactions: [{ data: arcimDebit() }, { data: [{ id: ARCIM.transactionId }] }], // read again, then the row claim
+    transactions: [{ data: options.debit ?? arcimDebit() }, { data: [{ id: ARCIM.transactionId }] }], // read again, then the row claim
     supplier_invoices: [{ data: arcimInvoice() }, { data: [{ id: ARCIM.invoiceId }] }],
     company_settings: { data: { accounting_method: 'accrual' } },
     cash_accounts: { data: { ledger_account: '1930' } },
     supplier_invoice_payments: [{ data: { id: 'sip-9' } }],
     payment_match_log: { data: null },
     payment_order_events: { data: null },
-  })
+  }
+  db = createTableMockSupabase(options.session ? asSession(answers) : answers)
 }
 
 beforeEach(async () => {
   vi.clearAllMocks()
+  mock.writer = null
   const detection = await vi.importActual<typeof import('@/lib/invoices/duplicate-payment-detection')>(
     '@/lib/invoices/duplicate-payment-detection',
   )
@@ -314,6 +335,141 @@ describe('loadOpenPaymentOrders', () => {
   it('answers an empty list when the read fails', async () => {
     db.setTable('payment_orders', { data: null, error: { message: 'boom' } })
     expect(await loadOpenPaymentOrders(db.supabase as unknown as SupabaseClient, ARCIM.companyId)).toEqual([])
+  })
+})
+
+describe('the debit of an order in a bank ingest a person started (their session only reads payment orders)', () => {
+  // The case production refused: the bank still answered ACSP when the debit
+  // came in (the bank feed, open_payments), and the debit names neither the
+  // order nor the payee, so the trigger's rule does not reach the order and
+  // this code links it.
+  const accepted = { status: 'accepted', executed_at: null, provider_status: 'ACSP' } as const
+  const debit = arcimDebit({ description: 'BETALNING', original_description: 'BETALNING', reference: null })
+  const raw = { date: debit.date, amount: debit.amount, description: debit.description, currency: 'SEK' } as RawTransaction
+  let service: ReturnType<typeof createTableMockSupabase>
+
+  /** A poll or a file import: the batch's client is the person's session. */
+  async function ingestDebit(tx: Transaction = debit) {
+    const batch: IngestBatch = {
+      supabase: db.supabase as unknown as SupabaseClient,
+      companyId: ARCIM.companyId,
+      userId: ARCIM.userId,
+      options: {},
+      log,
+      result: { auto_matched_invoices: 0 } as IngestResult,
+      claims: createIngestClaims(),
+      pools: { customerInvoices: vi.fn(), supplierInvoices: [] },
+      logMatch: vi.fn(),
+    }
+    const outcome = await paymentOrderIngestMatcher.match(batch, { orders: [arcimOrder(accepted)] }, { tx, raw, reread: false })
+    return { batch, outcome }
+  }
+
+  beforeEach(() => {
+    seed({ order: accepted, linkedAfter: false, debit, session: true })
+    service = createTableMockSupabase({ payment_orders: { data: [{ id: ARCIM.orderId }] }, payment_order_events: { data: null } })
+    mock.writer = service.supabase
+  })
+
+  it("books the debit with the session, as before, and links the order with the service writer, filtered to the order and the company it was read from", async () => {
+    const { batch, outcome } = await ingestDebit()
+
+    expect(outcome).toBe('explained')
+    expect(batch.result.auto_matched_invoices).toBe(1)
+    // What is booked does not change: one verifikat, through the person's own client.
+    expect(mockCreateJournalEntry).toHaveBeenCalledTimes(1)
+    expect(mockCreateJournalEntry.mock.calls[0][0]).toBe(db.supabase)
+    expect(payload('payment_match_log', 'insert')).toMatchObject({
+      match_method: 'payment_order',
+      new_state: expect.objectContaining({ payment_order_id: ARCIM.orderId, matched_by: 'amount_account_date' }),
+    })
+    // The session writes nothing to the order or its trail.
+    expect(db.findCalls('payment_orders', 'update')).toEqual([])
+    expect(db.findCalls('payment_order_events', 'insert')).toEqual([])
+    // The service writer writes the link, compare-and-set as the status sync's, and its event; nothing else.
+    expect(service.findCall('payment_orders', 'update')?.[0]).toMatchObject({
+      status: 'executed',
+      executed_at: expect.any(String),
+      supplier_invoice_payment_id: 'sip-9',
+      matched_transaction_id: ARCIM.transactionId,
+      matched_at: expect.any(String),
+    })
+    expect(service.findCalls('payment_orders', 'eq')).toEqual([['id', ARCIM.orderId], ['company_id', ARCIM.companyId], ['status', 'accepted']])
+    expect(service.findCalls('payment_orders', 'is')).toEqual([['supplier_invoice_payment_id', null]])
+    const [events] = service.findCall('payment_order_events', 'insert') as [Array<Record<string, unknown>>]
+    expect(events).toEqual([
+      expect.objectContaining({ company_id: ARCIM.companyId, payment_order_id: ARCIM.orderId, event_type: 'matched', from_status: 'accepted', to_status: 'executed' }),
+    ])
+    expect(service.tables()).toEqual(['payment_orders', 'payment_order_events'])
+    expect(log.error).not.toHaveBeenCalled()
+  })
+
+  it('logs a refused link with the order id: the booking stands and the order waits for a person', async () => {
+    service.setTable('payment_orders', { data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } })
+
+    const { outcome } = await ingestDebit()
+
+    expect(outcome).toBe('explained')
+    expect(mockCreateJournalEntry).toHaveBeenCalledTimes(1)
+    expect(service.findCalls('payment_order_events', 'insert')).toEqual([])
+    expect(log.error).toHaveBeenCalledWith(
+      'debit-settled payment order could not be linked to its payment row',
+      undefined,
+      expect.objectContaining({ orderId: ARCIM.orderId, transactionId: ARCIM.transactionId, paymentId: 'sip-9', code: '57014' }),
+    )
+  })
+
+  it('logs an order that moved between the read and the link with its id', async () => {
+    service.setTable('payment_orders', { data: [] })
+
+    expect(await settleOrderWithDebit(db.supabase as unknown as SupabaseClient, {
+      order: { id: ARCIM.orderId, company_id: ARCIM.companyId },
+      transaction: { id: ARCIM.transactionId },
+      confidence: 0.95,
+      basis: 'amount_account_date',
+      log,
+    })).toEqual({ ok: true, journalEntryId: 'je-payment', orderLinked: false, linkedBy: null })
+    expect(service.findCalls('payment_order_events', 'insert')).toEqual([])
+    expect(log.error).toHaveBeenCalledWith(
+      'debit-settled payment order could not be linked to its payment row',
+      undefined,
+      expect.objectContaining({ orderId: ARCIM.orderId, status: 'accepted', code: null }),
+    )
+  })
+
+  it('fails before anything is booked when the service writer cannot be made', async () => {
+    mock.writer = new Error('supabaseKey is required.')
+
+    expect(await settleOrderWithDebit(db.supabase as unknown as SupabaseClient, {
+      order: { id: ARCIM.orderId, company_id: ARCIM.companyId },
+      transaction: { id: ARCIM.transactionId },
+      confidence: 0.95,
+      basis: 'amount_account_date',
+      log,
+    })).toEqual({ ok: false, reason: 'booking_failed', code: 'UNEXPECTED_ERROR' })
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(db.findCalls('supplier_invoices', 'update')).toEqual([])
+    expect(db.findCalls('supplier_invoice_payments', 'insert')).toEqual([])
+  })
+
+  it("never links with the service writer from a bank file the person uploaded: the booking is as before, the link is the person's own and refused", async () => {
+    const fromFile = arcimDebit({ description: 'BETALNING', original_description: 'BETALNING', reference: null, import_source: 'camt053' })
+    seed({ order: accepted, linkedAfter: false, debit: fromFile, session: true })
+
+    const { outcome } = await ingestDebit(fromFile)
+
+    expect(outcome).toBe('explained')
+    expect(mockCreateJournalEntry).toHaveBeenCalledTimes(1)
+    expect(mockCreateJournalEntry.mock.calls[0][0]).toBe(db.supabase)
+    // The status sync trusts only bank-feed debits to move an order: a file's never reaches the service role.
+    expect(service.tables()).toEqual([])
+    expect(db.findCalls('payment_orders', 'update')).toHaveLength(1)
+    expect(db.findCalls('payment_order_events', 'insert')).toEqual([])
+    expect(log.error).toHaveBeenCalledWith(
+      'debit-settled payment order could not be linked to its payment row',
+      undefined,
+      expect.objectContaining({ orderId: ARCIM.orderId, code: '42501' }),
+    )
   })
 })
 

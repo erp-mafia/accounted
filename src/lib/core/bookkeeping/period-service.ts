@@ -9,6 +9,7 @@ import { countUnbookedBankTransactions } from '@/lib/transactions/unbooked'
 import { assertNoUnfinishedSieImport, sieHoldRefusal } from './sie-import-hold'
 import { codedRefusal } from '@/lib/errors/refusal'
 import { userFacing } from '@/lib/errors/user-facing'
+import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import type { FiscalPeriod } from '@/types'
 
 const log = createLogger('period-service')
@@ -207,6 +208,58 @@ export async function lockPeriod(
   return result
 }
 
+/** The audit_log row of a period decision, less the action and table every such row shares. */
+interface PeriodDecisionRow {
+  user_id: string
+  company_id: string
+  record_id: string
+  description: string
+  old_state: Record<string, unknown>
+  new_state: Record<string, unknown>
+}
+
+/**
+ * Write a period decision (unlock, klarmarkera, undoing klarmarkera) to the
+ * immutable audit_log, after the period row has changed.
+ *
+ * With the service role: audit_log has no INSERT policy (only SECURITY
+ * DEFINER triggers write it), so the caller's session client is refused
+ * (42501). The service role decides nothing here. Every value comes from the
+ * change the caller's own client has just made: it read and updated the
+ * period with company_id = companyId, under RLS for a session and behind the
+ * door's membership check for an API key, so a caller outside the company
+ * never gets this far.
+ *
+ * Never throws: the period change is made and the table trigger has kept its
+ * old and new row, so a failed write must not answer as a failed decision.
+ * It is logged at error level instead (warn never reaches the observability
+ * sink), so a missing row is alertable.
+ */
+async function recordPeriodDecision(row: PeriodDecisionRow): Promise<void> {
+  const context = { companyId: row.company_id, fiscalPeriodId: row.record_id }
+  try {
+    const { error } = await createServiceClientNoCookies()
+      .from('audit_log')
+      .insert({
+        user_id: row.user_id,
+        company_id: row.company_id,
+        action: 'UPDATE',
+        table_name: 'fiscal_periods',
+        record_id: row.record_id,
+        description: row.description,
+        old_state: row.old_state,
+        new_state: row.new_state,
+      })
+    if (!error) return
+    log.error('audit_log insert failed for a period decision', new Error(error.message ?? 'insert failed'), {
+      ...context,
+      code: error.code,
+    })
+  } catch (err) {
+    log.error('audit_log insert threw for a period decision', err as Error, context)
+  }
+}
+
 /**
  * Unlock a fiscal period: clears `locked_at` so new entries can be posted.
  * Requires: period exists, belongs to company, is currently locked, not closed.
@@ -257,11 +310,9 @@ export async function unlockPeriod(
   // event_log, which is no audit record: its rows can be deleted and the
   // archive export leaves it out) so an auditor can reconstruct who unlocked
   // which period and when, even years later.
-  await supabase.from('audit_log').insert({
+  await recordPeriodDecision({
     user_id: userId,
     company_id: companyId,
-    action: 'UPDATE',
-    table_name: 'fiscal_periods',
     record_id: fiscalPeriodId,
     description: `Period unlocked: ${result.name} (${result.period_start} to ${result.period_end})`,
     old_state: { locked_at: priorLockedAt },
@@ -589,11 +640,9 @@ export async function markPeriodClosedExternally(
 
   const result = updated as FiscalPeriod
 
-  await supabase.from('audit_log').insert({
+  await recordPeriodDecision({
     user_id: userId,
     company_id: companyId,
-    action: 'UPDATE',
-    table_name: 'fiscal_periods',
     record_id: fiscalPeriodId,
     description: `Period marked as closed in previous system: ${result.name} (${result.period_start} to ${result.period_end})`,
     old_state: { is_closed: false, closed_at: null, locked_at: period.locked_at },
@@ -678,11 +727,9 @@ export async function reopenExternallyClosedPeriod(
 
   const result = updated as FiscalPeriod
 
-  await supabase.from('audit_log').insert({
+  await recordPeriodDecision({
     user_id: userId,
     company_id: companyId,
-    action: 'UPDATE',
-    table_name: 'fiscal_periods',
     record_id: fiscalPeriodId,
     description: `Period reopened, previous-system close undone: ${result.name} (${result.period_start} to ${result.period_end})`,
     old_state: {

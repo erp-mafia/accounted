@@ -536,11 +536,12 @@ export function emptyResult(): InvoiceExtractionResult {
 }
 
 // Photos go through the shared fitter (lib/documents/read/image.ts), the same
-// numbers as every door that reads a photo: over 3.5 MB it rotates by EXIF
-// and fits inside 2000 px as JPEG 80 (the model refuses images above 5 MB of
-// base64), and HEIC/HEIF (the iPhone default) is transcoded to JPEG, with
-// heic-convert when the local sharp cannot decode it. A HEIC nothing could
-// decode stays as it was and is skipped as unsupported below.
+// numbers as every door that reads a photo: over 3.5 MB, or with a side over
+// 8000 px, it rotates by EXIF and fits inside 2000 px as JPEG 80 (the model
+// refuses images above 5 MB of base64 or 8000 px a side), and HEIC/HEIF (the
+// iPhone default) is transcoded to JPEG, with heic-convert when the local
+// sharp cannot decode it. A HEIC nothing could decode stays as it was and is
+// skipped as unsupported below.
 async function fitImageForExtraction(input: ExtractionInput): Promise<ExtractionInput> {
   const isHeic = (HEIC_MIME_TYPES as readonly string[]).includes(input.mimeType)
   const isSupportedImage = input.mimeType.startsWith('image/') && SUPPORTED_MEDIA_TYPES.has(input.mimeType)

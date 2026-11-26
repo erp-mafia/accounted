@@ -16,7 +16,9 @@ import { BRAIN_RECORD_KINDS, describeRecord, type WikiRecordKind, type WikiRecor
  *
  * The tools run with the caller's session client, as the in-app chat runs
  * them: row-level security applies, and the reads stay inside the active
- * company the route resolved.
+ * company the route resolved. One part reads on the service role, as on MCP:
+ * the briefing's Skatteverket filing readiness (skv-connection-health.ts in
+ * the mcp-server extension), whose columns end users cannot read.
  */
 
 export const BRIEFING_TOOL = 'gnubok_get_agent_briefing'

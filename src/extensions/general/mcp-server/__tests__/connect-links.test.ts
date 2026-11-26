@@ -6,6 +6,14 @@ import { setBankFeedConnectForTests, type BankFeedConnect } from '@/lib/bank-fee
 import { createTableMockSupabase } from '@/tests/helpers'
 import { tools } from '../server'
 
+// The filing readiness reads on the service role whichever client the tool
+// gets (skv-connection-health.ts), as on MCP: it reads the same rows here.
+let serviceDb: unknown = null
+vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/api-keys')>()
+  return { ...actual, createServiceClientNoCookies: () => serviceDb }
+})
+
 // Onboarding connect-link tools (issue #1814 PR 3): status + the browser link
 // the user opens. Both flows need a cookie session and BankID in a browser,
 // so the tools never try to drive them.
@@ -38,12 +46,15 @@ function listClient(rows: unknown[] | null, error: unknown = null) {
     maybeSingle: vi.fn().mockResolvedValue({ data: rows?.[0] ?? null, error }),
     then: (resolve: (v: unknown) => void) => resolve({ data: rows, error }),
   }
-  return { from: vi.fn(() => chain), chain }
+  const client = { from: vi.fn(() => chain), chain }
+  serviceDb = client
+  return client
 }
 
 describe('onboarding connect-link tools', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    serviceDb = null
     eventBus.clear()
     vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://app.example.test')
   })

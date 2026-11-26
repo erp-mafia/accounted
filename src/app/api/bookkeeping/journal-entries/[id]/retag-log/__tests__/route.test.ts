@@ -11,7 +11,7 @@ import {
   parseJsonResponse,
 } from '@/tests/helpers'
 
-const { supabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase, enqueue, reset, calls } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
 vi.mock('@/lib/auth/require-auth', () => ({
@@ -27,9 +27,10 @@ vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 
 import { GET } from '../route'
 
-const params = () => createMockRouteParams({ id: 'entry-1' })
-const makeGet = () =>
-  createMockRequest('/api/bookkeeping/journal-entries/entry-1/retag-log', { method: 'GET' })
+const ENTRY_ID = '7b0c1e2a-4d5f-4a6b-8c9d-0e1f2a3b4c5d'
+const params = (id = ENTRY_ID) => createMockRouteParams({ id })
+const makeGet = (id = ENTRY_ID) =>
+  createMockRequest(`/api/bookkeeping/journal-entries/${id}/retag-log`, { method: 'GET' })
 
 describe('GET /api/bookkeeping/journal-entries/[id]/retag-log', () => {
   beforeEach(() => {
@@ -44,6 +45,17 @@ describe('GET /api/bookkeeping/journal-entries/[id]/retag-log', () => {
     })
     const response = await GET(makeGet(), params())
     expect(response.status).toBe(401)
+  })
+
+  it('answers 404 for an id that is not a uuid, before any query', async () => {
+    // /bookkeeping/new opened by hand: Postgres refused the id with a uuid
+    // parse error, which this route answered as a 500.
+    const response = await GET(makeGet('new'), params('new'))
+    const { body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(response.status).toBe(404)
+    expect(body.error.code).toBe('JOURNAL_ENTRY_NOT_FOUND')
+    expect(calls).toEqual([])
   })
 
   it('returns the log rows newest first', async () => {

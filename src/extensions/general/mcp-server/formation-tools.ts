@@ -58,7 +58,11 @@ export interface FormationToolDeps {
   annotations: McpToolAnnotations
   /** Absolute origin for links the founder opens in a browser. */
   appOrigin: () => string
-  /** The user's personal team, for a company created without a cookie session. */
+  /**
+   * The user's personal team, for a company created without a cookie session
+   * (defaultTeamForNewCompany). Throws when it cannot be read, before the
+   * company row is inserted, so the setup stops with nothing created.
+   */
   defaultTeamForUser: (supabase: SupabaseClient, userId: string) => Promise<string | null>
   newCompanyReach: (
     supabase: SupabaseClient,

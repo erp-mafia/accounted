@@ -15,6 +15,7 @@ import { workflowSkills } from '../skills'
 import { isDefaultCatalogTool } from '../tool-reach'
 import { ALL_SCOPES, DEFAULT_OAUTH_SCOPES, TOOL_SCOPE_MAP } from '@/lib/auth/scope-catalog'
 import { createPagedMockSupabase, manyRows } from '@/tests/helpers'
+import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 
 vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(),
@@ -1078,18 +1079,25 @@ describe('grants (Profiles and Suggestions, step 4)', () => {
 describe('skatteverket_connection health block', () => {
   const tool = () => tools.find((t) => t.name === 'gnubok_get_agent_briefing')!
   const originalEnabled = process.env.SKATTEVERKET_ENABLED
+  // The filing readiness reads on the service role whichever client the tool
+  // gets (skv-connection-health.ts), as on MCP: it reads the same rows here.
+  const withServiceReads = <T>(supabase: T): T => {
+    vi.mocked(createServiceClientNoCookies).mockReturnValue(supabase as never)
+    return supabase
+  }
 
   beforeEach(() => {
     process.env.SKATTEVERKET_ENABLED = 'true'
   })
 
   afterEach(() => {
+    vi.mocked(createServiceClientNoCookies).mockReset()
     if (originalEnabled === undefined) delete process.env.SKATTEVERKET_ENABLED
     else process.env.SKATTEVERKET_ENABLED = originalEnabled
   })
 
   it('omits the block entirely for a company that never connected', async () => {
-    const supabase = mockSupabase({ profile: null, skvTokenRows: [] })
+    const supabase = withServiceReads(mockSupabase({ profile: null, skvTokenRows: [] }))
     const result = (await tool().execute(
       {},
       'company-1',
@@ -1102,10 +1110,10 @@ describe('skatteverket_connection health block', () => {
 
   it('omits the block when the skatteverket extension is disabled, even with a token row', async () => {
     process.env.SKATTEVERKET_ENABLED = 'false'
-    const supabase = mockSupabase({
+    const supabase = withServiceReads(mockSupabase({
       profile: null,
       skvTokenRows: [{ user_id: 'user-1', status: 'active', created_at: '2026-08-25T09:12:00Z' }],
-    })
+    }))
     const result = (await tool().execute(
       {},
       'company-1',
@@ -1118,7 +1126,7 @@ describe('skatteverket_connection health block', () => {
 
   it('reports an active personal session with its connect time (the ~65 min fuse)', async () => {
     const connectedAt = new Date(Date.now() - 5 * 60_000).toISOString()
-    const supabase = mockSupabase({
+    const supabase = withServiceReads(mockSupabase({
       profile: null,
       skvTokenRows: [{
         user_id: 'user-1',
@@ -1128,7 +1136,7 @@ describe('skatteverket_connection health block', () => {
         refresh_count: 0,
         refresh_token: 'ciphertext',
       }],
-    })
+    }))
     const result = (await tool().execute(
       {},
       'company-1',
@@ -1157,7 +1165,7 @@ describe('skatteverket_connection health block', () => {
     // ago. The status line stays the company's truth, and `filing` says what
     // gnubok_vat_declaration_validate/_submit will answer this caller.
     const memberConnectedAt = new Date(Date.now() - 3 * 60_000).toISOString()
-    const supabase = mockSupabase({
+    const supabase = withServiceReads(mockSupabase({
       profile: null,
       userFullName: 'Anna Admin',
       skvTokenRows: [
@@ -1178,7 +1186,7 @@ describe('skatteverket_connection health block', () => {
           refresh_token: 'ciphertext',
         },
       ],
-    })
+    }))
     const result = (await tool().execute({}, 'company-1', 'user-1', supabase as never, { type: 'api_key' })) as {
       skatteverket_connection?: {
         status: string
@@ -1196,12 +1204,12 @@ describe('skatteverket_connection health block', () => {
   })
 
   it('reports needs_reconsent with the directive message so the agent warns the user up front', async () => {
-    const supabase = mockSupabase({
+    const supabase = withServiceReads(mockSupabase({
       profile: null,
       skvTokenRows: [
         { user_id: 'user-1', status: 'needs_reconsent', created_at: '2026-08-25T08:00:00Z' },
       ],
-    })
+    }))
     const result = (await tool().execute(
       {},
       'company-1',
