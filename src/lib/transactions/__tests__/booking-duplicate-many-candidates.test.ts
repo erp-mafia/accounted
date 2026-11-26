@@ -151,24 +151,29 @@ describe('detectBookedDuplicateTransaction: many bulk-booked siblings in the win
     expect(unmodelled).toEqual([])
   })
 
-  it('fails open, out loud, when a slice of the anchors cannot be read', async () => {
-    const siblings = Array.from({ length: 300 }, (_, i) => swish(i + 1, '2026-03-20'))
+  it('decides on the anchors it read, out loud, when a slice of them cannot be read', async () => {
+    // A is booked through its own pointer; the bulk rows are anchored only in
+    // transaction_voucher_links, and their second slice cannot be read. A
+    // missing anchor can only hide a sibling, never make one: A is flagged.
+    const ownEntry = uuid(1, '22222222')
+    const booked: Row = { ...swish(9000, '2026-03-20'), journal_entry_id: ownEntry }
+    const bulk = Array.from({ length: 300 }, (_, i) => swish(i + 1, '2026-03-18'))
     let linkReads = 0
     const { supabase } = createGatewaySupabase(
       {
-        transactions: siblings,
-        transaction_voucher_links: siblings.map((s, i) => link(uuid(i + 1, '11111111'), s.id as string, BULK_ENTRY)),
-        journal_entries: [bulkEntry],
+        transactions: [booked, ...bulk],
+        transaction_voucher_links: bulk.map((s, i) => link(uuid(i + 1, '11111111'), s.id as string, BULK_ENTRY)),
+        journal_entries: [bulkEntry, { ...bulkEntry, id: ownEntry, voucher_number: 8 }],
       },
       { refuse: (request) => request.table === 'transaction_voucher_links' && ++linkReads === 2 },
     )
 
     const twin = await detectBookedDuplicateTransaction(supabase, COMPANY, outgoing)
 
-    expect(twin).toBeNull()
+    expect(twin).toMatchObject({ transaction_id: booked.id, journal_entry_id: ownEntry, voucher_label: 'A8' })
     expect(detectionLogs).toContainEqual(expect.objectContaining({
       level: 'warn',
-      msg: 'sibling anchors unreadable: no duplicate warning shown',
+      msg: 'sibling anchors partly unreadable: deciding on the anchors read',
     }))
   })
 })

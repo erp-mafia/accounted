@@ -51,7 +51,7 @@ import { sameCashAccount } from '@/lib/cash-accounts/ledger-slots'
 import { readPhysicalKeys } from '@/lib/cash-accounts/twins'
 import { chunk } from '@/lib/utils'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { ID_READ_CHUNK } from '@/lib/reconciliation/limits'
+import { ID_READ_CHUNK } from '@/lib/supabase/read-in-slices'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('transactions/booking-duplicate-detection')
@@ -443,8 +443,9 @@ export async function detectBookedDuplicateTransaction(
   // In slices of ID_READ_CHUNK, each paged: the window holds up to 500 rows,
   // the ids travel in the GET query string (the gateway refuses a long one),
   // and one split or batch-matched row carries hundreds of anchors. A slice
-  // that cannot be read fails open like the window read, out loud: unread
-  // anchors would leave some siblings out and decide on the rest.
+  // that cannot be read is logged, and the scan decides on the anchors read
+  // so far: a missing anchor can only hide a sibling, never make one, so a
+  // sibling booked through its own pointer is still flagged.
   const unanchoredIds = matches.filter((r) => r.journal_entry_id == null).map((r) => r.id)
   type AnchorRow = { transaction_id: string | null; journal_entry_id: string | null }
   const paymentRows: AnchorRow[] = []
@@ -484,8 +485,7 @@ export async function detectBookedDuplicateTransaction(
       paymentRows.push(...ip, ...sp)
     }
   } catch (err) {
-    log.warn('sibling anchors unreadable: no duplicate warning shown', err)
-    return null
+    log.warn('sibling anchors partly unreadable: deciding on the anchors read', err)
   }
 
   const booked = matches
