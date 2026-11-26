@@ -269,6 +269,21 @@ describe('uploadFile (resumable)', () => {
     expect(fetchMock).toHaveBeenCalledTimes(3)
   })
 
+  it('releases a 5xx response body before it retries the chunk', async () => {
+    const data = new Uint8Array([7, 7]).buffer
+    const flaky = new Response('flaky', { status: 503 })
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(initResponse())
+      .mockResolvedValueOnce(flaky)
+      .mockResolvedValueOnce(
+        fileResponse({ id: 'f-1', name: 'a.zip', md5Checksum: md5Of(data) })
+      )
+
+    await uploadFile('at', 'folder', 'a.zip', fileOf(data))
+    // A cancelled body is disturbed: nothing keeps the connection busy.
+    expect(flaky.bodyUsed).toBe(true)
+  })
+
   it('throws with Drive error body when the init fails', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response('quota exceeded', { status: 403 })

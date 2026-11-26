@@ -359,6 +359,9 @@ async function sendChunk(
       })
       if (res.status < 500) return res
       lastErr = new Error(`Drive chunk upload ${res.status}`)
+      // Release the connection before the retry: an unread body keeps it
+      // busy, and repeated server errors would stall the requests after it.
+      await res.body?.cancel().catch(() => undefined) // a failed cancel holds nothing to release
     } catch (err) {
       lastErr = err
     }
