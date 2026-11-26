@@ -5,7 +5,7 @@ import { DOC_TYPES, isDocType } from '@/lib/documents/classify/taxonomy'
 import { NOT_STRUCTURED_MIME_FILTER } from '@/lib/documents/read/types'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { chunk } from '@/lib/utils'
-import { ID_READ_CHUNK } from '@/lib/reconciliation/limits'
+import { ID_READ_CHUNK } from '@/lib/supabase/read-in-slices'
 import { FOLDER_ORDER, folderFor, type FolderKey } from './folders'
 
 /**

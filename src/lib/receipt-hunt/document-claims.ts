@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { chunk } from '@/lib/utils'
-import { ID_READ_CHUNK } from '@/lib/reconciliation/limits'
+import { ID_READ_CHUNK } from '@/lib/supabase/read-in-slices'
 
 /**
  * Who already holds a document: a link waiting for approval, or a bank

@@ -4,7 +4,7 @@ import { buildCompanyGraph, GRAPH_VERSION } from './build'
 import type { CompanyGraph } from './types'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { chunk } from '@/lib/utils'
-import { ID_READ_CHUNK } from '@/lib/reconciliation/limits'
+import { ID_READ_CHUNK } from '@/lib/supabase/read-in-slices'
 
 /**
  * One snapshot per company, so the page and the agent read the same picture

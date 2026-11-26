@@ -7,7 +7,7 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { isMatchableInvoiceStatus, isMatchableSupplierInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
-import { ID_READ_CHUNK } from '@/lib/reconciliation/limits'
+import { ID_READ_CHUNK } from '@/lib/supabase/read-in-slices'
 import { chunk } from '@/lib/utils'
 import type { BankTransactionPart } from '@/types'
 

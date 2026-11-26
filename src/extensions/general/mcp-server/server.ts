@@ -262,7 +262,7 @@ import { resolveAgentWorklist, verifikatNextStepKinds, type NextStepKind, type V
 import { isSkatteverketEnabled } from '@/lib/skatteverket/enabled'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { chunk } from '@/lib/utils'
-import { ID_READ_CHUNK } from '@/lib/reconciliation/limits'
+import { ID_READ_CHUNK } from '@/lib/supabase/read-in-slices'
 import { expandParty } from '@/lib/parties/party-api'
 import {
   cashAccountCurrencyMismatch,

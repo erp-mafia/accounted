@@ -12,9 +12,8 @@ import { NOT_STRUCTURED_MIME_FILTER } from '@/lib/documents/read/types'
 import { folderQuery, isFolderKey } from '@/lib/arkiv/folders'
 import { fillTypeFromClassification } from '@/lib/documents/locked-period'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { readInSlices } from '@/lib/supabase/read-in-slices'
+import { ID_READ_CHUNK, readInSlices } from '@/lib/supabase/read-in-slices'
 import { chunk } from '@/lib/utils'
-import { ID_READ_CHUNK } from '@/lib/reconciliation/limits'
 
 /**
  * GET /api/arkiv/documents?q=&year=

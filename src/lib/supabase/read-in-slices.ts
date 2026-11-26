@@ -1,5 +1,14 @@
 import { chunk } from '@/lib/utils'
-import { ID_READ_CHUNK } from '@/lib/reconciliation/limits'
+
+/**
+ * Ids per PostgREST `.in()` read. supabase-js puts the list in the GET query
+ * string, about 39 characters a uuid, and a gateway refuses a long one before
+ * PostgREST sees it: a self-hosted Kong with the stock 8 KB header buffer
+ * answers 414 (#2395), and hosted Supabase stops at about 16 KB. 100 uuids are
+ * about 3.9 KB, under half of the stricter limit with room for the rest of the
+ * URL. The one slice size (scripts/checks/one-definition/id-read-chunk.mjs).
+ */
+export const ID_READ_CHUNK = 100
 
 /** The rows of every slice, or the error of the first slice that failed. */
 export interface SlicedRead<Row> {
@@ -9,13 +18,11 @@ export interface SlicedRead<Row> {
 
 /**
  * A read by id list, one request per slice of ID_READ_CHUNK ids, the rows
- * merged in slice order. supabase-js puts an `.in()` list in the GET query
- * string, and a gateway refuses a long one before PostgREST sees it
- * (ID_READ_CHUNK in lib/reconciliation/limits.ts). For a read whose caller
- * takes a `{ data, error }` answer, such as several reads in one Promise.all:
- * the first slice that fails, with an error or by throwing (a slice paged
- * with fetchAllRows), answers for the whole read with no rows. A read with an
- * order or a limit over the whole list sorts and cuts the merged rows itself.
+ * merged in slice order. For a read whose caller takes a `{ data, error }`
+ * answer, such as several reads in one Promise.all: the first slice that
+ * fails, with an error or by throwing (a slice paged with fetchAllRows),
+ * answers for the whole read with no rows. A read with an order or a limit
+ * over the whole list sorts and cuts the merged rows itself.
  */
 export async function readInSlices<Row>(
   ids: readonly string[],

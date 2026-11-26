@@ -3,7 +3,7 @@ import { coreKey, ledgerKey } from '@/lib/parties/ledger-key'
 import { addDays, daysBetween } from './dates'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { chunk } from '@/lib/utils'
-import { ID_READ_CHUNK } from '@/lib/reconciliation/limits'
+import { ID_READ_CHUNK } from '@/lib/supabase/read-in-slices'
 
 /**
  * Arkiv phase 4: did the expected money arrive? Obligations are compared

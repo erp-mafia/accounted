@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { SupabaseDataClient } from '@/lib/supabase/data-client'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { ID_READ_CHUNK } from '@/lib/supabase/read-in-slices'
 import { chunk } from '@/lib/utils'
 import { NON_ISSUED_INVOICE_STATUSES_FILTER } from '@/lib/bookkeeping/matchable-statuses'
 import { MAX_CHAIN_WALK } from './correction-chain'
@@ -348,8 +349,8 @@ export const INVOICE_SOURCED_ENTRY_TYPES: ReadonlySet<string> = new Set([
   'reminder_fee',
 ])
 
-/** Ids per PostgREST `.in()` filter (URL-length convention, lib/worklist/categories.ts). */
-export const LINK_LOOKUP_CHUNK = 100
+/** Ids per PostgREST `.in()` filter: the one slice size, ID_READ_CHUNK. */
+export const LINK_LOOKUP_CHUNK = ID_READ_CHUNK
 
 /** The columns {@link getInvoicesExplainingJournalEntries} reads off an entry. */
 export interface ExplainableJournalEntry {

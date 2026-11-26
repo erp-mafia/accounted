@@ -13,7 +13,7 @@ import { describe, expect, it } from 'vitest'
 import { createStockCount } from '../register'
 import { StockCountError } from '../errors'
 import { STOCK_COUNT_MAX_ROWS } from '../schemas'
-import { ID_READ_CHUNK } from '@/lib/reconciliation/limits'
+import { ID_READ_CHUNK } from '@/lib/supabase/read-in-slices'
 import { createGatewaySupabase, GATEWAY_URL_LIMIT, inListOf } from '@/tests/gateway-supabase'
 
 const COMPANY = '5b0c3c1e-0000-4000-8000-000000000001'

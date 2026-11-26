@@ -1,6 +1,6 @@
 import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import { dbError } from '@/lib/errors/db-error'
-import { ID_READ_CHUNK } from '@/lib/reconciliation/limits'
+import { ID_READ_CHUNK } from '@/lib/supabase/read-in-slices'
 import { chunk } from '@/lib/utils'
 import { defineAgentIntent } from './types'
 import { SONNET_MODEL, EFFORT_STANDARD } from '@/lib/agent/composer/client'

@@ -25,7 +25,7 @@ import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/accou
 import { accountClass } from '@/lib/invariants/account-number'
 import { VAT_OUTPUT_ACCOUNTS } from '@/lib/reports/vat-declaration'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
-import { ID_READ_CHUNK } from '@/lib/reconciliation/limits'
+import { ID_READ_CHUNK } from '@/lib/supabase/read-in-slices'
 import { chunk } from '@/lib/utils'
 
 export type LinkRotRutPayoutVoucherErrorCode =

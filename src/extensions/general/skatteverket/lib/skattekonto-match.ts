@@ -4,7 +4,7 @@ import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-l
 import { roundOre } from '@/lib/money'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { chunk } from '@/lib/utils'
-import { ID_READ_CHUNK } from '@/lib/reconciliation/limits'
+import { ID_READ_CHUNK } from '@/lib/supabase/read-in-slices'
 import { resolveSkattekontoAccount, type SkattekontoLedgerAccount } from '@/lib/skatteverket/skattekonto-account'
 import { loadCancelledEntryIds } from '@/lib/skatteverket/skattekonto-cancelled-entries'
 import { fetchLiveLedgerSettlements } from '@/lib/reconciliation/ledger-settlement-store'
@@ -637,25 +637,12 @@ export async function findMatchSuggestionsBulk(
   // SKV rows already linked to a candidate entry, with their amounts: an
   // entry with links is only a candidate for a row that the group check
   // still accepts together with them.
-  //
-  // In slices of ID_READ_CHUNK, each paged: the ids travel in the GET query
-  // string, the window holds every verifikat on the account since the oldest
-  // open row (more than the gateway takes in one URL), and a group link puts
-  // up to 50 rows on one verifikat.
+  // The window holds every verifikat on the account since the oldest open
+  // row, more ids than the gateway takes in one URL (readLinkedSkvRows).
   const candidateEntryIds = Array.from(new Set(lines.map(l => l.journal_entries.id)))
-  const linked: Array<{ journal_entry_id: string | null; belopp_skatteverket?: number | string | null }> = []
+  let linked: LinkedSkvRow[]
   try {
-    for (const ids of chunk(candidateEntryIds, ID_READ_CHUNK)) {
-      linked.push(...(await fetchAllRows<(typeof linked)[number]>((range) =>
-        supabase
-          .from('skattekonto_transactions')
-          .select('journal_entry_id, belopp_skatteverket')
-          .eq('company_id', companyId)
-          .in('journal_entry_id', ids)
-          .order('id', { ascending: true })
-          .range(range.from, range.to),
-      )))
-    }
+    linked = await readLinkedSkvRows(supabase, companyId, candidateEntryIds)
   } catch {
     // Read as "none linked", a taken verifikat would be proposed again.
     return new Map()
@@ -1075,15 +1062,11 @@ export async function findGroupMatchCandidates(
   // read throws: treating a linked entry as unlinked would offer a link the
   // write then refuses.
   const entryIds = Array.from(new Set(lines.map(l => l.journal_entries.id)))
-  const linked: Array<{ journal_entry_id: string | null; belopp_skatteverket?: number | string | null }> = []
-  for (let i = 0; i < entryIds.length; i += LINKED_ID_CHUNK) {
-    const { data: linkedData, error: linkedError } = await supabase
-      .from('skattekonto_transactions')
-      .select('journal_entry_id, belopp_skatteverket')
-      .eq('company_id', companyId)
-      .in('journal_entry_id', entryIds.slice(i, i + LINKED_ID_CHUNK))
-    if (linkedError) throw searchFailed(linkedError.message)
-    linked.push(...((linkedData ?? []) as typeof linked))
+  let linked: LinkedSkvRow[]
+  try {
+    linked = await readLinkedSkvRows(supabase, companyId, entryIds)
+  } catch (err) {
+    throw searchFailed(err)
   }
 
   let excluded: Set<string>
@@ -1172,8 +1155,33 @@ function searchFailed(err: unknown): Error {
   return new Error(`${SEARCH_FAILED_PREFIX}: ${err instanceof Error ? err.message : String(err)}`)
 }
 
-/** Max journal_entry ids per `.in()` filter on the link read (URL length). */
-const LINKED_ID_CHUNK = 100
+/** An SKV row already linked to a verifikat, with its amount. */
+type LinkedSkvRow = { journal_entry_id: string | null; belopp_skatteverket?: number | string | null }
+
+/**
+ * The SKV rows already linked to these verifikat, with their amounts: what
+ * the group check weighs a new row against. In slices of ID_READ_CHUNK, each
+ * paged: the ids travel in the GET query string, which the gateway refuses
+ * past its limit, and a group link puts up to 50 rows on one verifikat, so a
+ * slice can pass 1000 rows. The bulk matcher and both twin searches read
+ * through this one read, so they never disagree on what is linked. Throws
+ * when a slice cannot be read; each caller decides what that means.
+ */
+async function readLinkedSkvRows(supabase: SupabaseClient, companyId: string, entryIds: readonly string[]): Promise<LinkedSkvRow[]> {
+  const linked: LinkedSkvRow[] = []
+  for (const ids of chunk(entryIds, ID_READ_CHUNK)) {
+    linked.push(...(await fetchAllRows<LinkedSkvRow>((range) =>
+      supabase
+        .from('skattekonto_transactions')
+        .select('journal_entry_id, belopp_skatteverket')
+        .eq('company_id', companyId)
+        .in('journal_entry_id', ids)
+        .order('id', { ascending: true })
+        .range(range.from, range.to),
+    )))
+  }
+  return linked
+}
 
 /**
  * Every candidate verifikat for each of `probes`: the ledger entries that
@@ -1359,15 +1367,11 @@ async function searchLedgerTwinWindow(
   // Rows already linked to a candidate entry, with their amounts. A failed
   // read throws: treating a linked entry as unlinked would invent a twin.
   const candidateEntryIds = Array.from(new Set(typedRows.map(r => r.journal_entries.id)))
-  const linked: Array<{ journal_entry_id: string | null; belopp_skatteverket?: number | string | null }> = []
-  for (let i = 0; i < candidateEntryIds.length; i += LINKED_ID_CHUNK) {
-    const { data, error } = await supabase
-      .from('skattekonto_transactions')
-      .select('journal_entry_id, belopp_skatteverket')
-      .eq('company_id', companyId)
-      .in('journal_entry_id', candidateEntryIds.slice(i, i + LINKED_ID_CHUNK))
-    if (error) throw searchFailed(error.message)
-    linked.push(...((data ?? []) as typeof linked))
+  let linked: LinkedSkvRow[]
+  try {
+    linked = await readLinkedSkvRows(supabase, companyId, candidateEntryIds)
+  } catch (err) {
+    throw searchFailed(err)
   }
 
   // AGI-linked entries for every period the probes name.
