@@ -74,6 +74,17 @@ export function resolveEffectiveVatRate(row: VatAccountClassificationRow): numbe
 }
 
 /**
+ * Whether a class 3 account is unclassified for VAT: no momskod and no
+ * momssats, configured or inferred from its number and name. The test
+ * fetchDynamicVatAccounts applies before it lists an account in
+ * unconfiguredRevenueAccounts, for a caller that holds one row.
+ */
+export function isUnclassifiedRevenueAccount(row: VatAccountClassificationRow): boolean {
+  if (accountClassOf(row) !== 3 || isAccountVatTreatment(row.default_vat_treatment)) return false
+  return resolveEffectiveVatRate(row) === null
+}
+
+/**
  * The momsdeklaration box a revenue (class 3) account feeds: a configured
  * treatment wins (its ruta, or null for OSS which is declared outside the
  * momsdeklaration), otherwise the static BAS map. Null when neither

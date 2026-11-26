@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { mailboxEntries } from '../mailboxes'
+import { billoLeftOutForKivra, mailboxEntries } from '../mailboxes'
 
 const ALL = { whatsapp: true, mail: true, kivra: true, billo: true }
 
@@ -45,5 +45,29 @@ describe('mailboxEntries', () => {
     expect(mailboxEntries(ALL, 'none').map((e) => e.door)).toEqual(usual)
     expect(mailboxEntries(ALL, 'unknown').map((e) => e.door)).toEqual(usual)
     expect(mailboxEntries(ALL, null).map((e) => e.door)).toEqual(usual)
+  })
+})
+
+describe('billoLeftOutForKivra', () => {
+  const answered = { read: 'ready' as const, kivraCompanyMailbox: 'none' as const, kivraConnected: false, billoConnected: false }
+
+  it('leaves Billo out for a company that already has its mailbox at Kivra, or has connected Kivra', () => {
+    expect(billoLeftOutForKivra({ ...answered, kivraCompanyMailbox: 'has' })).toBe(true)
+    expect(billoLeftOutForKivra({ ...answered, kivraCompanyMailbox: null, kivraConnected: true })).toBe(true)
+  })
+
+  it('offers Billo where Kivra does not have the company, or cannot say', () => {
+    expect(billoLeftOutForKivra(answered)).toBe(false)
+    expect(billoLeftOutForKivra({ ...answered, kivraCompanyMailbox: 'unknown' })).toBe(false)
+    expect(billoLeftOutForKivra({ ...answered, kivraCompanyMailbox: null })).toBe(false)
+  })
+
+  it('keeps a connected Billo listed whatever Kivra says', () => {
+    expect(billoLeftOutForKivra({ ...answered, kivraCompanyMailbox: 'has', billoConnected: true })).toBe(false)
+  })
+
+  it('holds Billo back until the answer is in, and lists it when the read failed', () => {
+    expect(billoLeftOutForKivra({ ...answered, read: 'loading' })).toBe(true)
+    expect(billoLeftOutForKivra({ ...answered, read: 'failed', kivraCompanyMailbox: 'has' })).toBe(false)
   })
 })

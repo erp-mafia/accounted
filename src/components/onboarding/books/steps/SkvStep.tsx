@@ -3,9 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { BuildingLibraryIcon } from '@/components/icons'
-import { useCompany } from '@/contexts/CompanyContext'
 import { useBranding } from '@/lib/branding/brand-context'
-import { usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
 import { useFormat } from '@/lib/hooks/use-format'
 import { useOAuthPopup } from '@/lib/hooks/use-oauth-popup'
 import { isSkvPopupOrigin, type SkvPopupMessage } from '@/lib/skatteverket/popup-origin'
@@ -40,9 +38,6 @@ export function SkvStep({ ctx }: { ctx: BooksCtx }) {
   const tOmbud = useTranslations('skatteverket_ombud')
   const errorLocale = useLocale() as ErrorLocale
   const { appName } = useBranding()
-  const { company } = useCompany()
-  // Where the company's number is the owner's own, the owner is the one who signs.
-  const ownerSigns = company ? usesPersonnummerAsOrgNumber(company.entity_type) : false
   const { state, dispatch, flags, findings, loadFindings, landedError } = ctx
   const phase = state.skvPhase
   const [saldo, setSaldo] = useState<number | null>(null)
@@ -237,13 +232,12 @@ export function SkvStep({ ctx }: { ctx: BooksCtx }) {
       {sourcesFlow && phase === 'away' ? <p className="jny-qsub">{holdText}</p> : null}
       {open ? (
         <div className={`skv-body${bodyCls}`}>
-          <p className="jny-qsub">
-            {ombudWaiting
-              ? tOmbud('waiting_hint', { appName })
-              : ombudMode
-                ? t(flags.sourcesFlow ? (ownerSigns ? 'skv_ombud_sub_short_owner' : 'skv_ombud_sub_short') : 'skv_ombud_sub', { appName })
-                : t(flags.sourcesFlow ? 'skv_sub_short' : 'skv_sub')}
-          </p>
+          {/* The sources arrangement says nothing under the title where Accounted is appointed: the button is the step. */}
+          {ombudWaiting ? (
+            <p className="jny-qsub">{tOmbud('waiting_hint', { appName })}</p>
+          ) : ombudMode && sourcesFlow ? null : (
+            <p className="jny-qsub">{ombudMode ? t('skv_ombud_sub', { appName }) : t(sourcesFlow ? 'skv_sub_short' : 'skv_sub')}</p>
+          )}
           {attn ? <p className="jny-attn">{attn}</p> : null}
           {flags.hasSkatteverket ? (
             <button
@@ -256,7 +250,9 @@ export function SkvStep({ ctx }: { ctx: BooksCtx }) {
                   <BuildingLibraryIcon className="h-4 w-4" />
                 </span>
               )}
-              <span className="jny-bankid-txt">{ombudMode ? t('skv_ombud_connect', { appName }) : t('skv_connect')}</span>
+              <span className="jny-bankid-txt">
+                {ombudMode ? (sourcesFlow ? t('skv_ombud_connect_short') : t('skv_ombud_connect', { appName })) : t('skv_connect')}
+              </span>
             </button>
           ) : (
             <p className="jny-qsub">{t('skv_unavailable')}</p>

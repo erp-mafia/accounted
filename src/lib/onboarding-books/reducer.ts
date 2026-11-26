@@ -24,6 +24,12 @@ export interface BooksFlags {
   skvOmbud?: boolean
   /** The arrangement with the AI and the receipts as steps of their own (after the bank, before Skatteverket). */
   sourcesFlow?: boolean
+  /**
+   * The receipts step has a mailbox to offer: the deployment receives from
+   * Kivra or Billo and the company has a legal person's number (neither
+   * serves any other). Without it the step is passed over.
+   */
+  hasDocs?: boolean
 }
 
 export interface BooksState {
@@ -114,7 +120,8 @@ export function stationOf(step: BooksStep, flags?: BooksFlags): BooksStation {
 export function stepsAfterBooks(flags: BooksFlags): BooksStep[] {
   const steps: BooksStep[] = []
   if (flags.hasBanking) steps.push('bank')
-  if (flags.sourcesFlow) steps.push('ai', 'docs')
+  if (flags.sourcesFlow) steps.push('ai')
+  if (flags.sourcesFlow && flags.hasDocs) steps.push('docs')
   if (flags.hasSkatteverket) steps.push('skv')
   steps.push('done')
   return steps
@@ -123,8 +130,11 @@ export function stepsAfterBooks(flags: BooksFlags): BooksStep[] {
 function stepAfter(step: BooksStep, flags: BooksFlags): BooksStep {
   const steps = stepsAfterBooks(flags)
   const at = steps.indexOf(step)
-  // A step this deployment does not list (a restored draft): the first step after the books.
-  return at < 0 ? steps[0] : steps[Math.min(at + 1, steps.length - 1)]
+  if (at >= 0) return steps[Math.min(at + 1, steps.length - 1)]
+  // The receipts step a company is not offered (a restored draft): onward to what follows it, never back to the bank.
+  if (step === 'docs') return flags.hasSkatteverket ? 'skv' : 'done'
+  // Any other step this deployment does not list (a restored draft): the first step after the books.
+  return steps[0]
 }
 
 /** One step back from a step after the books; before the first one, the books themselves. */

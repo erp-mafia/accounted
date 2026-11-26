@@ -67,8 +67,8 @@ function yearsOf(files: FileEntry[]): string[] {
 }
 
 /**
- * Ladda upp SIE-filen: drop one or more SIE 4 files, the facts ink in, one
- * sentence says what will be read with Ändra behind it, then the theater
+ * Ladda upp SIE-filen: drop one or more SIE 4 files, the file's company inks
+ * in, one sentence says what will be read with Ändra behind it, then the theater
  * runs while the server writes, oldest year first. Unmapped accounts are
  * created from the file, no mapping page, no VAT review gate: momskoder
  * for revenue accounts are set on the genomlysning instead. Only a selected
@@ -202,10 +202,10 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
   const facts = useMemo(() => {
     if (ready.length === 0) return []
     const list: { text: string; warn?: boolean }[] = []
+    // The sentence under the file says the years and the verifikat once;
+    // here stand whose file it is and what the sentence does not say.
     if (company) list.push({ text: company })
-    list.push({ text: t('fact_years', { count: nYears }) })
-    list.push({ text: t('fact_vouchers', { count: totalVouchers }) })
-    list.push(unmapped.length === 0 ? { text: t('fact_accounts_known', { count: totalAccounts }) } : { text: t('fact_accounts_new', { count: totalAccounts, created: unmapped.length }) })
+    if (unmapped.length > 0) list.push({ text: t('fact_accounts_new', { count: totalAccounts, created: unmapped.length }) })
     if (obsAccounts.length > 0) list.push({ text: t('fact_obs_to_2999', { accounts: obsAccounts.join(', ') }) })
     if (unresolved.length > 0) list.push({ text: t('accounts_outside_bas', { count: unresolved.length, accounts: unresolved.join(', ') }), warn: true })
     const fileOrgs = new Set<string>()
@@ -216,7 +216,7 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
       list.push({ text: tNotice('sie_org_mismatch', { fileOrg, companyOrg: f.parsed!.preview.companyOrgNumber ?? '?' }), warn: true })
     }
     return list
-  }, [ready.length, company, nYears, totalVouchers, totalAccounts, unmapped.length, obsAccounts, unresolved, orgMismatched, t, tNotice])
+  }, [ready.length, company, totalAccounts, unmapped.length, obsAccounts, unresolved, orgMismatched, t, tNotice])
 
   /* ── import ──────────────────────────────────────────────────────── */
   const lines: TheaterLine[] = [
