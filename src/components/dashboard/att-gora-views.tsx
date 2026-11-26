@@ -10,11 +10,10 @@ import { Button } from '@/components/ui/button'
 import { useViewerLock } from '@/components/ui/viewer-lock'
 import { EmptyState } from '@/components/ui/empty-state'
 import { PAGE_BOTTOM_BAR_PROPS } from '@/components/ui/fab-clearance'
-import { ChevronLeftIcon, ChevronRightIcon, CheckIcon, MagnifyingGlassIcon } from '@/components/icons'
+import { ChevronLeftIcon, ChevronRightIcon, CheckIcon } from '@/components/icons'
 import { CountTile } from '@/components/ui/count-tile'
 import { cn, formatAmount, formatCurrency, formatDate } from '@/lib/utils'
 import { useClockValue } from '@/lib/hooks/use-clock-value'
-import { openCommandPalette } from '@/components/common/open-command-palette'
 import { HEM_ACTION_SLOT_ID } from './hem-slot'
 import { HemPrimaryTaken, StepSummarySink } from './need-count'
 import {
@@ -335,8 +334,6 @@ export function HemCalm({
 
       {resume}
 
-      <AskField label={t('ask_placeholder')} />
-
       {connections}
 
       <nav className="flex flex-wrap gap-x-5 gap-y-1" aria-label={t('foot_label')}>
@@ -349,23 +346,6 @@ export function HemCalm({
         </Link>
       </nav>
     </div>
-  )
-}
-
-/**
- * One field for "what do you want to do": it opens the command palette, which
- * derives its entries (pages, actions, records) with the company's own gates.
- */
-function AskField({ label }: { label: string }) {
-  return (
-    <button
-      type="button"
-      onClick={openCommandPalette}
-      className="flex h-9 w-full max-w-[560px] items-center gap-2.5 rounded-lg bg-control px-3 text-left text-[13px] text-muted-foreground shadow-raised pointer-coarse:h-10 transition-shadow duration-150 hover:shadow-raised-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70"
-    >
-      <MagnifyingGlassIcon className="h-3.5 w-3.5 shrink-0" />
-      {label}
-    </button>
   )
 }
 
