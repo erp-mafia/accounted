@@ -1,4 +1,7 @@
-import { resolveDiscoveryBaseUrl } from '@/lib/api/v1/base-url'
+import {
+  authorizationServerForDiscoveryBase,
+  resolveDiscoveryBaseUrl,
+} from '@/lib/api/v1/base-url'
 
 /** Path of the one protected resource this server advertises: the MCP endpoint. */
 export const MCP_RESOURCE_PATH = '/api/extensions/ext/mcp-server/mcp'
@@ -22,6 +25,8 @@ export const MCP_RESOURCE_PATH = '/api/extensions/ext/mcp-server/mcp'
  * resource against the server URL they were configured with, existing
  * connectors point at the legacy app.gnubok.se domain after the
  * app.accounted.se cutover, and byrå users connect through their brand domain.
+ * The one exception is the authorization server on the legacy host, which is
+ * the canonical one (see authorizationServerForDiscoveryBase).
  */
 export async function buildProtectedResourceMetadata(request: Request): Promise<{
   resource: string
@@ -41,7 +46,7 @@ export async function buildProtectedResourceMetadata(request: Request): Promise<
 
   return {
     resource: resource.toString(),
-    authorization_servers: [appUrl],
+    authorization_servers: [authorizationServerForDiscoveryBase(appUrl)],
     scopes_supported: ['mcp'],
   }
 }

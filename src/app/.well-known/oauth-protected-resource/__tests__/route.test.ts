@@ -33,7 +33,7 @@ describe('MCP protected-resource discovery', () => {
     expect(body.authorization_servers).toEqual(['https://byra.example.se'])
   })
 
-  it('keeps the legacy MCP resource unchanged by default', async () => {
+  it('keeps the legacy MCP resource and names the canonical authorization server', async () => {
     vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://app.accounted.se')
 
     const response = await GET(
@@ -46,7 +46,9 @@ describe('MCP protected-resource discovery', () => {
     expect(body.resource).toBe(
       'https://app.gnubok.se/api/extensions/ext/mcp-server/mcp'
     )
-    expect(body.authorization_servers).toEqual(['https://app.gnubok.se'])
+    // The legacy host's login page forwards to the canonical host, so the
+    // sign-in finishes there and its `iss` is the canonical issuer.
+    expect(body.authorization_servers).toEqual(['https://app.accounted.se'])
   })
 
   it('advertises the exact Accounted namespace resource when requested', async () => {

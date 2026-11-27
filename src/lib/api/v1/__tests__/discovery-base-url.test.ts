@@ -7,7 +7,7 @@ vi.mock('@/lib/branding/resolve', () => ({
   resolveBrandResultByHost: (...args: unknown[]) => resolveBrandResultByHostMock(...args),
 }))
 
-import { resolveDiscoveryBaseUrl } from '../base-url'
+import { authorizationServerForDiscoveryBase, resolveDiscoveryBaseUrl } from '../base-url'
 
 const CANONICAL = 'https://app.accounted.se'
 const BRAND_HOST = 'byra.example.se'
@@ -114,5 +114,23 @@ describe('resolveDiscoveryBaseUrl', () => {
     expect(await resolveDiscoveryBaseUrl(requestWithHost('App.Gnubok.SE'))).toBe(
       'https://app.gnubok.se',
     )
+  })
+})
+
+describe('authorizationServerForDiscoveryBase', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  it('names the canonical authorization server for the legacy host', () => {
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', CANONICAL)
+    expect(authorizationServerForDiscoveryBase('https://app.gnubok.se')).toBe(CANONICAL)
+  })
+
+  it('keeps the canonical host, brand domains and localhost as their own authorization server', () => {
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', CANONICAL)
+    expect(authorizationServerForDiscoveryBase(CANONICAL)).toBe(CANONICAL)
+    expect(authorizationServerForDiscoveryBase(`https://${BRAND_HOST}`)).toBe(`https://${BRAND_HOST}`)
+    expect(authorizationServerForDiscoveryBase('http://localhost:3000')).toBe('http://localhost:3000')
   })
 })
