@@ -15,12 +15,14 @@ export interface LateInterestInvoiceRef {
 
 /**
  * Paid in full (an open remainder still earns interest, so the amount is not
- * final), not charged by a räntefaktura already, and some interest to charge.
+ * final), not charged by a räntefaktura already, some interest to charge, and
+ * a customer to send the räntefaktura to.
  */
 export function isLateInterestChargeable(row: {
   fully_paid: boolean
   interest_invoice: LateInterestInvoiceRef | null
   interest: number
+  customer_id: string | null
 }): boolean {
-  return row.fully_paid && row.interest_invoice === null && row.interest > 0
+  return row.fully_paid && row.interest_invoice === null && row.interest > 0 && row.customer_id !== null
 }

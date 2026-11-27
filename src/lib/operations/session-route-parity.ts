@@ -601,9 +601,9 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/invoices/:id/send-payment-confirmation': gap('P3', 'email a betalningsbekräftelse'),
   'POST /api/invoices/:id/resend': gap('P3', 'email an already emailed invoice again as a copy (crm#1339)'),
   'POST /api/invoices/self-billed': covered([`POST ${V}/invoices`], 'is_self_billed: true runs the same service (createSelfBilledSaleInvoice); gnubok_create_invoice has no such argument'),
-  'POST /api/invoices/late-payment-interest/invoices': covered(
-    [`POST ${V}/invoices`],
-    'the same draft from the figures of the late-payment-interest read (lines on 8313, vat_treatment outside_scope); only this door marks the charged invoices on the report, and gnubok_create_invoice takes no vat_treatment',
+  'POST /api/invoices/late-payment-interest/invoices': gap(
+    'P2',
+    'create räntefakturor that mark the invoices they charge; POST /invoices makes the same draft (lines on 8313, vat_treatment outside_scope) but leaves the interest chargeable on the report',
   ),
   'POST /api/invoices/preview-pdf': uiOnly(PREVIEW),
   'POST /api/invoices/preview-email': uiOnly(PREVIEW),
@@ -1187,4 +1187,4 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * on a Fortnox connection (PUT .../arcim-migration/fortnox-topup), new and
  * dashboard-only, as the nightly syncs of the webshop integrations.
  */
-export const GAP_CEILING = 160
+export const GAP_CEILING = 161

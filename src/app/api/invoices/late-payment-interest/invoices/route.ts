@@ -31,6 +31,7 @@ export const POST = withRouteContext(
       companyId,
       userId: user.id,
       invoiceIds: validation.data.invoice_ids,
+      log,
     })
     if (!result.ok) {
       if ('dbError' in result) return errorResponse(result.dbError, log, { requestId })

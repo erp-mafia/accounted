@@ -81,6 +81,9 @@ export function CreateLateInterestInvoicesDialog({
       json = await response.json().catch(() => null)
     } catch (error) {
       toast({ title: t('create_failed_title'), description: getErrorMessage(error, { locale }), variant: 'destructive' })
+      // The drafts may have been made before the answer was lost: read the
+      // page again so it shows what is charged now.
+      onCreated()
       return
     }
     if (!response.ok || !json?.data) {

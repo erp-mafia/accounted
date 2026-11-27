@@ -3642,13 +3642,6 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
       tool: 'gnubok_get_late_payment_interest',
     },
   },
-  LATE_INTEREST_ALREADY_CHARGED: {
-    httpStatus: 409,
-    message_sv:
-      'Räntan på fakturorna lades på en annan räntefaktura medan den här skapades. Inget nytt utkast sparades. Ladda om sidan Dröjsmålsränta.',
-    message_en:
-      'The interest on these invoices was put on another interest invoice while this one was being created. No new draft was kept. Reload the Late payment interest page.',
-  },
   LATE_INTEREST_FX_RATE_UNAVAILABLE: {
     httpStatus: 502,
     message_sv:

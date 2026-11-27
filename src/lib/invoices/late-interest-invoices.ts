@@ -17,6 +17,7 @@ import { roundOre } from '@/lib/money'
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import { backfillStandardBASAccounts } from '@/lib/bookkeeping/account-backfill'
 import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
+import type { Logger } from '@/lib/logger'
 
 /**
  * Skapa räntefaktura (the Dröjsmålsränta page): one unnumbered invoice draft
@@ -83,23 +84,36 @@ export function lateInterestLineText(row: LatePaidInvoice, lang: PdfLang): strin
     : `Dröjsmålsränta faktura ${row.invoice_number} (förfallodag ${row.due_date}): ${amount} betalt för sent, sista betalning ${row.last_payment_date}`
 }
 
-/** The draft's message: how the interest was computed. */
-export function lateInterestNotes(report: Pick<LatePaymentInterestReport, 'rate_is_override'>, lang: PdfLang): string {
+/**
+ * The draft's message: how the interest was computed. A private customer is
+ * never charged more than the consumer ceiling, so the agreed rate is said to
+ * stop there (konsumentkreditlagen 4 kap. 4 §).
+ */
+export function lateInterestNotes(
+  report: Pick<LatePaymentInterestReport, 'rate_is_override'>,
+  lang: PdfLang,
+  options: { consumer?: boolean } = {},
+): string {
+  const capped = report.rate_is_override && options.consumer === true
   if (lang === 'en') {
-    return report.rate_is_override
-      ? 'Late payment interest at the agreed rate, from the due date to the payment date of each amount paid late.'
-      : "Late payment interest under the Swedish Interest Act (räntelagen): the Riksbank's reference rate plus eight percentage points a year, from the due date to the payment date of each amount paid late."
+    return capped
+      ? 'Late payment interest at the agreed rate, for a private person at most the reference rate plus 20 percentage points a year, from the due date to the payment date of each amount paid late.'
+      : report.rate_is_override
+        ? 'Late payment interest at the agreed rate, from the due date to the payment date of each amount paid late.'
+        : "Late payment interest under the Swedish Interest Act (räntelagen): the Riksbank's reference rate plus eight percentage points a year, from the due date to the payment date of each amount paid late."
   }
-  return report.rate_is_override
-    ? 'Dröjsmålsränta enligt avtalad räntesats, från förfallodagen till betalningsdagen för varje belopp som betalats för sent.'
-    : 'Dröjsmålsränta enligt räntelagen: Riksbankens referensränta plus åtta procentenheter per år, från förfallodagen till betalningsdagen för varje belopp som betalats för sent.'
+  return capped
+    ? 'Dröjsmålsränta enligt avtalad räntesats, för privatpersoner högst referensräntan plus 20 procentenheter per år, från förfallodagen till betalningsdagen för varje belopp som betalats för sent.'
+    : report.rate_is_override
+      ? 'Dröjsmålsränta enligt avtalad räntesats, från förfallodagen till betalningsdagen för varje belopp som betalats för sent.'
+      : 'Dröjsmålsränta enligt räntelagen: Riksbankens referensränta plus åtta procentenheter per år, från förfallodagen till betalningsdagen för varje belopp som betalats för sent.'
 }
 
 export async function createLateInterestInvoices(
   supabase: SupabaseClient,
-  params: { companyId: string; userId: string; invoiceIds: string[] },
+  params: { companyId: string; userId: string; invoiceIds: string[]; log?: Logger },
 ): Promise<CreateLateInterestInvoicesResult> {
-  const { companyId, userId } = params
+  const { companyId, userId, log } = params
   const requested = [...new Set(params.invoiceIds)]
   const today = todayIsoStockholm()
 
@@ -115,7 +129,7 @@ export async function createLateInterestInvoices(
   const rows = new Map(report.paid_late.map((row) => [row.invoice_id, row]))
   const refused = requested.filter((id) => {
     const row = rows.get(id)
-    return !row || !row.customer_id || !isLateInterestChargeable(row)
+    return !row || !isLateInterestChargeable(row)
   })
   if (requested.length === 0 || refused.length > 0) {
     return { ok: false, code: 'LATE_INTEREST_NOT_CHARGEABLE', details: { invoice_ids: refused } }
@@ -146,18 +160,26 @@ export async function createLateInterestInvoices(
   const failed: FailedLateInterestInvoice[] = []
   for (const groupRows of groups.values()) {
     const outcome = await createOneDraft(supabase, { companyId, userId, today, vatRegistered, report, rows: groupRows })
-    if ('dbError' in outcome) return { ok: false, dbError: outcome.dbError }
-    if (outcome.ok) created.push(outcome.created)
-    else {
-      failed.push({
-        customer_id: groupRows[0].customer_id as string,
-        customer_name: groupRows[0].customer_name,
-        currency: groupRows[0].currency,
-        invoice_ids: groupRows.map((row) => row.invoice_id),
-        code: outcome.code,
-        ...(outcome.details ? { details: outcome.details } : {}),
+    if (outcome.ok) {
+      created.push(outcome.created)
+      continue
+    }
+    // One customer's failure is told beside the drafts already made, never
+    // in their place: a database error included, logged here with its cause.
+    const failure = 'dbError' in outcome ? { code: 'INVOICE_CREATE_INSERT_FAILED' } : outcome
+    if ('dbError' in outcome) {
+      log?.error('late interest draft failed on a database call', outcome.dbError as Error, {
+        customerId: groupRows[0].customer_id,
       })
     }
+    failed.push({
+      customer_id: groupRows[0].customer_id as string,
+      customer_name: groupRows[0].customer_name,
+      currency: groupRows[0].currency,
+      invoice_ids: groupRows.map((row) => row.invoice_id),
+      code: failure.code,
+      ...('details' in failure && failure.details ? { details: failure.details } : {}),
+    })
   }
   return { ok: true, created, failed }
 }
@@ -263,7 +285,7 @@ async function createOneDraft(
       currency: currency as Currency,
       your_reference: yourReferenceForNewInvoice(statedReference, customer) ?? undefined,
       invoice_marking: invoiceMarkingForNewInvoice(statedMarking, customer) ?? undefined,
-      notes: lateInterestNotes(ctx.report, lang),
+      notes: lateInterestNotes(ctx.report, lang, { consumer: customer.customer_type === 'individual' }),
       ...(ctx.vatRegistered ? { vat_treatment: 'outside_scope' as const, delivery_country: null } : {}),
       items,
     },
@@ -307,12 +329,14 @@ async function createOneDraft(
     return { ok: false, dbError: itemsError }
   }
 
-  // Claim the charged invoices, only where no räntefaktura holds them.
+  // Claim the charged invoices, only where they are still paid in full (a
+  // corrected payment can reopen one) and no räntefaktura holds them.
   let claim = supabase
     .from('invoices')
     .update({ late_interest_invoice_id: invoice.id })
     .eq('company_id', companyId)
     .in('id', ids)
+    .eq('status', 'paid')
   claim = released.length > 0
     ? claim.or(`late_interest_invoice_id.is.null,late_interest_invoice_id.in.(${released.join(',')})`)
     : claim.is('late_interest_invoice_id', null)
@@ -320,7 +344,7 @@ async function createOneDraft(
   if (claimError || (claimed ?? []).length !== ids.length) {
     await discard()
     if (claimError) return { ok: false, dbError: claimError }
-    return { ok: false, code: 'LATE_INTEREST_ALREADY_CHARGED', details: { invoice_ids: ids } }
+    return { ok: false, code: 'LATE_INTEREST_NOT_CHARGEABLE', details: { invoice_ids: ids } }
   }
 
   return {

@@ -118,6 +118,8 @@ describe('createLateInterestInvoices', () => {
     })
     expect(findCalls('invoices', 'update')).toEqual([[{ late_interest_invoice_id: 'draft-1' }]])
     expect(findCalls('invoices', 'is')).toContainEqual(['late_interest_invoice_id', null])
+    // Only an invoice still paid in full is claimed: a corrected payment can reopen one.
+    expect(findCalls('invoices', 'eq')).toContainEqual(['status', 'paid'])
   })
 
   it('keeps currencies apart: one draft per customer and currency', async () => {
@@ -144,6 +146,7 @@ describe('createLateInterestInvoices', () => {
     ['not paid in full', row({ fully_paid: false })],
     ['already on a räntefaktura', row({ interest_invoice: { id: 'rf-1', invoice_number: '1060', status: 'sent' } })],
     ['without interest', row({ interest: 0 })],
+    ['without a customer', row({ customer_id: null })],
   ])('refuses an invoice %s and writes nothing', async (_label, refused) => {
     mockReport.mockResolvedValue(report([refused]))
     const result = await createLateInterestInvoices(client, { companyId: 'company-1', userId: 'user-1', invoiceIds: ['inv-1'] })
@@ -189,7 +192,7 @@ describe('createLateInterestInvoices', () => {
     expect(result).toEqual({
       ok: true,
       created: [],
-      failed: [expect.objectContaining({ code: 'LATE_INTEREST_ALREADY_CHARGED', invoice_ids: ['inv-1'] })],
+      failed: [expect.objectContaining({ code: 'LATE_INTEREST_NOT_CHARGEABLE', invoice_ids: ['inv-1'] })],
     })
     // The other click's draft is not a release: only a cancelled one is.
     expect(findCalls('invoices', 'or')).toEqual([])
@@ -211,6 +214,32 @@ describe('createLateInterestInvoices', () => {
     const result = await createLateInterestInvoices(client, { companyId: 'company-1', userId: 'user-1', invoiceIds: ['inv-1'] })
     expect(result.ok && result.created).toHaveLength(1)
     expect(findCalls('invoices', 'or')).toEqual([['late_interest_invoice_id.is.null,late_interest_invoice_id.in.(rf-old)']])
+  })
+
+  it("tells a later customer's database error beside the draft already made", async () => {
+    mockReport.mockResolvedValue(report([row(), row({ invoice_id: 'inv-2', customer_id: 'cust-2', customer_name: 'Andra AB' })]))
+    const log = { error: vi.fn() }
+    enqueueMany([
+      { data: { vat_registered: true } },
+      { data: customer },
+      { data: [{ id: 'inv-1', late_interest_invoice_id: null }] },
+      { data: { id: 'draft-1', total: 68.49 } },
+      { data: null },
+      { data: [{ id: 'inv-1' }] },
+      { data: null, error: { message: 'connection reset', code: '08006' } },
+    ])
+    const result = await createLateInterestInvoices(client, {
+      companyId: 'company-1',
+      userId: 'user-1',
+      invoiceIds: ['inv-1', 'inv-2'],
+      log: log as never,
+    })
+    expect(result).toEqual({
+      ok: true,
+      created: [expect.objectContaining({ invoice_id: 'draft-1', customer_id: 'cust-1' })],
+      failed: [expect.objectContaining({ customer_id: 'cust-2', code: 'INVOICE_CREATE_INSERT_FAILED', invoice_ids: ['inv-2'] })],
+    })
+    expect(log.error).toHaveBeenCalledTimes(1)
   })
 
   it('creates nothing for a foreign currency without a Riksbank rate', async () => {
@@ -239,7 +268,14 @@ describe('the räntefaktura text', () => {
 
   it('says how the interest was computed: the statutory rate or the agreed one', () => {
     expect(lateInterestNotes({ rate_is_override: false }, 'sv')).toMatch(/räntelagen: Riksbankens referensränta plus åtta procentenheter/)
-    expect(lateInterestNotes({ rate_is_override: true }, 'sv')).toMatch(/avtalad räntesats/)
+    expect(lateInterestNotes({ rate_is_override: true }, 'sv')).toMatch(/avtalad räntesats, från förfallodagen/)
     expect(lateInterestNotes({ rate_is_override: false }, 'en')).toMatch(/reference rate plus eight percentage points/)
+  })
+
+  it('says a private person is charged the agreed rate only up to the consumer ceiling', () => {
+    expect(lateInterestNotes({ rate_is_override: true }, 'sv', { consumer: true })).toMatch(/högst referensräntan plus 20 procentenheter/)
+    expect(lateInterestNotes({ rate_is_override: true }, 'en', { consumer: true })).toMatch(/at most the reference rate plus 20 percentage points/)
+    // The statutory rate (plus eight) is always under the ceiling: nothing to add.
+    expect(lateInterestNotes({ rate_is_override: false }, 'sv', { consumer: true })).toMatch(/plus åtta procentenheter per år/)
   })
 })

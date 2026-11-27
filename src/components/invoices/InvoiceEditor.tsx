@@ -2079,8 +2079,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // draft page, the MCP approval card and the API responses carry. Empty
   // when there is nothing to explain. Swedish VAT to an EU customer whose
   // reverse charge is blocked needs an explicit confirm before creation.
+  // A räntefaktura's treatment is its own, not the customer's: nothing to explain.
   const vatWarnings =
-    selectedCustomer && vatRegistered ? explainVatTreatment(selectedCustomer, effectiveLineVatRates) : []
+    selectedCustomer && vatRegistered && !outsideScopeOn ? explainVatTreatment(selectedCustomer, effectiveLineVatRates) : []
   const needsSwedishVatAcknowledgement = requiresSwedishVatAcknowledgement(vatWarnings, effectiveLineVatRates)
   // A non-momsregistrerad company never charges VAT: hide the Moms column and
   // book every line momsfritt. `vatRegistered` is the single switch the whole

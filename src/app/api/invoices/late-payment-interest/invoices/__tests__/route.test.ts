@@ -83,10 +83,9 @@ describe('POST /api/invoices/late-payment-interest/invoices', () => {
     )
     expect(status).toBe(201)
     expect(body.data).toEqual({ created, failed: [] })
-    expect(mockCreate).toHaveBeenCalledWith(mockSupabase, {
-      companyId: 'company-1',
-      userId: 'user-1',
-      invoiceIds: [INVOICE_ID, INVOICE_ID],
-    })
+    expect(mockCreate).toHaveBeenCalledWith(
+      mockSupabase,
+      expect.objectContaining({ companyId: 'company-1', userId: 'user-1', invoiceIds: [INVOICE_ID, INVOICE_ID] }),
+    )
   })
 })
