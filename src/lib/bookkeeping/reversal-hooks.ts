@@ -42,6 +42,13 @@ export interface ReversalHookContext {
    * for it. Absent on every other storno.
    */
   readonly leaveCollectedPaymentRows?: true
+  /**
+   * Set only on the stornos of Korrigera lönekörning (reverseEntry option
+   * salaryRunCorrection, lib/salary/correct-run.ts): the run's verifikat are
+   * reversed together and the run is marked corrected after them, so the
+   * salary run hook lets them through. Absent on every other storno.
+   */
+  readonly salaryRunCorrection?: true
 }
 
 /** What an afterReversal gets: the context plus the storno reverseEntry posted. */
@@ -80,6 +87,12 @@ export const REVERSAL_MIRROR_REQUIRED: readonly JournalEntrySourceType[] = Objec
   // A K3 component replacement (lib/bokslut/assets/component-reversal.ts);
   // every other system voucher passes the hook untouched.
   'system',
+  // A supplier invoice's registration, a customer invoice's verifikat and a
+  // salary run's: each hook acts only on a verifikat its invoice or run
+  // points at, and passes every other one untouched.
+  'supplier_invoice_registered',
+  'invoice_created',
+  'salary_payment',
 ] satisfies JournalEntrySourceType[])
 
 /**

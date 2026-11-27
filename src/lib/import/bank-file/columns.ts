@@ -5,6 +5,7 @@
  */
 
 import { parseCSVLine } from './formats/nordea'
+import type { BankFileFormatId, BankFileParseIssue, BankFileParseResult } from './types'
 
 const DELIMITERS = [';', '\t', ','] as const
 
@@ -120,5 +121,24 @@ export function unrecognizedColumnsMessages(
       `Columns found: ${found.length > 0 ? found.join(', ') : 'no header row found'}. ` +
       `The file needs a date column (${orList(expected.date, 'or')}) ` +
       `and an amount column (${orList(expected.amount, 'or')}).${optionalEn}`,
+  }
+}
+
+/** A parse that read no row: the issue that says why, and the file's columns when none was recognized. */
+export function emptyParseResult(
+  format: BankFileFormatId,
+  formatName: string,
+  issue: BankFileParseIssue,
+  columns?: UnrecognizedColumns,
+): BankFileParseResult {
+  return {
+    format,
+    format_name: formatName,
+    transactions: [],
+    date_from: null,
+    date_to: null,
+    issues: [issue],
+    ...(columns ? { unrecognized_columns: columns } : {}),
+    stats: { total_rows: 0, parsed_rows: 0, skipped_rows: 0, total_income: 0, total_expenses: 0 },
   }
 }

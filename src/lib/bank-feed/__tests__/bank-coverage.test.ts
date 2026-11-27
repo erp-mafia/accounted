@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bankCoveredByOpenPayments, bankReached, enableBankingOffers } from '../bank-coverage'
+import { bankCoveredByOpenPayments, bankReached, enableBankingOffers, enableBankingWayOn } from '../bank-coverage'
 
 describe('bankCoveredByOpenPayments', () => {
   it('holds back only the banks missing from the Open Payments list in every country', () => {
@@ -46,5 +46,22 @@ describe('bankReached', () => {
     expect(bankReached('Wise', null)).toBe(false)
     expect(bankReached('Swedbank', false)).toBe(false)
     expect(bankReached('Swedbank', undefined)).toBe(true)
+  })
+})
+
+describe('enableBankingWayOn', () => {
+  it('sends an Enable Banking connection to the switch where the campaign applies and the new provider reaches the bank', () => {
+    expect(enableBankingWayOn('Swedbank', true)).toBe('switch')
+    expect(enableBankingWayOn('Svea Bank', true)).toBe('switch')
+  })
+
+  it('sends it to the bank file import where the new provider does not reach the bank', () => {
+    expect(enableBankingWayOn('Wise', true)).toBe('import')
+    expect(enableBankingWayOn('Nordea First Card', true)).toBe('import')
+  })
+
+  it('sends it to the bank file import where the campaign does not apply to the company, whatever the bank', () => {
+    expect(enableBankingWayOn('Swedbank', false)).toBe('import')
+    expect(enableBankingWayOn('Wise', false)).toBe('import')
   })
 })
