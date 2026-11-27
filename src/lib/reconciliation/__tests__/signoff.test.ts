@@ -597,7 +597,7 @@ describe('signOffAccount: the bank balance on the through-date', () => {
 
   describe('a stated balance on a bank account no bank connection feeds', () => {
     // signOffAccount reads the fiscal period first, then the cash account.
-    function supabaseFor(cashAccount: { bank_connection_id: string | null }) {
+    function supabaseFor(cashAccount: { bank_connection_id: string | null } | null) {
       const mock = createQueuedMockSupabase()
       mock.enqueueMany([{ data: null }, { data: cashAccount }])
       return mock
@@ -648,6 +648,14 @@ describe('signOffAccount: the bank balance on the through-date', () => {
       const { supabase } = supabaseFor({ bank_connection_id: '33333333-3333-4333-8333-333333333333' })
       statusMock.mockResolvedValue(noBankBalance())
       await expect(sign(supabase, false, { external_balance: 8150.5 })).rejects.toMatchObject({ code: 'EXTERNAL_BALANCE_NOT_ALLOWED' })
+      expect(insertMock).not.toHaveBeenCalled()
+    })
+
+    it('takes none for an account whose row is gone by the time it is read', async () => {
+      statusMock.mockResolvedValue(noBankBalance())
+      await expect(sign(supabaseFor(null).supabase, false, { external_balance: 8150.5 })).rejects.toMatchObject({
+        code: 'EXTERNAL_BALANCE_NOT_ALLOWED',
+      })
       expect(insertMock).not.toHaveBeenCalled()
     })
 

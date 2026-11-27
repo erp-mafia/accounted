@@ -186,7 +186,9 @@ async function fiscalPeriodStartFor(
 /**
  * Whether a bank connection feeds the cash account: the same test the
  * account list makes for its source (psd2 when it has one). A failed read
- * is no answer, so it throws rather than let a stated balance through.
+ * is no answer, so it throws rather than let a stated balance through, and a
+ * row that is gone (removed while the sign-off ran) counts as connected:
+ * only an account known to have no connection takes a stated balance.
  */
 async function hasBankConnection(supabase: SupabaseClient, companyId: string, cashAccountId: string): Promise<boolean> {
   const { data, error } = await supabase
@@ -196,7 +198,8 @@ async function hasBankConnection(supabase: SupabaseClient, companyId: string, ca
     .eq('id', cashAccountId)
     .maybeSingle()
   if (error) throw new Error(`Kunde inte läsa kassakontot: ${error.message}`)
-  return Boolean((data as { bank_connection_id?: string | null } | null)?.bank_connection_id)
+  const row = data as { bank_connection_id?: string | null } | null
+  return row === null || Boolean(row.bank_connection_id)
 }
 
 /**

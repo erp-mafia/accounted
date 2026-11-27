@@ -26,8 +26,9 @@ import { ALL_OPERATIONS } from '../registry'
 const COMPANY_ID = '11111111-1111-4111-8111-111111111111'
 const USER_ID = '22222222-2222-4222-8222-222222222222'
 
-function ctx() {
-  const { supabase } = createQueuedMockSupabase()
+function ctx(settings: Record<string, unknown> | null = null) {
+  const { supabase, enqueue } = createQueuedMockSupabase()
+  enqueue({ data: settings }) // company_settings: the sandbox guard
   return { supabase: supabase as never, companyId: COMPANY_ID, userId: USER_ID, log: createLogger('test') }
 }
 
@@ -88,6 +89,12 @@ describe('exchange-rates.get', () => {
   it('refuses a day after today without asking Riksbanken', async () => {
     const outcome = await exchangeRatesGet.run(ctx(), { currency: 'EUR', date: '2026-11-28' }, { dryRun: false })
     expect(outcome).toMatchObject({ ok: false, code: 'VALIDATION_ERROR', details: { field: 'date' } })
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('never asks Riksbanken for a sandbox company, as the app\'s own rate route does not', async () => {
+    const outcome = await exchangeRatesGet.run(ctx({ is_sandbox: true }), { currency: 'EUR', date: '2026-10-31' }, { dryRun: false })
+    expect(outcome).toEqual({ ok: false, code: 'EXCHANGE_RATE_SANDBOX' })
     expect(fetchMock).not.toHaveBeenCalled()
   })
 

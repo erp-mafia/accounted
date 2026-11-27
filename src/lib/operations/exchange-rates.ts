@@ -16,6 +16,7 @@ import { fetchExchangeRate, isExchangeRateTemporarilyUnavailable } from '@/lib/c
 import { RIKSBANKEN_CURRENCIES } from '@/lib/currency/riksbanken-currencies'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { saneIsoDateSchema } from '@/lib/invariants/zod'
+import { isSandboxCompany } from '@/lib/sandbox/guard'
 import { defineOperation, type OperationOutcome } from './types'
 
 const META = { request_id: 'req_…', api_version: '2026-05-12' }
@@ -91,7 +92,7 @@ export const exchangeRatesGet = defineOperation({
     date: saneIsoDateSchema.optional().describe('The day (YYYY-MM-DD), not after today. Default: today in Sweden.'),
   }),
   output: exchangeRateOutputSchema,
-  errorCodes: ['VALIDATION_ERROR'],
+  errorCodes: ['VALIDATION_ERROR', 'EXCHANGE_RATE_SANDBOX'],
   mcp: {
     name: 'gnubok_get_exchange_rate',
     title: 'Get Exchange Rate',
@@ -123,6 +124,9 @@ export const exchangeRatesGet = defineOperation({
         messageEn: 'The date is after today. Riksbanken publishes no rate ahead.',
       }
     }
+    // Riksbanken limits requests per IP: a demo company never spends that
+    // budget, as on GET /api/currency/rate.
+    if (await isSandboxCompany(ctx.supabase, ctx.companyId)) return { ok: false, code: 'EXCHANGE_RATE_SANDBOX' }
     const found = await fetchExchangeRate(input.currency, new Date(`${day}T00:00:00Z`), ctx.supabase)
     if (!found) {
       return {

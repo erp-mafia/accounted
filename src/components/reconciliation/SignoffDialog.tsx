@@ -160,6 +160,8 @@ export function SignoffDialog({
   // engine's number from the page tile (or "unknown") stands in.
   const asksBalance = askExternalBalance || askStatementBalance
   const stated = asksBalance ? parseAmountInput(external) : null
+  // Typed but not a number: never signed as if nothing were typed.
+  const statedUnreadable = asksBalance && external.trim() !== '' && stated == null
   const blocked = preview?.kind === 'blocked' ? preview.message : null
   const previewUnexplained = preview && preview.kind !== 'blocked' ? preview.unexplained : unexplained
   const previewBank = !previewing && preview && preview.kind !== 'blocked' ? (preview.bank ?? null) : null
@@ -204,6 +206,7 @@ export function SignoffDialog({
     !busy &&
     !previewing &&
     blocked === null &&
+    !statedUnreadable &&
     date.length === 10 &&
     (!needsForce || (force && note.trim().length > 0))
 
@@ -302,6 +305,11 @@ export function SignoffDialog({
                 placeholder="0,00"
                 className="tabular-nums"
               />
+              {statedUnreadable && (
+                <p role="alert" className="text-xs text-destructive">
+                  {t('signoff_balance_unreadable')}
+                </p>
+              )}
               <p className="text-xs text-muted-foreground">
                 {askStatementBalance
                   ? bookedForStated != null
