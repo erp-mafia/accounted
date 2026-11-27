@@ -57,4 +57,6 @@ export const SE_BAS_ACCOUNT_ROLES: Readonly<Record<AccountRole, string>> = Objec
   foreign_per_diem_tax_free: '7323',
   /** 7324 Skattepliktiga traktamenten, utlandet. */
   foreign_per_diem_taxable: '7324',
+  /** 8313 Ränteintäkter från kortfristiga fordringar. */
+  late_payment_interest_income: '8313',
 })

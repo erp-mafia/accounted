@@ -5604,7 +5604,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                   lang: documentLanguage,
                   showOcr: companySettings?.invoice_show_ocr ?? true,
                 })}
-                terms={paymentTermsTexts(companySettings, documentLanguage)}
+                terms={paymentTermsTexts(companySettings, documentLanguage, {
+                  lateInterestInvoice: initial?.is_late_interest_invoice === true,
+                })}
                 canEditCompany={isCompanyAdmin && canWrite}
                 addForm={
                   addingPayee ? (

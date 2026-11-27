@@ -14,6 +14,9 @@ import { yourReferenceForNewInvoice } from '@/lib/customers/invoice-reference'
 import { invoiceMarkingForNewInvoice } from '@/lib/customers/invoice-marking'
 import { invoiceDueDate, todayIsoStockholm } from '@/lib/dates/iso'
 import { roundOre } from '@/lib/money'
+import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
+import { backfillStandardBASAccounts } from '@/lib/bookkeeping/account-backfill'
+import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
 
 /**
  * Skapa räntefaktura (the Dröjsmålsränta page): one unnumbered invoice draft
@@ -31,6 +34,9 @@ import { roundOre } from '@/lib/money'
  * (ML 8 kap. 2-3 §§). A seller outside the VAT register states no treatment
  * at all; its lines are momsfri like every other line it writes.
  *
+ * 8313 is seeded into the company's chart when it is missing (a seeded chart
+ * starts without it), never reactivated when the company turned it off.
+ *
  * The draft is marked is_late_interest_invoice, so it earns no dröjsmålsränta
  * of its own and prints no late-payment terms. Each invoice it charges gets
  * late_interest_invoice_id, set only where no räntefaktura holds it (a
@@ -39,8 +45,8 @@ import { roundOre } from '@/lib/money'
  * no number. Deleting a draft frees its invoices (ON DELETE SET NULL).
  */
 
-/** The account the interest is booked on: Ränteintäkter från kortfristiga fordringar. */
-export const LATE_INTEREST_ACCOUNT = '8313'
+/** The account the interest is booked on (BAS 8313, Ränteintäkter från kortfristiga fordringar). */
+export const LATE_INTEREST_ACCOUNT = resolveAccountRole(PINNED_JURISDICTION, 'late_payment_interest_income')
 
 export interface CreatedLateInterestInvoice {
   /** The räntefaktura draft. */
@@ -123,6 +129,11 @@ export async function createLateInterestInvoices(
   if (settingsError) return { ok: false, dbError: settingsError }
   const vatRegistered = (settings as { vat_registered?: boolean | null } | null)?.vat_registered !== false
 
+  // A company chart starts small, without 8313: seed the BAS account, as the
+  // engine does for its own accounts. One the company deactivated stays so,
+  // and the builder says the account is not active.
+  await backfillStandardBASAccounts(supabase, companyId, userId, [LATE_INTEREST_ACCOUNT])
+
   // One draft per customer and currency: an invoice has one currency.
   const groups = new Map<string, LatePaidInvoice[]>()
   for (const id of requested) {
@@ -189,6 +200,45 @@ async function createOneDraft(
     return { ok: false, dbError: error }
   }
 
+  // The invoices charged: their Märkning and Er referens carry over when
+  // they all state the same one (a räntefaktura answers those invoices), and
+  // their stored links decide the claim below.
+  const ids = rows.map((row) => row.invoice_id)
+  const { data: sourceRows, error: sourcesError } = await supabase
+    .from('invoices')
+    .select('id, late_interest_invoice_id, invoice_marking, your_reference')
+    .eq('company_id', companyId)
+    .in('id', ids)
+  if (sourcesError) return { ok: false, dbError: sourcesError }
+  const sources = (sourceRows ?? []) as Array<{
+    late_interest_invoice_id: string | null
+    invoice_marking: string | null
+    your_reference: string | null
+  }>
+  const shared = (values: Array<string | null>): string | null => {
+    const set = new Set(values.map((value) => value?.trim() ?? ''))
+    const [only] = [...set]
+    return set.size === 1 && only ? only : null
+  }
+
+  // A stored link is released only by a cancelled räntefaktura. A link to
+  // any other (a draft another click made since the report was read) is a
+  // claim that stands, so the claim below matches fewer rows and this
+  // draft goes.
+  const linked = [...new Set(sources.map((source) => source.late_interest_invoice_id).filter((id): id is string => !!id))]
+  let released: string[] = []
+  if (linked.length > 0) {
+    const { data: targets, error: targetsError } = await supabase
+      .from('invoices')
+      .select('id, status')
+      .eq('company_id', companyId)
+      .in('id', linked)
+    if (targetsError) return { ok: false, dbError: targetsError }
+    released = ((targets ?? []) as Array<{ id: string; status: string }>)
+      .filter((target) => target.status === 'cancelled')
+      .map((target) => target.id)
+  }
+
   const items: InvoiceWriteInput['items'] = rows.map((row) => ({
     line_type: 'product',
     description: lateInterestLineText(row, lang),
@@ -199,6 +249,8 @@ async function createOneDraft(
     revenue_account: LATE_INTEREST_ACCOUNT,
   }))
 
+  const statedMarking = shared(sources.map((source) => source.invoice_marking))
+  const statedReference = shared(sources.map((source) => source.your_reference))
   const build = await buildInvoiceWriteData({
     supabase,
     companyId,
@@ -209,8 +261,8 @@ async function createOneDraft(
       invoice_date: today,
       due_date: dueDate,
       currency: currency as Currency,
-      your_reference: yourReferenceForNewInvoice(null, customer) ?? undefined,
-      invoice_marking: invoiceMarkingForNewInvoice(null, customer) ?? undefined,
+      your_reference: yourReferenceForNewInvoice(statedReference, customer) ?? undefined,
+      invoice_marking: invoiceMarkingForNewInvoice(statedMarking, customer) ?? undefined,
       notes: lateInterestNotes(ctx.report, lang),
       ...(ctx.vatRegistered ? { vat_treatment: 'outside_scope' as const, delivery_country: null } : {}),
       items,
@@ -222,7 +274,7 @@ async function createOneDraft(
   }
   // Never book a foreign amount 1:1 as kronor (as convertToInvoice and the
   // order path): the builder leaves the rate null when Riksbanken has none.
-  if (currency !== 'SEK' && build.invoiceFields.exchange_rate == null) {
+  if (!isLedgerCurrency(currency) && build.invoiceFields.exchange_rate == null) {
     return { ok: false, code: 'LATE_INTEREST_FX_RATE_UNAVAILABLE', details: { currency } }
   }
 
@@ -255,45 +307,7 @@ async function createOneDraft(
     return { ok: false, dbError: itemsError }
   }
 
-  // Claim the charged invoices, only where no räntefaktura holds them: a
-  // link to a cancelled one is released, any other link means someone else
-  // charged it first.
-  const ids = rows.map((row) => row.invoice_id)
-  const { data: links, error: linksError } = await supabase
-    .from('invoices')
-    .select('id, late_interest_invoice_id')
-    .eq('company_id', companyId)
-    .in('id', ids)
-  if (linksError) {
-    await discard()
-    return { ok: false, dbError: linksError }
-  }
-  const linked = [
-    ...new Set(
-      ((links ?? []) as Array<{ late_interest_invoice_id: string | null }>)
-        .map((link) => link.late_interest_invoice_id)
-        .filter((id): id is string => !!id),
-    ),
-  ]
-  // A stored link is released only by a cancelled räntefaktura. A link to
-  // any other (a draft another click made since the report was read) is a
-  // claim that stands, so the update below matches fewer rows and this
-  // draft goes.
-  let released: string[] = []
-  if (linked.length > 0) {
-    const { data: targets, error: targetsError } = await supabase
-      .from('invoices')
-      .select('id, status')
-      .eq('company_id', companyId)
-      .in('id', linked)
-    if (targetsError) {
-      await discard()
-      return { ok: false, dbError: targetsError }
-    }
-    released = ((targets ?? []) as Array<{ id: string; status: string }>)
-      .filter((target) => target.status === 'cancelled')
-      .map((target) => target.id)
-  }
+  // Claim the charged invoices, only where no räntefaktura holds them.
   let claim = supabase
     .from('invoices')
     .update({ late_interest_invoice_id: invoice.id })

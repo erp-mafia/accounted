@@ -8,6 +8,7 @@
 
 import type { EntityType, VatTreatment } from '@/types'
 import { templateAccountForForm } from '@/lib/company/entity-type'
+import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 
 /**
  * Stable code for the "foreign-currency customer invoice without a rate"
@@ -89,10 +90,9 @@ export function getRevenueAccount(
       return templateAccountForForm(entityType, '3100', '3004') ?? '3100'
     case 'outside_scope':
       // Not a supply made in Sweden, so no ruta: today dröjsmålsränta on a
-      // räntefaktura (Ränteintäkter från kortfristiga fordringar). Its lines
-      // carry their own account (the builder requires one); this is the
-      // fallback for a line read without it.
-      return '8313'
+      // räntefaktura. Its lines carry their own account (the builder
+      // requires one); this is the fallback for a line read without it.
+      return resolveAccountRole(PINNED_JURISDICTION, 'late_payment_interest_income')
     default:
       return '3001'
   }

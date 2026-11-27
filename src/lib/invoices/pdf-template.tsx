@@ -443,14 +443,12 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
   // document that asks for a payment: never on a quote, a kreditfaktura or a
   // följesedel. In the invoice's language: the English texts on an English
   // invoice, each falling back to the Swedish one (crm#1735).
-  const { lateFee, creditTerms } = invoiceFinePrint(company, lang)
-  // A räntefaktura states no dröjsmålsränta of its own: it charges the
-  // interest, and on a claim without a due date agreed in advance the
-  // statement is what would start new interest (räntelagen 4 §).
-  const chargesLateFee = !invoice.is_late_interest_invoice
+  const { lateFee, creditTerms } = invoiceFinePrint(company, lang, {
+    lateInterestInvoice: invoice.is_late_interest_invoice === true,
+  })
   const finePrint = isQuote || isDeliveryNote || isCreditNote
     ? []
-    : [chargesLateFee ? lateFee : null, creditTerms].filter((t): t is string => t !== null)
+    : [lateFee, creditTerms].filter((t): t is string => t !== null)
   const finePrintTravelsWhole = fitsOnOnePage(finePrint.join('\n'), FULL_WIDTH_BOX_PT, FINE_PRINT_KEEP_TOGETHER_LINES)
   const finePrintBlock = finePrint.length > 0 ? (
     <View style={styles.finePrint}>

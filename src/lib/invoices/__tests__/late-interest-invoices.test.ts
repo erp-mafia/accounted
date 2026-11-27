@@ -17,6 +17,11 @@ vi.mock('@/lib/invoices/due-date', () => ({
   loadInvoiceTerms: vi.fn().mockResolvedValue(30),
 }))
 
+const mockBackfill = vi.fn()
+vi.mock('@/lib/bookkeeping/account-backfill', () => ({
+  backfillStandardBASAccounts: (...args: unknown[]) => mockBackfill(...args),
+}))
+
 import { createLateInterestInvoices, lateInterestLineText, lateInterestNotes, LATE_INTEREST_ACCOUNT } from '../late-interest-invoices'
 
 const { supabase, enqueueMany, reset, findCall, findCalls } = createQueuedMockSupabase()
@@ -65,6 +70,7 @@ describe('createLateInterestInvoices', () => {
     vi.clearAllMocks()
     reset()
     mockBuild.mockResolvedValue(BUILT)
+    mockBackfill.mockResolvedValue(['8313'])
   })
 
   it('makes one unnumbered draft per customer: 0 % lines on 8313, outside the scope of Swedish VAT, and claims the invoices', async () => {
@@ -72,9 +78,14 @@ describe('createLateInterestInvoices', () => {
     enqueueMany([
       { data: { vat_registered: true } },
       { data: customer },
+      {
+        data: [
+          { id: 'inv-1', late_interest_invoice_id: null, invoice_marking: 'PO 77', your_reference: 'Anna' },
+          { id: 'inv-2', late_interest_invoice_id: null, invoice_marking: 'PO 77 ', your_reference: 'Bo' },
+        ],
+      },
       { data: { id: 'draft-1', total: 78.49 } },
       { data: null },
-      { data: [{ id: 'inv-1', late_interest_invoice_id: null }, { id: 'inv-2', late_interest_invoice_id: null }] },
       { data: [{ id: 'inv-1' }, { id: 'inv-2' }] },
     ])
 
@@ -86,6 +97,9 @@ describe('createLateInterestInvoices', () => {
       failed: [],
     })
     const input = mockBuild.mock.calls[0][0].input
+    // The charged invoices share their Märkning, so it carries over; their Er referens differ, so the card's.
+    expect(input.invoice_marking).toBe('PO 77')
+    expect(input.your_reference).toBeUndefined()
     expect(input.vat_treatment).toBe('outside_scope')
     expect(input.delivery_country).toBeNull()
     expect(input.items).toEqual([
@@ -93,6 +107,8 @@ describe('createLateInterestInvoices', () => {
       expect.objectContaining({ quantity: 1, unit_price: 10, vat_rate: 0, revenue_account: LATE_INTEREST_ACCOUNT }),
     ])
     expect(LATE_INTEREST_ACCOUNT).toBe('8313')
+    // Most charts start without 8313: the BAS account is seeded first.
+    expect(mockBackfill).toHaveBeenCalledWith(client, 'company-1', 'user-1', ['8313'])
     expect(findCall('invoices', 'insert')?.[0]).toMatchObject({
       invoice_number: null,
       status: 'draft',
@@ -110,14 +126,14 @@ describe('createLateInterestInvoices', () => {
     enqueueMany([
       { data: { vat_registered: true } },
       { data: customer },
+      { data: [{ id: 'inv-1', late_interest_invoice_id: null }] },
       { data: { id: 'draft-sek', total: 68.49 } },
       { data: null },
-      { data: [{ id: 'inv-1', late_interest_invoice_id: null }] },
       { data: [{ id: 'inv-1' }] },
       { data: customer },
+      { data: [{ id: 'inv-eur', late_interest_invoice_id: null }] },
       { data: { id: 'draft-eur', total: 68.49 } },
       { data: null },
-      { data: [{ id: 'inv-eur', late_interest_invoice_id: null }] },
       { data: [{ id: 'inv-eur' }] },
     ])
     const result = await createLateInterestInvoices(client, { companyId: 'company-1', userId: 'user-1', invoiceIds: ['inv-1', 'inv-eur'] })
@@ -133,6 +149,7 @@ describe('createLateInterestInvoices', () => {
     const result = await createLateInterestInvoices(client, { companyId: 'company-1', userId: 'user-1', invoiceIds: ['inv-1'] })
     expect(result).toEqual({ ok: false, code: 'LATE_INTEREST_NOT_CHARGEABLE', details: { invoice_ids: ['inv-1'] } })
     expect(findCall('invoices', 'insert')).toBeUndefined()
+    expect(mockBackfill).not.toHaveBeenCalled()
   })
 
   it('refuses an invoice the report does not list', async () => {
@@ -146,9 +163,9 @@ describe('createLateInterestInvoices', () => {
     enqueueMany([
       { data: { vat_registered: false } },
       { data: customer },
+      { data: [{ id: 'inv-1', late_interest_invoice_id: null }] },
       { data: { id: 'draft-1', total: 68.49 } },
       { data: null },
-      { data: [{ id: 'inv-1', late_interest_invoice_id: null }] },
       { data: [{ id: 'inv-1' }] },
     ])
     await createLateInterestInvoices(client, { companyId: 'company-1', userId: 'user-1', invoiceIds: ['inv-1'] })
@@ -160,10 +177,10 @@ describe('createLateInterestInvoices', () => {
     enqueueMany([
       { data: { vat_registered: true } },
       { data: customer },
-      { data: { id: 'draft-2', total: 68.49 } },
-      { data: null },
       { data: [{ id: 'inv-1', late_interest_invoice_id: 'draft-1' }] },
       { data: [{ id: 'draft-1', status: 'draft' }] },
+      { data: { id: 'draft-2', total: 68.49 } },
+      { data: null },
       { data: [] },
       { data: null },
       { data: null },
@@ -185,10 +202,10 @@ describe('createLateInterestInvoices', () => {
     enqueueMany([
       { data: { vat_registered: true } },
       { data: customer },
-      { data: { id: 'draft-2', total: 68.49 } },
-      { data: null },
       { data: [{ id: 'inv-1', late_interest_invoice_id: 'rf-old' }] },
       { data: [{ id: 'rf-old', status: 'cancelled' }] },
+      { data: { id: 'draft-2', total: 68.49 } },
+      { data: null },
       { data: [{ id: 'inv-1' }] },
     ])
     const result = await createLateInterestInvoices(client, { companyId: 'company-1', userId: 'user-1', invoiceIds: ['inv-1'] })
@@ -198,7 +215,7 @@ describe('createLateInterestInvoices', () => {
 
   it('creates nothing for a foreign currency without a Riksbank rate', async () => {
     mockReport.mockResolvedValue(report([row({ currency: 'EUR' })]))
-    enqueueMany([{ data: { vat_registered: true } }, { data: customer }])
+    enqueueMany([{ data: { vat_registered: true } }, { data: customer }, { data: [{ id: 'inv-1', late_interest_invoice_id: null }] }])
     const result = await createLateInterestInvoices(client, { companyId: 'company-1', userId: 'user-1', invoiceIds: ['inv-1'] })
     expect(result).toEqual({
       ok: true,
