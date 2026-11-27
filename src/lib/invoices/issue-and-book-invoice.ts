@@ -528,7 +528,10 @@ async function settleAtIssue(
           bookingError: settled.error,
         }
       case 'UPDATE_FAILED':
+      // Refusals of caller-supplied rows: the kontantfaktura passes none, so
+      // these are not reached; fail closed if they ever are.
       case 'INVOICE_PAID_LINES_UNBALANCED':
+      case 'INVOICE_PAID_ORE_LEFT':
         log.error('kontantfaktura: settlement at issue failed', settled.code === 'UPDATE_FAILED' ? settled.error as Error : undefined)
         return { ok: false, errorCode: 'INVOICE_MARK_SENT_BOOK_FAILED' }
       case 'SALE_FIRST_REFUSED':
