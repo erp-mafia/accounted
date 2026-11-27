@@ -2697,6 +2697,7 @@ For an original supplier invoice with status credited: posts a storno cancelling
 **Pitfalls:**
 - Pass the ORIGINAL invoice id, not the credit note's: a credit note's id answers 400 SI_UNCREDIT_CREDIT_NOTE, on a dry run too. details.credited_invoice_id names its original; when it is null the credit note is linked to none and its credit cannot be undone here, so ask the person instead of picking an original. A credit note whose details.credit_note_status is reversed is already undone.
 - The credit note's verifikat must lie in an open, unlocked period: otherwise the dry run answers 400 PERIOD_LOCKED and the commit 400 SI_UNCREDIT_FAILED.
+- Once the underlag the credit released was registered again on another live supplier invoice, the undo answers 409 SI_UNCREDIT_REGISTERED_AGAIN with details.supplier_invoice_id: undone, the credit would book the purchase twice.
 - A credit verifikat already reversed by hand is fine: the row cleanup still runs and reversal_entry_id is null.
 
 | Parameter | In | Type | Required | Notes |
