@@ -132,6 +132,7 @@ export default function OpeningBalanceRowEditor({
   const [autocompleteQuery, setAutocompleteQuery] = useState('')
   const autocompleteRef = useRef<HTMLDivElement>(null)
   const [amountDraft, setAmountDraft] = useState<{ rowId: string; field: AmountField; text: string } | null>(null)
+  const t = useTranslations('import')
   const tCommon = useTranslations('common')
 
   // Hold onChange in a ref so an unstable (inline) callback identity can't
@@ -246,6 +247,19 @@ export default function OpeningBalanceRowEditor({
     setRows((prev) => [...prev, adjustmentRow])
   }, [totals])
 
+  // Double-click a debit or credit field to fill the amount that makes the
+  // difference zero, as the verifikat form does (handleFillBalance): the
+  // difference of every other row, when it is short on this side. Nothing
+  // happens when it is short on the other side or there is none. A figure on
+  // one side clears the other.
+  const fillDifference = (row: EditableRow, field: AmountField) => {
+    const { difference } = lineBalance(rows.filter((r) => r.id !== row.id))
+    const fill = field === 'debit_amount' ? -difference : difference
+    if (fill <= 0) return
+    setAmountDraft(null)
+    updateRow(row.id, field === 'debit_amount' ? { debit_amount: fill, credit_amount: 0 } : { credit_amount: fill, debit_amount: 0 })
+  }
+
   // The field being typed in shows the typed text untouched; the row carries
   // the amount parsed from it. Writing the parsed number back as the text ate
   // a trailing decimal mark and a leading zero on every keystroke (crm#1836).
@@ -255,12 +269,14 @@ export default function OpeningBalanceRowEditor({
       <Input
         inputMode="decimal"
         aria-label={label}
+        title={t('ob_fill_difference_tooltip')}
         value={typing ? amountDraft.text : openingBalanceAmountText(row[field])}
         onChange={(e) => {
           const text = e.target.value
           setAmountDraft({ rowId: row.id, field, text })
           updateRow(row.id, { [field]: openingBalanceDraftAmount(text) })
         }}
+        onDoubleClick={() => fillDifference(row, field)}
         onBlur={() => setAmountDraft(null)}
         placeholder="0,00"
         className="h-8 text-right tabular-nums w-28"

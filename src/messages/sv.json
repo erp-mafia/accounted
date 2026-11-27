@@ -13812,6 +13812,7 @@
     "ob_edit_title": "Granska och redigera",
     "ob_edit_description": "Kontrollera att kontonummer och belopp stämmer. Du kan lägga till, ta bort och ändra rader. Debet och kredit måste balansera innan du kan fortsätta.",
     "ob_edit_continue": "Fortsätt",
+    "ob_fill_difference_tooltip": "Dubbelklicka för att fylla i beloppet som gör differensen noll",
     "ib_continuity_source_edits": "Filens ingående balans skiljer sig från föregående års utgående balans i samma fil på {count, plural, one {# konto} other {# konton}}. Den har troligen ändrats för hand i det gamla programmet. Importen bokför filens ingående balans som den står.",
     "ib_continuity_missing_years": "Räkenskapsår saknas: {from} till {to}. Importera det året också, annars räknas ingående balansen fram från ett äldre år.",
     "ib_continuity_no_vouchers": "Filen innehåller inga verifikationer för året. Hade företaget bokföring då saknas den i filen, och senare års ingående balanser blir fel.",
