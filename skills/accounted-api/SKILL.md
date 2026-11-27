@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 477 endpoints.
+  pagination, scopes), and all 478 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -225,7 +225,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 477 operations. Paths are shown without
+API version `2026-05-12`, 478 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.accounted.se/api/v1`).
 
 ### Core (24)
@@ -481,7 +481,7 @@ DELETE /companies/{companyId}/suppliers/{id} : Archive a supplier (soft-delete) 
 POST /companies/{companyId}/suppliers/bulk-create : Create up to 50 suppliers in one call (partial-success) [scope:suppliers:write risk:low idempotent dry-run reversible]
 ```
 
-### Documents (24)
+### Documents (25)
 
 Full detail: [references/documents.md](references/documents.md)
 
@@ -492,6 +492,7 @@ GET /companies/{companyId}/documents/{id} : Read one document's metadata and wha
 DELETE /companies/{companyId}/documents/{id} : Delete a document that no verifikat or registered record holds [scope:documents:write risk:medium idempotent dry-run]
 GET /companies/{companyId}/documents/{id}/download : Get a time-limited signed download URL for a document [scope:documents:read risk:low idempotent]
 POST /companies/{companyId}/documents/{id}/link : Link a document to a journal entry [scope:documents:write risk:medium idempotent dry-run]
+PUT /companies/{companyId}/documents/{id}/type : Set what an archived document is (its type in Dokument) [scope:documents:write risk:low idempotent dry-run reversible]
 GET /companies/{companyId}/inbox-items : List invoice-inbox items (Underlag) with a summary of what was read from each [scope:documents:read risk:low idempotent]
 POST /companies/{companyId}/inbox-items : Deliver a supplier invoice or receipt into the Inkorg for a person to book [scope:documents:write risk:low idempotent]
 GET /companies/{companyId}/inbox-items/{id} : Read one inbox item with its full reading and e-mail text [scope:documents:read risk:low idempotent]
