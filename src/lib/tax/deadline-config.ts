@@ -6,6 +6,7 @@
 import type { TaxDeadlineType, EntityType, MomsPeriod, TaxFilingMethod } from '@/types'
 import { filesIncomeReturn, fiscalYearLockedToCalendar, isEntityType, preparesForenklatArsbokslut } from '@/lib/company/entity-type'
 import { nextFiscalYearRange } from '@/lib/bookkeeping/suggest-fiscal-period'
+import { isDeclaredFirstFiscalYearName } from '@/lib/company/compute-fiscal-period'
 import { getNextBankingDay, isBankingDay } from './swedish-holidays'
 import { helarsmomsHasEuTrade } from '@/lib/reports/eu-trade'
 import {
@@ -135,6 +136,28 @@ function fromEmployeeEvidenceStart(
 export interface FiscalYearForDeadlines {
   start: string
   end: string
+  /**
+   * The company was created in this räkenskapsår and said it was its first
+   * (isDeclaredFirstFiscalYearName): no year came before it, kept here or
+   * elsewhere.
+   */
+  declaredFirst?: boolean
+}
+
+/** The fiscal_periods columns a FiscalYearForDeadlines is read from. */
+export interface FiscalPeriodRowForDeadlines {
+  name: string | null
+  period_start: string
+  period_end: string
+}
+
+/** One fiscal_periods row as the deadline schedule reads it. */
+export function fiscalYearForDeadlines(row: FiscalPeriodRowForDeadlines): FiscalYearForDeadlines {
+  return {
+    start: row.period_start,
+    end: row.period_end,
+    ...(isDeclaredFirstFiscalYearName(row.name) ? { declaredFirst: true } : {}),
+  }
 }
 
 /** A räkenskapsår a yearly deadline is computed from. */
@@ -294,7 +317,8 @@ function recordedFiscalYears(settings: FiscalCalendar): FiscalYearForDeadlines[]
  *    räkenskapsår starts mid-month only when bokföringsskyldigheten begins
  *    (BFL 3 kap. 1 and 3 §§), so a first period starting mid-month has no
  *    predecessor. One starting on the 1st may follow years kept elsewhere;
- *    that year's obligations are real and stay.
+ *    that year's obligations are real and stay, unless the company declared
+ *    the period its first räkenskapsår (declaredFirst).
  * 3. Where nothing is recorded after a recorded year, the next years chain
  *    from it (nextFiscalYearRange): the years not created yet, and a gap
  *    between two recorded years. One that would run into a recorded period
@@ -328,7 +352,7 @@ export function fiscalYearsEndingIn(
   for (const fy of recorded) add(fy.end, fy.start)
 
   const first = recorded[0]
-  if (first && first.start.endsWith('-01')) {
+  if (first && first.start.endsWith('-01') && !first.declaredFirst) {
     const end = shiftIsoDate(first.start, -1)
     add(end, twelveMonthStart(end))
   }
@@ -383,13 +407,13 @@ export function fiscalYearEndMonthOn(day: string, settings: FiscalCalendar): num
 /**
  * The day the company's bookkeeping began, when its recorded fiscal periods
  * prove it: the first one starts mid-month, which only a company's first
- * räkenskapsår does (BFL 3 kap. 1 and 3 §§). A first period starting on the
- * 1st may follow years kept elsewhere, so it proves nothing and null is
- * returned.
+ * räkenskapsår does (BFL 3 kap. 1 and 3 §§), or the company declared it its
+ * first (declaredFirst). Any other first period starting on the 1st may
+ * follow years kept elsewhere, so it proves nothing and null is returned.
  */
 export function bookkeepingStartFor(settings: CompanySettingsForDeadlines): string | null {
   const first = recordedFiscalYears(settings)[0]
-  return first && !first.start.endsWith('-01') ? first.start : null
+  return first && (first.declaredFirst || !first.start.endsWith('-01')) ? first.start : null
 }
 
 /**
