@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 477 endpoints.
+  pagination, scopes), and all 485 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -225,7 +225,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 477 operations. Paths are shown without
+API version `2026-05-12`, 485 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.accounted.se/api/v1`).
 
 ### Core (24)
@@ -565,7 +565,7 @@ PATCH /companies/{companyId}/owner-loans/{id} : Update an owner loan: outstandin
 POST /companies/{companyId}/owner-loans/{id}/interest : Record the interest on an owner loan for an inkomstår and the tax withheld: the figures KU20 reports [scope:companies:write risk:low idempotent dry-run reversible]
 ```
 
-### Banking (67)
+### Banking (75)
 
 Full detail: [references/banking.md](references/banking.md)
 
@@ -613,6 +613,14 @@ POST /companies/{companyId}/reconciliation/accounts/{accountKey}/signoff : Mark 
 POST /companies/{companyId}/reconciliation/accounts/{accountKey}/signoff/{signoffId}/reopen : Reopen (undo) a reconciliation sign-off [scope:reconciliation:signoff risk:low idempotent dry-run reversible]
 POST /companies/{companyId}/reconciliation/bank/run : Run the bank-reconciliation matcher [scope:transactions:write risk:medium idempotent dry-run]
 GET /companies/{companyId}/reconciliation/bank/status : Bank-reconciliation health snapshot [scope:transactions:read risk:low idempotent]
+GET /companies/{companyId}/spend/connections : The company card and spend platforms the company has connected, with their health and accounts [scope:transactions:read risk:low idempotent]
+POST /companies/{companyId}/spend/connections/{connectionId}/disconnect : Stop receiving a spend platform's expenses [scope:companies:write risk:medium idempotent dry-run reversible]
+PATCH /companies/{companyId}/spend/connections/{connectionId}/settings : Change the accounts a spend platform's expenses book to [scope:companies:write risk:medium idempotent dry-run reversible]
+POST /companies/{companyId}/spend/fetch : Receive waiting spend expenses now instead of waiting for the next run [scope:transactions:write risk:low idempotent dry-run]
+GET /companies/{companyId}/spend/items : The expenses received from the company's card and spend platforms, newest first [scope:transactions:read risk:low idempotent]
+GET /companies/{companyId}/spend/items/{itemId} : One spend expense: its coding, receipts and the verifikat it books as [scope:transactions:read risk:low idempotent]
+POST /companies/{companyId}/spend/items/{itemId}/book : Book one spend expense as its verifikat, with its receipts as underlag [scope:bookkeeping:write risk:high idempotent dry-run]
+POST /companies/{companyId}/spend/items/book : Book several ready spend expenses, each as its own verifikat [scope:bookkeeping:write risk:high idempotent dry-run]
 GET /companies/{companyId}/transactions : List transactions for a company [scope:transactions:read risk:low idempotent]
 GET /companies/{companyId}/transactions/{id} : Retrieve a single transaction by id [scope:transactions:read risk:low idempotent]
 PATCH /companies/{companyId}/transactions/{id} : Edit an unbooked transaction: its working title, or which bank account it belongs to [scope:transactions:write risk:low idempotent dry-run reversible]

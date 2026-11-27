@@ -32,6 +32,8 @@ export interface NavGateContext {
   hasExpenseClaims: boolean
   /** A POS connection exists, live or ended (lib/dashboard/nav-flags.ts). */
   hasPosSales: boolean
+  /** A spend connection exists, live or ended (lib/dashboard/nav-flags.ts). */
+  hasSpend: boolean
   arkivEnabled: boolean
   /**
    * BankID document signing is switched on here (lib/navigation/nav-rollouts.ts):
@@ -125,6 +127,8 @@ export function passesNavGates(item: NavGateFlags, ctx: NavGateContext): boolean
   if (item.requiresExpenses && !ctx.hasExpenseClaims) return false
   // Kassarapporter is hidden until a POS venue has been connected.
   if (item.requiresPosSales && !ctx.hasPosSales) return false
+  // Kortköp is hidden until a spend platform has been connected.
+  if (item.requiresSpend && !ctx.hasSpend) return false
   // Arkiv rolls out per company; outside the rollout the pages 404.
   if (item.requiresArkiv && !ctx.arkivEnabled) return false
   // Signeringar follows the signing switch, as every other signing affordance does.

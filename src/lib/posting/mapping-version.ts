@@ -62,8 +62,11 @@ import { currentAppVersion } from '@/lib/reports/app-version'
  * manual carry's lines name no rule), the balansdagen
  * revaluation (lib/bookkeeping/currency-revaluation.ts), the
  * bokslutsdispositioner (lib/bokslut's calculators), the accrual schedules'
- * monthly dissolutions (lib/bookkeeping/accruals/service.ts) and the year-end
- * wizard's periodiseringar (lib/bokslut/accruals/accrual-detector.ts).
+ * monthly dissolutions (lib/bookkeeping/accruals/service.ts), the year-end
+ * wizard's periodiseringar (lib/bokslut/accruals/accrual-detector.ts) and
+ * the card expense lines from a spend platform's coding (buildSpendItemEntry
+ * in lib/spend/evaluate.ts, with the connection's wallet and utlägg
+ * accounts).
  *
  * The version is the rubric version the producer already records on the
  * verifikat (journal_entries.rubric_version: the proposal rule revision plus
@@ -150,6 +153,10 @@ export const MAPPING_SOURCES = {
   // (lib/bokslut/stock-count): counted value against the 14xx balance per
   // kind of stock, booked against its 49xx förändring account.
   inventoryCount: 'se.inventory-count',
+  // A card expense from a spend platform (lib/spend/evaluate.ts
+  // buildSpendItemEntry): the provider's coding against the wallet or utlägg
+  // account of the connection.
+  spendExpense: 'se.spend-expense',
 } as const
 
 export type MappingSource = keyof typeof MAPPING_SOURCES

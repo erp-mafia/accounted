@@ -54,6 +54,11 @@ import { z } from 'zod'
  * before (the old consent still counts toward the company's quota), and no
  * response changed. A version moved for them would only make every call of a
  * newer installation look ahead of a service not yet re-pinned.
+ *
+ * The spend family (company card and spend platforms: approved, coded
+ * expenses with their receipts, delivered for booking) came later still,
+ * also without a new version, for the same reason: a new family only,
+ * nothing existing changed shape.
  */
 
 export const CONTRACT_VERSION = '2026-10-17'
@@ -2667,3 +2672,481 @@ export type DeliveryOperation = keyof typeof DELIVERY_OPERATIONS
 
 /** Delivery operations that begin new work; `status` serves a delivery already made. */
 export const DELIVERY_START_OPERATIONS = ['methods', 'send'] as const satisfies readonly DeliveryOperation[]
+
+// ---------------------------------------------------------------------------
+// Spend (installation -> service, /api/connect/spend/*)
+// ---------------------------------------------------------------------------
+
+/**
+ * Company card and spend platforms: expenses a person approved and coded at
+ * the provider (account, VAT code, dimensions), each with its receipt files,
+ * delivered to the installation for booking. One provider-neutral family;
+ * which providers exist is answered at runtime (`providers`), never named
+ * here. Conventions:
+ *
+ * - The service holds the integrator credential and the company's grant at
+ *   the provider (OAuth tokens, or an API key the provider issued to the
+ *   company). The installation never sees either: it keeps the connection
+ *   handle `complete` or `connectKey` returned and sends it as
+ *   SPEND_CONNECTION_HEADER. The service keeps only its hash and refuses a
+ *   handle bound to another key or company (CONNECTOR_CONNECTION_NOT_OWNED).
+ * - Connecting through the provider's consent page is a browser round trip.
+ *   `authorize` answers with the consent URL, built on the service's own
+ *   registered redirect URI; the provider sends the browser back to the
+ *   service, which exchanges the code and returns the browser to the
+ *   installation's `returnUrl` with `state` (the installation's own) and
+ *   `result` (opaque). The installation finishes with `complete`, server to
+ *   server. `returnUrl` must be on the connector key's instance.
+ * - The service refuses a connection whose provider company carries a
+ *   Swedish registration number other than `orgNumber`
+ *   (CONNECTOR_SPEND_COMPANY_MISMATCH): one provider company per ledger
+ *   company, never another entity's spend in these books.
+ * - The provider decides when expenses are ready: a person exports them
+ *   there. `expenses` returns what waits for the connection, oldest first.
+ *   Every expense is answered with `acknowledge`: received (the installation
+ *   holds it for booking; a person books it later) or rejected with a code
+ *   and a reason in Swedish, which the provider shows its user. An expense
+ *   left unanswered for SPEND_ACK_DEADLINE_SECONDS is rejected by the
+ *   service so the provider's own deadline never lapses silently; the person
+ *   exports it again and it returns under the same `externalId`, which the
+ *   installation treats as the same expense.
+ * - Amounts are numbers in `currency` (the wallet's), rounded to two
+ *   decimals by the service, signed from the company's side: positive is
+ *   money out of the wallet or owed to the person (a purchase, an utlägg),
+ *   negative is money back (a refund, a chargeback, cashback). Lines carry
+ *   the expense side only; the counter side is the installation's to choose
+ *   from `kind`. Where `lines` is not empty, the service guarantees that
+ *   their amounts sum to `amount`.
+ * - Codes on lines (`account`, `vat.code`, dimension and value codes) are the
+ *   installation's own, as it published them with `masterData`: the service
+ *   passes them through and never translates them.
+ * - `raw` is the provider's answer for the expense verbatim, which the
+ *   installation archives (BFL 7 kap) and never parses.
+ * - Receipt files are copied from the provider by the service when the
+ *   expense is first offered, and kept only until it is acknowledged and at
+ *   most SPEND_FILE_RETENTION_DAYS. `files[].downloadUrl` is a short-lived
+ *   https link to that copy, renewed on every `expenses` call; the
+ *   installation stores the file itself before it acknowledges.
+ * - Writes at the provider: `masterData` (the installation's accounts, VAT
+ *   codes and dimensions, reconciled into the provider: created, renamed,
+ *   archived, never deleted) and `acknowledge` (each expense's outcome).
+ *   Nothing else in this family writes at the provider.
+ */
+export const SPEND_BASE_PATH = '/api/connect/spend'
+
+/** The connector key scope that opens this family. */
+export const SPEND_SCOPE = 'spend'
+
+/** The connection handle header; the same name the other families use. */
+export const SPEND_CONNECTION_HEADER = CONNECTOR_HEADERS.connection
+
+/** In characters: the provider's answer for one expense, verbatim. */
+export const SPEND_MAX_RAW_CHARS = 200_000
+
+/** An expense not acknowledged this long after it was first offered is rejected by the service. */
+export const SPEND_ACK_DEADLINE_SECONDS = 45 * 60
+
+/** The longest the service keeps its copy of a receipt file. */
+export const SPEND_FILE_RETENTION_DAYS = 7
+
+/** The most expenses one `expenses` call answers with. */
+export const SPEND_EXPENSES_PAGE_MAX = 50
+
+/** The most outcomes one `acknowledge` call takes. */
+export const SPEND_ACK_MAX = 100
+
+const spendRefSchema = z.string().trim().min(1).max(128)
+/** An account number or VAT code as the installation published it. */
+const spendCodeSchema = z.string().trim().min(1).max(32)
+const spendDimensionCodeSchema = z.string().trim().min(1).max(40)
+const spendAmountSchema = z.number().finite()
+const spendSha256Schema = z.string().regex(/^[0-9a-f]{64}$/, 'lower-case hex sha256')
+/** A link back to the installation: https, or http on a local instance. */
+const spendInstanceUrlSchema = z.url({ protocol: /^https?$/ }).max(512)
+
+export const SPEND_CONNECT_MODES = ['oauth', 'api_key'] as const
+export const spendConnectModeSchema = z.enum(SPEND_CONNECT_MODES)
+export type SpendConnectMode = z.infer<typeof spendConnectModeSchema>
+
+/** A spend provider as the installation shows it. */
+export const spendProviderSchema = z.object({
+  /** Stable opaque slug; the installation stores it on its connection. */
+  ref: z.string().trim().min(1).max(64),
+  displayName: z.string().trim().min(1).max(80),
+  legalName: z.string().trim().min(1).max(200).nullable(),
+  portalUrl: httpsUrlSchema.nullable(),
+  supportUrl: httpsUrlSchema.nullable(),
+  /** How a company connects: the provider's consent page, an API key the provider issues, or both. */
+  connectModes: z.array(spendConnectModeSchema).min(1),
+  /** The most dimensions the provider takes from `masterData`; the rest are left out. */
+  maxDimensions: z.number().int().min(0).max(20),
+  /** What a person does at the provider after connecting (map categories, the wallet account), in Swedish. Null when nothing. */
+  setupNoteSv: z.string().max(4000).nullable(),
+})
+export type SpendProvider = z.infer<typeof spendProviderSchema>
+
+export const spendProvidersResponseSchema = z.object({
+  /** Providers this key may connect. */
+  providers: z.array(spendProviderSchema),
+  serverTime: z.string(),
+})
+export type SpendProvidersResponse = z.infer<typeof spendProvidersResponseSchema>
+
+export const spendAuthorizeRequestSchema = z.object({
+  provider: z.string().trim().min(1).max(64),
+  orgNumber: orgNumberSchema,
+  /** Where the service sends the browser after the provider's consent page. On the key's instance. */
+  returnUrl: spendInstanceUrlSchema,
+  /** The installation's own CSRF state, returned unchanged. */
+  state: z.string().trim().min(16).max(200),
+})
+export type SpendAuthorizeRequest = z.infer<typeof spendAuthorizeRequestSchema>
+
+export const spendAuthorizeResponseSchema = z.object({
+  /** The provider's consent page; open it in the person's browser. */
+  authorizeUrl: httpsUrlSchema,
+  /** The consent must be finished before this moment. */
+  expiresAt: z.string(),
+})
+export type SpendAuthorizeResponse = z.infer<typeof spendAuthorizeResponseSchema>
+
+export const spendCompleteRequestSchema = z.object({
+  state: z.string().trim().min(16).max(200),
+  /** The opaque `result` the service put on the return URL. */
+  result: z.string().trim().min(16).max(256),
+})
+export type SpendCompleteRequest = z.infer<typeof spendCompleteRequestSchema>
+
+export const spendConnectKeyRequestSchema = z.object({
+  provider: z.string().trim().min(1).max(64),
+  orgNumber: orgNumberSchema,
+  /** The API key the provider issued to the company. In transit only: the service stores it encrypted and never returns it. */
+  apiKey: z.string().trim().min(8).max(512),
+})
+export type SpendConnectKeyRequest = z.infer<typeof spendConnectKeyRequestSchema>
+
+export const spendConnectionSchema = z.object({
+  /** Opaque and secret-free; the installation stores it and sends it as SPEND_CONNECTION_HEADER. A new connect rotates it. */
+  connectionHandle: z.string().min(16).max(256),
+  provider: spendProviderSchema,
+  mode: spendConnectModeSchema,
+  /** The provider's own id of the connected company. */
+  providerCompanyRef: spendRefSchema,
+  providerCompanyName: z.string().trim().min(1).max(200).nullable(),
+  /** The company's registration number as the provider holds it, digits only; null when it holds none. */
+  providerOrgNumber: z.string().regex(/^\d{6,20}$/).nullable(),
+  connectedAt: z.string(),
+})
+export type SpendConnection = z.infer<typeof spendConnectionSchema>
+
+export const spendIssueSchema = z.object({
+  /** Stable, machine readable; the installation decides what each code means for booking. */
+  code: z.string().trim().min(1).max(64),
+  message: z.string().max(500),
+})
+export type SpendIssue = z.infer<typeof spendIssueSchema>
+
+export const spendStatusResponseSchema = z.object({
+  /** reconnect_required: the grant at the provider is gone (revoked, expired); a person connects again. */
+  state: z.enum(['active', 'reconnect_required', 'provider_error']),
+  detail: z.string().max(500).nullable(),
+  /** Expenses offered and not yet acknowledged. */
+  waitingExpenses: z.number().int().min(0),
+  /** When the provider last handed over a batch of expenses. */
+  lastBatchAt: z.string().nullable(),
+  masterData: z.object({
+    receivedAt: z.string().nullable(),
+    appliedAt: z.string().nullable(),
+    state: z.enum(['none', 'pending', 'applied', 'failed']),
+    issues: z.array(spendIssueSchema).max(50),
+  }),
+  serverTime: z.string(),
+})
+export type SpendStatusResponse = z.infer<typeof spendStatusResponseSchema>
+
+/** standard: the VAT is included in the amount; reverse: none was charged and the buyer accounts for it. */
+export const SPEND_VAT_TYPES = ['standard', 'reverse'] as const
+export const spendVatTypeSchema = z.enum(SPEND_VAT_TYPES)
+export type SpendVatType = z.infer<typeof spendVatTypeSchema>
+
+export const spendMasterAccountSchema = z.object({
+  number: spendCodeSchema,
+  name: z.string().trim().min(1).max(200),
+  /** The account's usual VAT code (one of `vatCodes`); a hint for the provider, never applied by the service. */
+  vatCode: spendCodeSchema.nullable(),
+})
+export type SpendMasterAccount = z.infer<typeof spendMasterAccountSchema>
+
+export const spendVatCodeSchema = z.object({
+  /** Upper case letters, digits and underscore; matched without regard to case at the provider. */
+  code: z.string().regex(/^[A-Z0-9_]{1,32}$/),
+  /** Shown to the people coding expenses at the provider. */
+  name: z.string().trim().min(1).max(100),
+  type: spendVatTypeSchema,
+  /** As a fraction: 0.25 for 25 %. */
+  rate: z.number().min(0).max(1),
+  /** For a reverse code: the accounts the buyer books the VAT on, for the provider's display. Null otherwise. */
+  inputVatAccount: spendCodeSchema.nullable(),
+  outputVatAccount: spendCodeSchema.nullable(),
+})
+export type SpendVatCode = z.infer<typeof spendVatCodeSchema>
+
+export const spendDimensionSchema = z.object({
+  code: spendDimensionCodeSchema,
+  name: z.string().trim().min(1).max(100),
+  values: z.array(z.object({ code: spendDimensionCodeSchema, name: z.string().trim().min(1).max(200) })).max(10_000),
+})
+export type SpendDimension = z.infer<typeof spendDimensionSchema>
+
+/**
+ * The installation's coding vocabulary, in full every time: the service
+ * reconciles the provider to it (creates, renames, archives what is no longer
+ * sent; never deletes). Dimensions beyond the provider's maxDimensions are
+ * left out, in the order sent.
+ */
+export const spendMasterDataRequestSchema = z.object({
+  idempotencyKey: idempotencyKeySchema,
+  accounts: z.array(spendMasterAccountSchema).max(11_000),
+  vatCodes: z.array(spendVatCodeSchema).max(100),
+  dimensions: z.array(spendDimensionSchema).max(20),
+})
+export type SpendMasterDataRequest = z.infer<typeof spendMasterDataRequestSchema>
+
+export const spendMasterDataResponseSchema = z.object({
+  accepted: z.literal(true),
+  /** applied: the provider already reflects it; pending: the service applies it shortly (status reports the outcome). */
+  state: z.enum(['pending', 'applied']),
+})
+export type SpendMasterDataResponse = z.infer<typeof spendMasterDataResponseSchema>
+
+/**
+ * What an expense is, from the company's side. The installation chooses the
+ * counter side of the voucher from it:
+ *
+ * - card_purchase, card_invoice, fee, refund, chargeback, cashback: on the
+ *   wallet (the provider's account holding the company's money);
+ * - out_of_pocket, mileage, per_diem: owed to the person (an utlägg or a
+ *   kostnadsersättning);
+ * - reimbursement: the provider paid the person back from the wallet;
+ * - external_reimbursement: the person was paid back outside the provider;
+ * - wallet_topup, wallet_unload: money between the company's bank and the
+ *   wallet;
+ * - atm_withdrawal, personal_spend: cash or a private purchase on the card;
+ * - invoice, invoice_payment: a supplier invoice registered or paid through
+ *   the provider;
+ * - balance_adjustment: the provider's own correction of the wallet;
+ * - other: a type the service does not recognise, with an issue.
+ */
+export const SPEND_EXPENSE_KINDS = [
+  'card_purchase',
+  'card_invoice',
+  'fee',
+  'refund',
+  'chargeback',
+  'cashback',
+  'out_of_pocket',
+  'mileage',
+  'per_diem',
+  'reimbursement',
+  'external_reimbursement',
+  'wallet_topup',
+  'wallet_unload',
+  'atm_withdrawal',
+  'personal_spend',
+  'invoice',
+  'invoice_payment',
+  'balance_adjustment',
+  'other',
+] as const
+export const spendExpenseKindSchema = z.enum(SPEND_EXPENSE_KINDS)
+export type SpendExpenseKind = z.infer<typeof spendExpenseKindSchema>
+
+export const spendExpenseLineSchema = z.object({
+  /** The account the line is coded on, as published in masterData; null when the provider has none. */
+  account: spendCodeSchema.nullable(),
+  /** In `currency`, VAT included, signed like the expense. */
+  amount: spendAmountSchema,
+  vat: z
+    .object({
+      /** The VAT code as published in masterData; null when the provider sent none. */
+      code: spendCodeSchema.nullable(),
+      type: spendVatTypeSchema,
+      rate: z.number().min(0).max(1),
+      /** The VAT inside `amount` as the provider states it (the receipt's), or the reverse charge it computed; null when it states none. */
+      amount: spendAmountSchema.nullable(),
+    })
+    .nullable(),
+  /** Dimension code to value code, as published in masterData. */
+  dimensions: z.record(spendDimensionCodeSchema, spendDimensionCodeSchema),
+  description: z.string().max(500).nullable(),
+})
+export type SpendExpenseLine = z.infer<typeof spendExpenseLineSchema>
+
+export const spendFileSchema = z.object({
+  fileRef: spendRefSchema,
+  /** The name the provider gave the file, when it has one. */
+  name: z.string().trim().min(1).max(255).nullable(),
+  contentType: z.string().trim().min(1).max(100),
+  /** In bytes. */
+  size: z.number().int().min(0),
+  sha256: spendSha256Schema,
+  /** A short-lived link to the service's copy; renewed on every `expenses` call. */
+  downloadUrl: httpsUrlSchema,
+  downloadExpiresAt: z.string(),
+})
+export type SpendFile = z.infer<typeof spendFileSchema>
+
+export const spendAttendeeSchema = z.object({
+  name: z.string().trim().min(1).max(200),
+  company: z.string().trim().max(200).nullable(),
+  /** True for the company's own people. */
+  internal: z.boolean(),
+})
+export type SpendAttendee = z.infer<typeof spendAttendeeSchema>
+
+export const spendExpenseSchema = z.object({
+  /** The provider's stable id for the expense; an expense exported again carries the same id. */
+  externalId: spendRefSchema,
+  /** The provider's batch the expense came in, for the installation's trail only. */
+  batchRef: spendRefSchema.nullable(),
+  kind: spendExpenseKindSchema,
+  /** The provider's own word for a sub type, when it has one. */
+  subKind: z.string().trim().min(1).max(64).nullable(),
+  /** When the expense happened, as the provider states it. */
+  date: isoDateSchema,
+  currency: currencyCodeSchema,
+  amount: spendAmountSchema,
+  /** What the merchant charged, when in another currency than `currency`. */
+  original: z.object({ currency: currencyCodeSchema, amount: spendAmountSchema }).nullable(),
+  /** The account the provider says holds the wallet, as published in masterData; null when it says none. */
+  walletAccount: spendCodeSchema.nullable(),
+  lines: z.array(spendExpenseLineSchema).max(100),
+  merchant: z
+    .object({
+      name: z.string().trim().min(1).max(200),
+      country: countryCodeSchema.nullable(),
+      taxId: z.string().trim().max(64).nullable(),
+      /** The card network's merchant category code, when sent. */
+      categoryCode: z.string().trim().max(16).nullable(),
+    })
+    .nullable(),
+  /** Who spent or is owed the money. */
+  person: z.object({ name: z.string().trim().min(1).max(200), ref: z.string().trim().max(128).nullable() }).nullable(),
+  note: z.string().max(2000).nullable(),
+  attendees: z.array(spendAttendeeSchema).max(100),
+  /** The provider's own reference for reconciliation, printed on the voucher. */
+  reference: z.string().trim().max(128).nullable(),
+  /** For a reimbursement: the externalIds of the expenses it settles. */
+  settles: z.array(spendRefSchema).max(500),
+  files: z.array(spendFileSchema).max(20),
+  /** The expense at the provider, for people. */
+  providerUrl: httpsUrlSchema.nullable(),
+  issues: z.array(spendIssueSchema).max(50),
+  raw: z.object({
+    contentType: z.string().max(100),
+    body: z.string().max(SPEND_MAX_RAW_CHARS),
+    /** Lower-case hex sha256 of `body` as UTF-8. */
+    sha256: spendSha256Schema,
+  }),
+})
+export type SpendExpense = z.infer<typeof spendExpenseSchema>
+
+export const spendExpensesRequestSchema = z.object({
+  limit: z.number().int().min(1).max(SPEND_EXPENSES_PAGE_MAX).optional(),
+})
+export type SpendExpensesRequest = z.infer<typeof spendExpensesRequestSchema>
+
+export const spendExpensesResponseSchema = z.object({
+  expenses: z.array(spendExpenseSchema).max(SPEND_EXPENSES_PAGE_MAX),
+  /** True when more expenses wait than this answer holds. */
+  more: z.boolean(),
+  serverTime: z.string(),
+})
+export type SpendExpensesResponse = z.infer<typeof spendExpensesResponseSchema>
+
+/** Why the installation refused an expense; the service maps each code to the provider's own failure type. */
+export const SPEND_REJECTION_CODES = [
+  'kind_unsupported',
+  'currency_unsupported',
+  'amounts_mismatch',
+  'account_missing',
+  'account_unknown',
+  'vat_code_missing',
+  'vat_code_unknown',
+  'dimension_unknown',
+  'wallet_account_unknown',
+  'period_locked',
+  'receipt_unusable',
+  'internal_error',
+] as const
+export const spendRejectionCodeSchema = z.enum(SPEND_REJECTION_CODES)
+export type SpendRejectionCode = z.infer<typeof spendRejectionCodeSchema>
+
+export const spendAckResultSchema = z.discriminatedUnion('outcome', [
+  z.object({
+    externalId: spendRefSchema,
+    outcome: z.literal('received'),
+    /** The installation's own id for the expense. */
+    ledgerRef: spendRefSchema,
+    /** Where a person finds it in the installation; null when it has no public address. */
+    ledgerUrl: spendInstanceUrlSchema.nullable(),
+  }),
+  z.object({
+    externalId: spendRefSchema,
+    outcome: z.literal('rejected'),
+    reasonCode: spendRejectionCodeSchema,
+    /** Shown to the provider's user, in Swedish: what to fix there before exporting again. */
+    reasonSv: z.string().trim().min(1).max(500),
+  }),
+])
+export type SpendAckResult = z.infer<typeof spendAckResultSchema>
+
+export const spendAcknowledgeRequestSchema = z.object({
+  results: z.array(spendAckResultSchema).min(1).max(SPEND_ACK_MAX),
+})
+export type SpendAcknowledgeRequest = z.infer<typeof spendAcknowledgeRequestSchema>
+
+export const spendAcknowledgeResponseSchema = z.object({
+  accepted: z.number().int().min(0),
+  /** externalIds the service does not hold as waiting (already answered, or never offered). */
+  unknown: z.array(spendRefSchema),
+})
+export type SpendAcknowledgeResponse = z.infer<typeof spendAcknowledgeResponseSchema>
+
+export const spendDisconnectResponseSchema = z.object({ disconnected: z.literal(true) })
+
+/**
+ * The operation table, paths under SPEND_BASE_PATH. `connection` marks the
+ * operations that carry SPEND_CONNECTION_HEADER.
+ */
+export const SPEND_OPERATIONS = {
+  providers: { method: 'POST', path: '/providers', company: true, connection: false, request: z.object({}), response: spendProvidersResponseSchema },
+  authorize: { method: 'POST', path: '/authorize', company: true, connection: false, request: spendAuthorizeRequestSchema, response: spendAuthorizeResponseSchema },
+  complete: { method: 'POST', path: '/complete', company: true, connection: false, request: spendCompleteRequestSchema, response: spendConnectionSchema },
+  connectKey: { method: 'POST', path: '/connect-key', company: true, connection: false, request: spendConnectKeyRequestSchema, response: spendConnectionSchema },
+  status: { method: 'POST', path: '/status', company: true, connection: true, request: z.object({}), response: spendStatusResponseSchema },
+  masterData: { method: 'POST', path: '/master-data', company: true, connection: true, request: spendMasterDataRequestSchema, response: spendMasterDataResponseSchema },
+  expenses: { method: 'POST', path: '/expenses', company: true, connection: true, request: spendExpensesRequestSchema, response: spendExpensesResponseSchema },
+  acknowledge: { method: 'POST', path: '/acknowledge', company: true, connection: true, request: spendAcknowledgeRequestSchema, response: spendAcknowledgeResponseSchema },
+  disconnect: { method: 'POST', path: '/disconnect', company: true, connection: true, request: z.object({}), response: spendDisconnectResponseSchema },
+} as const
+export type SpendOperation = keyof typeof SPEND_OPERATIONS
+
+/**
+ * Error codes of this family, in addition to the shared ones.
+ * CONNECTOR_SPEND_RECONNECT_REQUIRED: the grant at the provider is gone and a
+ * person connects again. CONNECTOR_SPEND_PROVIDER_RATE_LIMITED is the
+ * PROVIDER's 429, answered with its Retry-After.
+ */
+export const SPEND_ERROR_CODES = [
+  'CONNECTOR_CONNECTION_NOT_OWNED',
+  'CONNECTOR_SPEND_PROVIDER_UNKNOWN',
+  'CONNECTOR_SPEND_MODE_UNSUPPORTED',
+  'CONNECTOR_SPEND_COMPANY_MISMATCH',
+  'CONNECTOR_SPEND_ALREADY_CONNECTED',
+  'CONNECTOR_SPEND_RECONNECT_REQUIRED',
+  'CONNECTOR_SPEND_PROVIDER_ACCESS_DENIED',
+  'CONNECTOR_SPEND_PROVIDER_RATE_LIMITED',
+  'CONNECTOR_SPEND_PROVIDER_ERROR',
+] as const
+export type SpendErrorCode = (typeof SPEND_ERROR_CODES)[number]

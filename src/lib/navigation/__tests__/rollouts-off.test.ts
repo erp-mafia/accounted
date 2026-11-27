@@ -30,6 +30,7 @@ function rolloutsOff(overrides: Partial<NavGateContext> = {}): NavGateContext {
     hasMileage: false,
     hasExpenseClaims: false,
     hasPosSales: false,
+    hasSpend: false,
     arkivEnabled: false,
     arkivBrainEnabled: false,
     signingEnabled: false,

@@ -95,7 +95,7 @@ interface DashboardNavProps {
 /** The switches of a shell with no company open: all off but offerter, which is on unless a company switches it off. */
 const NAV_GATE_DEFAULTS = {
   dimensionsEnabled: false, salesOrdersEnabled: false, quotesEnabled: true, hasWebshop: false, hasMileage: false, hasExpenseClaims: false,
-  hasPosSales: false, arkivEnabled: false, agentsEnabled: false, inkorgV2Enabled: false, autogiroEnabled: false,
+  hasPosSales: false, hasSpend: false, arkivEnabled: false, agentsEnabled: false, inkorgV2Enabled: false, autogiroEnabled: false,
 }
 
 /**

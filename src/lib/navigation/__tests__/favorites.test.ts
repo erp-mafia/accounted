@@ -22,6 +22,7 @@ function ctx(overrides: Partial<NavGateContext> = {}): NavGateContext {
     hasMileage: true,
     hasExpenseClaims: true,
     hasPosSales: true,
+    hasSpend: true,
     arkivEnabled: true,
     agentsEnabled: true,
     inkorgV2Enabled: true,

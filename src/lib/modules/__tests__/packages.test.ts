@@ -55,7 +55,7 @@ describe('package map', () => {
       Bank: { switchable: true, modules: ['bank-feed'] },
       Kundfakturor: { switchable: true, modules: ['collections', 'invoicing'] },
       'Leverantörsfakturor och betalningar': { switchable: true, modules: ['payments', 'supplier-invoices'] },
-      'Kvitton och underlag': { switchable: true, modules: ['inbox'] },
+      'Kvitton och underlag': { switchable: true, modules: ['inbox', 'spend'] },
       Utlägg: { switchable: true, modules: ['expenses'] },
       Lön: { switchable: true, modules: ['payroll'] },
       Inventarier: { switchable: true, modules: ['assets'] },

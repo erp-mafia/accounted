@@ -287,6 +287,7 @@ describe('dimension rule policy per source type', () => {
     'salary_payment',
     'webshop_order',
     'pos_daily_sales',
+    'spend_item',
     'expense_claim',
     'reminder_fee',
   ]

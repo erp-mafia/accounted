@@ -375,6 +375,15 @@ import '@/app/api/v1/companies/[companyId]/collections/settlements/[settlementId
 import '@/app/api/v1/companies/[companyId]/collections/payments/[paymentId]/book/route'
 import '@/app/api/v1/companies/[companyId]/invoices/[id]/collection/route'
 import '@/app/api/v1/companies/[companyId]/invoices/[id]/collection/actions/route'
+// Spend (company card and spend platforms through Accounted Connect): lib/operations/spend.ts
+import '@/app/api/v1/companies/[companyId]/spend/connections/route'
+import '@/app/api/v1/companies/[companyId]/spend/connections/[connectionId]/disconnect/route'
+import '@/app/api/v1/companies/[companyId]/spend/connections/[connectionId]/settings/route'
+import '@/app/api/v1/companies/[companyId]/spend/items/route'
+import '@/app/api/v1/companies/[companyId]/spend/items/[itemId]/route'
+import '@/app/api/v1/companies/[companyId]/spend/items/[itemId]/book/route'
+import '@/app/api/v1/companies/[companyId]/spend/items/book/route'
+import '@/app/api/v1/companies/[companyId]/spend/fetch/route'
 // Operation registry, wave 2: booking, payment files, utlägg, payroll.
 import '@/app/api/v1/companies/[companyId]/salary-runs/[id]/send-payslips/route'
 import '@/app/api/v1/companies/[companyId]/salary-runs/[id]/revert/route'

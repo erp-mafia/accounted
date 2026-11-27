@@ -27,7 +27,7 @@ const SOURCE_TYPES = [
   'supplier_credit_note', 'currency_revaluation', 'supplier_invoice_privately_paid', 'reminder_fee', 'accrual',
   'result_appropriation', 'rot_rut_payout', 'vat_settlement', 'stripe_payout', 'webshop_order', 'expense_claim',
   'expense_payout', 'rot_rut_reclaim', 'pos_daily_sales', 'rot_rut_reclassification', 'collection_settlement',
-  'customer_loss', 'counterparty_setoff',
+  'customer_loss', 'counterparty_setoff', 'spend_item',
 ]
 
 const TRANSACTION_CATEGORIES: TransactionCategory[] = [

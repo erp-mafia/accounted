@@ -203,6 +203,7 @@ export async function loadNavGateContext(
     hasMileage: (settings?.mileage_enabled ?? false) || navFlags.hasMileageTrips,
     hasExpenseClaims: navFlags.hasExpenseClaims,
     hasPosSales: navFlags.hasPosSales,
+    hasSpend: navFlags.hasSpend,
     ...navRollouts(companyId),
     capabilities: entitlements.capabilities,
     hiddenNavHrefs: new Set(getBranding().hiddenNavHrefs),

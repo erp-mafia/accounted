@@ -10,6 +10,7 @@ import {
   BuildingLibraryIcon,
   BuildingStorefrontIcon,
   CheckIcon,
+  CreditCardIcon,
   EllipsisHorizontalIcon,
   EnvelopeIcon,
   ExclamationTriangleIcon,
@@ -170,6 +171,8 @@ interface Status {
   mail: MailboxSummary | null
   /** The connected POS venue(s); null when none. */
   pos: { label: string; attention: boolean } | null
+  /** The connected spend platform(s); null when none. */
+  spend: { label: string; attention: boolean } | null
 }
 
 /**
@@ -297,7 +300,12 @@ export function ConnectionsSettingsContent() {
         .select('venue_name, provider_name, health')
         .eq('company_id', companyId)
         .eq('status', 'active'),
-    ]).then(([bank, skv, peppol, mail, pos]) => {
+      supabase
+        .from('spend_connections')
+        .select('provider_name, provider_company_name, health')
+        .eq('company_id', companyId)
+        .eq('status', 'active'),
+    ]).then(([bank, skv, peppol, mail, pos, spend]) => {
       if (cancelled) return
       // A failed read (rejected, or an error with no rows) is unknown: the row
       // must not offer Koppla to a company whose bank may be connected.
@@ -323,6 +331,14 @@ export function ConnectionsSettingsContent() {
           return {
             label: venues.length === 1 ? `${venues[0].venue_name} (${venues[0].provider_name})` : venues.map((v) => v.venue_name).join(', '),
             attention: venues.some((v) => v.health === 'action_required'),
+          }
+        })(),
+        spend: (() => {
+          const rows = spend.status === 'fulfilled' ? ((spend.value.data ?? []) as Array<{ provider_name: string; provider_company_name: string | null; health: string }>) : []
+          if (rows.length === 0) return null
+          return {
+            label: rows.map((r) => (r.provider_company_name ? `${r.provider_name} (${r.provider_company_name})` : r.provider_name)).join(', '),
+            attention: rows.some((r) => r.health === 'action_required'),
           }
         })(),
       })
@@ -385,6 +401,26 @@ export function ConnectionsSettingsContent() {
       })
       .catch(() => {
         if (!cancelled) setBankPayments(paymentsConnectionRow(null))
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [companyId])
+
+  // Kortköp is offered once Accounted Connect lists a spend provider for this
+  // company (the switch-on lives there, with the provider's credentials); a
+  // company that already has a connection keeps the row whatever Connect says.
+  const [spendOffered, setSpendOffered] = useState(false)
+  useEffect(() => {
+    if (!companyId) return
+    let cancelled = false
+    fetch('/api/spend/providers')
+      .then(async (res) => {
+        const json = (await res.json()) as { data?: { providers?: unknown[] } }
+        if (!cancelled) setSpendOffered(res.ok && (json.data?.providers?.length ?? 0) > 0)
+      })
+      .catch(() => {
+        if (!cancelled) setSpendOffered(false)
       })
     return () => {
       cancelled = true
@@ -779,6 +815,18 @@ export function ConnectionsSettingsContent() {
               href: '/settings/pos',
               connected: status ? status.pos !== null : null,
               attention: status?.pos?.attention ?? false,
+            })}
+          {/* Kortköp: core, not an extension (provider code lives in Accounted Connect). */}
+          {!isSandbox &&
+            (spendOffered || status?.spend) &&
+            row({
+              logo: <CreditCardIcon className="h-4 w-4 text-muted-foreground" aria-hidden="true" />,
+              name: t('spend'),
+              help: t('spend_help'),
+              state: status?.spend ? (status.spend.attention ? t('spend_state_attention', { provider: status.spend.label }) : status.spend.label) : null,
+              href: '/settings/spend',
+              connected: status ? status.spend !== null : null,
+              attention: status?.spend?.attention ?? false,
             })}
           {showCollections &&
             row({

@@ -513,6 +513,7 @@ export const JournalEntrySourceTypeSchema = z.enum([
   'customer_loss',
   'counterparty_setoff',
   'rot_rut_reclassification',
+  'spend_item',
 ])
 
 /** Query params for GET /api/bookkeeping/voucher-sequences/next. */

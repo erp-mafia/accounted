@@ -1870,6 +1870,75 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
       company_settings: { bookkeeping_locked_through: null },
     },
   },
+  // Kortköp: a received, ready card purchase with its receipt, its connection
+  // and an open, unlocked 2026; the preview builds the verifikat and never
+  // reaches the engine.
+  gnubok_book_spend_item: {
+    rows: {
+      spend_items: {
+        connection_id: SOME_UUID,
+        provider: 'pleo',
+        external_id: 'exp-1',
+        kind: 'card_purchase',
+        expense_date: '2026-01-15',
+        currency: 'SEK',
+        amount: 625,
+        merchant_name: 'Papper & Penna AB',
+        person_name: 'Anna Exempel',
+        status: 'ready',
+        reasons: [],
+        raw_sha256: 'a'.repeat(64),
+        document_ids: [],
+        received_at: '2026-01-15T12:00:00Z',
+        ack_outcome: 'received',
+        changed_after_booking: false,
+        journal_entry_id: null,
+        booked_at: null,
+        expense: {
+          externalId: 'exp-1',
+          batchRef: 'job-1',
+          kind: 'card_purchase',
+          subKind: null,
+          date: '2026-01-15',
+          currency: 'SEK',
+          amount: 625,
+          original: null,
+          walletAccount: '1940',
+          lines: [{ account: '6110', amount: 625, vat: { code: 'SE25', type: 'standard', rate: 0.25, amount: 125 }, dimensions: {}, description: null }],
+          merchant: { name: 'Papper & Penna AB', country: 'SE', taxId: null, categoryCode: null },
+          person: { name: 'Anna Exempel', ref: null },
+          note: null,
+          attendees: [],
+          reference: 'P-1',
+          settles: [],
+          files: [{
+            fileRef: 'file-1',
+            name: 'kvitto.pdf',
+            contentType: 'application/pdf',
+            size: 1000,
+            sha256: 'b'.repeat(64),
+            downloadUrl: 'https://files.example.test/file-1',
+            downloadExpiresAt: '2026-01-16T12:00:00Z',
+          }],
+          providerUrl: null,
+          issues: [],
+        },
+      },
+      spend_connections: { provider: 'pleo', provider_name: 'Pleo', settings: { wallet_account: '1940' }, status: 'active' },
+      chart_of_accounts: { account_number: '6110', is_active: true, default_vat_treatment: 'standard_25' },
+      fiscal_periods: { ...FISCAL_YEAR_2026, locked_at: null },
+      company_settings: { bookkeeping_locked_through: null, vat_registered: true, dimensions_enabled: false },
+    },
+  },
+  // Kortköp accounts: the connection exists and the chart answers; the
+  // preview only reads, the write happens on approval.
+  gnubok_update_spend_settings: {
+    args: { settings: { wallet_account: '1940' } },
+    rows: {
+      spend_connections: { settings: {}, provider_name: 'Pleo', status: 'active' },
+      chart_of_accounts: { account_number: '1940', is_active: true },
+    },
+  },
 }
 
 describe('a tool that declares the staged envelope only stages', () => {

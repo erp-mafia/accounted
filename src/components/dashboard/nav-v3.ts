@@ -239,6 +239,9 @@ export const NAV_V3_AREAS: NavV3Area[] = [
           { href: '/supplier-invoices', module: 'supplier-invoices', labelKey: 'supplier_invoices', icon: WalletIcon },
           { href: '/payments', module: 'payments', labelKey: 'v2_payments', icon: CreditCardIcon },
           { href: '/suppliers', module: 'supplier-invoices', labelKey: 'suppliers', icon: TruckIcon },
+          // Kortköp: card and spend platform expenses (Pleo and the like via
+          // Accounted Connect), shown once a platform is connected.
+          { href: '/kortkop', module: 'spend', labelKey: 'spend_items', icon: CreditCardIcon, requiresSpend: true, betaBadge: true },
           { href: '/expenses', module: 'expenses', labelKey: 'expenses', icon: ReceiptRefundIcon, requiresExpenses: true },
           { href: '/mileage', module: 'expenses', labelKey: 'mileage', icon: MapIcon, requiresMileage: true },
         ],

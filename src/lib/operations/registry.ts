@@ -259,6 +259,7 @@ import {
   posSalesVenuesList,
 } from './pos-sales'
 import { webshopOrdersBook, webshopOrdersBookDay, webshopOrdersGet, webshopOrdersList, webshopOrdersOssUnderlag } from './webshop-orders'
+import { SPEND_OPERATIONS_LIST } from './spend'
 import { COLLECTIONS_OPERATION_LIST } from './collections'
 import { PACKAGE_OPERATIONS } from './packages'
 import { K3_OPERATIONS } from './k3'
@@ -557,6 +558,8 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   webshopOrdersBook,
   webshopOrdersBookDay,
   webshopOrdersOssUnderlag,
+  // spend (company card and spend platforms via Accounted Connect; connecting is browser-only, the fetch is v1 only)
+  ...SPEND_OPERATIONS_LIST,
   // bank-feed (reading a bank with BankID through Open Payments): the reads and the signatory link bind v1 + MCP;
   // start, poll, restart, select and disconnect have no door (a person's BankID and a person's choice), and sync
   // is already served by POST /bank-connections/:connectionId/sync and gnubok_sync_bank for every aggregator.
