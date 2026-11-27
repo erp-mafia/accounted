@@ -18,6 +18,7 @@
  */
 import { handleSupplierInvoiceRetroMatch } from '@/lib/invoices/supplier-invoice-handler'
 import { unlearnOnCorrection, unlearnOnReversal } from '@/lib/bookkeeping/handlers/unlearn-on-reversal'
+import { moveTaxAccountRowsOnCorrection } from '@/lib/skatteverket/handlers/tax-row-follows-correction'
 import { cancelAccrualsOnOriginReversal } from '@/lib/bookkeeping/handlers/cancel-accruals-on-origin-reversal'
 import { WEBHOOKS_EVENT_CONSUMER } from '@/lib/composition/async-event-consumers'
 import { eventConsumer, type EventConsumer } from '@/lib/events/consumers'
@@ -50,6 +51,13 @@ export const EVENT_CONSUMERS: readonly EventConsumer[] = Object.freeze([
     handle: (event) => event.type === 'journal_entry.corrected'
       ? unlearnOnCorrection(event.payload)
       : unlearnOnReversal(event.payload),
+  }),
+  // A tax account row follows the rättelse of the verifikat it names.
+  eventConsumer({
+    id: 'tax-account-row-follows-correction',
+    owner: 'skatteverket',
+    eventTypes: ['journal_entry.corrected'],
+    handle: (event) => moveTaxAccountRowsOnCorrection(event.payload),
   }),
   // A reversed verifikat cancels the manual periodiseringar it is the origin
   // of and stornoes the months they posted, as a credit does for an invoice.

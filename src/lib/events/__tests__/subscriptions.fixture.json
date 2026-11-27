@@ -132,6 +132,7 @@
   ],
   "journal_entry.corrected": [
     "unlearn-on-reversal",
+    "tax-account-row-follows-correction",
     "event-log",
     "webhooks"
   ],
