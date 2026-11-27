@@ -339,6 +339,10 @@ describe('inline rättelse carries a line\'s currency (pg-real)', () => {
     ['a negative amount in the currency', { currency: 'EUR', amount_in_currency: -1000, exchange_rate: 11 }, /måste ha belopp i valutan och kurs/],
     ['no rate', { currency: 'EUR', amount_in_currency: 1000 }, /måste ha belopp i valutan och kurs/],
     ['a rate of zero', { currency: 'EUR', amount_in_currency: 1000, exchange_rate: 0 }, /måste ha belopp i valutan och kurs/],
+    // A direct caller's strings: "NaN" casts to a numeric above every number.
+    ['an amount in the currency of "NaN"', { currency: 'EUR', amount_in_currency: 'NaN', exchange_rate: 11 }, /måste ha belopp i valutan och kurs/],
+    ['a rate of "Infinity"', { currency: 'EUR', amount_in_currency: 1000, exchange_rate: 'Infinity' }, /måste ha belopp i valutan och kurs/],
+    ['an amount in the currency as text', { currency: 'EUR', amount_in_currency: 'tusen', exchange_rate: 11 }, /måste ha belopp i valutan och kurs/],
   ])('refuses a foreign added line with %s, writing nothing', async (_name, currencyFacts, message) => {
     const w = await bankWorld()
     const before = await state(w.entryId)

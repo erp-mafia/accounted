@@ -24,8 +24,9 @@
 --      exchange_rate. The code is stored in upper case; a line that names no
 --      currency, or SEK, is stored in kronor with no amount in currency and no
 --      rate, exactly as before. A line in a foreign currency needs a
---      three-letter code and an amount in the currency and a rate, both above
---      zero (the amount rounded to two decimals, as the engine stores it).
+--      three-letter code and an amount in the currency and a rate, both JSON
+--      numbers above zero (the amount rounded to two decimals, as the engine
+--      stores it).
 --   2. A line in a foreign currency may be struck when every line the
 --      rättelse adds names its currency (a foreign code, or SEK), so no added
 --      line drops to kronor because its caller left the currency out. The
@@ -225,7 +226,7 @@ BEGIN
     SELECT 1 FROM jsonb_array_elements(p_new_lines) AS l
      WHERE NULLIF(btrim(COALESCE(l ->> 'currency', '')), '') IS NULL
   ) THEN
-    RAISE EXCEPTION 'Rättelsen stryker en rad i utländsk valuta. Ange valuta på varje ny rad: valutakod med belopp i valutan och kurs, eller SEK för en rad i kronor.';
+    RAISE EXCEPTION 'Rättelsen stryker en rad i utländsk valuta. Ange valuta på varje ny rad (valutakod med belopp i valutan och kurs, eller SEK för en rad i kronor), eller använd rättelseverifikat (storno).';
   END IF;
 
   -- A struck line with a line-level underlag link would sever the document
@@ -277,9 +278,15 @@ BEGIN
       RAISE EXCEPTION 'Valutakoden "%" är ogiltig: ange tre bokstäver, till exempel EUR (konto %).', v_line ->> 'currency', v_acc;
     END IF;
     IF v_currency <> 'SEK' THEN
+      -- JSON numbers only: a string such as "NaN" or "Infinity" casts to a
+      -- numeric that passes "> 0".
+      IF jsonb_typeof(v_line -> 'amount_in_currency') IS DISTINCT FROM 'number'
+         OR jsonb_typeof(v_line -> 'exchange_rate') IS DISTINCT FROM 'number' THEN
+        RAISE EXCEPTION 'En rad i % måste ha belopp i valutan och kurs, båda över noll (konto %).', v_currency, v_acc;
+      END IF;
       v_aic  := round((v_line ->> 'amount_in_currency')::numeric, 2);
       v_rate := (v_line ->> 'exchange_rate')::numeric;
-      IF v_aic IS NULL OR v_aic <= 0 OR v_rate IS NULL OR v_rate <= 0 THEN
+      IF v_aic <= 0 OR v_rate <= 0 THEN
         RAISE EXCEPTION 'En rad i % måste ha belopp i valutan och kurs, båda över noll (konto %).', v_currency, v_acc;
       END IF;
     END IF;

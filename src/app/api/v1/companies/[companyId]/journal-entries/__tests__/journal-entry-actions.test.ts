@@ -446,7 +446,7 @@ describe('POST /journal-entries/:id/strike-lines', () => {
           error: {
             code: 'P0001',
             message:
-              'Rättelsen stryker en rad i utländsk valuta. Ange valuta på varje ny rad: valutakod med belopp i valutan och kurs, eller SEK för en rad i kronor.',
+              'Rättelsen stryker en rad i utländsk valuta. Ange valuta på varje ny rad (valutakod med belopp i valutan och kurs, eller SEK för en rad i kronor), eller använd rättelseverifikat (storno).',
           },
         },
       }),

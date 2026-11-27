@@ -418,7 +418,7 @@ interface PreviewLine {
 
 /** The RPC's refusal of a struck foreign-currency line beside an added line that names no currency. */
 const FOREIGN_STRIKE_NEEDS_CURRENCY =
-  'Rättelsen stryker en rad i utländsk valuta. Ange valuta på varje ny rad: valutakod med belopp i valutan och kurs, eller SEK för en rad i kronor.'
+  'Rättelsen stryker en rad i utländsk valuta. Ange valuta på varje ny rad (valutakod med belopp i valutan och kurs, eller SEK för en rad i kronor), eller använd rättelseverifikat (storno).'
 
 /** The code a line names, as the RPC stores it: upper case, SEK when it names none. */
 function storedCurrencyCode(code: string | null | undefined): string {
