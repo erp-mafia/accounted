@@ -6,6 +6,7 @@ describe('zeroVatReason', () => {
     expect(zeroVatReason('reverse_charge')).toBe('reverse_charge')
     expect(zeroVatReason('reverse_charge_domestic')).toBe('reverse_charge_domestic')
     expect(zeroVatReason('export')).toBe('export')
+    expect(zeroVatReason('outside_scope')).toBe('outside_scope')
     expect(zeroVatReason('standard_25')).toBe('exempt')
     expect(zeroVatReason('exempt')).toBe('exempt')
   })
@@ -40,6 +41,12 @@ describe('buildSummaryVatLines', () => {
         groups: [{ rate: 0, base: 50000, vat: 0 }],
       }),
     ).toEqual([{ kind: 'vat', rate: 0, amount: 0, reason: 'reverse_charge_domestic' }])
+  })
+
+  it('shows Moms without a rate, outside Swedish VAT, on a räntefaktura: no rate, not even 0 %', () => {
+    expect(
+      buildSummaryVatLines({ vatRegistered: true, treatment: 'outside_scope', groups: [{ rate: 0, base: 68.49, vat: 0 }] }),
+    ).toEqual([{ kind: 'vat', rate: null, amount: 0, reason: 'outside_scope' }])
   })
 
   it('names export and momsfri for their 0 % lines', () => {

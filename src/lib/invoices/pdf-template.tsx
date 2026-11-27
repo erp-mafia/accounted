@@ -444,9 +444,13 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
   // följesedel. In the invoice's language: the English texts on an English
   // invoice, each falling back to the Swedish one (crm#1735).
   const { lateFee, creditTerms } = invoiceFinePrint(company, lang)
+  // A räntefaktura states no dröjsmålsränta of its own: it charges the
+  // interest, and on a claim without a due date agreed in advance the
+  // statement is what would start new interest (räntelagen 4 §).
+  const chargesLateFee = !invoice.is_late_interest_invoice
   const finePrint = isQuote || isDeliveryNote || isCreditNote
     ? []
-    : [lateFee, creditTerms].filter((t): t is string => t !== null)
+    : [chargesLateFee ? lateFee : null, creditTerms].filter((t): t is string => t !== null)
   const finePrintTravelsWhole = fitsOnOnePage(finePrint.join('\n'), FULL_WIDTH_BOX_PT, FINE_PRINT_KEEP_TOGETHER_LINES)
   const finePrintBlock = finePrint.length > 0 ? (
     <View style={styles.finePrint}>
@@ -874,7 +878,10 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                   // A non-registered seller who states VAT (warned at create time
                   // per ML 16 kap. 23 §) still gets the totals row so the printed
                   // invoice matches what the customer is being asked to pay.
-                  !(company.vat_registered === false && invoice.vat_amount === 0) && (
+                  // Nor on an outside_scope invoice without VAT: not a supply,
+                  // so no rate, not even 0 %; its notice says why.
+                  !(company.vat_registered === false && invoice.vat_amount === 0) &&
+                  !(invoice.vat_treatment === 'outside_scope' && invoice.vat_amount === 0) && (
                     <View style={styles.totalRow}>
                       <Text style={styles.totalLabel}>{bareLabel(L.vatRow(invoice.vat_rate ?? (vatByRate.size === 1 ? (vatByRate.keys().next().value ?? 0) : 0)))}</Text>
                       <Text style={styles.totalValue}>{formatPdfAmount(invoice.vat_amount, lang)}</Text>

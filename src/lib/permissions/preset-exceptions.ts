@@ -56,6 +56,7 @@ export const INVOICER_OUTSIDE_ALLOWLIST: readonly string[] = [
   'POST /api/invoices/autogiro/reports',
   'POST /api/invoices/autogiro/settle',
   'POST /api/invoices/bulk-book',
+  'POST /api/invoices/late-payment-interest/invoices',
   'POST /api/invoices/recurring',
   'POST /api/invoices/recurring/:id/run',
   'POST /api/invoices/self-billed',

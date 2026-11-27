@@ -1948,7 +1948,7 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
       'The delivery country does not match the VAT treatment. Export requires the goods to leave the EU; an intra-EU supply requires transport to another EU member state.',
     remediation: {
       description:
-        'Check delivery_country. Goods to another EU member state: vat_treatment reverse_charge (needs the buyer VAT number). Goods leaving the EU: export. Goods staying in Sweden: standard. reverse_charge_domestic (construction services) takes no delivery_country. details.required names what the treatment needs.',
+        'Check delivery_country. Goods to another EU member state: vat_treatment reverse_charge (needs the buyer VAT number). Goods leaving the EU: export. Goods staying in Sweden: standard. reverse_charge_domestic (construction services) and outside_scope (late payment interest) take no delivery_country. details.required names what the treatment needs.',
     },
   },
   INVOICE_VAT_TREATMENT_BUYER_VAT_NUMBER_REQUIRED: {
@@ -1961,6 +1961,17 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
       description:
         'Add the buyer EU VAT number to the customer (it is validated against VIES when saved), or send vat_treatment standard for Swedish VAT (for example a consumer under the distance-sales threshold). details.reason: private_person, missing, not_another_member_state or not_validated.',
       tool: 'gnubok_update_customer',
+    },
+  },
+  INVOICE_VAT_TREATMENT_OUTSIDE_SCOPE_LINE: {
+    httpStatus: 400,
+    message_sv:
+      'Utanför svensk moms gäller bara belopp som inte är försäljning, i dag dröjsmålsränta: varje rad med belopp ska bokföras på ett konto för ränteintäkter, till exempel 8313.',
+    message_en:
+      'Outside the scope of Swedish VAT applies only to amounts that are not a sale, today late payment interest: every priced line must book an interest-income account, for example 8313.',
+    remediation: {
+      description:
+        'Set revenue_account to an interest-income account (825x, 826x, 831x or 836x, e.g. 8313) on the rows in details.rows, or omit vat_treatment for an ordinary sale.',
     },
   },
   INVOICE_VAT_TREATMENT_DOMESTIC_BUYER_REQUIRED: {
@@ -3617,6 +3628,33 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     httpStatus: 409,
     message_sv: 'Underlaget har redan en kundorder.',
     message_en: 'The source document already has a sales order.',
+  },
+  // POST /api/invoices/late-payment-interest/invoices (Skapa räntefaktura).
+  LATE_INTEREST_NOT_CHARGEABLE: {
+    httpStatus: 409,
+    message_sv:
+      'Räntan på en eller flera av fakturorna kan inte faktureras: de har redan en räntefaktura eller är inte slutbetalda. Ladda om sidan Dröjsmålsränta och försök igen.',
+    message_en:
+      'The interest on one or more of the invoices cannot be charged: they already have an interest invoice or are not paid in full. Reload the Late payment interest page and try again.',
+    remediation: {
+      description:
+        'Read the report again (gnubok_get_late_payment_interest): only paid_late rows with fully_paid true, interest_invoice null and interest above 0 can be charged. details.invoice_ids names the refused ones.',
+      tool: 'gnubok_get_late_payment_interest',
+    },
+  },
+  LATE_INTEREST_ALREADY_CHARGED: {
+    httpStatus: 409,
+    message_sv:
+      'Räntan på fakturorna lades på en annan räntefaktura medan den här skapades. Inget nytt utkast sparades. Ladda om sidan Dröjsmålsränta.',
+    message_en:
+      'The interest on these invoices was put on another interest invoice while this one was being created. No new draft was kept. Reload the Late payment interest page.',
+  },
+  LATE_INTEREST_FX_RATE_UNAVAILABLE: {
+    httpStatus: 502,
+    message_sv:
+      'Kunde inte hämta växelkursen från Riksbanken för fakturadatumet. Räntefakturan har inte skapats: en gissad kurs får inte bokföras. Försök igen om en stund.',
+    message_en:
+      'Could not fetch the Riksbanken exchange rate for the invoice date. No interest invoice was created: a guessed rate must not be booked. Try again shortly.',
   },
   SALES_ORDER_INVOICE_FX_RATE_UNAVAILABLE: {
     httpStatus: 502,

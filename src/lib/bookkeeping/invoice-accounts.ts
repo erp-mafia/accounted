@@ -87,6 +87,12 @@ export function getRevenueAccount(
       // Momsfri försäljning: 3004 for a form that books like an aktiebolag
       // (templateColumn 'ab'), 3100 for the others.
       return templateAccountForForm(entityType, '3100', '3004') ?? '3100'
+    case 'outside_scope':
+      // Not a supply made in Sweden, so no ruta: today dröjsmålsränta on a
+      // räntefaktura (Ränteintäkter från kortfristiga fordringar). Its lines
+      // carry their own account (the builder requires one); this is the
+      // fallback for a line read without it.
+      return '8313'
     default:
       return '3001'
   }

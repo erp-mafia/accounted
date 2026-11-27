@@ -809,7 +809,7 @@ export const InvoiceVatOverrideShape = {
     .nullable()
     .optional()
     .describe(
-      "This invoice's own VAT treatment instead of the customer's. standard = Swedish VAT at the line rates (ruta 05). export with delivery_country = export of goods (0 %, 3105, ruta 36); reverse_charge with delivery_country = intra-EU supply of goods (0 %, 3108, ruta 35). Without delivery_country, export / reverse_charge are the services treatments and only accepted where the customer already gets them. reverse_charge_domestic = omvänd betalningsskyldighet for construction services (0 %, 3231, ruta 41, ML 16 kap. 13 §): only to a swedish_business customer with a Swedish VAT number (SE + 12 digits), never with delivery_country; every line 0 %. Omit to let the customer decide; null clears.",
+      "This invoice's own VAT treatment instead of the customer's. standard = Swedish VAT at the line rates (ruta 05). export with delivery_country = export of goods (0 %, 3105, ruta 36); reverse_charge with delivery_country = intra-EU supply of goods (0 %, 3108, ruta 35). Without delivery_country, export / reverse_charge are the services treatments and only accepted where the customer already gets them. reverse_charge_domestic = omvänd betalningsskyldighet for construction services (0 %, 3231, ruta 41, ML 16 kap. 13 §): only to a swedish_business customer with a Swedish VAT number (SE + 12 digits), never with delivery_country; every line 0 %. outside_scope = no Swedish VAT and no ruta, for an amount that is not a supply (a räntefaktura's dröjsmålsränta): every line 0 % with revenue_account on an interest-income account (e.g. 8313), never with delivery_country. Omit to let the customer decide; null clears.",
     ),
   delivery_country: z
     .string()
@@ -1091,6 +1091,9 @@ export const InvoicePreviewSchema = z.object({
   qr_mode: z.union([InvoiceQrModeSchema, z.literal('')]).nullish().transform((v) => v || null),
   ore_rounding: z.boolean().nullish(),
   ...InvoiceVatOverrideShape,
+  // A räntefaktura draft (is_late_interest_invoice): no late-payment terms
+  // on its PDF, so the preview prints none either.
+  is_late_interest_invoice: z.boolean().optional(),
   deduction_personnummer: z.string().max(20).nullish(),
   deduction_housing_designation: z.string().max(128).nullish(),
   deduction_apartment_number: z.string().max(25).nullish(),

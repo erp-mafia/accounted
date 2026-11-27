@@ -601,6 +601,10 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/invoices/:id/send-payment-confirmation': gap('P3', 'email a betalningsbekräftelse'),
   'POST /api/invoices/:id/resend': gap('P3', 'email an already emailed invoice again as a copy (crm#1339)'),
   'POST /api/invoices/self-billed': covered([`POST ${V}/invoices`], 'is_self_billed: true runs the same service (createSelfBilledSaleInvoice); gnubok_create_invoice has no such argument'),
+  'POST /api/invoices/late-payment-interest/invoices': covered(
+    [`POST ${V}/invoices`],
+    'the same draft from the figures of the late-payment-interest read (lines on 8313, vat_treatment outside_scope); only this door marks the charged invoices on the report, and gnubok_create_invoice takes no vat_treatment',
+  ),
   'POST /api/invoices/preview-pdf': uiOnly(PREVIEW),
   'POST /api/invoices/preview-email': uiOnly(PREVIEW),
   'POST /api/invoices/recurring': covered(['gnubok_create_recurring_schedule']),
