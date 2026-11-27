@@ -2607,7 +2607,8 @@ export const InlineRattelseLineSchema = z.object({
   credit_amount: nonNegativeAmount.default(0),
   line_description: z.string().max(500).optional(),
   dimensions: DimensionsBagSchema.optional(),
-  currency: z.string().optional(),
+  // Trimmed here, so the dry run and the RPC read the same code.
+  currency: z.string().trim().optional(),
   amount_in_currency: z.number().optional(),
   exchange_rate: z.number().positive().optional(),
 }).refine(isSingleSidedLine, SINGLE_SIDED_LINE_ISSUE)
