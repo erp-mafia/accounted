@@ -82,7 +82,7 @@ registerEndpoint({
     'off (turned off for this company); unsupported (not offered for this company: its country, or its legal form, such as payroll for an enskild firma that has not said it pays salaries). ' +
     'Reasons, the deciding one first: unsupported_country, unsupported_legal_form, needs_plan, disabled_by_company, dependency_unavailable (a module it needs is unsupported or off; it then takes that status). ' +
     'Kernels (platform, ledger) are always active. ' +
-    'parts lists a part of a module that is switched on company by company (Avtal och åtaganden in year-end: agreements, securities and group links): its status is off, with the reason switched_on_per_company and a resolution, while the module itself stays active. ' +
+    'parts lists a part of a module that is switched on company by company (Avtal och åtaganden in year-end: agreements, securities and group links): active for a company the rollout names; for any other its status is off, with the reason switched_on_per_company and a resolution, while the module itself stays active. ' +
     'profile names the company profile (sole-trader, limited-company-no-employees, limited-company-with-employees, retail, association, or standard, every package on): the starting point for which packages the app menu and the MCP tool list show. ' +
     'A module in a package the profile leaves off is hidden there but keeps its status and still answers when called. A company without a stored profile has standard (source implicit). This is a read-only report: nothing here changes a profile or a module.',
   useWhen:
