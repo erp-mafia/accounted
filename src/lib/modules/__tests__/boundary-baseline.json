@@ -102,8 +102,11 @@
       "lib/composition/reversal-hooks.ts -> lib/collections/settlement-reversal",
       "lib/composition/reversal-hooks.ts -> lib/customer-loss/reversal",
       "lib/composition/reversal-hooks.ts -> lib/invoices/counterparty-setoff/reversal",
+      "lib/composition/reversal-hooks.ts -> lib/invoices/invoice-verifikat-reversal",
       "lib/composition/reversal-hooks.ts -> lib/invoices/migrated-deduction-reversal",
       "lib/composition/reversal-hooks.ts -> lib/invoices/rot-rut-reclaim-reversal",
+      "lib/composition/reversal-hooks.ts -> lib/salary/run-verifikat-reversal",
+      "lib/composition/reversal-hooks.ts -> lib/supplier-invoices/registration-reversal",
       "lib/composition/unbooked-bank-lines.ts -> lib/transactions/unbooked",
       "lib/composition/voucher-block-warnings.ts -> lib/invoices/voucher-open-invoice-warning",
       "lib/composition/voucher-block-warnings.ts -> lib/vat/voucher-filed-period-warning"

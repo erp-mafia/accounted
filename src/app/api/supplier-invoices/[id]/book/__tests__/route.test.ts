@@ -8,7 +8,7 @@ import {
   makeSupplierInvoice,
 } from '@/tests/helpers'
 
-const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
 vi.mock('@/lib/auth/require-auth', () => ({
@@ -50,6 +50,11 @@ vi.mock('@/lib/core/documents/supplier-invoice-underlag', () => ({
   anchorSupplierInvoiceDocument: (...args: unknown[]) => mockAnchorDocument(...args),
 }))
 
+const mockFindStandingRegistration = vi.fn()
+vi.mock('@/lib/supplier-invoices/standing-registration', () => ({
+  findStandingRegistration: (...args: unknown[]) => mockFindStandingRegistration(...args),
+}))
+
 import { POST } from '../route'
 
 const mockUser = { id: 'user-1', email: 'test@test.se' }
@@ -78,6 +83,7 @@ describe('POST /api/supplier-invoices/[id]/book', () => {
     reset()
     requireAuthMock.mockResolvedValue({ user: mockUser, supabase: mockSupabase, error: null })
     mockCreateSchedules.mockResolvedValue({ created: 0, failed: 0 })
+    mockFindStandingRegistration.mockResolvedValue(null)
   })
 
   it('returns 401 when not authenticated', async () => {
@@ -114,6 +120,31 @@ describe('POST /api/supplier-invoices/[id]/book', () => {
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(await bookRequest())
     expect(status).toBe(400)
     expect(body.error.code).toBe('SI_BOOK_INVALID_STATUS')
+  })
+
+  it('hands the invoice back to a registration that still stands instead of booking it again', async () => {
+    enqueue({ data: makeUnbookedInvoice(), error: null })
+    mockFindStandingRegistration.mockResolvedValue({ id: 'je-standing' })
+    // The pointer goes back to the standing verifikat.
+    enqueue({ data: null, error: null })
+
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(await bookRequest())
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('SI_BOOK_ALREADY_BOOKED')
+    expect(mockFindStandingRegistration).toHaveBeenCalledWith(mockSupabase, 'company-1', 'si-1')
+    expect(findCalls('supplier_invoices', 'update')).toEqual([[{ registration_journal_entry_id: 'je-standing' }]])
+    expect(findCalls('supplier_invoices', 'is')).toEqual([['registration_journal_entry_id', null]])
+    expect(mockCreateRegistrationEntry).not.toHaveBeenCalled()
+  })
+
+  it('fails closed when the standing registration cannot be looked up', async () => {
+    enqueue({ data: makeUnbookedInvoice(), error: null })
+    mockFindStandingRegistration.mockRejectedValue(new Error('boom'))
+
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(await bookRequest())
+    expect(status).toBe(500)
+    expect(body.error.code).toBe('SI_BOOK_FAILED')
+    expect(mockCreateRegistrationEntry).not.toHaveBeenCalled()
   })
 
   it('fails closed when company settings cannot be read', async () => {
