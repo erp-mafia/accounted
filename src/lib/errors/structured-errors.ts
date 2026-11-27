@@ -2664,6 +2664,34 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Kreditfakturan har redan utfärdats.',
     message_en: 'The credit note has already been issued.',
   },
+  // The undone credit note keeps its number KR-<the original's> (ML 17 kap
+  // 24 § p. 2), and a new credit note of the same invoice would take it.
+  INVOICE_CREDIT_UNDONE_BEFORE: {
+    httpStatus: 409,
+    message_sv: 'Fakturans kreditering har ångrats, och kreditfakturans nummer är redan använt. Fakturan kan inte krediteras igen här.',
+    message_en: 'This invoice\'s credit was undone, and the undone credit note keeps its number, so the invoice cannot be credited again here.',
+  },
+  // "Ångra kreditering" (lib/invoices/uncredit-invoice.ts).
+  INVOICE_UNCREDIT_DELIVERED: {
+    httpStatus: 409,
+    message_sv: 'Kreditfakturan har skickats till kunden och kan inte ångras. Skapa en ny faktura som kopia av originalet i stället.',
+    message_en: 'The credit note reached the customer, so the credit cannot be undone. Create a new invoice as a copy of the original instead.',
+  },
+  INVOICE_UNCREDIT_ATTESTATION_REQUIRED: {
+    httpStatus: 400,
+    message_sv: 'Kreditfakturan är markerad som skickad. Intyga att den inte har lämnats till kunden.',
+    message_en: 'The credit note is marked as sent: confirm that it never reached the customer (attest_not_delivered).',
+  },
+  INVOICE_UNCREDIT_REFUNDED: {
+    httpStatus: 409,
+    message_sv: 'Kreditfakturan har en registrerad återbetalning. Makulera återbetalningens verifikation först.',
+    message_en: 'The credit note has a refund recorded. Reverse the refund\'s verifikat first.',
+  },
+  INVOICE_UNCREDIT_NOT_REVERSIBLE: {
+    httpStatus: 409,
+    message_sv: 'Krediteringen kan inte ångras här. Skapa en ny faktura som kopia av originalet i stället.',
+    message_en: 'The credit cannot be undone here; details.reason says why (accrual_schedules, customer_loss or credit_note_state). Create a new invoice as a copy of the original instead.',
+  },
   INVOICE_MARK_SENT_INVALID_STATUS: {
     httpStatus: 400,
     message_sv: 'Fakturan kan inte markeras som skickad i nuvarande status.',

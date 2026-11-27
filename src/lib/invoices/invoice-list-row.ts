@@ -36,6 +36,7 @@ export type InvoiceListRow = Pick<
   | 'currency'
   | 'ore_rounding'
   | 'credited_invoice_id'
+  | 'credit_undone_at'
   | 'remaining_amount'
   | 'paid_at'
   | 'deduction_total'

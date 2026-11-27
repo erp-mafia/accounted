@@ -306,6 +306,8 @@ const CUSTOMER_INVOICES: PackageDoors = {
     'POST /api/invoices/:id/resend',
     'POST /api/invoices/:id/send',
     'POST /api/invoices/:id/send-payment-confirmation',
+    // Ångra kreditering: undoes a credit of an invoice already issued.
+    'POST /api/invoices/:id/uncredit',
     'POST /api/invoices/bulk-book',
     'POST /api/invoices/preview-email',
     'POST /api/invoices/preview-pdf',

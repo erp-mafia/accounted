@@ -1864,6 +1864,10 @@ export interface Invoice {
 
   // Credit note reference
   credited_invoice_id: string | null
+  // On a cancelled credit note: when its credit was undone (Ångra
+  // kreditering, lib/invoices/uncredit-invoice.ts, migration
+  // 20261127170000). Optional in TS for pre-migration fixtures.
+  credit_undone_at?: string | null
 
   // Autogiro: the payer number the invoice is debited on. Follows the
   // customer's active mandate while a draft and freezes at issue (migration
