@@ -153,3 +153,28 @@ export async function resolveDiscoveryBaseUrl(request: Request): Promise<string>
     return canonical
   }
 }
+
+/**
+ * The authorization server the protected-resource document names, given the
+ * discovery base URL resolveDiscoveryBaseUrl returned for the request.
+ *
+ * The canonical host and the brand domains serve their own login page, so
+ * they name themselves. A legacy host does not: its login page forwards to
+ * the canonical host, so a sign-in started there finishes on the canonical
+ * host, whose RFC 9207 `iss` then differs from the legacy issuer the client
+ * discovered, and the client refuses the response. A legacy host therefore
+ * names the canonical authorization server (RFC 9728 lets the resource and
+ * its authorization server live on different hosts), while its own
+ * authorization-server metadata stays in place for clients that already
+ * hold it.
+ */
+export function authorizationServerForDiscoveryBase(discoveryBaseUrl: string): string {
+  try {
+    if (LEGACY_DISCOVERY_HOSTS.has(new URL(discoveryBaseUrl).host.toLowerCase())) {
+      return getCanonicalBaseUrl()
+    }
+  } catch {
+    // An unparseable base is returned as it is, like any other host.
+  }
+  return discoveryBaseUrl
+}
