@@ -27,7 +27,7 @@
     "payments -> invoicing": 1,
     "supplier-invoices -> invoicing": 4,
     "transactions -> collections": 1,
-    "transactions -> invoicing": 21,
+    "transactions -> invoicing": 22,
     "transactions -> skatteverket": 10,
     "transactions -> supplier-invoices": 1
   },
