@@ -22,6 +22,8 @@ import { refreshRunEmployeeSalaryType, runMonthlySalaryFor } from '@/lib/salary/
 import { invalidateRunCalculation } from '@/lib/salary/invalidate-calculation'
 import { baseSalaryLineType, payslipLineFlags } from '@/lib/salary/line-item-roles'
 import { lateDayReaderRunIds, lateDaysCarriedTo } from '@/lib/salary/late-days'
+import { isSalaryExtraRunsEnabled } from '@/lib/env/salary-extra-runs-switch'
+import { findRosterClashes, readSiblingRuns, rosterClashDetails } from '@/lib/salary/extra-runs'
 
 export type RunEmployeeResult<T> =
   | { ok: true; data: T }
@@ -47,6 +49,7 @@ interface DraftRunGate {
   status: string
   period_year: number
   period_month: number
+  payment_date?: string
   deviation_period_start?: string | null
   deviation_period_end?: string | null
   corrects_run_id?: string | null
@@ -59,7 +62,7 @@ async function assertRunDraftForRoster(
 ): Promise<RunEmployeeResult<DraftRunGate>> {
   const { data: run, error } = await supabase
     .from('salary_runs')
-    .select('id, status, period_year, period_month, deviation_period_start, deviation_period_end, corrects_run_id')
+    .select('id, status, period_year, period_month, payment_date, deviation_period_start, deviation_period_end, corrects_run_id')
     .eq('id', salaryRunId)
     .eq('company_id', companyId)
     .maybeSingle()
@@ -126,6 +129,24 @@ export async function addEmployeeToRun(
       ok: false,
       code: 'SALARY_RUN_EMPLOYEE_DUPLICATE',
       details: { salary_run_employee_id: (existing as { id: string }).id },
+    }
+  }
+
+  // Several runs in one month (extra-runs.ts): a person is on one run per
+  // payout month and period, so an employee another such run has is refused.
+  if (isSalaryExtraRunsEnabled(args.companyId) && gate.data.payment_date) {
+    const siblings = await readSiblingRuns(supabase, args.companyId, {
+      id: gate.data.id,
+      period_year: gate.data.period_year,
+      period_month: gate.data.period_month,
+      payment_date: gate.data.payment_date,
+      corrects_run_id: gate.data.corrects_run_id ?? null,
+    })
+    if (!siblings.ok) return { ok: false, code: 'INTERNAL_ERROR', details: { message: 'sibling run read failed' } }
+    const clashes = await findRosterClashes(supabase, args.companyId, siblings.runs, [args.employeeId])
+    if (!clashes.ok) return { ok: false, code: 'INTERNAL_ERROR', details: { message: 'sibling roster read failed' } }
+    if (clashes.clashes.length > 0) {
+      return { ok: false, code: 'SALARY_RUN_EMPLOYEE_IN_OTHER_RUN', details: rosterClashDetails(clashes.clashes) }
     }
   }
 

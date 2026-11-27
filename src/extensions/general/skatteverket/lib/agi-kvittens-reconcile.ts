@@ -3,6 +3,9 @@ import { createLogger } from '@/lib/logger'
 import { formatRedovisningsperiod } from '@/lib/skatteverket/format'
 import { companyRedovisare } from '@/lib/company/org-number'
 import { completeTaxDeadline } from '@/lib/deadlines/complete-tax-deadline'
+import { agiReportingPeriod, formatAgiPeriodDashed } from '@/lib/deadlines/agi-reporting-period'
+import { addMonthsIso, previousMonthEndIso } from '@/lib/dates/iso'
+import { isSalaryExtraRunsEnabled } from '@/lib/env/salary-extra-runs-switch'
 import { agiGetKvittenser } from './agi-client'
 import { isApigwClientRefusal } from './api-client'
 import { auditUserIdFor } from './audit'
@@ -156,19 +159,26 @@ export async function declarationKvittens(
 
   const { data: run, error: runError } = await supabase
     .from('salary_runs')
-    .select('period_year, period_month')
+    .select('period_year, period_month, payment_date')
     .eq('id', salaryRunId)
     .eq('company_id', companyId)
     .maybeSingle()
   if (runError) return { ok: false, error: `Kunde inte läsa lönekörningen: ${runError.message}` }
   if (!run) return { ok: true, kvittens: newest }
 
-  const { data: filedRuns, error: filedError } = await supabase
+  // A company with several runs in one month files the payout month's runs
+  // together: an earlier filing of the month may be a run of another period
+  // paid out in it, so the month is read by payout month.
+  const filedQuery = supabase
     .from('salary_runs')
     .select('agi_submitted_at')
     .eq('company_id', companyId)
-    .eq('period_year', run.period_year)
-    .eq('period_month', run.period_month)
+  const payout = agiReportingPeriod(run as { period_year: number; period_month: number; payment_date?: string | null })
+  const monthStart = `${formatAgiPeriodDashed(payout)}-01`
+  const { data: filedRuns, error: filedError } = await (isSalaryExtraRunsEnabled(companyId)
+    ? filedQuery.gte('payment_date', monthStart).lte('payment_date', previousMonthEndIso(addMonthsIso(monthStart, 1)))
+    : filedQuery.eq('period_year', run.period_year).eq('period_month', run.period_month)
+  )
     .neq('id', salaryRunId)
     .not('agi_submitted_at', 'is', null)
   if (filedError) return { ok: false, error: `Kunde inte läsa månadens tidigare inlämningar: ${filedError.message}` }
@@ -278,6 +288,14 @@ export async function reconcileAgiDeclaration(
  * `notifyUserId` null skips the email: the interactive check runs while the
  * user is looking at the panel, which shows the receipt itself.
  */
+/**
+ * The runs a filed declaration is the filing of: its holder, and every run a
+ * month summed over several runs lists (agi_declarations.salary_run_ids).
+ */
+export function filedRunIds(holder: string | null, covered: readonly string[] | null | undefined): string[] {
+  return [...new Set([...(holder ? [holder] : []), ...(covered ?? [])])]
+}
+
 export async function promoteAgiDeclaration(
   supabase: SupabaseClient,
   decl: PendingAgiDeclaration,
@@ -357,7 +375,7 @@ export async function promoteAgiDeclaration(
     .eq('id', declarationId)
     .eq('company_id', companyId)
     .in('status', [...(opts.fromStatuses ?? ['pending_signature'])])
-    .select('id')
+    .select('id, salary_run_ids')
 
   if (claimError) {
     return { status: 'error', error: `Kunde inte uppdatera deklarationen: ${claimError.message}` }
@@ -366,12 +384,14 @@ export async function promoteAgiDeclaration(
     return { status: 'already_claimed' }
   }
 
-  if (decl.salary_run_id) {
-    const { error: runError } = await supabase
-      .from('salary_runs')
-      .update({ agi_submitted_at: submittedAt })
-      .eq('id', decl.salary_run_id)
-      .eq('company_id', companyId)
+  // A month summed over several runs (salary_run_ids) is filed for every
+  // run it covers, not only the one holding the row.
+  const coveredRunIds = filedRunIds(decl.salary_run_id, (claimed[0] as { salary_run_ids?: string[] | null }).salary_run_ids)
+  if (coveredRunIds.length > 0) {
+    const stamp = supabase.from('salary_runs').update({ agi_submitted_at: submittedAt })
+    const { error: runError } = await (coveredRunIds.length > 1
+      ? stamp.in('id', coveredRunIds).eq('company_id', companyId)
+      : stamp.eq('id', coveredRunIds[0]).eq('company_id', companyId))
     if (runError) {
       // The declaration is already promoted and cannot be unwound here, and
       // no run revisits a submitted declaration, so the stamp stays missing

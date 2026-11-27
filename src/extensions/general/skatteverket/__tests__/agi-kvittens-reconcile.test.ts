@@ -32,6 +32,7 @@ vi.mock('@/lib/deadlines/complete-tax-deadline', () => ({
 
 import {
   declarationKvittens,
+  filedRunIds,
   newestAgiKvittens,
   reconcileAgiDeclaration,
   promoteAgiDeclaration,
@@ -76,10 +77,12 @@ function makeSupabase(opts: {
   const claimStatuses: unknown[] = []
   const recorded: Array<{ rows: unknown[]; options: unknown }> = []
   const updates: Array<{ table: string; values: any }> = []
+  const stampedIds: unknown[] = []
   return {
     claimStatuses,
     recorded,
     updates,
+    stampedIds,
     supabase: {
       from(table: string) {
         let op: 'read' | 'mutate' = 'read'
@@ -93,6 +96,7 @@ function makeSupabase(opts: {
         }))
         chain.in = vi.fn((column: string, values: unknown) => {
           if (table === 'agi_declarations' && column === 'status') claimStatuses.push(values)
+          if (table === 'salary_runs' && column === 'id') stampedIds.push(values)
           return chain
         })
         chain.update = vi.fn((values: unknown) => {
@@ -446,6 +450,22 @@ describe('promoteAgiDeclaration: the interactive check shares the claim', () => 
     expect(mockCompleteTaxDeadline).not.toHaveBeenCalled()
   })
 
+  it("files every run a month's summed declaration covers", async () => {
+    const { supabase, stampedIds, updates } = makeSupabase({
+      claim: { data: [{ id: DECL.id, salary_run_ids: [DECL.salary_run_id, 'run-sibling'] }] },
+    })
+
+    const outcome = await promoteAgiDeclaration(supabase, DECL, kvittens, {
+      reconciledBy: 'interactive',
+      submittedBy: 'user-9',
+      notifyUserId: null,
+    })
+
+    expect(outcome).toEqual({ status: 'signed', kvittensnummer: 'uuid-1' })
+    expect(stampedIds).toEqual([[DECL.salary_run_id, 'run-sibling']])
+    expect(updates.find((u) => u.table === 'salary_runs')?.values).toEqual({ agi_submitted_at: expect.any(String) })
+  })
+
   it('refuses a kvittens without a number', async () => {
     const { supabase, mutatedTables } = makeSupabase()
 
@@ -566,5 +586,13 @@ describe('newestAgiKvittens', () => {
     expect(newestAgiKvittens([untimed, { uuidKvittens: 'd' }] as any)).toBe(untimed)
     expect(newestAgiKvittens([unnumbered] as any)).toBeNull()
     expect(newestAgiKvittens(undefined)).toBeNull()
+  })
+})
+
+describe('filedRunIds', () => {
+  it('is the holder alone for a one-run declaration, and every covered run of a summed month once', () => {
+    expect(filedRunIds('run-a', null)).toEqual(['run-a'])
+    expect(filedRunIds('run-a', ['run-a', 'run-b'])).toEqual(['run-a', 'run-b'])
+    expect(filedRunIds(null, undefined)).toEqual([])
   })
 })

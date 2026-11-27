@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import {
   createQueuedMockSupabase,
@@ -21,7 +21,7 @@ vi.mock('@/lib/events', () => ({ eventBus: { emit: vi.fn().mockResolvedValue(und
 vi.mock('@/lib/salary/create-run', () => ({ createSalaryRunWithEmployees: vi.fn() }))
 vi.mock('@/lib/salary/run-calculation', () => ({ runSalaryCalculation: vi.fn() }))
 
-import { POST } from '../route'
+import { GET, POST } from '../route'
 import { eventBus } from '@/lib/events'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { createSalaryRunWithEmployees } from '@/lib/salary/create-run'
@@ -268,6 +268,54 @@ describe('POST /api/salary/runs — one-click creation', () => {
     expect(runSalaryCalculation).not.toHaveBeenCalled()
   })
 
+  it('creates an extra run beside the period\'s run when the body asks for one', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    authed(supabase)
+    enqueueMany([{ data: null }]) // settings: no duplicate pre-check for an extra run
+
+    const response = await POST(
+      post({ period_year: 2026, period_month: 6, payment_date: '2026-06-26', extra_run: true }),
+      { params: Promise.resolve({}) } as never,
+    )
+
+    expect(response.status).toBe(201)
+    expect(createSalaryRunWithEmployees).toHaveBeenCalledWith(
+      supabase,
+      'company-1',
+      'user-1',
+      expect.objectContaining({ periodYear: 2026, periodMonth: 6, paymentDate: '2026-06-26', extraRun: true }),
+    )
+  })
+
+  it('answers 409 SALARY_EXTRA_RUN_UNAVAILABLE when the company has no extra runs', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    authed(supabase)
+    enqueueMany([{ data: null }])
+    vi.mocked(createSalaryRunWithEmployees).mockRejectedValueOnce(
+      Object.assign(new Error('not switched on'), { name: 'SalaryExtraRunError', reason: 'not_enabled' }),
+    )
+
+    const response = await POST(
+      post({ period_year: 2026, period_month: 6, payment_date: '2026-06-26', extra_run: true }),
+      { params: Promise.resolve({}) } as never,
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details: { reason: string } } }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('SALARY_EXTRA_RUN_UNAVAILABLE')
+    expect(body.error.details.reason).toBe('not_enabled')
+  })
+
+  it('refuses a non-boolean extra_run with 400', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    authed(supabase)
+
+    const response = await POST(post({ extra_run: 'yes' }), { params: Promise.resolve({}) } as never)
+
+    expect(response.status).toBe(400)
+    expect(createSalaryRunWithEmployees).not.toHaveBeenCalled()
+  })
+
   it('returns 409 with existingId when an active run exists for the period', async () => {
     const { supabase, enqueueMany } = createQueuedMockSupabase()
     authed(supabase)
@@ -378,5 +426,35 @@ describe('POST /api/salary/runs — one-click creation', () => {
     expect(status).toBe(201)
     expect(body.data.id).toBe('run-new')
     expect(body.calculation).toEqual({ ok: false, code: 'SALARY_RUN_TAX_TABLE_MISSING' })
+  })
+})
+
+describe('GET /api/salary/runs', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  afterEach(() => {
+    delete process.env.SALARY_EXTRA_RUNS_COMPANY_IDS
+  })
+
+  it('says whether the company may start an extra run in a month that has one', async () => {
+    const off = createQueuedMockSupabase()
+    authed(off.supabase)
+    off.enqueue({ data: [{ id: 'run-1' }] })
+    const closed = await parseJsonResponse<{ data: unknown[]; extra_runs: boolean }>(
+      await GET(createMockRequest('/api/salary/runs'), { params: Promise.resolve({}) } as never),
+    )
+    expect(closed.status).toBe(200)
+    expect(closed.body).toEqual({ data: [{ id: 'run-1' }], extra_runs: false })
+
+    process.env.SALARY_EXTRA_RUNS_COMPANY_IDS = 'company-1'
+    const on = createQueuedMockSupabase()
+    authed(on.supabase)
+    on.enqueue({ data: [] })
+    const open = await parseJsonResponse<{ extra_runs: boolean }>(
+      await GET(createMockRequest('/api/salary/runs'), { params: Promise.resolve({}) } as never),
+    )
+    expect(open.body.extra_runs).toBe(true)
   })
 })

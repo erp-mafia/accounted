@@ -10,6 +10,8 @@ import {
   resolveDeviationWindowForNewRun,
   type DateWindow,
 } from './deviation-period'
+import { isSalaryExtraRunsEnabled } from '@/lib/env/salary-extra-runs-switch'
+import { findRosterClashes, nextRunNumber, readSiblingRuns } from './extra-runs'
 
 export interface CreateSalaryRunResult {
   run: Record<string, unknown>
@@ -37,6 +39,26 @@ export class SalaryRunExistsError extends Error {
     this.name = 'SalaryRunExistsError'
     this.existingId = existingId
     this.existingStatus = existingStatus
+  }
+}
+
+/**
+ * Thrown when an extra run (several runs in one month, lib/salary/extra-runs.ts)
+ * cannot be created: the company is not in SALARY_EXTRA_RUNS_COMPANY_IDS, or
+ * it calculates regionalt stöd, whose monthly cap the runs would each claim.
+ */
+export class SalaryExtraRunError extends Error {
+  readonly code = 'SALARY_EXTRA_RUN_UNAVAILABLE'
+  readonly reason: 'not_enabled' | 'regional_support'
+
+  constructor(reason: 'not_enabled' | 'regional_support') {
+    super(
+      reason === 'not_enabled'
+        ? 'Several salary runs in one month are not switched on for this company'
+        : 'An extra salary run cannot be combined with regionalt stöd',
+    )
+    this.name = 'SalaryExtraRunError'
+    this.reason = reason
   }
 }
 
@@ -107,15 +129,52 @@ export async function createSalaryRunWithEmployees(
     deviationPeriodEnd?: string | null
     /** Seed a base line per eligible employee (default true). */
     seedEmployees?: boolean
+    /**
+     * An extra run beside the period's run (SALARY_EXTRA_RUNS_COMPANY_IDS):
+     * it takes the period's next run_number. Throws SalaryExtraRunError for a
+     * company outside the list or one with regionalt stöd.
+     */
+    extraRun?: boolean
   },
 ): Promise<CreateSalaryRunResult> {
+  // A company in the list seeds no employee a sibling run already has (one
+  // run per payout month and period per person, extra-runs.ts), whichever
+  // run it creates.
+  const severalRuns = isSalaryExtraRunsEnabled(companyId)
+  let runNumber: number | null = null
+  if (params.extraRun) {
+    if (!severalRuns) throw new SalaryExtraRunError('not_enabled')
+    const { data: settings, error: settingsError } = await supabase
+      .from('company_settings')
+      .select('salary_regional_support')
+      .eq('company_id', companyId)
+      .maybeSingle()
+    if (settingsError) throw new Error(`Failed to load salary settings: ${settingsError.message}`)
+    if ((settings as { salary_regional_support?: boolean } | null)?.salary_regional_support === true) {
+      throw new SalaryExtraRunError('regional_support')
+    }
+    const next = await nextRunNumber(supabase, companyId, {
+      periodYear: params.periodYear,
+      periodMonth: params.periodMonth,
+    })
+    if (!next.ok) throw new Error(`Failed to number the extra salary run: ${String((next.error as { message?: string })?.message ?? next.error)}`)
+    runNumber = next.runNumber
+  }
+
   const { window: deviationWindow } = await resolveDeviationWindowForNewRun(supabase, companyId, {
     periodYear: params.periodYear,
     periodMonth: params.periodMonth,
     explicitStart: params.deviationPeriodStart,
     explicitEnd: params.deviationPeriodEnd,
   })
-  await assertNoDeviationOverlap(supabase, companyId, deviationWindow)
+  // An extra run reads its period's avvikelseperiod beside the period's
+  // other runs: their rosters never share a person, so no day is read twice.
+  await assertNoDeviationOverlap(
+    supabase,
+    companyId,
+    deviationWindow,
+    runNumber !== null ? { samePeriod: { periodYear: params.periodYear, periodMonth: params.periodMonth } } : undefined,
+  )
   const voucherSeries = await resolveSalaryRunSeries(supabase, companyId, params.voucherSeries)
 
   const { data: run, error: runError } = await supabase
@@ -130,6 +189,7 @@ export async function createSalaryRunWithEmployees(
       deviation_period_end: deviationWindow.end,
       voucher_series: voucherSeries,
       ...(params.notes ? { notes: params.notes } : {}),
+      ...(runNumber !== null ? { run_number: runNumber } : {}),
     })
     .select()
     .single()
@@ -171,11 +231,30 @@ export async function createSalaryRunWithEmployees(
       .toISOString()
       .slice(0, 10)
 
-    const eligibleEmployees = (employees || []).filter((emp) => {
+    let eligibleEmployees = (employees || []).filter((emp) => {
       if (emp.employment_start && emp.employment_start > periodEnd) return false
       if (emp.employment_end && emp.employment_end < periodStart) return false
       return true
     })
+
+    if (severalRuns && eligibleEmployees.length > 0) {
+      const siblings = await readSiblingRuns(supabase, companyId, run as {
+        id: string
+        period_year: number
+        period_month: number
+        payment_date: string
+      })
+      if (!siblings.ok) throw new Error('Failed to read the period\'s other salary runs')
+      const clashes = await findRosterClashes(
+        supabase,
+        companyId,
+        siblings.runs,
+        eligibleEmployees.map((emp) => emp.id as string),
+      )
+      if (!clashes.ok) throw new Error('Failed to read the rosters of the period\'s other salary runs')
+      const taken = new Set(clashes.clashes.map((clash) => clash.employee_id))
+      eligibleEmployees = eligibleEmployees.filter((emp) => !taken.has(emp.id as string))
+    }
 
     for (const emp of eligibleEmployees) {
       const baseAmount =

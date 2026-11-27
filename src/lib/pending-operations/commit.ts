@@ -5587,18 +5587,29 @@ async function commitCreateSalaryRun(
   try {
     const { createSalaryRunWithEmployees } = await import('@/lib/salary/create-run')
     const { SalaryDeviationPeriodError } = await import('@/lib/salary/deviation-period')
+    // An extra run beside the period's run (several runs in one month).
+    const extraRun = params.extra_run === true
     try {
       const { run, employeeCount, deviationWindow } = await createSalaryRunWithEmployees(
         supabase,
         companyId,
         userId,
-        { periodYear, periodMonth, paymentDate, deviationPeriodStart, deviationPeriodEnd, voucherSeries },
+        {
+          periodYear,
+          periodMonth,
+          paymentDate,
+          deviationPeriodStart,
+          deviationPeriodEnd,
+          voucherSeries,
+          ...(extraRun ? { extraRun: true } : {}),
+        },
       )
       return {
         data: {
           salary_run_id: (run as { id?: string }).id,
           employee_count: employeeCount,
           period: `${periodYear}-${String(periodMonth).padStart(2, '0')}`,
+          ...(extraRun ? { run_number: (run as { run_number?: number }).run_number ?? 1 } : {}),
           deviation_period_start: deviationWindow.start,
           deviation_period_end: deviationWindow.end,
         },
@@ -5609,6 +5620,10 @@ async function commitCreateSalaryRun(
           error: err.message,
           status: err.code === 'SALARY_RUN_DEVIATION_PERIOD_OVERLAP' ? 409 : 400,
         }
+      }
+      // By name, so a mocked module still matches (SalaryExtraRunError).
+      if (err instanceof Error && err.name === 'SalaryExtraRunError') {
+        return { error: err.message, status: 409 }
       }
       throw err
     }

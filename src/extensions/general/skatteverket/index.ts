@@ -100,7 +100,7 @@ import {
 } from './lib/skattekonto-sync'
 import { fetchDeclarationView, fetchVatDeclarationStatus } from './lib/declaration-status'
 import { runPostConnectRefresh } from './lib/post-connect-refresh'
-import { declarationKvittens, newestAgiKvittens, promoteAgiDeclaration } from './lib/agi-kvittens-reconcile'
+import { declarationKvittens, filedRunIds, newestAgiKvittens, promoteAgiDeclaration } from './lib/agi-kvittens-reconcile'
 import { recordAgiKvittenser } from './lib/agi-kvittens-history'
 import { readAgiSubmissionStatus } from './lib/agi-submission-status'
 import {
@@ -2088,7 +2088,7 @@ export const skatteverketExtension: Extension = {
             // superseded row.
             const { data: latest } = await ctx.supabase
               .from('agi_declarations')
-              .select('id, salary_run_id, status')
+              .select('id, salary_run_id, salary_run_ids, status')
               .eq('company_id', ctx.companyId)
               .eq('period_year', periodYear)
               .eq('period_month', periodMonth)
@@ -2211,7 +2211,18 @@ export const skatteverketExtension: Extension = {
                   })
                   .eq('id', latest.id)
 
-                if (latest.salary_run_id) {
+                // Every run a month summed over several runs covers.
+                const filedIds = filedRunIds(
+                  (latest.salary_run_id as string | null) ?? null,
+                  latest.salary_run_ids as string[] | null | undefined,
+                )
+                if (filedIds.length > 1) {
+                  await ctx.supabase
+                    .from('salary_runs')
+                    .update({ agi_submitted_at: submittedAt })
+                    .in('id', filedIds)
+                    .eq('company_id', ctx.companyId)
+                } else if (latest.salary_run_id) {
                   await ctx.supabase
                     .from('salary_runs')
                     .update({ agi_submitted_at: submittedAt })

@@ -10,7 +10,7 @@
  * run that is neither paid nor declared, a draft with the employee on it.
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import {
@@ -1261,5 +1261,36 @@ describe('registerRefusalMessageSv', () => {
   it('is null for any other code', () => {
     expect(registerRefusalMessageSv('VALIDATION_ERROR', { field: 'x' }, 'api')).toBeNull()
     expect(registerRefusalMessageSv('SALARY_REGISTER_DATES_LOCKED_BY_RUN', undefined, 'api')).toBeNull()
+  })
+})
+
+describe('planRegisterUpsert: several runs in one month', () => {
+  // Two runs of November share its window: the hourly staff's, booked on the
+  // 5th, and the monthly staff's, still a draft.
+  const BOOKED_HOURLY = run({ id: 'run-hourly', status: 'booked', period_year: 2026, period_month: 11 })
+  const DRAFT_MONTHLY = run({ id: 'run-monthly', status: 'draft', period_year: 2026, period_month: 11 })
+
+  beforeEach(() => {
+    process.env.SALARY_EXTRA_RUNS_COMPANY_IDS = COMPANY_ID
+  })
+
+  afterEach(() => {
+    delete process.env.SALARY_EXTRA_RUNS_COMPANY_IDS
+  })
+
+  it("lets the employee's own draft run read a day the other run of the period already booked past", async () => {
+    mock.enqueue({ data: [BOOKED_HOURLY, DRAFT_MONTHLY] })
+    mock.enqueue({ data: [{ salary_run_id: 'run-monthly' }] }) // the employee is on the monthly run
+    mock.enqueue({ data: [] })
+    const result = await upsert(['2026-11-10'])
+    expect(carriedTo(result)).toEqual({ '2026-11-10': null })
+  })
+
+  it("still locks the day for an employee on the booked run", async () => {
+    mock.enqueue({ data: [BOOKED_HOURLY, DRAFT_MONTHLY] })
+    mock.enqueue({ data: [{ salary_run_id: 'run-hourly' }] })
+    mock.enqueue({ data: [] })
+    const result = await upsert(['2026-11-10'])
+    expect(result).toMatchObject({ ok: false, code: 'SALARY_REGISTER_DATES_LOCKED_BY_RUN', details: { salary_run_id: 'run-hourly' } })
   })
 })

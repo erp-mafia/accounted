@@ -100,7 +100,7 @@ export const salaryRunsList = defineOperation({
     doNotUseFor:
       'One run\'s employees and calculation (gnubok_get_salary_run), one employee\'s payslip (gnubok_get_payslip) or the yearly lönejournal (gnubok_get_salary_journal).',
     pitfalls: [
-      'A company has at most one live run per period_year and period_month. A corrected run and its correction run share the period; the correction run is the live one.',
+      'A company has one live run per period_year and period_month, except where several runs in one month are switched on: the extra runs carry run_number 2 and up. A corrected run and its correction run share the period; the correction run is the live one.',
       'Totals are 0 until the run is calculated (gnubok_calculate_salary_run).',
       'Oldest first: to find the current run, filter by period_year and period_month, or by status draft, instead of paging to the end.',
       'The page is in salary_runs with next_cursor; a cursor that no longer decodes starts from the first page.',

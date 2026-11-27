@@ -3,7 +3,7 @@
  * (../agi-payable-declaration.ts, crm#1768): the generator's check for other
  * live runs paid out in the month, asked of a declaration already stored.
  */
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createTableMockSupabase } from '@/tests/helpers'
 import { readAgiPaymentPeriodConflict } from '../agi-payable-declaration'
 
@@ -138,5 +138,32 @@ describe('readAgiPaymentPeriodConflict', () => {
 
     db.setTable('salary_runs', salaryRuns(OWN_RUN, [OWN_LIVE], { live: { message: 'boom' } }))
     expect(await readAgiPaymentPeriodConflict(db.supabase as never, COMPANY, UNFILED)).toEqual({ ok: false, error: { message: 'boom' } })
+  })
+})
+
+describe('readAgiPaymentPeriodConflict: several runs in one month', () => {
+  beforeEach(() => {
+    process.env.SALARY_EXTRA_RUNS_COMPANY_IDS = COMPANY
+  })
+
+  afterEach(() => {
+    delete process.env.SALARY_EXTRA_RUNS_COMPANY_IDS
+  })
+
+  it("pays the month's declaration when it is summed over every live run of the month", async () => {
+    db = createTableMockSupabase({
+      salary_runs: salaryRuns(OWN_RUN, [OWN_LIVE, OTHER_LIVE]),
+      agi_declarations: () => ({ data: { salary_run_ids: ['run-other', 'run-own'] } }),
+    })
+    expect(await readAgiPaymentPeriodConflict(db.supabase as never, COMPANY, UNFILED)).toEqual({ ok: true, conflict: null })
+  })
+
+  it('refuses a declaration that leaves a live run of the month out', async () => {
+    db = createTableMockSupabase({
+      salary_runs: salaryRuns(OWN_RUN, [OWN_LIVE, OTHER_LIVE]),
+      agi_declarations: () => ({ data: { salary_run_ids: null } }),
+    })
+    const result = await readAgiPaymentPeriodConflict(db.supabase as never, COMPANY, UNFILED)
+    expect(result).toMatchObject({ ok: true, conflict: { code: 'AGI_PAYMENT_PERIOD_CONFLICT' } })
   })
 })

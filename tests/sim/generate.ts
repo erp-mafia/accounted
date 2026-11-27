@@ -115,7 +115,17 @@ export type SimEvent = Dated &
     | { type: 'pension_premium'; amount: number }
     | { type: 'pension_tax'; year: number }
     | { type: 'salary_change'; employee: string; monthlySalary: number }
-    | { type: 'payroll'; year: number; month: number }
+    | {
+        type: 'payroll'
+        year: number
+        month: number
+        /**
+         * Paid early in the month in a run of its own (several runs in one
+         * month): the employee and the payout day. The rest are paid on the
+         * payday in an extra run, and the month's AGI sums the two.
+         */
+        earlyPay?: { employee: string; date: string }
+      }
     | { type: 'payroll_taxes_paid'; year: number; month: number }
     | { type: 'vat_settlement'; year: number; quarter: number }
     | { type: 'vat_paid'; year: number; quarter: number }
@@ -488,7 +498,9 @@ export function generateCompany(seed: number, scaleName: SimScaleName): SimPlan 
       events.push({ type: 'pension_premium', date: weekday(iso(year, month, 20)), amount: PENSION_PREMIUM })
 
       const payday = weekday(iso(year, month, 25))
-      events.push({ type: 'payroll', date: payday, year, month })
+      // October 2025: one consultant is paid on the 6th in a run of its own.
+      const earlyPay = year === 2025 && month === 10 ? { employee: 'consultant-2', date: weekday(iso(year, month, 6)) } : undefined
+      events.push({ type: 'payroll', date: payday, year, month, ...(earlyPay ? { earlyPay } : {}) })
       const following = month === 12 ? iso(year + 1, 1, 12) : iso(year, month + 1, 12)
       // AGI and payment fall on the 12th, the 17th in January and August.
       const taxDay = month === 12 || month === 7 ? `${following.slice(0, 8)}17` : following

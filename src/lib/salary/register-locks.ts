@@ -42,6 +42,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { isSalaryExtraRunsEnabled } from '@/lib/env/salary-extra-runs-switch'
 import { SalaryCalculationPolicySchema } from './calculation-policy'
 import { runDeviationWindow, type DateWindow } from './deviation-period'
 import {
@@ -360,6 +361,26 @@ function refOf(run: CompanyRun): RegisterRunRef {
   }
 }
 
+/**
+ * The runs with the employee on them, for a company with several runs in one
+ * month (SALARY_EXTRA_RUNS_COMPANY_IDS): undefined for every other company,
+ * whose windows each have one live run.
+ */
+async function loadEmployeeRuns(
+  supabase: SupabaseClient,
+  companyId: string,
+  employeeId: string,
+): Promise<{ runs: ReadonlySet<string> | undefined } | { error: string }> {
+  if (!isSalaryExtraRunsEnabled(companyId)) return { runs: undefined }
+  const { data, error } = await supabase
+    .from('salary_run_employees')
+    .select('salary_run_id')
+    .eq('company_id', companyId)
+    .eq('employee_id', employeeId)
+  if (error) return { error: error.message }
+  return { runs: new Set(((data ?? []) as Array<{ salary_run_id: string }>).map((row) => row.salary_run_id)) }
+}
+
 /** Every run of the company, one query, literal select. */
 async function loadCompanyRuns(
   supabase: SupabaseClient,
@@ -375,8 +396,22 @@ async function loadCompanyRuns(
   return { runs: ((Array.isArray(data) ? data : []) as CompanyRun[]).slice().sort(byPeriod) }
 }
 
-/** The earliest run in a locking status whose window holds the date: the run that read it. */
-function windowLockingRun(runs: CompanyRun[], date: string): CompanyRun | null {
+/**
+ * The earliest run in a locking status whose window holds the date: the run
+ * that read it. `employeeRuns` (several runs in one month, extra-runs.ts):
+ * the runs with the employee on them. Runs of one period share a window but
+ * never a person, so the live run that has the employee is the one that
+ * reads the day; without one, the earliest locking run decides, as before.
+ */
+function windowLockingRun(runs: CompanyRun[], date: string, employeeRuns?: ReadonlySet<string>): CompanyRun | null {
+  if (employeeRuns) {
+    const own = runs.find((run) => {
+      if (run.status === 'corrected' || !employeeRuns.has(run.id)) return false
+      const window = windowOf(run)
+      return date >= window.start && date <= window.end
+    })
+    if (own) return LOCKING.includes(own.status) ? own : null
+  }
   for (const run of runs) {
     if (!LOCKING.includes(run.status)) continue
     const window = windowOf(run)
@@ -458,8 +493,13 @@ function chainDepth(runs: CompanyRun[], run: CompanyRun): number {
  * run, as it would be under that run itself. An employee no version paid
  * (added to the correction) has the day read by the correction, as before.
  */
-function newDayWindowRun(runs: CompanyRun[], date: string, paidByCorrected: ReadonlySet<string>): CompanyRun | null {
-  const live = windowLockingRun(runs, date)
+function newDayWindowRun(
+  runs: CompanyRun[],
+  date: string,
+  paidByCorrected: ReadonlySet<string>,
+  employeeRuns?: ReadonlySet<string>,
+): CompanyRun | null {
+  const live = windowLockingRun(runs, date, employeeRuns)
   // An ordinary run that reads the window decides it; only a correction
   // defers to the version it replaces.
   if (live && (runIsSettled(live) || !live.corrects_run_id)) return live
@@ -544,8 +584,10 @@ function lockFailure(refusals: Refusal[], runs: CompanyRun[], onRoster: Readonly
 }
 
 /** The lock a registered row is under: its carry's live reader, or its window's run. */
-function rowRefusal(runs: CompanyRun[], row: RegisterRow): Refusal | null {
-  const run = row.carried_to_run_id ? liveCarriedReader(runs, row.carried_to_run_id) : windowLockingRun(runs, row.date)
+function rowRefusal(runs: CompanyRun[], row: RegisterRow, employeeRuns?: ReadonlySet<string>): Refusal | null {
+  const run = row.carried_to_run_id
+    ? liveCarriedReader(runs, row.carried_to_run_id)
+    : windowLockingRun(runs, row.date, employeeRuns)
   if (!run || !LOCKING.includes(run.status)) return null
   return { run, date: row.date, reason: runIsSettled(run) ? 'read_by_settled_run' : 'run_not_settled' }
 }
@@ -799,6 +841,9 @@ export async function planRegisterUpsert(
   const loaded = await loadCompanyRuns(supabase, companyId)
   if ('error' in loaded) return internal(loaded.error)
   const { runs } = loaded
+  const employeeRunsLoad = await loadEmployeeRuns(supabase, companyId, args.employeeId)
+  if ('error' in employeeRunsLoad) return internal(employeeRunsLoad.error)
+  const employeeRuns = employeeRunsLoad.runs
 
   const existing = await loadExistingRows(supabase, companyId, {
     kind: args.kind,
@@ -840,7 +885,7 @@ export async function planRegisterUpsert(
   for (const date of dates) {
     const row = existingByDate.get(date)
     if (row) {
-      const refusal = rowRefusal(runs, row)
+      const refusal = rowRefusal(runs, row, employeeRuns)
       if (refusal) {
         refusals.push(refusal)
         continue
@@ -857,7 +902,7 @@ export async function planRegisterUpsert(
       if (reader) readers.add(reader.id)
       continue
     }
-    const run = newDayWindowRun(runs, date, paidByCorrected)
+    const run = newDayWindowRun(runs, date, paidByCorrected, employeeRuns)
     if (!run) {
       const gap = args.kind === 'absence' ? gapPeriodRun(runs, date) : null
       if (gap) gapDays.set(date, { ...gap, existing: false })
@@ -955,11 +1000,13 @@ export async function checkRegisterRangeDelete(
   const loaded = await loadCompanyRuns(supabase, companyId)
   if ('error' in loaded) return internal(loaded.error)
   const { runs } = loaded
+  const employeeRunsLoad = await loadEmployeeRuns(supabase, companyId, args.employeeId)
+  if ('error' in employeeRunsLoad) return internal(employeeRunsLoad.error)
 
   const refusals: Refusal[] = []
   const readers = new Set<string>()
   for (const row of loadedRows.rows) {
-    const refusal = rowRefusal(runs, row)
+    const refusal = rowRefusal(runs, row, employeeRunsLoad.runs)
     if (refusal) {
       refusals.push(refusal)
       continue

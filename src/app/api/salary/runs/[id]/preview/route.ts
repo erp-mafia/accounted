@@ -13,6 +13,7 @@ import {
 import { runRemeasuresVacationLiability } from '@/lib/salary/vacation-liability-method'
 import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import { loadPostedSalaryRunEntries, PostedSalaryEntriesReadError } from '@/lib/salary/posted-run-entries'
+import { loadMonthAvgifterContext, type MonthContextRun } from '@/lib/salary/extra-runs'
 import type { CreateJournalEntryLineInput } from '@/types'
 
 /**
@@ -110,8 +111,17 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     const remeasureLines = remeasure
       ? (await planRunVacationRemeasure(supabase, companyId, runRow)).lines
       : undefined
+    // A month with several runs previews the 2731 share the booking takes
+    // (loadMonthAvgifterContext, the booking's own read).
+    const runData = salaryRunDataFromRows(runRow, employees as SalaryRosterRow[])
+    const month = await loadMonthAvgifterContext(supabase, companyId, runRow as unknown as MonthContextRun)
+    if (!month.ok) {
+      log.error('salary run preview: month runs read failed', { salaryRunId: id })
+      return NextResponse.json({ error: 'Kunde inte läsa månadens andra lönekörningar' }, { status: 500 })
+    }
+    if (month.context) runData.month_avgifter = month.context
     const built = buildSalaryRunEntryLines(
-      salaryRunDataFromRows(runRow, employees as SalaryRosterRow[]),
+      runData,
       desc,
       await resolvePrimaryBankAccount(supabase, companyId, log),
       remeasureLines,

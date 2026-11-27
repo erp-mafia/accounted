@@ -55,6 +55,7 @@ Ask them together, in one message, with what you already found:
 
 - **Avvikelseperiod:** absence and worked days are read from a deviation window. Default is the company setting (same month, or the common "föregående månads avvikelser"). The staged preview shows the resolved window; tell the user which dates it covers. Override only on request, with both \`deviation_period_start\` and \`deviation_period_end\`. A window that overlaps another run is refused (the same sick day would be deducted twice).
 - **"Salary run already exists for this period":** one run per company and month. Do not create another. The error names the existing run's id and status; or call \`gnubok_get_salary_run({ period_year, period_month })\`. Ask whether the user means that run.
+- **Groups paid on different days:** a company with several runs in one month switched on can pay a second group in an extra run: \`gnubok_create_salary_run({ ..., extra_run: true })\`. It is seeded with the employees no other run of the period or payout month has; an employee is on one run per payout month. Everywhere else the refusal SALARY_EXTRA_RUN_UNAVAILABLE says to keep everyone in the period's run.
 - After approval the run id is in the approved operation's result. Keep it for every later step.
 
 To change a draft's payment date, voucher series or note: \`gnubok_update_salary_run\` (search-only write: stage it through \`gnubok_stage_tool\` if it is not in your tool list). Changing the payment date clears the calculation.

@@ -109,6 +109,7 @@ import {
   resolveDeviationWindowForNewRun,
 } from '@/lib/salary/deviation-period'
 import { resolveSalaryRunSeries } from '@/lib/salary/create-run'
+import { isSalaryExtraRunsEnabled } from '@/lib/env/salary-extra-runs-switch'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import {
   DEFAULT_REVERSE_CHARGE_KIND,
@@ -21392,17 +21393,38 @@ export const tools: McpTool[] = [
         ]
         if (periodIssues.length > 0) throw fieldValidationError('Invalid arguments', periodIssues)
         // The partial unique index (status != corrected) leaves at most one
-        // live run per period; a corrected original coexists with its
-        // correction, so exclude it explicitly.
-        const { data, error } = await supabase
+        // live run per period and run number; a corrected original coexists
+        // with its correction, so exclude it explicitly. A company with
+        // several runs in one month can have more than one: then the run is
+        // named by id.
+        const periodQuery = supabase
           .from('salary_runs')
           .select('*')
           .eq('company_id', companyId)
           .eq('period_year', periodYear)
           .eq('period_month', periodMonth)
           .neq('status', 'corrected')
-          .maybeSingle()
-        if (error) throw dbError(error)
+        let data: Record<string, unknown> | null
+        if (isSalaryExtraRunsEnabled(companyId)) {
+          const { data: rows, error } = await periodQuery.order('run_number', { ascending: true })
+          if (error) throw dbError(error)
+          const list = (rows ?? []) as Array<{ id: string; run_number?: number | null; payment_date?: string; status?: string }>
+          if (list.length > 1) {
+            const named = list
+              .map((r) => `run ${r.run_number ?? 1} paid ${r.payment_date} (${r.status}, salary_run_id ${r.id})`)
+              .join('; ')
+            throw codedRefusal('SALARY_RUN_SEVERAL_IN_PERIOD', `The period has ${list.length} salary runs: ${named}.`, {
+              description: 'Call again with the salary_run_id of the run you mean.',
+              tool: 'gnubok_get_salary_run',
+              args: { salary_run_id: list[0].id },
+            })
+          }
+          data = (list[0] as Record<string, unknown> | undefined) ?? null
+        } else {
+          const { data: row, error } = await periodQuery.maybeSingle()
+          if (error) throw dbError(error)
+          data = row as Record<string, unknown> | null
+        }
         if (!data) {
           const period = `${periodYear}-${String(periodMonth).padStart(2, '0')}`
           // Say which runs do exist: agents looking for the latest run asked
@@ -21504,6 +21526,8 @@ export const tools: McpTool[] = [
         payment_date: { type: 'string', description: 'YYYY-MM-DD' },
         deviation_period_start: { type: 'string', description: 'YYYY-MM-DD; with end, else company setting' },
         deviation_period_end: { type: 'string', description: 'YYYY-MM-DD inclusive' },
+        // Explained by the refusal it answers (payload ceiling).
+        extra_run: { type: 'boolean' },
       },
       required: ['period_year', 'period_month', 'payment_date'],
     },
@@ -21516,6 +21540,19 @@ export const tools: McpTool[] = [
         payment_date: string
         deviation_period_start?: string
         deviation_period_end?: string
+      }
+      // An extra run beside the period's run: several runs in one month,
+      // for a company in SALARY_EXTRA_RUNS_COMPANY_IDS only.
+      const extraRun = (args as { extra_run?: unknown }).extra_run === true
+      if (extraRun && !isSalaryExtraRunsEnabled(companyId)) {
+        throw codedRefusal(
+          'SALARY_EXTRA_RUN_UNAVAILABLE',
+          'Several salary runs in one month are not switched on for this company.',
+          {
+            description:
+              "Create no extra run. Put the employees in the period's run (gnubok_get_salary_run with period_year and period_month), and pay any group earlier outside the run's payment file.",
+          },
+        )
       }
       if (!Number.isInteger(period_year) || period_year < 1900 || period_year > 9999) {
         throw badArgument('period_year', 'period_year must be a 4-digit year')
@@ -21536,7 +21573,12 @@ export const tools: McpTool[] = [
           explicitEnd: deviation_period_end,
         },
       )
-      await assertNoDeviationOverlap(supabase, companyId, deviationWindow)
+      await assertNoDeviationOverlap(
+        supabase,
+        companyId,
+        deviationWindow,
+        extraRun ? { samePeriod: { periodYear: period_year, periodMonth: period_month } } : undefined,
+      )
       // The company's salary series, resolved now so the approver sees which
       // verifikationsserie the run books into (the same rule as the app and v1).
       const voucherSeries = await resolveSalaryRunSeries(supabase, companyId)
@@ -21556,7 +21598,9 @@ export const tools: McpTool[] = [
         companyId,
         userId,
         type: 'create_salary_run',
-        title: `Skapa löneutbetalning: ${period} (${employeeCount ?? 0} anställda)`,
+        title: extraRun
+          ? `Skapa extra löneutbetalning: ${period}, utbetalning ${payment_date}`
+          : `Skapa löneutbetalning: ${period} (${employeeCount ?? 0} anställda)`,
         params: {
           period_year,
           period_month,
@@ -21564,9 +21608,13 @@ export const tools: McpTool[] = [
           deviation_period_start: deviationWindow.start,
           deviation_period_end: deviationWindow.end,
           voucher_series: voucherSeries,
+          ...(extraRun ? { extra_run: true } : {}),
         },
         preview: {
           period,
+          ...(extraRun
+            ? { extra_run: true, employees: 'the active employees no other run of the period or payout month has' }
+            : {}),
           payment_date,
           deviation_period_start: deviationWindow.start,
           deviation_period_end: deviationWindow.end,

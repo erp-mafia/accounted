@@ -21,6 +21,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { AGI_RECEIPT_STATUSES } from '@/lib/deadlines/agi-filed'
+import { isSalaryExtraRunsEnabled } from '@/lib/env/salary-extra-runs-switch'
 import { agiPeriodConflictDetails, readOtherRunsPaidInPeriod } from './agi-period-runs'
 
 /** The agi_declarations columns the check reads. */
@@ -80,6 +81,25 @@ export async function readAgiPaymentPeriodConflict(
   const others = await readOtherRunsPaidInPeriod(supabase, companyId, agiPeriod, run)
   if (!others.ok) return { ok: false, error: others.error }
   if (others.runs.length === 0) return { ok: true, conflict: null }
+
+  // Several runs in one month (SALARY_EXTRA_RUNS_COMPANY_IDS): the month's
+  // declaration is summed over its runs and lists them (salary_run_ids).
+  // When it lists every live run of the month, its total is what the month
+  // owes.
+  if (isSalaryExtraRunsEnabled(companyId)) {
+    const { data: covering, error: coverError } = await supabase
+      .from('agi_declarations')
+      .select('salary_run_ids')
+      .eq('company_id', companyId)
+      .eq('period_year', declaration.period_year)
+      .eq('period_month', declaration.period_month)
+      .maybeSingle()
+    if (coverError) return { ok: false, error: coverError }
+    const covered = (covering as { salary_run_ids?: string[] | null } | null)?.salary_run_ids ?? null
+    if (covered && covered.includes(run.id) && others.runs.every((other) => covered.includes(other.id))) {
+      return { ok: true, conflict: null }
+    }
+  }
 
   const details = agiPeriodConflictDetails(
     agiPeriod,

@@ -57,6 +57,9 @@ export default function SalaryPage() {
   // the run list has loaded; null means "let the server decide" and the
   // button keeps its plain label rather than naming a month it cannot know.
   const [choices, setChoices] = useState<RunPeriodChoice[] | null>(null)
+  // Whether a month with a run may get an extra run (several runs in one
+  // month, SALARY_EXTRA_RUNS_COMPANY_IDS): the run list says so.
+  const [extraRuns, setExtraRuns] = useState(false)
   const { canWrite } = useCanWrite()
   const { settings } = useCompanySettings()
   const { toast } = useToast()
@@ -70,8 +73,9 @@ export default function SalaryPage() {
   const load = useCallback(async () => {
     const runsRes = await fetch('/api/salary/runs').catch(() => null)
     if (runsRes?.ok) {
-      const { data } = await runsRes.json()
+      const { data, extra_runs: extraRunsOn } = await runsRes.json()
       setRuns(data || [])
+      setExtraRuns(extraRunsOn === true)
       setChoices(runPeriodChoices(data || [], new Date()))
       setRunsFailed(false)
     } else {
@@ -90,14 +94,20 @@ export default function SalaryPage() {
   // the button or its menu names, sent explicitly so the click creates exactly
   // that month; null lets the server pick. A month that has a run by now
   // (someone else started it meanwhile) answers 409 and is opened instead.
-  async function startRun(period: RunPeriod | null) {
+  async function startRun(period: RunPeriod | null, extraRun = false) {
     setStartingKey(period ? formatRunPeriod(period) : 'default')
     try {
       const res = await fetch('/api/salary/runs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(
-          period ? { period_year: period.period_year, period_month: period.period_month } : {},
+          period
+            ? {
+                period_year: period.period_year,
+                period_month: period.period_month,
+                ...(extraRun ? { extra_run: true } : {}),
+              }
+            : {},
         ),
       })
       const json = await res.json().catch(() => null)
@@ -146,23 +156,28 @@ export default function SalaryPage() {
           period_month: choice.period_month,
         })
       : null
+    // A month with a run gets an extra run where the company has several
+    // runs in one month: for the employees no other run of it pays.
+    const extra = choice.hasRun && extraRuns
     return {
       key,
       // Same YYYY-MM the new run gets in the table below and in its own title.
-      label: t('start_run_for_period', { period: key }),
+      label: extra ? t('start_extra_run_for_period', { period: key }) : t('start_run_for_period', { period: key }),
       icon: PlusIcon,
-      description: choice.hasRun
-        ? t('start_run_choice_exists')
-        : paymentDate && agiPeriod
-          ? t('start_run_choice_payout', {
-              date: formatDate(paymentDate),
-              agi_period: formatAgiPeriodDashed(agiPeriod),
-            })
-          : undefined,
-      disabled: choice.hasRun || (startingKey !== null && startingKey !== key),
-      disabledTitle: choice.hasRun ? t('start_run_choice_exists') : undefined,
+      description: extra
+        ? t('start_extra_run_choice')
+        : choice.hasRun
+          ? t('start_run_choice_exists')
+          : paymentDate && agiPeriod
+            ? t('start_run_choice_payout', {
+                date: formatDate(paymentDate),
+                agi_period: formatAgiPeriodDashed(agiPeriod),
+              })
+            : undefined,
+      disabled: (choice.hasRun && !extra) || (startingKey !== null && startingKey !== key),
+      disabledTitle: choice.hasRun && !extra ? t('start_run_choice_exists') : undefined,
       busy: startingKey === key,
-      onSelect: () => startRun(choice),
+      onSelect: () => startRun(choice, extra),
     }
   })
 
@@ -311,7 +326,9 @@ export default function SalaryPage() {
                             className="hover:underline"
                             onClick={(e) => e.stopPropagation()}
                           >
-                            {formatRunPeriod(run)}
+                            {(run.run_number ?? 1) > 1
+                              ? t('run_period_extra', { period: formatRunPeriod(run), number: run.run_number ?? 1 })
+                              : formatRunPeriod(run)}
                           </Link>
                         </td>
                         {/* overflow-hidden: see #2003, nothing in this cell

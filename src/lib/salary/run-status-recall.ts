@@ -25,6 +25,7 @@
  * A dry run reads and checks and answers what would change; it writes
  * nothing (it is also the MCP staging preview).
  */
+import { isSalaryExtraRunsEnabled } from '@/lib/env/salary-extra-runs-switch'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import { eventBus } from '@/lib/events'
 import { isSalaryInBankPaymentError } from '@/lib/salary/payment/in-bank-payment'
@@ -143,11 +144,12 @@ export async function unapproveSalaryRun(
   // the same error, so a run with two rows read as having none. A failed read
   // refuses: whether the AGI is filed is unknown, and recalling a filed run
   // is what this check exists to stop (accounted#58).
-  const { data: agiRows, error: agiError } = await supabase
-    .from('agi_declarations')
-    .select('id, status')
-    .eq('company_id', companyId)
-    .eq('salary_run_id', salaryRunId)
+  // A month summed over several runs (SALARY_EXTRA_RUNS_COMPANY_IDS) is the
+  // declaration of every run it lists, whichever run holds the row.
+  const agiQuery = supabase.from('agi_declarations').select('id, status').eq('company_id', companyId)
+  const { data: agiRows, error: agiError } = await (isSalaryExtraRunsEnabled(companyId)
+    ? agiQuery.or(`salary_run_id.eq.${salaryRunId},salary_run_ids.cs.{${salaryRunId}}`)
+    : agiQuery.eq('salary_run_id', salaryRunId))
   if (agiError) {
     log.error('salary run unapprove: AGI declaration read failed', agiError as Error)
     return { ok: false, code: 'SALARY_RUN_UNAPPROVE_FAILED' }

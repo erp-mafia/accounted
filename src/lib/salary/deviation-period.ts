@@ -255,11 +255,17 @@ function windowsOverlap(a: DateWindow, b: DateWindow): boolean {
  * August run already read August, so a September run under 'previous_month'
  * would read August again. The error names the conflicting run so the
  * caller can pass an explicit non-overlapping window instead.
+ *
+ * `samePeriod`: an extra run of that period (several runs in one month,
+ * extra-runs.ts) may share the window of the period's other runs. Their
+ * rosters never share a person, so no person's day is read twice; a run of
+ * another period still refuses.
  */
 export async function assertNoDeviationOverlap(
   supabase: SupabaseClient,
   companyId: string,
   window: DateWindow,
+  options?: { samePeriod?: { periodYear: number; periodMonth: number } },
 ): Promise<void> {
   const { data, error } = await supabase
     .from('salary_runs')
@@ -270,7 +276,9 @@ export async function assertNoDeviationOverlap(
     throw new Error(`Failed to check deviation period overlap: ${error.message}`)
   }
   const rows = (Array.isArray(data) ? data : []) as Array<RunDeviationSource & { id: string }>
+  const samePeriod = options?.samePeriod
   for (const row of rows) {
+    if (samePeriod && row.period_year === samePeriod.periodYear && row.period_month === samePeriod.periodMonth) continue
     const other = runDeviationWindow(row)
     if (windowsOverlap(window, other)) {
       throw new SalaryDeviationPeriodError(

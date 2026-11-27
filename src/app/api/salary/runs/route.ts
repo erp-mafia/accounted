@@ -4,7 +4,8 @@ import { CreateSalaryRunWithDefaultsSchema } from '@/lib/api/schemas'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import { createSalaryRunWithEmployees } from '@/lib/salary/create-run'
+import { createSalaryRunWithEmployees, type SalaryExtraRunError } from '@/lib/salary/create-run'
+import { isSalaryExtraRunsEnabled } from '@/lib/env/salary-extra-runs-switch'
 import { SalaryDeviationPeriodError } from '@/lib/salary/deviation-period'
 import { defaultRunPaymentDate, formatRunPeriod, nextRunPeriod } from '@/lib/salary/next-run-period'
 import { runSalaryCalculation } from '@/lib/salary/run-calculation'
@@ -37,7 +38,9 @@ export const GET = withRouteContext(
       return errorResponse(error, log, { requestId })
     }
 
-    return NextResponse.json({ data })
+    // extra_runs: the company may start an extra run in a month that has
+    // one (SALARY_EXTRA_RUNS_COMPANY_IDS), so the Löner page can offer it.
+    return NextResponse.json({ data, extra_runs: isSalaryExtraRunsEnabled(companyId) })
   },
 )
 
@@ -55,7 +58,10 @@ export const GET = withRouteContext(
  * immediately; a calculation failure is
  * non-fatal (201 with calculation.ok=false, user lands on the draft).
  * A month that already has a live run answers 409 SALARY_RUN_DUPLICATE_PERIOD
- * (the v1 route's code) naming the month, with the existing run's id.
+ * (the v1 route's code) naming the month, with the existing run's id, unless
+ * the body asks for an extra run (extra_run, SALARY_EXTRA_RUNS_COMPANY_IDS):
+ * that run takes the period's next run number and the employees no other run
+ * of its period or payout month has.
  */
 export const POST = withRouteContext(
   'salary_run.create',
@@ -116,15 +122,17 @@ export const POST = withRouteContext(
     // Corrected runs coexist with their correction in the same period (the
     // unique index is partial), so exclude them - and use maybeSingle():
     // .single() errors on multiple rows and would skip the 409.
-    const { data: existing } = await supabase
-      .from('salary_runs')
-      .select('id')
-      .eq('company_id', companyId)
-      .eq('period_year', periodYear)
-      .eq('period_month', periodMonth)
-      .neq('status', 'corrected')
-      .limit(1)
-      .maybeSingle()
+    const { data: existing } = body.extra_run
+      ? { data: null }
+      : await supabase
+          .from('salary_runs')
+          .select('id')
+          .eq('company_id', companyId)
+          .eq('period_year', periodYear)
+          .eq('period_month', periodMonth)
+          .neq('status', 'corrected')
+          .limit(1)
+          .maybeSingle()
 
     if (existing) {
       return duplicatePeriod({ existingId: existing.id })
@@ -141,12 +149,18 @@ export const POST = withRouteContext(
         notes: body.notes,
         deviationPeriodStart: body.deviation_period_start,
         deviationPeriodEnd: body.deviation_period_end,
+        ...(body.extra_run ? { extraRun: true } : {}),
       })
       run = created.run
       employeeCount = created.employeeCount
     } catch (err) {
       if (err instanceof SalaryDeviationPeriodError) {
         return errorResponseFromCode(err.code, log, { requestId, details: err.details })
+      }
+      // By name, like SalaryRunExistsError below, so a mocked module still matches.
+      if (err instanceof Error && err.name === 'SalaryExtraRunError') {
+        const extraErr = err as SalaryExtraRunError
+        return errorResponseFromCode('SALARY_EXTRA_RUN_UNAVAILABLE', log, { requestId, details: { reason: extraErr.reason } })
       }
       const message = err instanceof Error ? err.message : 'unknown error'
       // Race with a concurrent create: the lib throws SalaryRunExistsError
