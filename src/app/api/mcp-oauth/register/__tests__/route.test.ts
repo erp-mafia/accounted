@@ -194,6 +194,53 @@ describe('POST /api/mcp-oauth/register', () => {
     expect(body.client_secret).toBeUndefined()
   })
 
+  // The body Gemini custom apps send today: one callback on each of Google's
+  // three relay hosts, under /r/ and /a/ (captured verbatim on other MCP
+  // servers, BerriAI/litellm issue 46640 and emergent-company/emergent.memory
+  // issue 411; the id here is made up).
+  const geminiId = 'user_bound_custom-mcp-4815162342c0ffee15deadbe'
+  const geminiSix = [
+    `https://oauth-redirect-sandbox.googleusercontent.com/r/${geminiId}`,
+    `https://oauth-redirect-test.googleusercontent.com/r/${geminiId}`,
+    `https://oauth-redirect.googleusercontent.com/r/${geminiId}`,
+    `https://oauth-redirect-sandbox.googleusercontent.com/a/${geminiId}`,
+    `https://oauth-redirect-test.googleusercontent.com/a/${geminiId}`,
+    `https://oauth-redirect.googleusercontent.com/a/${geminiId}`,
+  ]
+
+  it('registers the six callbacks Gemini sends by keeping only the production /r/ one', async () => {
+    const response = await POST(createRequest({
+      client_name: 'Google',
+      redirect_uris: geminiSix,
+      response_types: ['code'],
+      grant_types: ['authorization_code', 'refresh_token'],
+      token_endpoint_auth_method: 'client_secret_post',
+    }))
+    expect(response.status).toBe(201)
+    const body = await response.json()
+    expect(body.redirect_uris).toEqual([`https://oauth-redirect.googleusercontent.com/r/${geminiId}`])
+    expect(body.token_endpoint_auth_method).toBe('none')
+  })
+
+  it('refuses Gemini\'s test, sandbox and /a/ callbacks without the production one', async () => {
+    const response = await POST(createRequest({
+      redirect_uris: geminiSix.filter((u) => !u.startsWith('https://oauth-redirect.googleusercontent.com/r/')),
+    }))
+    expect(response.status).toBe(400)
+    expect((await response.json()).error).toBe('invalid_redirect_uri')
+  })
+
+  it('still refuses a Gemini registration that also holds an unknown callback', async () => {
+    for (const extra of [
+      'https://evil.com/callback',
+      'https://oauth-redirect-test.googleusercontent.com/r/some-cloud-project',
+      'https://oauth-redirect.googleusercontent.com/a/some-cloud-project',
+    ]) {
+      const response = await POST(createRequest({ redirect_uris: [...geminiSix, extra] }))
+      expect(response.status, extra).toBe(400)
+    }
+  })
+
   it('registers a Copilot Studio connector on Power Platform\'s consent callback as a public client', async () => {
     const redirect = 'https://global.consent.azure-apim.net/redirect/cr7d9-5fmonday-20mcp-20test-2077-5f0f516cbecf05asda'
     const response = await POST(createRequest({
