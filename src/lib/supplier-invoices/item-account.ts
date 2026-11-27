@@ -291,6 +291,9 @@ export async function moveSupplierInvoiceItemAccount(
       old_account: row.account_number,
       new_account: accountNumber,
       amount: roundOre(Number(row.line_total)),
+      // The currency amount is in: without it the review reads a foreign
+      // line's amount as kronor.
+      currency: inv.currency ?? 'SEK',
       changed: true,
     }
     if (!entryId) {
