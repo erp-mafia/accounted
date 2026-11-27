@@ -222,6 +222,7 @@ The first stable release of the public REST API. Six phases of development cover
 
 ### Journal entries: a filed momsperiod (2026-11)
 
+- **New booking-time warning \`OPEN_INVOICE_COVERS_POSTING\`** (2026-11-27): a typed verifikat whose net credit on kundfordringar, or net debit on leverantörsskulder, is exactly what an open invoice in kronor has left to pay answers \`409 VOUCHER_NEEDS_CONFIRMATION\` with the code in \`details.warnings\` (\`details.invoices\` names each invoice by kind and id), like the other warnings: match the payment to the invoice instead, or send the same lines again with the code in \`acknowledged_warnings\` when the posting is meant. A rättelse and an ingående balans are not asked.
 - **New booking-time warning \`VAT_PERIOD_ALREADY_FILED\`** (2026-11-17): \`POST /journal-entries/{id}/commit\` of a typed draft that moves a ruta of a momsperiod whose declaration is on record as filed answers \`409 VOUCHER_NEEDS_CONFIRMATION\` with the code in \`details.warnings\` (\`details.filed_periods\` names each period, its filing date and the rutor that move), like the other warnings of that answer. Show it to a person; to book anyway, send the same request with \`acknowledged_warnings\` naming the code. The declaration for the period may then need correcting. A draft that changes no ruta of a filed period is not asked, and a locked period still refuses as before.
 
 ### Fiscal periods and journal entries (2026-10)

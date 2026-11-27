@@ -22,8 +22,10 @@
  * guard rail #9: identical to the route's previous `Math.round(x*100)/100`
  * except on exact-half-öre amounts, where `roundOre` rounds correctly.
  */
-import { roundOre, ORE_TOLERANCE, ORE_ROUNDING_ACCOUNT, ORE_ROUNDING_SETTLEMENT_MAX } from '@/lib/money'
+import { roundOre, sumOre, equalOre, isZeroOre, ORE_TOLERANCE, ORE_ROUNDING_ACCOUNT, ORE_ROUNDING_SETTLEMENT_MAX } from '@/lib/money'
 import { bookedOreRounding, oreSettlementResidual } from '@/lib/bookkeeping/ore-rounding'
+import { isKronorCurrency } from '@/lib/bookkeeping/currency-utils'
+import { isCustomerReceivableAccount } from '@/lib/bookkeeping/customer-receivable-lines'
 
 /** Half an öre: anything over the remaining by more than this is a real overpayment. */
 export const PAYMENT_OVERSHOOT_TOLERANCE = ORE_TOLERANCE
@@ -174,18 +176,71 @@ export function deriveCustomerSettlementAmount(
  *
  * `carriedSek` (carriedSekOf): when the issue verifikat already booked the
  * öresavrundning, the payment's 3740 carries only the rest of it (the
- * residual less bookedOreRounding), which is what the proposal books.
+ * residual less bookedOreRounding), which is what the proposal books. For
+ * that invoice the lines settle in full exactly when they clear what 1510
+ * carries, the rule of the other settlement doors: whatever reached the bank,
+ * 3740 takes the rest (999,75 paid where 1510 carries 1 000: Dr 1930 999,75,
+ * Dr 3740 0,25, Cr 1510 1 000). Lines that would close the invoice with öre
+ * left on 1510 (Cr 1510 999,75, the reskontra's figure) are refused with
+ * INVOICE_PAID_ORE_LEFT; details.carried is the figure to clear.
  */
 export function planInvoicePaymentForLines(
   invoice: InvoicePaymentTotals,
   paymentAmountInInvoiceCurrency: number,
-  lines:
-    | Array<{ account_number: string; debit_amount: number; credit_amount: number }>
-    | undefined,
+  lines: PaymentLine[] | undefined,
   invoiceCurrency: string,
   carriedSek?: number | null,
+): PlanInvoicePaymentForLinesResult {
+  const absorbEligible = !!lines && isKronorCurrency(invoiceCurrency)
+  const booked = absorbEligible ? bookedOreClearing(invoice, lines!, carriedSek) : null
+  // The payment is the remainder, or off it by öresavrundning only: a krona
+  // or more is planned as before (a part payment, or refused as too much).
+  const paysRemainder =
+    !!booked &&
+    (equalOre(paymentAmountInInvoiceCurrency, booked.remaining) ||
+      oreSettlementResidual(booked.remaining, paymentAmountInInvoiceCurrency) !== 0)
+  // 3740 takes öresavrundning only: a krona or more there is not rounding,
+  // and the old plan answers for it.
+  const net3740 = booked ? net3740Of(lines!) : 0
+  const roundingOnly = isZeroOre(net3740) || oreSettlementResidual(net3740, 0) !== 0
+  if (booked && paysRemainder && roundingOnly && equalOre(booked.cleared, booked.carried)) {
+    return {
+      ok: true,
+      plan: {
+        newPaidAmount: roundOre((invoice.paid_amount || 0) + booked.remaining),
+        newRemaining: 0,
+        isFullyPaid: true,
+        newStatus: 'paid',
+        oreSettled: !equalOre(paymentAmountInInvoiceCurrency, booked.remaining),
+      },
+    }
+  }
+
+  const payment = planLinesPayment(invoice, paymentAmountInInvoiceCurrency, lines, absorbEligible, carriedSek)
+  if (!payment.ok || !booked || payment.plan.newStatus !== 'paid') return payment
+  const left = oreSettlementResidual(booked.carried, booked.cleared)
+  if (left === 0) return payment
+  return { ok: false, code: 'INVOICE_PAID_ORE_LEFT', details: { carried: booked.carried, cleared: booked.cleared, left } }
+}
+
+type PaymentLine = { account_number: string; debit_amount: number; credit_amount: number }
+
+export type PlanInvoicePaymentForLinesResult =
+  | PlanInvoicePaymentResult
+  | {
+      ok: false
+      code: 'INVOICE_PAID_ORE_LEFT'
+      /** carried: what 1510 carries, the figure to clear; cleared: what the lines clear; left: what they would leave. */
+      details: { carried: number; cleared: number; left: number }
+    }
+
+function planLinesPayment(
+  invoice: InvoicePaymentTotals,
+  paymentAmountInInvoiceCurrency: number,
+  lines: PaymentLine[] | undefined,
+  absorbEligible: boolean,
+  carriedSek: number | null | undefined,
 ): PlanInvoicePaymentResult {
-  const absorbEligible = !!lines && invoiceCurrency === 'SEK'
   const payment = planInvoicePayment(invoice, paymentAmountInInvoiceCurrency, {
     absorbOreRounding: absorbEligible,
   })
@@ -197,11 +252,38 @@ export function planInvoicePaymentForLines(
     oreSettlementResidual(currentRemaining, paymentAmountInInvoiceCurrency) -
       bookedOreRounding(roundOre(currentRemaining), carriedSek),
   )
-  const net3740 = roundOre(
-    lines!
+  if (net3740Of(lines!) === residual) return payment
+  return planInvoicePayment(invoice, paymentAmountInInvoiceCurrency)
+}
+
+/** The lines' net 3740, debit less credit. */
+function net3740Of(lines: PaymentLine[]): number {
+  return roundOre(
+    lines
       .filter((l) => l.account_number === ORE_ROUNDING_ACCOUNT)
       .reduce((s, l) => s + l.debit_amount - l.credit_amount, 0),
   )
-  if (net3740 === residual) return payment
-  return planInvoicePayment(invoice, paymentAmountInInvoiceCurrency)
+}
+
+/**
+ * For a SEK invoice whose own verifikat booked the öresavrundning
+ * (bookedOreRounding non-zero): what is still owed, what 1510 carries for it,
+ * and what the lines clear, their net 151x credit. 1513 is Skatteverket's
+ * ROT/RUT share, never what 1510 carries for the customer
+ * (document_carried_sek leaves it out the same way). Null for every other
+ * invoice: the lines are planned as they always were.
+ */
+function bookedOreClearing(
+  invoice: InvoicePaymentTotals,
+  lines: PaymentLine[],
+  carriedSek: number | null | undefined,
+): { remaining: number; carried: number; cleared: number } | null {
+  const remaining = roundOre(invoice.remaining_amount ?? invoice.total - (invoice.paid_amount || 0))
+  if (bookedOreRounding(remaining, carriedSek) === 0) return null
+  const cleared = sumOre(
+    lines
+      .filter((l) => isCustomerReceivableAccount(l.account_number) && l.account_number !== ROT_RUT_RECEIVABLE_ACCOUNT)
+      .map((l) => (Number(l.credit_amount) || 0) - (Number(l.debit_amount) || 0)),
+  )
+  return { remaining, carried: roundOre(carriedSek!), cleared }
 }
