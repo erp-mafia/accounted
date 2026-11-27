@@ -475,17 +475,19 @@ function newDayWindowRun(runs: CompanyRun[], date: string, paidByCorrected: Read
  * no run reads October any more (the next starts after November's window,
  * deviation-period.ts), while October's monthly salary went out in full: an
  * October absence was deducted and reported nowhere. Such a day belongs to
- * the settled run of its own pay month (the last version that paid), and the
- * caller makes it a late day of the next run when that run paid the employee
- * a monthly salary (late-days.ts has the law).
+ * the settled run of its own pay month (its last version), and the caller
+ * makes it a late day of the next run when that run paid the employee a
+ * monthly salary (late-days.ts has the law). When only an earlier version
+ * did, the late day is refused (not_paid_then).
  *
  * Null, and the day stays as before, when a window holds the day (a draft's
  * still reads it), when no settled run comes after it, when no settled run
  * paid its pay month (a month without a run paid nobody), and when that run's
  * own window does not end before the day (history from before a company's
- * first window).
+ * first window). `versions`: every settled run of the pay month, the run
+ * included, whose payslips say what the employee was paid.
  */
-function gapPeriodRun(runs: CompanyRun[], date: string): CompanyRun | null {
+function gapPeriodRun(runs: CompanyRun[], date: string): { run: CompanyRun; versions: CompanyRun[] } | null {
   const settled = runs.filter((run) => runIsSettled(run))
   if (!settled.some((run) => !run.corrects_run_id && windowOf(run).start > date)) return null
   const year = Number(date.slice(0, 4))
@@ -499,7 +501,7 @@ function gapPeriodRun(runs: CompanyRun[], date: string): CompanyRun | null {
     return date >= window.start && date <= window.end
   }
   if (runs.some(holds)) return null
-  return periodRun
+  return { run: periodRun, versions: paid }
 }
 
 /** The pay type a payslip was priced on: its own, else the employee's. */
@@ -834,7 +836,7 @@ export async function planRegisterUpsert(
   const readers = new Set<string>()
   // Absence days between two windows (gapPeriodRun), decided once the
   // payslips are read. `existing`: registered already, carried nowhere.
-  const gapDays = new Map<string, { run: CompanyRun; existing: boolean }>()
+  const gapDays = new Map<string, { run: CompanyRun; versions: CompanyRun[]; existing: boolean }>()
   for (const date of dates) {
     const row = existingByDate.get(date)
     if (row) {
@@ -847,7 +849,7 @@ export async function planRegisterUpsert(
       // settled is read by no run: naming a later run carries it there.
       const gap = !row.carried_to_run_id && args.kind === 'absence' && args.carriedToRunId ? gapPeriodRun(runs, date) : null
       if (gap) {
-        gapDays.set(date, { run: gap, existing: true })
+        gapDays.set(date, { ...gap, existing: true })
         continue
       }
       plan.carriedTo.set(date, row.carried_to_run_id)
@@ -858,7 +860,7 @@ export async function planRegisterUpsert(
     const run = newDayWindowRun(runs, date, paidByCorrected)
     if (!run) {
       const gap = args.kind === 'absence' ? gapPeriodRun(runs, date) : null
-      if (gap) gapDays.set(date, { run: gap, existing: false })
+      if (gap) gapDays.set(date, { ...gap, existing: false })
       else plan.carriedTo.set(date, null)
       continue
     }
@@ -881,7 +883,7 @@ export async function planRegisterUpsert(
     const ids = new Set<string>()
     for (const run of runs) if (!runIsSettled(run)) ids.add(run.id)
     for (const run of periodRuns.values()) ids.add(run.id)
-    for (const gap of gapDays.values()) ids.add(gap.run.id)
+    for (const gap of gapDays.values()) for (const version of gap.versions) ids.add(version.id)
     const loadedSlips = await loadPayslips(supabase, companyId, args.employeeId, Array.from(ids))
     if ('error' in loadedSlips) return internal(loadedSlips.error)
     payslips = loadedSlips.slips
@@ -889,9 +891,18 @@ export async function planRegisterUpsert(
 
   // A day between the windows is late only when its pay month paid the
   // employee a monthly salary: that is what the day's absence should have
-  // reduced. Hourly pay, or no payslip then, leaves it as before.
+  // reduced. Hourly pay, or no payslip then, leaves it as before. A settled
+  // correction that left off an employee an earlier version paid monthly
+  // paid them nothing to deduct from; what went out before is an
+  // overpayment handled by hand (payable.ts). The day is then a late day of
+  // the correction, as in a window, which checkLaterRun refuses
+  // (not_paid_then).
   for (const [date, gap] of gapDays) {
-    if (slipPayType(payslips.get(gap.run.id)) !== 'monthly') {
+    const slip = payslips.get(gap.run.id)
+    const paidMonthly = slip
+      ? slipPayType(slip) === 'monthly'
+      : gap.versions.some((version) => slipPayType(payslips.get(version.id)) === 'monthly')
+    if (!paidMonthly) {
       plan.carriedTo.set(date, null)
       continue
     }
