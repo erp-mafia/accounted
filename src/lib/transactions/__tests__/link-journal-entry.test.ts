@@ -371,4 +371,53 @@ describe('linkTransactionToJournalEntry: the payment plan', () => {
     expect(findCalls('invoices', 'update')).toHaveLength(0)
     expect(findCalls('transactions', 'update')).toHaveLength(0)
   })
+
+  // An invoice of 999,75 whose own verifikat booked 1510 at 1 000 and the öre
+  // on 3740; the bank row and the verifikat clear 1 000. Real Postgres covers
+  // the settlement itself (tests/pg/link-bank-row-voucher-booked-ore.pg.test.ts);
+  // here what keeps the strict plan.
+  const rounded = { ...invoice, total: 999.75, remaining_amount: 999.75, journal_entry_id: 'je-issue' }
+  const roundedRow = { ...row, amount: 1000 }
+  const queueTo = (enqueue: (r: { data?: unknown; error?: unknown }) => void, lines: unknown[]) => {
+    enqueue({ data: roundedRow, error: null })
+    enqueue({ data: { id: 'je-1', status: 'posted', voucher_series: 'A', voucher_number: 1 }, error: null })
+    enqueueBankLinkLeg(enqueue, 1000)
+    enqueue({ data: rounded, error: null })
+    enqueue({ data: { settlement_side: 'ar_credit', account_prefix: '151', entry_side: 'credit' }, error: null })
+    enqueue({ data: lines, error: null })
+  }
+  const link = (supabase: unknown) =>
+    linkTransactionToJournalEntry(supabase as never, 'user-1', 'company-1', {
+      transactionId: 'tx-1', journalEntryId: 'je-1', invoiceId: 'inv-1',
+    }, { dryRun: true })
+
+  it('settles a rounded invoice in full when the row and the verifikat clear what 1510 carries', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    queueTo(enqueue, [{ account_number: '1510', debit_amount: 0, credit_amount: 1000 }])
+    enqueue({ data: { ok: true, sek: 1000 }, error: null }) // document_carried_sek
+    enqueue({ data: [], error: null }) // payment rows on the verifikat
+
+    expect(await link(supabase)).toMatchObject({
+      ok: true,
+      dryRun: true,
+      result: { invoiceStatus: 'paid', paidAmount: 999.75, remainingAmount: 0 },
+    })
+  })
+
+  it('plans against the remainder when what 1510 carries cannot be read', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    queueTo(enqueue, [{ account_number: '1510', debit_amount: 0, credit_amount: 1000 }])
+    enqueue({ data: null, error: { message: 'statement timeout' } }) // document_carried_sek
+
+    expect(await link(supabase)).toMatchObject({ ok: false, code: 'MATCH_AMOUNT_EXCEEDS_REMAINING' })
+  })
+
+  it("plans against the remainder when another invoice's row already uses the verifikat's 151x credit", async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    queueTo(enqueue, [{ account_number: '1510', debit_amount: 0, credit_amount: 1000 }])
+    enqueue({ data: { ok: true, sek: 1000 }, error: null }) // document_carried_sek
+    enqueue({ data: [{ invoice_id: 'inv-other', amount: 400, currency: 'SEK' }], error: null })
+
+    expect(await link(supabase)).toMatchObject({ ok: false, code: 'MATCH_AMOUNT_EXCEEDS_REMAINING' })
+  })
 })

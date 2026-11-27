@@ -34,7 +34,10 @@ import { planInvoicePayment } from '@/lib/invoices/apply-invoice-payment'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { emitInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
-import { roundOre } from '@/lib/money'
+import { equalOre, roundOre, sumOre } from '@/lib/money'
+import { carriedSekOf } from '@/lib/bookkeeping/ledger-carried-sek'
+import { isKronorCurrency } from '@/lib/bookkeeping/currency-utils'
+import { storedRemaining } from '@/lib/invoices/voucher-matching-shared'
 import { recordInvoicePaymentRow } from '@/lib/invoices/invoice-payment-row'
 import { hasActiveCreditNote } from '@/lib/transactions/invoice-document-refusal'
 import { resolveInvoiceSettlementSide } from '@/lib/invoices/invoice-settlement-side'
@@ -262,6 +265,7 @@ export async function linkTransactionToJournalEntry(
     | 'paid_at'
     | 'invoice_number'
     | 'credited_invoice_id'
+    | 'journal_entry_id'
   > & { customer?: { name?: string } | null }
   let invoice: FetchedInvoice | null = null
   let newPaidAmount = 0
@@ -276,7 +280,7 @@ export async function linkTransactionToJournalEntry(
     const { data: invoiceRow, error: fetchInvError } = await supabase
       .from('invoices')
       .select(
-        'id, status, total, paid_amount, remaining_amount, currency, exchange_rate, paid_at, invoice_number, credited_invoice_id, customer:customers(name), credit_notes:invoices!credited_invoice_id(id, status, creation_complete)'
+        'id, status, total, paid_amount, remaining_amount, currency, exchange_rate, paid_at, invoice_number, credited_invoice_id, journal_entry_id, customer:customers(name), credit_notes:invoices!credited_invoice_id(id, status, creation_complete)'
       )
       .eq('id', invoiceId)
       .eq('company_id', companyId)
@@ -337,11 +341,12 @@ export async function linkTransactionToJournalEntry(
     if (voucherLinesError) {
       return { ok: false, code: 'LINK_TX_DB_ERROR', details: { reason: voucherLinesError.message } }
     }
-    const settlesOnSide = ((voucherLines ?? []) as Array<{
+    const sideLines = (voucherLines ?? []) as Array<{
       account_number: string | null
       debit_amount: number | string | null
       credit_amount: number | string | null
-    }>).some(
+    }>
+    const settlesOnSide = sideLines.some(
       (line) =>
         String(line.account_number ?? '').startsWith(side.accountPrefix) &&
         Number((side.entrySide === 'debit' ? line.debit_amount : line.credit_amount) ?? 0) > 0,
@@ -358,9 +363,17 @@ export async function linkTransactionToJournalEntry(
       }
     }
 
-    // The one payment plan, strict: no öre absorption, and a bank row larger
-    // than the invoice's remainder is refused before anything is written.
-    const payment = planInvoicePayment(invoice, transaction.amount)
+    // A SEK invoice whose own verifikat booked the öresavrundning (1510 at the
+    // rounded "Att betala", the öre on 3740) is settled in full when the row
+    // and the verifikat both clear exactly what 151x carries for it: the rule
+    // of the voucher link (validateVoucherForInvoiceLink) and the other
+    // settlement doors (bookedOreRounding over carriedSekOf). Otherwise the
+    // one payment plan, strict: no öre absorption, and a bank row larger than
+    // the invoice's remainder is refused before anything is written.
+    const settlesCarried =
+      side.side === 'ar_credit' &&
+      (await clearsBookedOre(supabase, companyId, invoice, journalEntryId, transaction.amount, sideLines))
+    const payment = planInvoicePayment(invoice, settlesCarried ? storedRemaining(invoice) : transaction.amount)
     if (!payment.ok) return { ok: false, code: payment.code, details: payment.details }
     ;({ newPaidAmount, newRemaining, isFullyPaid, newStatus } = payment.plan)
   }
@@ -533,9 +546,10 @@ export async function linkTransactionToJournalEntry(
     // The AR sub-ledger row goes through the single writer
     // (lib/invoices/invoice-payment-row.ts). This path plans strictly (no öre
     // absorption, same currency only), so the applied amount IS the bank line
-    // to the öre: the writer is used for one set of row semantics, not for a
-    // different number. A unique violation (23505) means the row already
-    // exists for this voucher and is not an error here.
+    // to the öre, except on an invoice whose own verifikat booked the öre: the
+    // row that clears what 1510 carries applies the whole remainder. The
+    // writer is used for one set of row semantics. A unique violation (23505)
+    // means the row already exists for this voucher and is not an error here.
     const recorded = await recordInvoicePaymentRow(supabase, {
       userId,
       companyId,
@@ -697,4 +711,55 @@ async function verifikatClearsReceivable(supabase: SupabaseClient, journalEntryI
     return null
   }
   return clearsReceivable((data ?? []) as Array<{ account_number: string; credit_amount: number | null }>)
+}
+
+/**
+ * Whether the bank row and the linked verifikat settle in full a SEK invoice
+ * whose own verifikat booked the öresavrundning: carriedSekOf answers what
+ * 151x carries for it only then, and both the row and what the verifikat's
+ * 151x credit has left after the rows of other invoices it settles must be
+ * exactly that. A failed read answers false: the row is then planned against
+ * the remainder, as before.
+ */
+async function clearsBookedOre(
+  supabase: SupabaseClient,
+  companyId: string,
+  invoice: Pick<Invoice, 'id' | 'currency' | 'total' | 'paid_amount' | 'remaining_amount' | 'journal_entry_id'>,
+  journalEntryId: string,
+  rowAmount: number,
+  sideLines: ReadonlyArray<{ credit_amount: number | string | null }>,
+): Promise<boolean> {
+  if (!isKronorCurrency(invoice.currency)) return false
+  let carried: number | null
+  try {
+    carried = await carriedSekOf(supabase, companyId, 'customer', invoice)
+  } catch (error) {
+    log.warn('carried SEK read failed; the row is planned against the remainder', {
+      companyId,
+      invoiceId: invoice.id,
+      message: error instanceof Error ? error.message : String(error),
+    })
+    return false
+  }
+  if (carried === null || !equalOre(rowAmount, carried)) return false
+
+  const { data: rows, error } = await supabase
+    .from('invoice_payments')
+    .select('invoice_id, amount, currency')
+    .eq('company_id', companyId)
+    .eq('journal_entry_id', journalEntryId)
+  if (error) {
+    log.warn('payment rows of the verifikat unreadable; the row is planned against the remainder', {
+      companyId,
+      journalEntryId,
+      message: error.message,
+    })
+    return false
+  }
+  const others = ((rows ?? []) as Array<{ invoice_id: string; amount: number | string | null; currency: string | null }>)
+    .filter((row) => row.invoice_id !== invoice.id)
+  if (others.some((row) => !isKronorCurrency(row.currency ?? 'SEK'))) return false
+  const credited = sumOre(sideLines.map((line) => Number(line.credit_amount ?? 0) || 0))
+  const used = sumOre(others.map((row) => Number(row.amount ?? 0) || 0))
+  return equalOre(roundOre(credited - used), carried)
 }
