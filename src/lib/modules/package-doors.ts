@@ -232,6 +232,7 @@ const CUSTOMER_INVOICES: PackageDoors = {
     'POST /api/invoices',
     'POST /api/invoices/:id/convert',
     'POST /api/invoices/:id/convert-to-order',
+    'POST /api/invoices/late-payment-interest/invoices',
     'POST /api/invoices/recurring',
     'POST /api/invoices/recurring/:id/run',
     'POST /api/invoices/self-billed',
