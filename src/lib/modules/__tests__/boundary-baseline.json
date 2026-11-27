@@ -82,6 +82,7 @@
       "lib/composition/event-consumers.ts -> lib/events/handlers/inbox-bank-match-handler",
       "lib/composition/event-consumers.ts -> lib/events/handlers/inbox-companion-handler",
       "lib/composition/event-consumers.ts -> lib/invoices/supplier-invoice-handler",
+      "lib/composition/event-consumers.ts -> lib/skatteverket/handlers/tax-row-follows-correction",
       "lib/composition/event-consumers.ts -> lib/suggestions/handler",
       "lib/composition/event-consumers.ts -> lib/supplier-invoices/attest-notify",
       "lib/composition/ingest-feeds.ts -> lib/bank-feed/ingest-feed",
