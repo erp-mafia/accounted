@@ -7,6 +7,7 @@ import { FortnoxApiError } from '@/lib/providers/fortnox/client'
 import { BokioApiError } from '@/lib/providers/bokio/client'
 import { mapBokioToSalesInvoice, mapBokioToSupplierInvoice } from '@/lib/providers/bokio/mapper'
 import { mapFortnoxToSupplierInvoice } from '@/lib/providers/fortnox/mapper'
+import { mapVismaToSalesInvoice } from '@/lib/providers/visma/mapper'
 import { enrichBokioSupplierInvoice } from '@/lib/providers/bokio/supplier-evidence'
 import { encryptCustomerPersonalNumber } from '@/lib/customers/protect-personal-number'
 const mocks = vi.hoisted(() => ({ resolve: vi.fn(), page: vi.fn(), hydrate: vi.fn(), probe: vi.fn(), link: vi.fn(), reconcile: vi.fn(), warn: vi.fn(), error: vi.fn(),
@@ -34,7 +35,7 @@ vi.mock('../entity-mapper', () => ({
   mapSalesInvoice: vi.fn(() => ({ invoice: { subtotal: 100, vat_amount: 25, total_sek: 125 }, items: [{ line_total: 100, vat_amount: 25 }] })),
   mapSupplierInvoice: vi.fn(() => ({ invoice: { supplier_invoice_number: 'S-1', subtotal: 100, vat_amount: 25, total_sek: 125 }, items: [{ line_total: 100, vat_amount: 25 }] })),
 }))
-import { mapCustomer, mapSalesInvoice, mapSupplier, mapSupplierInvoice } from '../entity-mapper'
+import { buildFxRateIndex, mapCustomer, mapSalesInvoice, mapSupplier, mapSupplierInvoice } from '../entity-mapper'
 import { invoicePartySourceId, migrationRpc, pairMigratedCreditNotes, runProviderMigrationWorker, withinMigrationDeadline, type MigrationChunk } from '../migration-job-worker'
 import { SIE_IMPORT_IN_PLACE_JOB_FILTER } from '@/lib/bookkeeping/sie-import-in-place'
 
@@ -202,6 +203,28 @@ describe('bounded durable worker', () => {
     expect(db.rpc).toHaveBeenCalledWith('commit_provider_migration_records', expect.objectContaining({
       p_records: [{ id: dto.id, error: 'MIGRATION_ROWS_MISMATCH' }],
     }))
+  })
+  it('refuses a foreign Visma invoice without a total in its own currency, and writes nothing for it', async () => {
+    // Refused with its reason, as a row mismatch is: never imported with the
+    // SEK total under EUR, or with a total read off the rows.
+    const db = database({ phase: 'import', resources: ['salesInvoices'] })
+    const dto = mapVismaToSalesInvoice({ Id: 'eur-1', InvoiceNumber: 2001, InvoiceDate: '2026-03-10', CurrencyCode: 'EUR',
+      CurrencyRate: 11.2, TotalAmount: 112000, TotalVatAmount: 22400, TotalVatAmountInvoiceCurrency: 2000,
+      RemainingAmount: 0, PaymentStatus: 0, InvoiceCustomerName: 'Kund AB',
+      Rows: [{ LineNumber: 1, Text: 'Konsulttjänst', Quantity: 1, UnitPrice: 8000, AmountNoVat: 8000, PercentVat: 25 }] })
+    db.rows.push({ id: dto.id, source_id: dto.id, resource: 'salesInvoices', state: 'pending', ...sealMigrationPayload(dto) })
+    mocks.hydrate.mockResolvedValueOnce({ invoices: [dto], unhydratedIds: new Set(), hydration: {} })
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(db.rpc).toHaveBeenCalledWith('commit_provider_migration_records', expect.objectContaining({
+      p_records: [{ id: dto.id, error: 'MIGRATION_CURRENCY_TOTAL_MISSING' }],
+    }))
+    // Nothing is mapped, priced or matched for it, and no card is touched.
+    expect(mapSalesInvoice).not.toHaveBeenCalled()
+    expect(buildFxRateIndex).not.toHaveBeenCalled()
+    expect(db.rpc.mock.calls.map(([name]) => name)).not.toContain('adopt_provider_migration_invoice_party')
+    expect(db.updates).toEqual([])
+    expect(db.rows.find(row => row.id === dto.id)?.state).toBe('needs_attention')
+    expect(db.job.state).toBe('needs_attention')
   })
   it.each([
     ['keeps a Bokio invoice whose rows name no account, without rows', 'bokio', undefined],

@@ -134,7 +134,8 @@ function labelFromSnapshot(resource: MigrationResource, payload: string): Migrat
   return {
     number: invoice.invoiceNumber || null,
     date: typeof invoice.issueDate === 'string' && invoice.issueDate ? invoice.issueDate.slice(0, 10) : null,
-    amount: finite(invoice.legalMonetaryTotal?.payableAmount?.value),
+    // An invoice with no total in its own currency carries a placeholder 0.
+    amount: (invoice as SalesInvoiceDto).totalUnresolved ? null : finite(invoice.legalMonetaryTotal?.payableAmount?.value),
     currency: invoice.currencyCode || null,
     party: party?.name || null,
   }

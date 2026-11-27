@@ -255,6 +255,7 @@ export type MigrationIssueReason =
   | 'source_id_missing'
   | 'changed'
   | 'rows_mismatch'
+  | 'currency_total_missing'
   | 'lines_missing'
   | 'too_large'
   | 'temporary'
@@ -309,6 +310,9 @@ export function migrationIssueReason(issue: Pick<ProviderMigrationIssue, 'error_
       return 'changed'
     case 'MIGRATION_ROWS_MISMATCH':
       return 'rows_mismatch'
+    // A foreign invoice the provider stated no total for in its own currency.
+    case 'MIGRATION_CURRENCY_TOTAL_MISSING':
+      return 'currency_total_missing'
     case 'MIGRATION_SOURCE_LINES_MISSING':
       return 'lines_missing'
     case 'MIGRATION_INVOICE_TOO_LARGE':

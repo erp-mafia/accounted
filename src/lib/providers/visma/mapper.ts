@@ -17,6 +17,7 @@ import {
 import { parseSourceVoucherRef } from '../source-voucher';
 import { documentPayment, documentState } from '../document-state';
 import { roundOre } from '@/lib/money';
+import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils';
 import { vismaDeductionKind, vismaHouseholdDeduction, vismaHouseholdWork } from './housework';
 
 function amount(value: number | undefined | null, currency: string = 'SEK'): AmountType {
@@ -32,16 +33,49 @@ function amount(value: number | undefined | null, currency: string = 'SEK'): Amo
  * asked for `LineTotal` and `VatRatePercent`, neither of which exists in the
  * schema, so every line landed with a 0 amount and the hardcoded 25 % default.
  *
- * `TotalAmount` and `TotalVatAmount` are both in the company's accounting
- * currency, while `currencyCode` below reports the INVOICE currency; the
- * `*InvoiceCurrency` twins carry the invoice-currency figures. What matters
- * for VAT is reading a consistent pair, so both come from the
- * accounting-currency family here. The currency-label mismatch on foreign
- * invoices predates this change and is deliberately left alone:
- * `RemainingAmount` and the paid/balance logic read that same family, and
- * switching only the totals would desync payment status.
+ * A customer invoice's header amounts come in two families: see
+ * salesInvoiceAmounts below.
  */
 const VISMA_INVOICE_VAT_KEYS = ['TotalVatAmount'] as const;
+
+/**
+ * CustomerInvoiceApi states `TotalAmount`, `TotalVatAmount` and
+ * `RemainingAmount` "expressed in base currency" and their `*InvoiceCurrency`
+ * twins in the invoice currency, the one `CurrencyCode` names and the rows
+ * (`AmountNoVat`) are priced in. The DTO reports every amount in
+ * `currencyCode` and the importer converts to SEK at the document's own rate,
+ * so a foreign invoice read from the base family stored its SEK figures as
+ * euros and was converted a second time. A foreign invoice is read from the
+ * twins alone, so total, VAT and open balance share one currency; a missing
+ * twin stays unknown rather than borrowing a base figure, except a base
+ * balance of 0, which is 0 in any currency. Without
+ * `TotalAmountInvoiceCurrency` the invoice has no total in its own currency:
+ * `total` is undefined, no VAT or net is derived from it, and the importer
+ * refuses the invoice (SalesInvoiceDto.totalUnresolved). A SEK invoice, whose
+ * base currency is its invoice currency, keeps the base family as before.
+ */
+function salesInvoiceAmounts(raw: Record<string, unknown>, currency: string): {
+  total: number | undefined;
+  vat: number | undefined;
+  remaining: number | null;
+} {
+  if (isLedgerCurrency(currency.toUpperCase())) {
+    return {
+      total: raw['TotalAmount'] as number ?? 0,
+      vat: readNumber(raw, VISMA_INVOICE_VAT_KEYS),
+      remaining: readRemaining(raw),
+    };
+  }
+  const total = readNumber(raw, ['TotalAmountInvoiceCurrency']);
+  const remaining = raw['RemainingAmountInvoiceCurrency'];
+  return {
+    total,
+    vat: total === undefined ? undefined : readNumber(raw, ['TotalVatAmountInvoiceCurrency']),
+    remaining: typeof remaining === 'number' ? remaining
+      : raw['RemainingAmount'] === 0 ? 0
+      : null,
+  };
+}
 
 // CustomerInvoiceApi.PaymentStatus: 0 = Paid, 1 = Unpaid, 2 = Overdue.
 const CUSTOMER_PS_PAID = 0;
@@ -92,9 +126,16 @@ function openBalance(
   return remaining ?? (paid ? 0 : total);
 }
 
-function deriveInvoiceStatus(raw: Record<string, unknown>): InvoiceStatusCode {
-  const remaining = readRemaining(raw);
-  const total = raw['TotalAmount'] as number ?? 0;
+/**
+ * `remaining` and `total` are the figures the invoice's balance is read from
+ * (salesInvoiceAmounts), so the status and the balance never disagree on a
+ * foreign invoice whose two families do.
+ */
+function deriveInvoiceStatus(
+  raw: Record<string, unknown>,
+  remaining: number | null,
+  total: number,
+): InvoiceStatusCode {
   const ps = raw['PaymentStatus'] as number | undefined;
   if (ps === CUSTOMER_PS_PAID) return 'paid';
   if (ps === CUSTOMER_PS_OVERDUE) return 'overdue';
@@ -192,8 +233,11 @@ function emailAddresses(value: unknown): string[] | undefined {
 
 export function mapVismaToSalesInvoice(raw: Record<string, unknown>): SalesInvoiceDto {
   const currency = (raw['CurrencyCode'] as string) ?? 'SEK';
-  const total = raw['TotalAmount'] as number ?? 0;
-  const remaining = readRemaining(raw);
+  const { total: statedTotal, vat: statedVat, remaining } = salesInvoiceAmounts(raw, currency);
+  // No total in the invoice's own currency: reported as 0 and flagged, never
+  // as the base-currency total.
+  const totalUnresolved = statedTotal === undefined;
+  const total = statedTotal ?? 0;
   const ps = raw['PaymentStatus'] as number | undefined;
   const paid = ps != null
     ? ps === CUSTOMER_PS_PAID
@@ -237,7 +281,7 @@ export function mapVismaToSalesInvoice(raw: Record<string, unknown>): SalesInvoi
 
   const vat = resolveVatTriple({
     gross: total,
-    vat: readNumber(raw, VISMA_INVOICE_VAT_KEYS),
+    vat: statedVat,
   });
 
   const legalMonetaryTotal: LegalMonetaryTotalDto = {
@@ -261,7 +305,7 @@ export function mapVismaToSalesInvoice(raw: Record<string, unknown>): SalesInvoi
     issueDate: (raw['InvoiceDate'] as string) ?? '',
     dueDate: raw['DueDate'] as string | undefined,
     currencyCode: currency,
-    status: doc.status ?? deriveInvoiceStatus(raw),
+    status: doc.status ?? deriveInvoiceStatus(raw, remaining, total),
     invoiceTypeCode: doc.invoiceTypeCode,
     supplier: buildParty(''),
     customer: buildParty(
@@ -271,6 +315,7 @@ export function mapVismaToSalesInvoice(raw: Record<string, unknown>): SalesInvoi
     lines,
     taxTotal: vat.vat !== undefined ? { taxAmount: amount(vat.vat, currency) } : undefined,
     legalMonetaryTotal,
+    ...(totalUnresolved ? { totalUnresolved } : {}),
     paymentStatus,
     householdDeduction: isCredit ? undefined : vismaHouseholdDeduction(raw),
     // eAccounting names the booking voucher on the invoice itself

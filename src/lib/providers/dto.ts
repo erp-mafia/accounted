@@ -307,6 +307,15 @@ export interface SalesInvoiceDto {
   allowanceCharges?: AllowanceChargeDto[];
   taxTotal?: TaxTotalDto;
   legalMonetaryTotal: LegalMonetaryTotalDto;
+  /**
+   * True when the provider stated no total in the invoice's own currency
+   * (`currencyCode`): a foreign Visma invoice without
+   * `TotalAmountInvoiceCurrency`. `payableAmount` is then 0, not the
+   * invoice's total, and the net and VAT are left unknown. The importer
+   * refuses such an invoice (MIGRATION_CURRENCY_TOTAL_MISSING) rather than
+   * store a base-currency total under the foreign code or guess one.
+   */
+  totalUnresolved?: boolean;
   paymentStatus: PaymentStatusDto;
   householdDeduction?: HouseholdDeductionDto;
   paymentTerms?: string;

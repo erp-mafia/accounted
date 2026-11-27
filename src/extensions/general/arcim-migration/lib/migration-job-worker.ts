@@ -231,6 +231,13 @@ async function prepareRecord(supabase: SupabaseClient, job: ProviderMigrationJob
   const invoice = hydrated.invoices[0]
   if (invoice.id !== listed.id) throw new Error('MIGRATION_SOURCE_ID_CHANGED')
   if (invoice.lines.length > MAX_INVOICE_LINES) return { id: c.id, error: 'MIGRATION_INVOICE_TOO_LARGE' }
+  // No total in the invoice's own currency (SalesInvoiceDto.totalUnresolved):
+  // refused the way a row mismatch is, before anything is looked up or
+  // written. Its base-currency total under the foreign code, or a total read
+  // off its rows, would be a guess.
+  if (c.resource === 'salesInvoices' && (invoice as SalesInvoiceDto).totalUnresolved) {
+    return { id: c.id, error: 'MIGRATION_CURRENCY_TOTAL_MISSING' }
+  }
   const fx = await withinMigrationDeadline(buildFxRateIndex(supabase, [invoice]), deadline)
   // The RPC resolves the source party and stamps its actual id atomically.
   const placeholder = '00000000-0000-0000-0000-000000000000'

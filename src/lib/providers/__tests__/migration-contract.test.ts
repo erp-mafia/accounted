@@ -186,6 +186,7 @@ describe('migrationIssueReason', () => {
     expect(reason('MIGRATION_SOURCE_ID_MISSING')).toBe('source_id_missing')
     expect(reason('MIGRATION_INVOICE_CHANGED')).toBe('changed')
     expect(reason('MIGRATION_ROWS_MISMATCH')).toBe('rows_mismatch')
+    expect(reason('MIGRATION_CURRENCY_TOTAL_MISSING')).toBe('currency_total_missing')
     expect(reason('MIGRATION_INVOICE_TOO_LARGE')).toBe('too_large')
     expect(reason('MIGRATION_DETAIL_RETRY')).toBe('temporary')
     expect(reason('40001')).toBe('temporary')
@@ -201,7 +202,8 @@ describe('migrationIssueReason', () => {
   it('has a Swedish and an English sentence for every reason', () => {
     const codes = ['MIGRATION_INVOICE_NUMBER_TAKEN', 'MIGRATION_SUPPLIER_INVOICE_NUMBER_MISSING', '23502', '23514',
       'MIGRATION_INVOICE_AMBIGUOUS', 'MIGRATION_PARTY_AMBIGUOUS', 'MIGRATION_PARTY_CHANGED', 'MIGRATION_SOURCE_ID_MISSING',
-      'MIGRATION_INVOICE_CHANGED', 'MIGRATION_ROWS_MISMATCH', 'MIGRATION_SOURCE_LINES_MISSING', 'MIGRATION_INVOICE_TOO_LARGE',
+      'MIGRATION_INVOICE_CHANGED', 'MIGRATION_ROWS_MISMATCH', 'MIGRATION_CURRENCY_TOTAL_MISSING',
+      'MIGRATION_SOURCE_LINES_MISSING', 'MIGRATION_INVOICE_TOO_LARGE',
       'MIGRATION_DETAIL_RETRY', 'MIGRATION_REGISTRATION_AMBIGUOUS', 'MIGRATION_REGISTRATION_REVIEW',
       'MIGRATION_VOUCHER_UNAVAILABLE', 'MIGRATION_PAYMENT_REVIEW', 'BOKIO_X', 'PROVIDER_AUTH_EXPIRED', 'P0001']
     const reasons = new Set([...codes.map(code => reason(code)),
