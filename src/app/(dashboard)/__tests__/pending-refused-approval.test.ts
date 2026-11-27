@@ -64,14 +64,28 @@ describe('/pending, a refused approval', () => {
     // Through the same queue as every other approval.
     expect(dialog).toContain('void queueApproval(op, undefined, warnings.map((warning) => warning.code))')
     expect(page).toContain('...(acknowledgedWarnings ? { acknowledged_warnings: acknowledgedWarnings } : {}),')
-    // The only caller that passes codes is the dialog's confirm.
+    // The only callers that pass codes are the confirms of the two dialogs:
+    // the voucher warnings, and a salary run's pay that may already have left.
     // (The lookbehind leaves out the function's own declaration.)
-    expect(page.match(/(?<!function )queueApproval\([^()]*,[^()]*,/g)).toEqual(['queueApproval(op, undefined,'])
+    expect(page.match(/(?<!function )queueApproval\([^()]*,[^()]*,/g)).toEqual(['queueApproval(op, undefined,', 'queueApproval(op, undefined,'])
   })
 
-  it('has words for every code on the list of fixable refusals but the one answered in a dialog', () => {
+  it("asks the person, never the agent, whether a salary run's pay already left, and sends the answer only once it is ticked", () => {
+    const dialog = page.slice(page.indexOf('{/* Salary bank payments for a run'), page.indexOf('{/* Bulk commit confirmation dialog */}'))
+    expect(dialog).toContain('confirmDisabled={!salaryUnpaidChecked}')
+    expect(dialog).toContain("void queueApproval(op, undefined, ['SALARY_RUN_BANK_PAYMENT_CONFIRMATION_REQUIRED'])")
+    expect(page).toContain("if (refusal.code === 'SALARY_RUN_BANK_PAYMENT_CONFIRMATION_REQUIRED') {")
+    // Queued, as the voucher warnings are: a second refusal never replaces the prompt being read.
+    expect(page).toContain('setSalaryUnpaidConfirms((prev) => [...prev.filter((waiting) => waiting.id !== op.id), op])')
+    for (const key of ['salary_unpaid_title', 'salary_unpaid_body', 'salary_unpaid_label'] as const) {
+      expect(sv.pending[key]).toBeTruthy()
+      expect(en.pending[key]).toBeTruthy()
+    }
+  })
+
+  it('has words for every code on the list of fixable refusals but the ones answered in a dialog', () => {
     for (const code of Object.keys(FIXABLE_REFUSALS)) {
-      if (code === 'VOUCHER_NEEDS_CONFIRMATION') continue
+      if (code === 'VOUCHER_NEEDS_CONFIRMATION' || code === 'SALARY_RUN_BANK_PAYMENT_CONFIRMATION_REQUIRED') continue
       expect(page, code).toContain(`  ${code}: { note: '`)
     }
   })

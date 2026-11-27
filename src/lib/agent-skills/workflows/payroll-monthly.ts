@@ -100,6 +100,8 @@ Ask one explicit question: "Stämmer beloppen? När jag bokför skapas ett verif
 
 That verifikat already credits the bank account and books the tax and avgift liabilities. When the bank payment and the skattekonto draw show up, they are matched against it, never booked a second time (\`bank-reconciliation\`).
 
+**Paying the net pay through the bank**, when the user wants the salaries paid from Accounted instead of a payment file and bank payments are on (\`gnubok_get_payments_availability\`): \`gnubok_prepare_salary_payments({ salary_run_id, cash_account_id })\` stages one draft payment per employee with a payout, on the banking day before payday unless \`execution_date\` is given. The run must be approved, paid or booked. For a paid or booked run the person who approves the proposal in Accounted confirms that the pay has not already gone out another way: you never answer that, and an approval by API key is refused. After approval the drafts are approved and signed with BankID on Betalningar (\`gnubok_get_payments_signing_link\`); the run moves to paid when the bank has executed every payment.
+
 ### Step 8: AGI
 
 1. **Generate:** \`gnubok_generate_agi({ salary_run_id })\` stages the AGI underlag. The run must be past draft; book first so the AGI matches the books.
@@ -187,6 +189,7 @@ In the user's language, short groups:
 - \`gnubok_book_salary_run\` (staged, high risk; marks the run paid on the way), \`gnubok_mark_salary_run_paid\` (staged, when the pay-out is recorded before booking)
 - \`gnubok_correct_salary_run\` (staged, high risk: rättelsekörning of a booked run)
 - \`gnubok_list_salary_payment_files\` (read: which bank payment files were generated; the file itself is downloaded on the salary run page)
+- \`gnubok_prepare_salary_payments\` (staged, via \`gnubok_stage_tool\` when not listed: the net pay as draft bank payments for BankID signing on Betalningar)
 - \`gnubok_generate_agi\`, \`gnubok_agi_submit\` (staged; filing needs BankID), \`gnubok_agi_status\` (read)
 - \`gnubok_get_fora_report\` (read, via \`gnubok_call_tool\`: what the monthly Fora file says for a payment month, for arbetare with a Fora code \`fora_fok_id\` on the employee; the file itself is downloaded on the salary run page and uploaded on Fora's Mina sidor by the last day of the following month)
 - \`gnubok_close_vacation_year\` (staged, high risk, yearly)

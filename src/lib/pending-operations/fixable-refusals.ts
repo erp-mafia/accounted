@@ -37,6 +37,12 @@ export const FIXABLE_REFUSALS: Readonly<Record<string, FixableRefusal>> = {
   // sent again with acknowledged_warnings, the guard runs again, and the
   // booking leaves a behandlingshistorik record of what was confirmed.
   VOUCHER_NEEDS_CONFIRMATION: { operationTypes: ['create_voucher'] },
+  // prepare_salary_payment_orders: a paid or booked run, or one with a
+  // payment file, may have been paid another way. The service refuses after
+  // reads only, before the draft payments are written. The person confirms
+  // the pay has not left, and the approval is sent again with this code in
+  // acknowledged_warnings (lib/operations/salary-run-bank-payment.ts).
+  SALARY_RUN_BANK_PAYMENT_CONFIRMATION_REQUIRED: { operationTypes: ['prepare_salary_payment_orders'] },
   // The Skatteverket filings and skattekonto bookings: the person's BankID
   // session with Skatteverket is missing or has run out (they last about ten
   // hours). Answered before anything is sent or booked, and already kept

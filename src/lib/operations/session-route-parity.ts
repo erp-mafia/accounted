@@ -839,9 +839,9 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
     [`POST ${V}/salary-runs/:id/payment-file`],
     'new version with new_version + confirm_previous_not_approved; no MCP door builds payment files',
   ),
-  'POST /api/salary/runs/:id/payment/pay-via-bank': gap(
-    'P2',
-    'prepare a salary run as bank payments, one per employee (lib/salary/payment/pay-via-bank.ts): the dashboard only in v1, no v1 endpoint or MCP tool yet; approving and signing them are the supplier payments\' doors',
+  'POST /api/salary/runs/:id/payment/pay-via-bank': covered(
+    ['gnubok_prepare_salary_payments'],
+    'staged; for a paid or booked run the person approving in the app confirms the pay has not left another way (the route takes confirmed_unpaid, the tool never does); no v1 endpoint; approving and signing the drafts are the supplier payments\' doors',
   ),
   'POST /api/salary/runs/:id/payslips/send': covered([`POST ${V}/salary-runs/:id/send-payslips`, 'gnubok_send_payslips']),
   'POST /api/salary/runs/:id/employees': covered([`POST ${V}/salary-runs/:id/employees`, 'gnubok_add_salary_run_employee']),
@@ -1182,5 +1182,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * 159 -> 160 (2026-11-25): the switch of the nightly top-up from Fortnox
  * on a Fortnox connection (PUT .../arcim-migration/fortnox-topup), new and
  * dashboard-only, as the nightly syncs of the webshop integrations.
+ * 160 -> 159 (2026-11-27): preparing a salary run's net pay as bank
+ * payments, through the staged gnubok_prepare_salary_payments.
  */
-export const GAP_CEILING = 160
+export const GAP_CEILING = 159

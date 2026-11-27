@@ -205,6 +205,9 @@ const RISK_TIERS = {
   // Bank payments: a prepared order is a draft a person still approves and
   // signs with BankID; a cancel only counts when the bank confirms it.
   prepare_payment_orders: 'medium',
+  // A salary run's net pay as draft bank payments (lib/operations/salary-run-bank-payment.ts):
+  // drafts only, a person approves and signs them with BankID, as for supplier payments.
+  prepare_salary_payment_orders: 'medium',
   cancel_payment_order: 'medium',
   // The signatory link mints a 7-day credential URL (and may mail it); the
   // consent itself is still signed by the firmatecknare with BankID.

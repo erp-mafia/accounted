@@ -91,7 +91,8 @@ const Reference = z.object({
   value: z.string(),
 })
 
-const OrderOut = z.object({
+/** A payment order as every door answers it (also the salary run's bank payment, ./salary-run-bank-payment.ts). */
+export const OrderOut = z.object({
   payment_order_id: z.string().uuid(),
   supplier_invoice_id: z.string().uuid().nullable(),
   payment_order_batch_id: z
