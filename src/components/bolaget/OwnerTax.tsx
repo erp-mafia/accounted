@@ -28,6 +28,7 @@ import type { OwnerLoanView, OwnerLoansView, SpecialListRow } from '@/lib/bolage
 import type { Ku20Status } from '@/lib/bolaget/owner-tax/ku20'
 import type { BoardLoansNote } from '@/lib/bolaget/owner-tax/arl-note'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { ownerTaxOpeningYear } from '@/lib/bolaget/filing-year'
 
 type FormState = Record<string, string>
 type Preview = Record<string, unknown>
@@ -96,7 +97,7 @@ export function OwnerTax() {
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
 
-  const [year, setYear] = useState<number>(() => Number(todayIsoStockholm().slice(0, 4)))
+  const [year, setYear] = useState<number>(() => ownerTaxOpeningYear(todayIsoStockholm()))
   const [loading, setLoading] = useState(true)
   const [data, setData] = useState<PageData | null>(null)
   // The page could not be read. The year the data on screen belongs to

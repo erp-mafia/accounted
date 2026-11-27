@@ -28,6 +28,7 @@ import type { CapitalView } from '@/lib/bolaget/capital/view'
 import type { Ku31Status } from '@/lib/bolaget/capital/ku31'
 import type { LedgerPayout } from '@/lib/bolaget/capital/dividends'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { incomeYearToFile } from '@/lib/bolaget/filing-year'
 import { ArrowDownTrayIcon, PlusIcon } from '@/components/icons'
 
 type FormState = Record<string, string>
@@ -91,10 +92,7 @@ export function CapitalEvents() {
   const [people, setPeople] = useState<Person[]>([])
   const [busy, setBusy] = useState(false)
 
-  const [ku31Year, setKu31Year] = useState<number>(() => {
-    const now = todayIsoStockholm()
-    return now.slice(5, 7) === '01' ? Number(now.slice(0, 4)) - 1 : Number(now.slice(0, 4))
-  })
+  const [ku31Year, setKu31Year] = useState<number>(() => incomeYearToFile(todayIsoStockholm()))
   const [ku31, setKu31] = useState<Ku31Status | null>(null)
   const [ku31Form, setKu31Form] = useState<FormState>({ famansforetag: '', contact_name: '', contact_phone: '', contact_email: '' })
 
