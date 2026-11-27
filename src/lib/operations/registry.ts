@@ -431,7 +431,7 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   paymentsSigningLink,
   // changed supplier bank details: MCP stages the approval, a person gives it in the web UI
   supplierPayeesConfirm,
-  // documents (set-type is MCP only: Dokument's own route calls the same service)
+  // documents (Dokument's own routes call the same services)
   documentsList,
   documentsGet,
   documentsDelete,

@@ -1020,7 +1020,9 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
   // real generator's lines, which reads the fiscal period and writes nothing.
   gnubok_book_invoice: { rows: DEFERRED_BOOKING_ROWS },
   gnubok_bulk_book_invoices: { rows: DEFERRED_BOOKING_ROWS },
-  gnubok_book_supplier_invoice: { rows: DEFERRED_BOOKING_ROWS },
+  // No registration verifikat booked from the supplier invoice stands
+  // (lib/supplier-invoices/standing-registration.ts), so it is still to book.
+  gnubok_book_supplier_invoice: { rows: DEFERRED_BOOKING_ROWS, empty: ['journal_entries'] },
   // Revoke a service account: the caller owns the company and sponsors a live
   // account with one live key; the preview reads them and writes nothing.
   gnubok_revoke_service_account: {

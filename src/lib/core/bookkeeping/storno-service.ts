@@ -33,7 +33,10 @@ import { postedLineAsInput } from '@/lib/core/bookkeeping/posted-line-input'
 import { findKontantmetodCarry } from '@/lib/bookkeeping/kontantmetod-carry-guard'
 import { assertCorrectedImportVatBase } from '@/lib/bookkeeping/import-vat-base'
 import { assertCorrectionKeepsBankAccount } from '@/lib/core/bookkeeping/correction-bank-leg'
-import { relinkPaymentRowsToEntry } from '@/lib/core/bookkeeping/correction-payment-relink'
+import {
+  relinkPaymentRowsToEntry,
+  relinkBookedRecordsToEntry,
+} from '@/lib/core/bookkeeping/correction-payment-relink'
 import {
   correctionChainDepth,
   CORRECTION_CHAIN_GUARD_DEPTH,
@@ -377,6 +380,8 @@ export async function correctEntry(
   corrected: JournalEntry
   transactionRelinkError?: string
   documentRelinkError?: string
+  /** A payment row or a booked record (invoice, inbox item, utlägg) that stayed on the reversed original. */
+  recordRelinkError?: string
 }> {
   // Validate the corrected lines are balanced
   const balance = validateBalance(correctedLines)
@@ -773,10 +778,12 @@ export async function correctEntry(
   // A moved storno writes nothing to the original or its locked stretch (the
   // period-lock trigger refuses any write to a locked or closed year, and
   // what lies on or before the lock date stands as it was locked): the
-  // original keeps its status, bank rows, payment rows and underlag, and the
-  // chain is read from the new verifikat (reverses_id, correction_of_id).
+  // original keeps its status, bank rows, payment rows, the records it books
+  // and its underlag, and the chain is read from the new verifikat
+  // (reverses_id, correction_of_id).
   let transactionRelinkError: string | undefined
   let documentRelinkError: string | undefined
+  let recordRelinkError: string | undefined
   if (!moved) {
     // ===== Mark original as reversed (CAS guard: only if still 'posted') =====
     const { data: updatedOriginal, error: casError } = await supabase
@@ -847,7 +854,14 @@ export async function correctEntry(
     }
     // The invoice payment rows follow too, so the invoice reads as paid by the
     // verifikat that stands, not by the reversed original (PH 227).
-    await relinkPaymentRowsToEntry(supabase, companyId, original, correctedEntry!.id)
+    const paymentRowRelinkError = await relinkPaymentRowsToEntry(supabase, companyId, originalEntryId, correctedEntry!.id)
+    // So do the records the original books, each by its own verifikat
+    // pointer: the invoice, the inbox item it was booked from and the utlägg.
+    // The corrected verifikat books them now.
+    const bookedRecordRelinkError = await relinkBookedRecordsToEntry(supabase, companyId, originalEntryId, correctedEntry!.id)
+    // Surfaced on the result like the two relinks beside them, so a caller
+    // can warn instead of reporting a clean correction.
+    recordRelinkError = paymentRowRelinkError ?? bookedRecordRelinkError
     documentRelinkError = await relinkDocumentsToEntry(
       supabase,
       userId,
@@ -874,6 +888,7 @@ export async function correctEntry(
     corrected: finalCorrected as JournalEntry,
     ...(transactionRelinkError ? { transactionRelinkError } : {}),
     ...(documentRelinkError ? { documentRelinkError } : {}),
+    ...(recordRelinkError ? { recordRelinkError } : {}),
   }
 
   // Both new verifikat are posted vouchers like any other: announce each as

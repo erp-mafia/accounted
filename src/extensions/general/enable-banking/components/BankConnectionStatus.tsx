@@ -15,10 +15,16 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { cn, formatDate } from '@/lib/utils'
 import { ChevronRightIcon, EllipsisHorizontalIcon, SpinnerIcon } from '@/components/icons'
-import { switchDeepLink } from '@/lib/bank-feed/switch-link'
+import { BANK_FILE_IMPORT_PATH, switchDeepLink } from '@/lib/bank-feed/switch-link'
 import { getConnectionUiState, offersAccountChoice, type SunsetPath, type SyncPauseReason } from '../lib/connection-state'
 import { describeClaimedElsewhere, describeMirrorCards, partitionAccounts } from '../lib/claimed-accounts'
 import type { BankConnection } from '@/types'
+
+/** The way on from the old provider, as the row's button and its menu entry name it. */
+const WAY_ON_LABEL: Record<SunsetPath, string> = {
+  switch: 'Byt till ny koppling',
+  import: 'Importera kontoutdrag',
+}
 
 interface BankConnectionStatusProps {
   connection: BankConnection
@@ -38,6 +44,11 @@ interface BankConnectionStatusProps {
    *  no bank_sync capability, so the row offers the way back instead of a
    *  Synka the server would refuse. Null while syncs run. */
   paused?: SyncPauseReason | null
+  /** Enable Banking takes no renewal while the switch campaign is on
+   *  (lib/connection-state.ts renewal_closed): a consent that has run out or
+   *  is about to offers this way on (SunsetPath) instead of a renewal the
+   *  server would refuse. Null while renewals are open. */
+  renewalClosed?: SunsetPath | null
 }
 
 /**
@@ -60,6 +71,7 @@ export function BankConnectionStatus({
   isSyncing = false,
   sunset = null,
   paused = null,
+  renewalClosed = null,
 }: BankConnectionStatusProps) {
   // Sync stays live for a read-only member; connecting, renewing, account choice and removal do not.
   const { canWrite, lockedTitle } = useViewerLock()
@@ -183,25 +195,28 @@ export function BankConnectionStatus({
   const isPaused = uiState === 'paused'
   // The old provider is gone, or the company's syncs are paused: nothing to
   // sync and no consent worth renewing (the server refuses both while paused).
-  const canReconnect = !!onReconnect && !isSunset && !isPaused
+  // While the switch campaign is on the server refuses every renewal, so none
+  // is offered.
+  const canReconnect = !!onReconnect && !isSunset && !isPaused && !renewalClosed
   const canSync = (connection.status === 'active' || connection.status === 'error') && !isSunset && !isPaused
+
+  // The way on from the old provider. The switch is done on Kopplingar (the
+  // deep link opens Koppla banken in switch mode for exactly this row); where
+  // the new provider does not reach the bank, bank statements come in as files.
+  function renderWayOn(path: SunsetPath | null) {
+    const way: SunsetPath = path === 'import' ? 'import' : 'switch'
+    return (
+      <Button asChild>
+        <Link href={way === 'import' ? BANK_FILE_IMPORT_PATH : switchDeepLink(connection.id)}>{WAY_ON_LABEL[way]}</Link>
+      </Button>
+    )
+  }
 
   // Exactly ONE primary action per state; everything else goes in the menu.
   function renderPrimaryAction() {
     switch (uiState) {
       case 'sunset':
-        // The switch is done on Kopplingar (the deep link opens Koppla banken
-        // in switch mode for exactly this row); where the new provider does
-        // not reach the bank, bank statements come in as files.
-        return sunset === 'import' ? (
-          <Button asChild>
-            <Link href="/import?mode=bank">Importera kontoutdrag</Link>
-          </Button>
-        ) : (
-          <Button asChild>
-            <Link href={switchDeepLink(connection.id)}>Byt till ny koppling</Link>
-          </Button>
-        )
+        return renderWayOn(sunset)
       case 'paused':
         // Hosted, the subscription brings the feed back; self-hosted, the
         // connector key, which the page's sentence names.
@@ -225,6 +240,9 @@ export function BankConnectionStatus({
         )
       case 'expired':
       case 'expiring':
+        // Renewals closed: the consent cannot be renewed here, so the row
+        // offers the way on the server's refusal names.
+        if (renewalClosed) return renderWayOn(renewalClosed)
         // No psu override: the server reuses the stored psu_type, so renewal
         // is one click. Switching account type lives in the menu.
         return canReconnect ? (
@@ -257,6 +275,10 @@ export function BankConnectionStatus({
 
   const primaryIsSync = uiState === 'stale' || uiState === 'never_synced' || uiState === 'active' || uiState === 'error'
   const primaryIsReconnect = uiState === 'expired' || uiState === 'expiring'
+  // While renewals are closed the switch takes the renewal's place: the
+  // primary action where the consent has run out or is about to, a menu
+  // entry on every other row (an import row already has the file import there).
+  const menuOffersSwitch = renewalClosed === 'switch' && !isSunset && !primaryIsReconnect
 
   return (
     <div className="border-b-hairline px-1 py-3">
@@ -330,6 +352,11 @@ export function BankConnectionStatus({
                   {canReconnect && !primaryIsReconnect && (
                     <DropdownMenuItem disabled={!canWrite} onSelect={() => onReconnect!(connection)}>
                       Förnya samtycke
+                    </DropdownMenuItem>
+                  )}
+                  {menuOffersSwitch && (
+                    <DropdownMenuItem asChild>
+                      <Link href={switchDeepLink(connection.id)}>{WAY_ON_LABEL.switch}</Link>
                     </DropdownMenuItem>
                   )}
                   {canReconnect && (

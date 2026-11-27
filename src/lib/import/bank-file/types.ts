@@ -101,6 +101,7 @@ export type BankFileFormatId =
   | 'northmill'
   | 'wise'
   | 'wise_statement'
+  | 'mynt'
   | 'generic_csv'
   | 'camt053'
 

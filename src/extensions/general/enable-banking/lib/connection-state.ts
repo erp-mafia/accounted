@@ -94,6 +94,12 @@ export interface ConnectionStateInput {
    *  acted on until the capability is back, and "Synka" would only be
    *  refused. An in-flight 'pending' attempt keeps its own UI. */
   paused?: SyncPauseReason | null
+  /** Enable Banking takes no renewal: the switch campaign is on
+   *  (lib/bank-feed/switch-campaign.ts enableBankingClosedToNew), and the
+   *  server refuses every renewal before the bank. What the row offers in its
+   *  place (SunsetPath). The state is unchanged, since the feed runs until
+   *  the consent ends; only the way on differs. Null while renewals are open. */
+  renewal_closed?: SunsetPath | null
 }
 
 export function getConnectionUiState(
@@ -268,6 +274,10 @@ export function buildPageAttentionSentence(
   now: number = Date.now(),
 ): string {
   const bank = attention.connection.bank_name
+  // While renewals are closed, the way on is the switch or the file import:
+  // never "förnya", which the server would refuse.
+  const closed = attention.connection.renewal_closed ?? null
+  const closedReason = 'den gamla bankkopplingen tar inte emot förnyelser'
   switch (attention.state) {
     case 'sunset':
       // The old provider is gone. Where the new one reaches the bank the row
@@ -282,19 +292,26 @@ export function buildPageAttentionSentence(
         ? `${bank}: synkningen är pausad eftersom connector-nyckeln saknas. Lägg in nyckeln för att hämta transaktioner igen.`
         : `${bank}: synkningen är pausad eftersom abonnemanget saknas. Uppgradera för att hämta transaktioner igen.`
     case 'error':
+      if (closed === 'switch') return `${bank}: anslutningen har ett fel. Försök igen eller byt till ny koppling.`
+      if (closed === 'import') return `${bank}: anslutningen har ett fel. Försök igen eller importera kontoutdrag som fil.`
       return `${bank}: anslutningen har ett fel. Försök igen eller förnya samtycket.`
     case 'needs_configuration':
       return `${bank}: synkningen har stannat. Öppna Välj konton och spara kontovalet igen.`
     case 'abandoned':
       return `${bank}: anslutningen slutfördes inte hos banken. Starta bankkopplingen på nytt och slutför alla steg direkt.`
     case 'expired':
+      if (closed === 'switch') return `${bank}: PSD2-samtycket har löpt ut, och ${closedReason}. Byt till ny koppling för att återuppta synkroniseringen.`
+      if (closed === 'import') return `${bank}: PSD2-samtycket har löpt ut, och ${closedReason}. Importera kontoutdrag som fil (SIE eller CSV) tills vidare.`
       return `${bank}: PSD2-samtycket har löpt ut. Förnya samtycket för att återuppta synkroniseringen.`
     case 'expiring': {
       const expires = attention.connection.consent_expires
       const days = expires
         ? Math.max(0, Math.ceil((new Date(expires).getTime() - now) / DAY_MS))
         : 0
-      return `${bank}: samtycket går ut om ${days} ${days === 1 ? 'dag' : 'dagar'}. Förnya det för att undvika avbrott i synkroniseringen.`
+      const ends = `${bank}: samtycket går ut om ${days} ${days === 1 ? 'dag' : 'dagar'}`
+      if (closed === 'switch') return `${ends}, och ${closedReason}. Byt till ny koppling för att undvika avbrott i synkroniseringen.`
+      if (closed === 'import') return `${ends}, och ${closedReason}. Importera kontoutdrag som fil (SIE eller CSV) när det har gått ut.`
+      return `${ends}. Förnya det för att undvika avbrott i synkroniseringen.`
     }
     case 'stale': {
       const last = attention.connection.last_synced_at

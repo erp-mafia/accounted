@@ -3001,6 +3001,14 @@ export async function reverseEntry(
      */
     collectionsRebook?: boolean
     /**
+     * Korrigera lönekörning only (lib/salary/correct-run.ts): lets the storno
+     * of a booked salary run's verifikat through, since the correction
+     * reverses all of them and marks the run corrected after. Every other
+     * caller leaves it unset, so the generic storno of such a verifikat stays
+     * refused (the salary run's reversal hook).
+     */
+    salaryRunCorrection?: boolean
+    /**
      * Posting port: the business event the storno answers, linked right
      * after the reversal's draft header and before its voucher number is
      * drawn (see CreateEntryOptions.businessEvent). Absent, nothing changes.
@@ -3134,6 +3142,8 @@ export async function reverseEntry(
     entry: original as JournalEntry,
     // The rebook removes the collections payment row itself, inside its window.
     ...(collectionsRebook ? { leaveCollectedPaymentRows: true } : {}),
+    // Korrigera lönekörning reverses all of the run's verifikat together.
+    ...(options?.salaryRunCorrection === true ? { salaryRunCorrection: true } : {}),
   }
   for (const hook of reversalHooks) {
     if (hook.beforeReversal) await hook.beforeReversal(reversalHookContext)
