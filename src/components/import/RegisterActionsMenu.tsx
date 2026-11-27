@@ -17,6 +17,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { useExportDownload } from '@/lib/hooks/use-export-download'
 import { registerImportHref, type RegisterImportEntity } from '@/lib/import/register-import-link'
 
 /**
@@ -31,13 +32,14 @@ export function RegisterActionsMenu({ entity }: { entity: RegisterImportEntity }
   const t = useTranslations('import')
   const tCommon = useTranslations('common')
   const { canWrite } = useCanWrite()
+  const { pending, download } = useExportDownload()
   const exportHref = `/api/export/${entity}`
 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon" aria-label={tCommon('more_options')} title={tCommon('more_options')}>
-          <EllipsisHorizontalIcon className="h-4 w-4" />
+        <Button variant="ghost" size="icon" aria-label={tCommon('more_options')} title={tCommon('more_options')} loading={pending}>
+          {!pending && <EllipsisHorizontalIcon className="h-4 w-4" />}
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
@@ -55,11 +57,11 @@ export function RegisterActionsMenu({ entity }: { entity: RegisterImportEntity }
           </DropdownMenuItem>
         )}
         <DropdownMenuSeparator />
-        <DropdownMenuItem onSelect={() => window.open(exportHref, '_blank')}>
+        <DropdownMenuItem onSelect={() => void download(exportHref, `${entity}.xlsx`)}>
           <ArrowDownTrayIcon className="mr-2 h-4 w-4" />
           {t('register_export_xlsx')}
         </DropdownMenuItem>
-        <DropdownMenuItem onSelect={() => window.open(`${exportHref}?format=csv`, '_blank')}>
+        <DropdownMenuItem onSelect={() => void download(`${exportHref}?format=csv`, `${entity}.csv`)}>
           <ArrowDownTrayIcon className="mr-2 h-4 w-4" />
           {t('register_export_csv')}
         </DropdownMenuItem>
