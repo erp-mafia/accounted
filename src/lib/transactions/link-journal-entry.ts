@@ -30,14 +30,14 @@ import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { releaseDoubtfulReserveAfterChange } from '@/lib/customer-loss/doubtful'
 import { eventBus } from '@/lib/events/bus'
-import { planInvoicePayment } from '@/lib/invoices/apply-invoice-payment'
+import { planInvoicePayment, ROT_RUT_RECEIVABLE_ACCOUNT } from '@/lib/invoices/apply-invoice-payment'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { emitInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
 import { equalOre, roundOre, sumOre } from '@/lib/money'
 import { carriedSekOf } from '@/lib/bookkeeping/ledger-carried-sek'
 import { isKronorCurrency } from '@/lib/bookkeeping/currency-utils'
-import { storedRemaining } from '@/lib/invoices/voucher-matching-shared'
+import { storedRemaining, voucherCapacity } from '@/lib/invoices/voucher-matching-shared'
 import { recordInvoicePaymentRow } from '@/lib/invoices/invoice-payment-row'
 import { hasActiveCreditNote } from '@/lib/transactions/invoice-document-refusal'
 import { resolveInvoiceSettlementSide } from '@/lib/invoices/invoice-settlement-side'
@@ -716,9 +716,9 @@ async function verifikatClearsReceivable(supabase: SupabaseClient, journalEntryI
 /**
  * Whether the bank row and the linked verifikat settle in full a SEK invoice
  * whose own verifikat booked the öresavrundning: carriedSekOf answers what
- * 151x carries for it only then, and both the row and what the verifikat's
- * 151x credit has left after the rows of other invoices it settles must be
- * exactly that. A failed read answers false: the row is then planned against
+ * 1510 carries for it only then, and both the row and what the verifikat's
+ * 151x credit has left after the rows of other invoices it settles
+ * (voucherCapacity) must be exactly that. A failed read answers false: the row is then planned against
  * the remainder, as before.
  */
 async function clearsBookedOre(
@@ -727,7 +727,7 @@ async function clearsBookedOre(
   invoice: Pick<Invoice, 'id' | 'currency' | 'total' | 'paid_amount' | 'remaining_amount' | 'journal_entry_id'>,
   journalEntryId: string,
   rowAmount: number,
-  sideLines: ReadonlyArray<{ credit_amount: number | string | null }>,
+  sideLines: ReadonlyArray<{ account_number: string | null; credit_amount: number | string | null }>,
 ): Promise<boolean> {
   if (!isKronorCurrency(invoice.currency)) return false
   let carried: number | null
@@ -756,10 +756,24 @@ async function clearsBookedOre(
     })
     return false
   }
-  const others = ((rows ?? []) as Array<{ invoice_id: string; amount: number | string | null; currency: string | null }>)
-    .filter((row) => row.invoice_id !== invoice.id)
-  if (others.some((row) => !isKronorCurrency(row.currency ?? 'SEK'))) return false
-  const credited = sumOre(sideLines.map((line) => Number(line.credit_amount ?? 0) || 0))
-  const used = sumOre(others.map((row) => Number(row.amount ?? 0) || 0))
-  return equalOre(roundOre(credited - used), carried)
+  // What the verifikat can still settle for this invoice, as the link RPCs
+  // count it: null when the invoice already has a row on it (carriedSekOf has
+  // then subtracted that row's credit already) or another invoice's row is in
+  // another currency. 1513 is Skatteverket's ROT/RUT share, never what 1510
+  // carries, so it is not counted.
+  const capacity = voucherCapacity(
+    {
+      amount: sumOre(
+        sideLines
+          .filter((line) => line.account_number !== ROT_RUT_RECEIVABLE_ACCOUNT)
+          .map((line) => Number(line.credit_amount ?? 0) || 0),
+      ),
+    },
+    ((rows ?? []) as Array<{ invoice_id: string; amount: number | string | null; currency: string | null }>).map(
+      (row) => ({ invoiceId: row.invoice_id, amount: row.amount, currency: row.currency }),
+    ),
+    invoice.id,
+    'SEK',
+  )
+  return capacity !== null && equalOre(capacity.left, carried)
 }

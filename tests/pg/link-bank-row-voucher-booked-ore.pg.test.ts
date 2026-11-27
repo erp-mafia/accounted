@@ -181,6 +181,50 @@ describe('a bank row linked to a payment verifikat that clears what 1510 carries
     expect(await invoiceRow(invoiceId)).toEqual({ status: 'sent', paid: 0, remaining: 999.75 })
     expect(await paymentRows(invoiceId)).toEqual([])
   }, 30000)
+  it('a part payment, then the final payment that clears the rest of what 1510 carries, settles it in full', async () => {
+    const b = await books()
+    const { invoiceId, issueId } = await roundedUp(b)
+    const first = await paymentAndRow(b, clears(500), 500)
+    expect(await link(b, first.txId, first.paymentId, invoiceId)).toMatchObject({
+      ok: true,
+      result: { invoiceStatus: 'partially_paid', paidAmount: 500, remainingAmount: 499.75 },
+    })
+
+    const last = await paymentAndRow(b, clears(500), 500)
+    const outcome = await link(b, last.txId, last.paymentId, invoiceId)
+
+    expect(outcome, JSON.stringify(outcome)).toMatchObject({
+      ok: true,
+      result: { invoiceStatus: 'paid', paidAmount: 999.75, remainingAmount: 0 },
+    })
+    expect(await paymentRows(invoiceId)).toEqual([500, 499.75])
+    expect(await balance([issueId, first.paymentId, last.paymentId], '1510')).toBe(0)
+  }, 30000)
+
+  it('a row that clears the last of what 1510 carries beside another invoice on the same verifikat', async () => {
+    const b = await books()
+    const { invoiceId, issueId } = await roundedUp(b)
+    const other = await exact(b)
+    // One verifikat pays both: 1 000 for this invoice, 999,75 for the other.
+    const { paymentId, txId } = await paymentAndRow(b, [
+      ['1930', 1999.75, 0],
+      ['1510', 0, 1000],
+      ['1510', 0, 999.75],
+    ], 1000)
+    const { rows } = await pool().query<{ result: { ok: boolean } }>(
+      'SELECT public.link_invoice_to_voucher($1, $2, $3, $4, NULL, $5) AS result',
+      [other.invoiceId, paymentId, b.userId, b.companyId, 999.75],
+    )
+    expect(rows[0]!.result).toMatchObject({ ok: true })
+
+    const outcome = await link(b, txId, paymentId, invoiceId)
+
+    expect(outcome, JSON.stringify(outcome)).toMatchObject({
+      ok: true,
+      result: { invoiceStatus: 'paid', paidAmount: 999.75, remainingAmount: 0 },
+    })
+    expect(await balance([issueId, other.issueId, paymentId], '1510')).toBe(0)
+  }, 30000)
 })
 
 describe('what still plans against the remainder, as before', () => {
@@ -226,10 +270,10 @@ describe('what still plans against the remainder, as before', () => {
     })
   }, 30000)
 
-  it('a verifikat that also clears another invoice on 151x is planned on the row, as before', async () => {
+  it('a verifikat whose 151x credit is more than what 1510 carries for the invoice is planned on the row, as before', async () => {
     const b = await books()
     const { invoiceId } = await roundedUp(b)
-    // 1 000 for this invoice and 500 for another, on one verifikat; the row is the 1 000.
+    // 1 500 off 151x on one verifikat, no other invoice linked to it; the row is 1 000.
     const { paymentId, txId } = await paymentAndRow(b, [
       ['1930', 1500, 0],
       ['1510', 0, 1000],

@@ -420,4 +420,40 @@ describe('linkTransactionToJournalEntry: the payment plan', () => {
 
     expect(await link(supabase)).toMatchObject({ ok: false, code: 'MATCH_AMOUNT_EXCEEDS_REMAINING' })
   })
+
+  it("settles in full when another invoice's row uses part of the verifikat and the rest is what 1510 carries", async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    queueTo(enqueue, [
+      { account_number: '1510', debit_amount: 0, credit_amount: 1000 },
+      { account_number: '1510', debit_amount: 0, credit_amount: 400 },
+    ])
+    enqueue({ data: { ok: true, sek: 1000 }, error: null }) // document_carried_sek
+    enqueue({ data: [{ invoice_id: 'inv-other', amount: 400, currency: 'SEK' }], error: null })
+
+    expect(await link(supabase)).toMatchObject({
+      ok: true,
+      result: { invoiceStatus: 'paid', paidAmount: 999.75, remainingAmount: 0 },
+    })
+  })
+
+  it('plans against the remainder when the invoice already has a row on the verifikat: what 1510 carries already counts it', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    queueTo(enqueue, [{ account_number: '1510', debit_amount: 0, credit_amount: 1000 }])
+    enqueue({ data: { ok: true, sek: 1000 }, error: null }) // document_carried_sek
+    enqueue({ data: [{ invoice_id: 'inv-1', amount: 500, currency: 'SEK' }], error: null })
+
+    expect(await link(supabase)).toMatchObject({ ok: false, code: 'MATCH_AMOUNT_EXCEEDS_REMAINING' })
+  })
+
+  it("does not count a 1513 credit (Skatteverket's ROT/RUT share) as clearing what 1510 carries", async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    queueTo(enqueue, [
+      { account_number: '1510', debit_amount: 0, credit_amount: 400 },
+      { account_number: '1513', debit_amount: 0, credit_amount: 600 },
+    ])
+    enqueue({ data: { ok: true, sek: 1000 }, error: null }) // document_carried_sek
+    enqueue({ data: [], error: null })
+
+    expect(await link(supabase)).toMatchObject({ ok: false, code: 'MATCH_AMOUNT_EXCEEDS_REMAINING' })
+  })
 })
