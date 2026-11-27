@@ -41,8 +41,12 @@ so an application-only rollback cannot restore the old writer.
   the file has moved off 2099 to 2098 or 2091: the year-end's omföring
   (`result-appropriation-service`), dated the year's first day, onto the file's
   account, named in the import result (`src/lib/import/sie-result-transfer.ts`).
-  Undo leaves it, as it leaves the close's; the next import of the year finds it
-  and books none. Any other difference stays a warning.
+  It is booked only when the year-end's plan moves exactly that amount between
+  those two accounts; a verifikat in the file that already moved part of the
+  result changes the plan, and then nothing is booked. Undo leaves it, as it
+  leaves the close's; the next import of the year finds it and books none. A
+  storno in the same year takes it away, and the next import books it again.
+  Any other difference stays a warning.
 
 Limits: 50 MiB per file, 150,000 vouchers, 2,000 lines per voucher, 200 vouchers
 and 1 MiB per chunk. Claims are capped at two globally and one per company.

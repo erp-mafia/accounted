@@ -11,7 +11,8 @@
  * close then has no carry left to block on. When anything besides that move
  * differs from the file, nothing is booked and the result warns as before.
  * A completion retried after the omföring, and the year imported again
- * after an undo, find the omföring and book none twice.
+ * after an undo, find the omföring and book none twice; a storno in the same
+ * year takes it away, and the next import books it again.
  *
  * What is not real: the HTTP hop to PostgREST (tests/pg/postgrest-over-pg.ts,
  * every request asserted inside its grammar after each test) and Supabase
@@ -20,6 +21,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
+import { reverseEntry } from '@/lib/bookkeeping/engine'
 import { priorResultCarry } from '@/lib/core/bookkeeping/prior-result-carry'
 import { requestSIEJobAction, submitSIEJob } from '@/lib/import/sie-jobs'
 import { runSIEWorker } from '@/lib/import/sie-job-worker'
@@ -470,5 +472,37 @@ describe('SIE import of two consecutive years: last year\'s result moved as the 
     expect(noticeCodes(again.job_result)).not.toContain('sie_ib_differs_from_file')
     expect(await carryLeft(seed)).toBe(0)
     expect(await gapsOf(seed.companyId, seed.fiscalPeriodId)).toEqual([])
+  })
+
+  it('books it again after a storno in the same year took it away', { timeout: FLOW_TIMEOUT }, async () => {
+    vi.stubEnv('SIE_IMPORT_JOBS', 'true')
+    vi.stubEnv('POSTING_EVENTS', 'off')
+    const seed = await seedAll()
+    await importFile(seed, PROFIT_2025, 'historik-2025.se')
+    const importId = await importFile(seed, ON_2091_2026, 'historik-2026.se')
+    const [first] = await omforingar(seed.companyId)
+
+    // A storno dated in the same year marks the omföring reversed: it moves
+    // nothing any more, so it is neither named nor counted.
+    await asUser(() => reverseEntry(seed.supabase, seed.companyId, seed.userId, first.id, '2026-06-30'))
+    await asUser(() => requestSIEJobAction(seed.supabase, seed.companyId, seed.userId, importId, 'undo'))
+    await runSIEWorker({ supabase: seed.supabase, importId, budgetMs: 120_000 })
+    expect((await jobOf(importId)).job_state).toBe('undone')
+
+    const again = await jobOf(await importFile(seed, ON_2091_2026, 'historik-2026.se'))
+    expect(again.job_state).toBe('completed')
+    const [reversed, fresh, ...more] = await omforingar(seed.companyId)
+    expect(more).toEqual([])
+    expect(reversed).toMatchObject({ id: first.id, status: 'reversed' })
+    expect(fresh).toMatchObject({
+      status: 'posted',
+      entry_date: '2026-01-01',
+      lines: [
+        { account: '2099', debit: 11850, credit: 0 },
+        { account: '2091', debit: 0, credit: 11850 },
+      ],
+    })
+    expect(again.job_result?.details?.resultTransfer).toMatchObject({ entryId: fresh.id, to: '2091', amount: 11850 })
+    expect(await carryLeft(seed)).toBe(0)
   })
 })
