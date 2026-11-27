@@ -161,6 +161,11 @@ export type SettleInvoicePaymentResult =
       warnings: OperationWarning[]
     }
   | { ok: false; code: 'MATCH_AMOUNT_EXCEEDS_REMAINING'; details: Record<string, unknown> }
+  /**
+   * Custom lines that settle in full an invoice whose own verifikat booked the
+   * öresavrundning but leave öre on 1510: details.carried is what to clear.
+   */
+  | { ok: false; code: 'INVOICE_PAID_ORE_LEFT'; details: Record<string, unknown> }
   | { ok: false; code: 'INVOICE_PAID_CASH_PARTIAL_UNSUPPORTED'; details: Record<string, unknown> }
   | { ok: false; code: 'INVOICE_PAID_LINES_UNBALANCED'; details: Record<string, unknown> }
   | { ok: false; code: 'INVOICE_PAID_NO_FISCAL_PERIOD'; details: Record<string, unknown> }
@@ -297,7 +302,7 @@ export async function settleInvoicePayment(
   if (!payment.ok) {
     return {
       ok: false,
-      code: 'MATCH_AMOUNT_EXCEEDS_REMAINING',
+      code: payment.code,
       details: payment.details as Record<string, unknown>,
     }
   }

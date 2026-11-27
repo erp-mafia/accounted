@@ -3235,6 +3235,13 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Verifikationsraderna är inte balanserade (debet ≠ kredit).',
     message_en: 'Custom journal lines do not balance.',
   },
+  INVOICE_PAID_ORE_LEFT: {
+    httpStatus: 400,
+    message_sv:
+      'Fakturans verifikation bokade öresavrundningen, så 1510 har fakturans avrundade belopp att betala. En betalning av hela fakturan krediterar 1510 med just det beloppet, och skillnaden mot det som kom in på banken bokas på 3740.',
+    message_en:
+      'The invoice\'s verifikat booked its öresavrundning: lines that settle the invoice in full credit 1510 what it carries for it (details.carried), with any difference to the bank on 3740. These would leave details.left on 1510.',
+  },
   INVOICE_PAID_NO_FISCAL_PERIOD: {
     httpStatus: 400,
     message_sv: 'Ingen öppen räkenskapsperiod för betalningsdatumet.',

@@ -767,6 +767,38 @@ describe('settleInvoicePayment', () => {
     })
   })
 
+  it.each([
+    ['rounded up, lines at the reskontra figure', 999.75, 1000, [['1930', 999.75, 0], ['1510', 0, 999.75]], 0.25],
+    ['rounded down, lines at the öre total', 1000.4, 1000, [['1930', 1000.4, 0], ['1510', 0, 1000.4]], -0.4],
+  ] as const)(
+    'refuses lines that settle in full but leave öre on 1510 when the issue verifikat booked the öresavrundning (%s), booking nothing',
+    async (_label, total, carried, rows, left) => {
+      vi.mocked(findFiscalPeriod).mockResolvedValue('fp-1')
+      vi.mocked(createJournalEntry).mockResolvedValue({ id: 'je-left' } as never)
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: { ok: true, sek: carried } }) // 1510 carries the rounded "Att betala"
+      enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert (must not be reached)
+      enqueue({ data: [{ id: 'inv-1' }] }) // CAS update (must not be reached)
+
+      const invoice = payableInvoice({ total, remaining_amount: total, journal_entry_id: 'je-orig' } as Partial<Invoice>)
+      const result = await settleInvoicePayment(supabase as unknown as SupabaseClient, 'company-1', 'user-1', {
+        ...BASE_PARAMS,
+        invoice,
+        paymentAmountInInvoiceCurrency: total,
+        customLines: rows.map(([account_number, debit_amount, credit_amount]) => ({ account_number, debit_amount, credit_amount })),
+      })
+
+      expect(result).toEqual({
+        ok: false,
+        code: 'INVOICE_PAID_ORE_LEFT',
+        details: { carried, cleared: total, left },
+      })
+      expect(vi.mocked(createJournalEntry)).not.toHaveBeenCalled()
+      expect(supabase.from).not.toHaveBeenCalledWith('invoice_payments')
+      expect(supabase.from).not.toHaveBeenCalledWith('invoices')
+    },
+  )
+
   it('rejects a sub-krona custom-line overshoot WITHOUT a 3740 line', async () => {
     const { supabase } = createQueuedMockSupabase()
     const invoice = payableInvoice({

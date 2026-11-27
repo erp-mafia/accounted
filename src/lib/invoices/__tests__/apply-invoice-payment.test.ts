@@ -259,6 +259,153 @@ describe('planInvoicePaymentForLines', () => {
     expect(planInvoicePaymentForLines(INV, 1234.75, undefined, 'SEK').ok).toBe(true)
     expect(planInvoicePaymentForLines(INV, 1235, undefined, 'SEK').ok).toBe(false)
   })
+
+  describe('the issue verifikat booked the öresavrundning: a settlement in full clears what 1510 carries', () => {
+    // 999,75 issued as Dr 1510 1 000 / Cr 3740 0,25: 1510 carries 1 000.
+    const UP = { total: 999.75, paid_amount: 0, remaining_amount: 999.75 }
+    // 1 000,40 issued as Dr 1510 1 000 / Dr 3740 0,40: 1510 carries 1 000.
+    const DOWN = { total: 1000.4, paid_amount: 0, remaining_amount: 1000.4 }
+    const row = (account_number: string, debit_amount: number, credit_amount: number) => ({
+      account_number,
+      debit_amount,
+      credit_amount,
+    })
+
+    it('refuses lines that clear only the reskontra figure (0,25 would stay on 1510)', () => {
+      const r = planInvoicePaymentForLines(UP, 999.75, [row('1930', 999.75, 0), row('1510', 0, 999.75)], 'SEK', 1000)
+      expect(r).toEqual({
+        ok: false,
+        code: 'INVOICE_PAID_ORE_LEFT',
+        details: { carried: 1000, cleared: 999.75, left: 0.25 },
+      })
+    })
+
+    it('refuses any other figure inside the öre band of what 1510 carries', () => {
+      const r = planInvoicePaymentForLines(
+        UP,
+        999.75,
+        [row('1930', 999.75, 0), row('1510', 0, 999.7), row('3740', 0, 0.05)],
+        'SEK',
+        1000,
+      )
+      expect(r.ok).toBe(false)
+      if (!r.ok) expect(r.code).toBe('INVOICE_PAID_ORE_LEFT')
+    })
+
+    it('rounded down: refuses lines that credit 1510 the öre total, booking the 3740 öre a second time', () => {
+      const exact = planInvoicePaymentForLines(DOWN, 1000.4, [row('1930', 1000.4, 0), row('1510', 0, 1000.4)], 'SEK', 1000)
+      expect(exact).toEqual({
+        ok: false,
+        code: 'INVOICE_PAID_ORE_LEFT',
+        details: { carried: 1000, cleared: 1000.4, left: -0.4 },
+      })
+      const twice = planInvoicePaymentForLines(
+        DOWN,
+        1000.4,
+        [row('1930', 1000, 0), row('3740', 0.4, 0), row('1510', 0, 1000.4)],
+        'SEK',
+        1000,
+      )
+      expect(twice.ok).toBe(false)
+      if (!twice.ok) expect(twice.code).toBe('INVOICE_PAID_ORE_LEFT')
+    })
+
+    it('lines that clear what 1510 carries settle in full, whatever reached the bank', () => {
+      const rounded = planInvoicePaymentForLines(UP, 1000, [row('1930', 1000, 0), row('1510', 0, 1000)], 'SEK', 1000)
+      expect(rounded.ok && rounded.plan.newStatus).toBe('paid')
+      // The customer paid the exact total, not "Att betala": 3740 takes the öre
+      // back. The doors pay what the rows debit, 3740 included (1 000).
+      const exactRows = [row('1930', 999.75, 0), row('3740', 0.25, 0), row('1510', 0, 1000)]
+      for (const paid of [1000, 999.75]) {
+        const exactTotal = planInvoicePaymentForLines(UP, paid, exactRows, 'SEK', 1000)
+        expect(exactTotal.ok && exactTotal.plan.newStatus).toBe('paid')
+        expect(exactTotal.ok && exactTotal.plan.newPaidAmount).toBe(999.75)
+        expect(exactTotal.ok && exactTotal.plan.newRemaining).toBe(0)
+      }
+      // Rounded down, the exact total paid: 3740 gives the 0,40 back.
+      const downExact = planInvoicePaymentForLines(
+        DOWN,
+        1000.4,
+        [row('1930', 1000.4, 0), row('1510', 0, 1000), row('3740', 0, 0.4)],
+        'SEK',
+        1000,
+      )
+      expect(downExact.ok && downExact.plan.newStatus).toBe('paid')
+      const down = planInvoicePaymentForLines(DOWN, 1000, [row('1930', 1000, 0), row('1510', 0, 1000)], 'SEK', 1000)
+      expect(down.ok && down.plan.newStatus).toBe('paid')
+    })
+
+    it('a part payment is planned as before: the last payment clears the rest of what 1510 carries', () => {
+      const r = planInvoicePaymentForLines(UP, 500, [row('1930', 500, 0), row('1510', 0, 500)], 'SEK', 1000)
+      expect(r.ok && r.plan.newStatus).toBe('partially_paid')
+      expect(r.ok && r.plan.newRemaining).toBe(499.75)
+      // Then 499,75 owed and 500 on 1510: the rows the payment dialog proposes
+      // (bank the remaining, 1510 what it carries, 3740 the öre) settle it.
+      const rest = { total: 999.75, paid_amount: 500, remaining_amount: 499.75 }
+      const last = planInvoicePaymentForLines(
+        rest,
+        500,
+        [row('1930', 499.75, 0), row('1510', 0, 500), row('3740', 0.25, 0)],
+        'SEK',
+        500,
+      )
+      expect(last.ok && last.plan).toMatchObject({ newStatus: 'paid', newPaidAmount: 999.75, newRemaining: 0 })
+      const short = planInvoicePaymentForLines(rest, 499.75, [row('1930', 499.75, 0), row('1510', 0, 499.75)], 'SEK', 500)
+      expect(short).toMatchObject({ ok: false, code: 'INVOICE_PAID_ORE_LEFT', details: { carried: 500, cleared: 499.75, left: 0.25 } })
+    })
+
+    it('lines that clear what 1510 carries but pay a krona or more off the remainder are planned as before', () => {
+      const over = planInvoicePaymentForLines(
+        UP,
+        1500,
+        [row('1930', 1500, 0), row('1510', 0, 1000), row('2420', 0, 500)],
+        'SEK',
+        1000,
+      )
+      expect(over).toMatchObject({ ok: false, code: 'MATCH_AMOUNT_EXCEEDS_REMAINING' })
+    })
+
+    it('a krona or more on 3740 is not öresavrundning, and is refused as before', () => {
+      const r = planInvoicePaymentForLines(
+        UP,
+        1000,
+        [row('1930', 1, 0), row('3740', 999, 0), row('1510', 0, 1000)],
+        'SEK',
+        1000,
+      )
+      expect(r).toMatchObject({ ok: false, code: 'MATCH_AMOUNT_EXCEEDS_REMAINING' })
+    })
+
+    it('1513, Skatteverket\'s share, is not what the customer clears', () => {
+      const r = planInvoicePaymentForLines(
+        UP,
+        999.75,
+        [row('1930', 999.75, 0), row('1513', 0, 0.25), row('1510', 0, 999.75)],
+        'SEK',
+        1000,
+      )
+      expect(r.ok).toBe(false)
+      if (!r.ok) expect(r.code).toBe('INVOICE_PAID_ORE_LEFT')
+    })
+
+    it('an invoice whose 1510 carries its remainder (no ledger figure) is planned exactly as before', () => {
+      const r = planInvoicePaymentForLines(UP, 999.75, [row('1930', 999.75, 0), row('1510', 0, 999.75)], 'SEK', null)
+      expect(r.ok && r.plan.newStatus).toBe('paid')
+      const same = planInvoicePaymentForLines(UP, 999.75, [row('1930', 999.75, 0), row('1510', 0, 999.75)], 'SEK', 999.75)
+      expect(same.ok && same.plan.newStatus).toBe('paid')
+    })
+
+    it('a gap of a krona or more is not rounding and is planned as before', () => {
+      const r = planInvoicePaymentForLines(
+        UP,
+        999.75,
+        [row('1930', 999.75, 0), row('1510', 0, 998.75), row('3010', 0, 1)],
+        'SEK',
+        1000,
+      )
+      expect(r.ok && r.plan.newStatus).toBe('paid')
+    })
+  })
 })
 
 describe('deriveCustomerSettlementAmount', () => {

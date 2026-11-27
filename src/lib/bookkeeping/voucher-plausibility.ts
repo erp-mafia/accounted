@@ -53,6 +53,10 @@ export const VOUCHER_WARNING_CODES = [
   // A rättelse moved out of a locked period that changes VAT
   // (lib/vat/moved-correction-vat.ts).
   'VAT_OF_MOVED_CORRECTION',
+  // The verifikat settles kundfordringar or leverantörsskulder by exactly
+  // what an open invoice has left to pay
+  // (lib/invoices/voucher-open-invoice-warning.ts).
+  'OPEN_INVOICE_COVERS_POSTING',
 ] as const
 
 export type VoucherWarningCode = (typeof VOUCHER_WARNING_CODES)[number]

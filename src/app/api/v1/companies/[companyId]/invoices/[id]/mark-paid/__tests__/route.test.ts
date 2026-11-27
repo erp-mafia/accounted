@@ -432,6 +432,37 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid', () => {
     expect(mockPayment).not.toHaveBeenCalled()
   })
 
+  it('returns 400 INVOICE_PAID_ORE_LEFT when lines settle in full but leave öre on 1510 the issue verifikat rounded', async () => {
+    // 999,75 issued as Dr 1510 1 000 / Cr 3740 0,25: lines that credit 1510
+    // the reskontra figure would mark it paid with 0,25 left on 1510.
+    const ORE_INVOICE = { ...SENT_INVOICE, total: 999.75, remaining_amount: 999.75, journal_entry_id: 'je-issue' }
+    mockServiceClient.mockReturnValue(
+      createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: { data: ORE_INVOICE, error: null },
+        company_settings: { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null },
+        invoice_payments: { data: { id: 'ip-1' }, error: null },
+        'rpc:document_carried_sek': { data: { ok: true, sek: 1000 }, error: null },
+      }).supabase,
+    )
+
+    const res = await markPaid(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/mark-paid`, {
+        lines: [
+          { account_number: '1930', debit_amount: 999.75, credit_amount: 0 },
+          { account_number: '1510', debit_amount: 0, credit_amount: 999.75 },
+        ],
+      }),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('INVOICE_PAID_ORE_LEFT')
+    expect(body.error.details).toMatchObject({ carried: 1000, cleared: 999.75, left: 0.25 })
+    expect(mockPayment).not.toHaveBeenCalled()
+  })
+
   it('accepts the kontantmetoden ROT payment entry: the 1513 leg is not customer money', async () => {
     // remaining_amount is stored net of the ROT/RUT deduction; the cash entry
     // still books the gross shape with a 1513 debit for Skatteverket's share.
