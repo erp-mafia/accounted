@@ -765,6 +765,41 @@ describe('counterparty set-off clears what 1510 carries when the issue verifikat
     expect(await balance([pair.issueId, part.journal_entry_id!, rest.journal_entry_id!], '1510')).toBe(0)
   })
 
+  it('a part set-off that leaves whole kronor open: the last one clears what 1510 still carries (20261127121500)', async () => {
+    const s = await seedCompany()
+    const pair = await roundedPair(s, 999.75, 1000)
+
+    const part = await bookAsService(s, pair, { amount: 499.75 })
+    expect(part).toMatchObject({ ok: true, invoice: { status: 'partially_paid', remaining_amount: 500 } })
+    // The planner reads the same figure off the row the SQL reads.
+    const { rows } = await getPool().query(
+      `SELECT id, currency, total::float8 AS total, remaining_amount::float8 AS remaining_amount,
+              paid_amount::float8 AS paid_amount, journal_entry_id
+         FROM public.invoices WHERE id = $1`,
+      [pair.invoiceId],
+    )
+    const client = await getPool().connect()
+    try {
+      await client.query('BEGIN')
+      expect(await carriedSekOf(stagingSIEClient(client, ''), s.companyId, 'customer', rows[0])).toBe(500.25)
+    } finally {
+      await client.query('ROLLBACK')
+      client.release()
+    }
+
+    const rest = await bookAsService(s, pair, { amount: 500 })
+    expect(rest).toMatchObject({ ok: true, invoice: { status: 'paid', remaining_amount: 0 } })
+    // On main: Dr 2440 500 / Cr 1510 500, and 0,25 stayed on 1510 of a paid invoice.
+    expect(await voucherLines(rest.journal_entry_id!)).toEqual([
+      ['2440', 500, 0],
+      ['1510', 0, 500.25],
+      ['3740', 0.25, 0],
+    ])
+    const entries = [pair.issueId, part.journal_entry_id!, rest.journal_entry_id!]
+    expect(await balance(entries, '1510')).toBe(0)
+    expect(await balance(entries, '3740')).toBe(0)
+  })
+
   it('previews the lines it posts: the planner reads what 1510 carries off the same rows', async () => {
     for (const [total, receivable, amount] of [
       [999.75, 1000, 1000],
