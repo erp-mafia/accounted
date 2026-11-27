@@ -20,6 +20,7 @@ vi.mock('@/lib/bookkeeping/account-backfill', () => ({
 
 import { planAccountMove, bookedItemDimensions, moveSupplierInvoiceItemAccount } from '../item-account'
 import { buildSupplierInvoiceRegistrationEntryInput } from '@/lib/bookkeeping/supplier-invoice-entries'
+import { headlineAmount } from '@/components/pending-operations/review-model'
 import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
 
 const line = (
@@ -297,6 +298,35 @@ describe('moveSupplierInvoiceItemAccount on a foreign-currency invoice', () => {
       expect.objectContaining({ account_number: '6550', debit_amount: aloneA }),
     ])
     expect(Math.round((aloneA + aloneC) * 100) / 100).toBe(bookedOn(verifikat, '6110'))
+  })
+
+  it('the dry run states the invoice currency its amount is in, so the review never shows it as kronor', async () => {
+    const itemA = eurItem('a', '6110', 100.5)
+    const verifikat = await registrationLines([itemA])
+    const { supabase } = createTableMockSupabase({
+      supplier_invoices: { data: eurInvoice },
+      supplier_invoice_items: { data: itemA },
+      journal_entry_lines: { data: verifikat },
+    })
+    strikeLines.mockResolvedValue({ ok: true, dryRun: true, preview: {} })
+
+    const outcome = await moveSupplierInvoiceItemAccount(ctx(supabase), 'inv-1', 'a', '6550', { dryRun: true })
+
+    if (!outcome.ok || !outcome.dryRun) throw new Error('expected a dry-run preview')
+    expect(outcome.preview).toMatchObject({ amount: 100.5, currency: 'EUR', amount_sek: bookedOn(verifikat, '6110') })
+    expect(headlineAmount({ preview_data: outcome.preview as never })).toEqual({ value: 100.5, currency: 'EUR' })
+  })
+
+  it('the dry run of an invoice with no verifikat yet states its currency too', async () => {
+    const { supabase } = createTableMockSupabase({
+      supplier_invoices: { data: { ...eurInvoice, registration_journal_entry_id: null } },
+      supplier_invoice_items: { data: eurItem('a', '6110', 100.5) },
+    })
+
+    const outcome = await moveSupplierInvoiceItemAccount(ctx(supabase), 'inv-1', 'a', '6550', { dryRun: true })
+
+    if (!outcome.ok || !outcome.dryRun) throw new Error('expected a dry-run preview')
+    expect(outcome.preview).toMatchObject({ amount: 100.5, currency: 'EUR', corrects_verifikat: false })
   })
 
   it('refuses a verifikat-booked invoice whose rate cannot be determined, writing nothing', async () => {
