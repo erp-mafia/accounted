@@ -58,6 +58,10 @@ function mapSelfBilledFailure(failure: SelfBilledSaleFailure, log: Logger, reque
         { error: 'Ingen öppen bokföringsperiod för fakturadatumet', type: 'validation_error' },
         { status: 400 },
       )
+    case 'duplicate':
+      return errorResponseFromCode('SELF_BILLED_INVOICE_DUPLICATE', log, { requestId })
+    case 'review_changed':
+      return errorResponseFromCode('SELF_BILLED_INVOICE_REVIEW_CHANGED', log, { requestId })
     case 'insert_failed':
       return errorResponseFromCode('INVOICE_CREATE_INSERT_FAILED', log, {
         requestId,

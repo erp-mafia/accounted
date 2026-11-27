@@ -1916,6 +1916,22 @@ const MATCH_SI: Record<string, StructuredErrorEntry> = {
 }
 
 const INVOICE: Record<string, StructuredErrorEntry> = {
+  SELF_BILLED_INVOICE_DUPLICATE: {
+    httpStatus: 409,
+    message_sv: 'En självfaktura med det fakturanumret finns redan för kunden.',
+    message_en: 'A self-billed invoice with that invoice number already exists for the customer.',
+  },
+  SELF_BILLED_INVOICE_REVIEW_CHANGED: {
+    httpStatus: 409,
+    message_sv: 'Beloppet i SEK eller bokföringsmetoden stämmer inte längre med förslaget. Lägg fram självfakturan på nytt för granskning.',
+    message_en: 'The SEK amount or accounting method no longer matches the proposal. Stage the self-billed invoice again for review.',
+  },
+  SELF_BILLED_INVOICE_FX_RATE_UNAVAILABLE: {
+    httpStatus: 502,
+    message_sv: 'Kunde inte hämta växelkursen för självfakturans fakturadatum. Försök igen senare.',
+    message_en: 'Could not retrieve the exchange rate for the self-billed invoice date. Try again later.',
+    retryable: true,
+  },
   INVOICE_CUSTOMER_NOT_FOUND: {
     httpStatus: 404,
     message_sv: 'Kunden kunde inte hittas.',

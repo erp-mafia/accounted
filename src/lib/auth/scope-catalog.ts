@@ -336,6 +336,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   // Drafts only (the update refuses anything past draft): invoices:draft,
   // which invoices:write includes. Every door out of draft stays on write.
   gnubok_create_invoice:                  'invoices:draft',
+  gnubok_create_self_billed_invoice:      'invoices:write',
   gnubok_update_invoice:                  'invoices:draft',
   gnubok_delete_draft_invoice:            'invoices:write',
   gnubok_send_invoice:                    'invoices:write',

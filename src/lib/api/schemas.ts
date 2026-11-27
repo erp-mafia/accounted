@@ -1244,12 +1244,19 @@ export const SelfBillingInvoiceItemSchema = z.object({
     .optional(),
 })
 
+export const SelfBilledExternalInvoiceNumberSchema = z
+  .string()
+  .max(64)
+  .trim()
+  .min(1, 'External invoice number is required')
+  .describe('Invoice number on the document issued by the customer.')
+
 export const CreateSelfBillingInvoiceSchema = z.object({
   customer_id: uuid,
   // The VAT per rate the customer's document states (percent rates, like the
   // items). Omitted: the VAT on the summed base per rate (crm#1367).
   vat_breakdown: SelfBilledVatBreakdownSchema.optional(),
-  external_invoice_number: z.string().min(1, 'External invoice number is required').max(64),
+  external_invoice_number: SelfBilledExternalInvoiceNumberSchema,
   self_billing_agreement_ref: z.string().max(128).optional(),
   invoice_date: isoDate,
   received_date: isoDate,

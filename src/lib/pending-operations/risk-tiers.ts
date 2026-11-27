@@ -361,6 +361,7 @@ const RISK_TIERS = {
   // without confirmed=true. /pending says "kan inte ångras" on the row and in
   // the bulk line instead (rowConsentSentence, registerBookedInvoiceBulkLine).
   create_invoice: 'medium',
+  create_self_billed_invoice: 'high', // registration posts under the accrual method
   // Rewrites a DRAFT in place (header + full item replace). Same tier as
   // create_invoice: the target has no verifikat yet (isEditableInvoiceDraft
   // is re-checked at commit), so the edit is fully reversible by editing again.

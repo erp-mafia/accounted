@@ -67,6 +67,7 @@ const PRICEABLE_OPERATIONS: Readonly<Record<string, readonly string[]>> = {
   link_supplier_invoice_voucher: ['payment_amount'],
   // match_batch_allocate: PRICED_BY_PREVIEW below.
   mark_invoice_paid: ['total'],
+  create_self_billed_invoice: ['total_sek'],
   // Operation registry, wave 2. Dotted paths read a nested preview field.
   book_invoice: ['journal_entry.total_debit'],
   bulk_book_invoices: ['total_debit'],

@@ -14,18 +14,21 @@ describe('self-billing invoice constraints', () => {
   async function insertSelfBilled(params: {
     userId: string
     companyId: string
+    customerId?: string
     status?: string
     invoiceNumber?: string | null
     externalNumber?: string | null
     isSelfBilled?: boolean
   }): Promise<string> {
     const id = randomUUID()
-    const customerId = randomUUID()
-    await getPool().query(
-      `INSERT INTO public.customers (id, user_id, company_id, name)
-       VALUES ($1, $2, $3, 'Stora Bolaget AB')`,
-      [customerId, params.userId, params.companyId],
-    )
+    const customerId = params.customerId ?? randomUUID()
+    if (!params.customerId) {
+      await getPool().query(
+        `INSERT INTO public.customers (id, user_id, company_id, name)
+         VALUES ($1, $2, $3, 'Stora Bolaget AB')`,
+        [customerId, params.userId, params.companyId],
+      )
+    }
     await getPool().query(
       `INSERT INTO public.invoices
          (id, user_id, company_id, customer_id, invoice_number,
@@ -67,6 +70,26 @@ describe('self-billing invoice constraints', () => {
     )
     expect(rows[0]!.is_self_billed).toBe(true)
     expect(rows[0]!.external_invoice_number).toBe('KUND-55012')
+  })
+
+  it('rejects concurrent copies for the same customer and permits the same number for another customer', async () => {
+    const { userId, companyId } = await seedCompany()
+    const customerId = randomUUID()
+    await getPool().query(
+      `INSERT INTO public.customers (id, user_id, company_id, name)
+       VALUES ($1, $2, $3, 'Stora Bolaget AB')`,
+      [customerId, userId, companyId],
+    )
+    const results = await Promise.allSettled([
+      insertSelfBilled({ userId, companyId, customerId, externalNumber: 'SF-123' }),
+      insertSelfBilled({ userId, companyId, customerId, externalNumber: ' SF-123 ' }),
+    ])
+
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
+    expect(results.find((result) => result.status === 'rejected')).toMatchObject({
+      reason: { code: '23505', constraint: 'idx_invoices_self_billed_number' },
+    })
+    await expect(insertSelfBilled({ userId, companyId, externalNumber: 'SF-123' })).resolves.toEqual(expect.any(String))
   })
 
   it('rejects a self-billed row that also carries an own invoice_number', async () => {

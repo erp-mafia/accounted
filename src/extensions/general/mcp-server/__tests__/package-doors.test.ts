@@ -154,6 +154,20 @@ describe('tools/call package start gate', () => {
     expect((await telemetry).errorKind).toBe('package_off')
   })
 
+  it('refuses to stage a received self-bill while customer invoicing is off', async () => {
+    vi.mocked(packageStartRefusal).mockResolvedValueOnce(
+      packageOffRefusal('customer-invoices', 'turned_off_by_company'),
+    )
+
+    const { isError, payload } = await toolResult(
+      await handleMcpRequest(toolCall('gnubok_create_self_billed_invoice')),
+    )
+
+    expect(isError).toBe(true)
+    expect(payload.error).toMatchObject({ code: 'PACKAGE_OFF', details: { package_id: 'customer-invoices' } })
+    expect(packageStartRefusal).toHaveBeenCalledWith(expect.anything(), '11111111-1111-4111-8111-111111111111', 'customer-invoices')
+  })
+
   it('never asks for a tool that settles open work', async () => {
     await handleMcpRequest(toolCall('gnubok_book_salary_run', { salary_run_id: '6f1c2a40-0000-4000-8000-000000000001' }))
     expect(packageStartRefusal).not.toHaveBeenCalled()

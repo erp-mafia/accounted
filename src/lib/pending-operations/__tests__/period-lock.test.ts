@@ -78,6 +78,18 @@ describe('stagedPeriodLock', () => {
     })
   })
 
+  it("preserves the invoice date in lock guidance for a received self-bill", () => {
+    const op = {
+      operation_type: 'create_self_billed_invoice',
+      params: { invoice_date: '2026-10-05' },
+      preview_data: { posts_on_approval: true },
+    }
+    const note = stagedPeriodLockNote(op, '2026-10-05', BEHIND_LOCK_DATE)
+    expect(note).toContain('retains its actual date')
+    expect(note).not.toContain('stage it again')
+    expect(stagedPostingDate({ ...op, preview_data: { posts_on_approval: false } })).toBeNull()
+  })
+
   it("states no through-date for a year's own lock (its lock_date is when it was locked) or a closed year", () => {
     expect(stagedPeriodLock('2026-06-01', YEAR_LOCKED)).toEqual({
       period_id: 'fp-2026',

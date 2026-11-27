@@ -807,7 +807,7 @@ import { createFormationTools } from './formation-tools'
 import { createPurchaseCategoryTools } from './purchase-category-tools'
 import { createFeedTools } from './feed-tools'
 import { OPEN_QUESTIONS_HOW, answerQuestionWithFact, briefingQuestion, createQuestionTools } from './question-tools'
-import { createOperationTools, toolOutputSchema } from './operation-tools'
+import { createOperationTools, toolInputSchema, toolOutputSchema } from './operation-tools'
 import { ALL_OPERATIONS, OPERATIONS } from '@/lib/operations/registry'
 import type { DoorRule } from '@/lib/permissions/doors'
 import { mcpToolDoor } from './permission-doors'
@@ -873,6 +873,8 @@ import { commitPendingOperation } from '@/lib/pending-operations/commit'
 import { resolveUserEmail } from '@/lib/pending-operations/api-approval'
 import type { ApprovalDoor } from '@/lib/suggestion-log/approval-door'
 import { buildStagedInvoice, describeInvoiceBuildRefusal } from '@/lib/pending-operations/build-staged-invoice'
+import { resolveSelfBilledSaleDraft } from '@/lib/invoices/self-billed-sale'
+import { CreateSelfBilledInvoiceParamsSchema, selfBilledInvoiceFailure } from '@/lib/pending-operations/schemas/create-self-billed-invoice'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { getUserCompanies } from '@/lib/company/context'
 import { CURRENCIES, INVOICE_QR_MODES, SUPPLIER_INVOICE_REVERSE_CHARGE_KINDS } from '@/types'
@@ -1276,6 +1278,8 @@ const SUPPLIER_INVOICE_VOUCHER_REF_SCHEMA = {
 } as const
 // dry_run and idempotency_key: the staging arguments every write tool takes
 // (stagingOptions turns them into staging options).
+const SELF_BILLED_INVOICE_INPUT_SCHEMA = toolInputSchema(CreateSelfBilledInvoiceParamsSchema)
+
 const STAGING_ARGS_PROPERTIES = {
   dry_run: {
     type: 'boolean',
@@ -2522,6 +2526,8 @@ interface StageOptions {
    * IDEMPOTENCY_KEY_REUSE. Must itself be free of plaintext PII.
    */
   idempotencyParams?: Record<string, unknown>
+  /** Replay the stored proposal's reviewed fields, even when a new calculation differs. */
+  replayStoredPreview?: boolean
   /**
    * ISO yyyy-MM-dd date used to look up period_status before staging. When
    * provided, the response includes a `period_status` envelope so agents and
@@ -2530,9 +2536,10 @@ interface StageOptions {
    * the DB triggers remain the authoritative gate. When the operation posts
    * a verifikat on this date, list its type in
    * lib/pending-operations/period-lock.ts: the staged message and the
-   * approval queue then say when the date is locked.
+   * approval queue then say when the date is locked. Use false to skip the
+   * check when the dates are informational.
    */
-  dateForPeriodCheck?: string
+  dateForPeriodCheck?: string | false
   /**
    * Advisory compliance warning. Appended to the staged message and echoed as
    * preview.compliance_warning, which persists into preview_data so the
@@ -2725,7 +2732,9 @@ async function stagePendingOperation(
   // field so every date-bearing operation surfaces a period_status envelope
   // without each tool having to opt in. Failure is non-fatal: DB triggers
   // are the authoritative gate; a missing envelope just degrades preview UX.
-  const dateForPeriodCheck = options.dateForPeriodCheck ?? autoExtractDateForPeriodCheck(params)
+  const dateForPeriodCheck = options.dateForPeriodCheck === false
+    ? undefined
+    : options.dateForPeriodCheck ?? autoExtractDateForPeriodCheck(params)
   let periodLock: PeriodLockForDate | undefined
   if (dateForPeriodCheck) {
     try {
@@ -2793,6 +2802,10 @@ async function stagePendingOperation(
     if (cached) {
       const cachedBody = cached.body as Record<string, unknown>
       const cachedOpId = typeof cachedBody.operation_id === 'string' ? cachedBody.operation_id : undefined
+      const storedPreview = cachedBody.preview
+      const replayPreview = options.replayStoredPreview && storedPreview && typeof storedPreview === 'object'
+        ? storedPreview
+        : previewData
       return {
         ...cachedBody,
         idempotency_replay: true,
@@ -2802,7 +2815,7 @@ async function stagePendingOperation(
           ? `Replayed cached response for idempotency_key "${options.idempotencyKey}": already staged as pending_operation ${cachedOpId}. No new side-effects. ${buildApprovalGuidance(cachedOpId, riskLevel, actor.canApprove)}`
           : `Replayed cached response for idempotency_key "${options.idempotencyKey}". No new side-effects.`,
         ...(cachedOpId ? approveHint(cachedOpId, companyId, actor) : {}),
-        preview: periodStatus ? { ...previewData, period_status: periodStatus } : previewData,
+        preview: periodStatus ? { ...replayPreview, period_status: periodStatus } : replayPreview,
         ...(periodStatus ? { period_status: periodStatus } : {}),
       } as Awaited<ReturnType<typeof stagePendingOperation>>
     }
@@ -11257,6 +11270,66 @@ export const tools: McpTool[] = [
         items,
         item_count: items.length,
       }
+    },
+  },
+
+  {
+    name: 'gnubok_create_self_billed_invoice',
+    title: 'Register a Received Self-Billed Invoice',
+    description: 'Stage a received self-billed invoice issued by your customer on your behalf. Use the customer’s invoice number and actual dates. Approval registers the sale and can post a voucher. There is no send step.',
+    keywords: ['självfaktura', 'självfakturering', 'mottagen självfaktura', 'self-billing'],
+    catalogVisibility: 'search',
+    inputSchema: {
+      ...SELF_BILLED_INVOICE_INPUT_SCHEMA,
+      properties: {
+        ...(SELF_BILLED_INVOICE_INPUT_SCHEMA.properties as Record<string, unknown>),
+        ...STAGING_ARGS_PROPERTIES,
+      },
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: ANNOTATIONS_STAGED_WRITE,
+    async execute(args, companyId, userId, supabase, actor) {
+      const { dry_run, idempotency_key, ...raw } = args
+      const parsed = CreateSelfBilledInvoiceParamsSchema.safeParse(raw)
+      if (!parsed.success) {
+        throw fieldValidationError('Invalid self-billed invoice', zodFieldIssues(parsed.error, raw))
+      }
+
+      const input = parsed.data
+      const resolved = await resolveSelfBilledSaleDraft(supabase, companyId, input)
+      if (!resolved.ok) {
+        const { code, message } = selfBilledInvoiceFailure(resolved.failure)
+        throw codedRefusal(code, message)
+      }
+
+      const settings = await supabase.from('company_settings')
+        .select('accounting_method').eq('company_id', companyId).maybeSingle()
+      const postsOnApproval = requireAccountingMethod(settings) === 'accrual'
+      const { draft } = resolved
+      return stage({
+        supabase,
+        companyId,
+        userId,
+        type: 'create_self_billed_invoice',
+        title: `Registrera självfaktura ${input.external_invoice_number}: ${draft.customer.name} ${draft.total} ${input.currency}`,
+        params: input,
+        preview: {
+          ...input,
+          customer_name: draft.customer.name,
+          items: draft.items,
+          subtotal: roundOre(draft.subtotal),
+          vat_amount: roundOre(draft.vatAmount),
+          total: draft.total,
+          total_sek: draft.totalSek ?? draft.total,
+          vat_treatment: draft.vatTreatment,
+          posts_on_approval: postsOnApproval,
+          ...(draft.exchangeRate === null ? {} : { exchange_rate: draft.exchangeRate }),
+        },
+        actor,
+        dateForPeriodCheck: postsOnApproval ? input.invoice_date : false,
+        replayStoredPreview: true,
+        ...stagingOptions({ dry_run, idempotency_key }),
+      })
     },
   },
 
