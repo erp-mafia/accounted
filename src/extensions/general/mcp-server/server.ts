@@ -884,6 +884,7 @@ import { creditNoteRefusal } from '@/lib/invoices/credit-invoice'
 import { noteCompletionLog } from '@/lib/extensions/completion-log'
 import { loadInvoiceTerms } from '@/lib/invoices/due-date'
 import { lineQuantityIssue, LINE_QUANTITY_MESSAGES } from '@/lib/invoices/line-quantity'
+import { SEND_ORDER_WAYS } from '@/lib/invoices/send-order'
 import { bookDirectDocumentCurrency, bookDirectFxRefusal } from '@/lib/bookkeeping/book-direct-prefill'
 
 // ── Actor context ────────────────────────────────────────────
@@ -10419,6 +10420,7 @@ export const tools: McpTool[] = [
         language: { type: 'string', enum: ['sv', 'en'] },
         invoice_reference: { type: 'string' },
         invoice_marking: { type: 'string' },
+        invoice_send_way: { type: 'string', enum: [...SEND_ORDER_WAYS], description: "Sent first; omitted: company's order." },
         notes: { type: 'string' },
         dry_run: STAGING_ARGS_PROPERTIES.dry_run,
         idempotency_key: STAGING_ARGS_PROPERTIES.idempotency_key,
@@ -10518,6 +10520,7 @@ export const tools: McpTool[] = [
         default_payment_terms: { type: 'integer', minimum: 0, maximum: 365 },
         invoice_reference: { type: 'string' },
         invoice_marking: { type: 'string' },
+        invoice_send_way: { type: ['string', 'null'], enum: [...SEND_ORDER_WAYS, null], description: "Null: company's order." },
         notes: { type: 'string' },
         dry_run: STAGING_ARGS_PROPERTIES.dry_run,
         idempotency_key: STAGING_ARGS_PROPERTIES.idempotency_key,
