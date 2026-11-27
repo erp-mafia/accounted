@@ -15,7 +15,6 @@ function input(over: Partial<FirstThingInput> = {}): FirstThingInput {
     hasBankFeed: true,
     hasImportedBooks: false,
     hasTransactions: true,
-    hasAi: true,
     companyCreatedAt: '2026-11-10T08:00:00Z',
     today: '2026-11-25',
     closed: false,
@@ -156,10 +155,6 @@ describe('pickFirstThing: the first thing', () => {
     expect(r?.kind).toBe('go_through_documents')
   })
 
-  it('d needs the AI capability', () => {
-    expect(pickFirstThing(input({ hasAi: false, counts: counts({ inbox_document: 3 }) }))).toBeNull()
-  })
-
   it('the lead names books and bank together', () => {
     const r = pickFirstThing(input({ hasImportedBooks: true, counts: counts({ book_transaction: 1 }) }))
     expect(r?.lead).toBe('books_and_bank')
@@ -195,11 +190,6 @@ describe('pickFirstThing: what comes after', () => {
     )
     expect(r?.after).toHaveLength(3)
     expect(r?.after.map((t) => t.category)).toEqual(['book_skattekonto', 'inbox_document', 'supplier_invoice_approval'])
-  })
-
-  it('leaves out the inbox row without the AI capability', () => {
-    const r = pickFirstThing(input({ hasAi: false, counts: counts({ book_transaction: 1, inbox_document: 2, overdue_invoice: 1 }) }))
-    expect(r?.after.map((t) => t.category)).toEqual(['overdue_invoice'])
   })
 
   it('keeps the rows when the first thing is connecting the bank', () => {

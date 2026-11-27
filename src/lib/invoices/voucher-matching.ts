@@ -50,6 +50,8 @@ import { clearSettledInvoiceSuggestions } from './clear-settled-invoice-suggesti
 import { anchorCustomerInvoiceDocument } from '@/lib/core/documents/customer-invoice-underlag'
 import { releaseDoubtfulReserveAfterChange } from '@/lib/customer-loss/doubtful'
 import { documentCurrency, ledgerLineSideAmountIn } from '@/lib/bookkeeping/ledger-line-amount'
+import { carriedSekOf } from '@/lib/bookkeeping/ledger-carried-sek'
+import { isKronorCurrency } from '@/lib/bookkeeping/currency-utils'
 import type { SqlBusinessEventLink } from '@/lib/bookkeeping/business-event-link'
 import { postingPort } from '@/lib/posting/port'
 import type { Invoice, Customer } from '@/types'
@@ -560,7 +562,25 @@ export async function validateVoucherForInvoiceLink(
   // From here on arCreditTotal is what the voucher has LEFT.
   arCreditTotal = roundOre(arCreditTotal - used)
 
-  if (statedAmount === null) {
+  // A SEK invoice whose own verifikat booked the öresavrundning (1510 at the
+  // rounded "Att betala", the öre on 3740) is settled in full by a voucher
+  // that has exactly what 151x carries for it left, as the RPC reads it
+  // (20261126170500): with no share, or a share of the whole remainder or of
+  // what 151x carries. A voucher with more or less left is judged on the
+  // remainder, as before.
+  const remaining = roundOre(remainingAmount)
+  const receivable = settlement.side === 'ar_credit' && !sekFallback && isKronorCurrency(invoice.currency)
+    ? await bookedOreReceivable(supabase, companyId, invoice)
+    : null
+  const clearsCarried = receivable !== null
+    && Math.abs(arCreditTotal - receivable) <= AMOUNT_TOLERANCE
+    && (statedAmount === null
+      || Math.abs(statedAmount - remaining) <= AMOUNT_TOLERANCE
+      || Math.abs(statedAmount - receivable) <= AMOUNT_TOLERANCE)
+
+  if (clearsCarried) {
+    // The voucher's rest is what 151x carries: the invoice settles in full.
+  } else if (statedAmount === null) {
     // No stated share: nothing is split on a guess. What the voucher has left
     // must fit inside the invoice's remainder.
     if (arCreditTotal > remainingAmount + AMOUNT_TOLERANCE) {
@@ -602,7 +622,10 @@ export async function validateVoucherForInvoiceLink(
     return { ok: false, code: 'LINK_VOUCHER_ALREADY_LINKED' }
   }
 
-  const paymentAmount = Math.min(statedAmount ?? arCreditTotal, arCreditTotal, roundOre(remainingAmount))
+  // A settlement in full on what 151x carries pays the whole remainder and
+  // takes all the voucher has left.
+  const paymentAmount = clearsCarried ? remaining : Math.min(statedAmount ?? arCreditTotal, arCreditTotal, remaining)
+  const cleared = clearsCarried ? arCreditTotal : paymentAmount
   const remainingAfter = Math.max(0, roundOre(remainingAmount - paymentAmount))
   const isFullyPaid = remainingAfter <= AMOUNT_TOLERANCE
 
@@ -614,7 +637,30 @@ export async function validateVoucherForInvoiceLink(
     remainingAfter,
     isFullyPaid,
     paymentAmount,
-    voucherRemainingAfter: roundOre(arCreditTotal - paymentAmount),
+    voucherRemainingAfter: roundOre(arCreditTotal - cleared),
+  }
+}
+
+/**
+ * What 151x carries for a SEK invoice whose issue verifikat booked the
+ * öresavrundning (carriedSekOf answers it only then), else null. A failed
+ * read answers null: the link is judged on the remainder, as before, and the
+ * RPC reads the ledger itself at commit.
+ */
+async function bookedOreReceivable(
+  supabase: SupabaseClient,
+  companyId: string,
+  invoice: Invoice,
+): Promise<number | null> {
+  try {
+    return await carriedSekOf(supabase, companyId, 'customer', invoice)
+  } catch (error) {
+    log.warn('carried SEK read failed; the link is judged on the remainder', {
+      companyId,
+      invoiceId: invoice.id,
+      message: error instanceof Error ? error.message : String(error),
+    })
+    return null
   }
 }
 

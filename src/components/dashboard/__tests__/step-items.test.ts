@@ -77,7 +77,7 @@ describe('every count row says what its Börja step lists', () => {
       'verifikat_missing_document', 'deadline_action', 'agreement_payment_missed', 'reconciliation_due',
     ]
     const counts = Object.fromEntries(categories.map((c) => [c, 3])) as Record<WorklistCategory, number>
-    const specs = countRowSpecs({ counts, hasAi: true, inboxHref: '/inkorg', invoiceSetRows: 0, personAttestRows: 0 })
+    const specs = countRowSpecs({ counts, inboxHref: '/inkorg', invoiceSetRows: 0, personAttestRows: 0 })
     expect(specs).toHaveLength(18)
     expect(specs.filter((spec) => !spec.items).map((spec) => spec.key).sort()).toEqual(['arkiv-finding', 'reconciliation-due'])
     expect(specs.find((spec) => spec.key === 'inbox-documents')?.items).toBe('inbox')

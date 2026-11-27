@@ -25,6 +25,7 @@ import {
 import { deleteTransaction, refreshTransactionExchangeRate, updateTransaction } from '@/lib/transactions/manage'
 import { linkTransactionToJournalEntry } from '@/lib/transactions/link-journal-entry'
 import { matchTransactionBatch, type MatchBatchInput } from '@/lib/transactions/match-batch'
+import { checkBankHeldPayments, withBankHeldPaymentWarnings } from '@/lib/payments/orders/signed-payment'
 import { bulkBookTransactions } from '@/lib/transactions/bulk-book'
 import { coveredDayReason, type CoveredFeedRows } from '@/lib/bookkeeping/feed-row-coverage'
 import { hasScope, type ApiKeyScope } from '@/lib/auth/api-keys'
@@ -477,6 +478,7 @@ export const transactionsMatchBatch = defineOperation({
       'Faktureringsmetoden with defer_invoice_booking (Registrera men bokför inte): each supplier invoice registered without its verifikat is booked first by the supplier-invoices :book step (dated on its invoice date), then the samlingsverifikation clears its 2440; registration_journal_entry_ids names them and the dry run shows them as registration_entries. A refusal of the book step (PERIOD_LOCKED on an invoice date, SI_BOOK_NO_FISCAL_PERIOD, SI_ACCRUED_COST_PERIOD_LOCKED, SI_BOOK_INVALID_STATUS for a partially paid invoice) refuses the batch with that code and details.registration_first, before anything is booked.',
       'Faktureringsmetoden with defer_invoice_booking (Registrera men bokför inte): each customer invoice sent without its verifikat gets its sale booked first by the invoices :book step (dated on its invoice date), then the samlingsverifikation clears its 1510; sale_journal_entry_ids names them and the dry run shows them as sale_entries. A refusal of the book step (PERIOD_LOCKED on an invoice date, INVOICE_BOOK_NO_FISCAL_PERIOD, INVOICE_BOOK_INVALID_STATUS for a partially paid invoice) refuses the batch with that code and details.sale_first, before anything is booked.',
       'Proformas and quotes return 400 MATCH_INVOICE_NOT_INVOICE_TYPE.',
+      'A supplier invoice with a payment the bank holds (Betala via banken) is not refused: the row may be that payment. The dry run\'s preview.bank_payments names each such order (payment_order_id, status, signed, requested_execution_date, amount) and preview.warnings says it, as the answer\'s meta.warnings does, each warning naming the order (payment_order_id) and the invoice (supplier_invoice_id): SI_SIGNED_BANK_PAYMENT when a payment that is signed or being signed still goes out on its date, so unless this row is that payment the supplier is paid twice (cancel the order first with POST /payment-orders/{id}/cancel, or match another row); SI_UNSIGNED_BANK_PAYMENT when it waits unsigned: it never executes, and the status sync asks the bank to cancel it once the invoice no longer needs paying; SI_BANK_PAYMENT_CHECK_FAILED when the orders could not be read. Both are part of the preview a Preview-Token pins: an order that moves (signed, cancelled, executed) between the dry run and a commit or staging that sends its Preview-Token answers 409 PREVIEW_STALE with the preview as it now stands.',
     ],
     example: {
       request: {
@@ -599,21 +601,33 @@ export const transactionsMatchBatch = defineOperation({
         // (defer_invoice_booking), before the samlingsverifikation.
         ...(p.sale_entries ? { books_sale_first: true, sale_entries: p.sale_entries } : {}),
       }),
-      extras: (_input, p) => ({
-        next: {
-          description:
-            'After approval the combined verifikat is created exactly as preview.expected_lines and each invoice is advanced. Verify with gnubok_get_ar_ledger (customer) or gnubok_get_supplier_ledger.',
-          tool: p.allocations_kind === 'supplier_invoice' ? 'gnubok_get_supplier_ledger' : 'gnubok_get_ar_ledger',
-        },
-        periodDate: p.transaction_date as string | undefined,
+      extras: (_input, p) => {
         // Never silent: an honoured override names the vouchers it books
-        // over, and a check that could not run says so.
-        ...(p.already_explained_by
-          ? { complianceNote: `Bokförs trots att ${String(p.already_explained_by)} redan förklarar raden (force=true).` }
-          : p.duplicate_check_failed
-            ? { complianceNote: DUPLICATE_CHECK_FAILED_NOTE }
-            : {}),
-      }),
+        // over, and a check that could not run says so. So does a payment
+        // the bank holds for one of the supplier invoices (preview.warnings),
+        // before the approver approves.
+        const notes = [
+          p.already_explained_by
+            ? `Bokförs trots att ${String(p.already_explained_by)} redan förklarar raden (force=true).`
+            : p.duplicate_check_failed
+              ? DUPLICATE_CHECK_FAILED_NOTE
+              : null,
+          ...(Array.isArray(p.warnings) ? p.warnings : []).map((warning: unknown) =>
+            typeof (warning as { message_sv?: unknown } | null)?.message_sv === 'string'
+              ? (warning as { message_sv: string }).message_sv
+              : null,
+          ),
+        ].filter((note): note is string => !!note)
+        return {
+          next: {
+            description:
+              'After approval the combined verifikat is created exactly as preview.expected_lines and each invoice is advanced. Verify with gnubok_get_ar_ledger (customer) or gnubok_get_supplier_ledger.',
+            tool: p.allocations_kind === 'supplier_invoice' ? 'gnubok_get_supplier_ledger' : 'gnubok_get_ar_ledger',
+          },
+          periodDate: p.transaction_date as string | undefined,
+          ...(notes.length > 0 ? { complianceNote: notes.join(' ') } : {}),
+        }
+      },
       refusal: (failure, _input, keyScopes) => {
         if (failure.code === 'BATCH_TX_POSSIBLE_DUPLICATE' && failure.details) {
           return alreadyExplainedRefusal(failure.details as unknown as AlreadyExplainedRefusalDetails, keyScopes)
@@ -646,11 +660,27 @@ export const transactionsMatchBatch = defineOperation({
       },
     },
   },
-  run: (ctx, { transaction_id, ...body }, { dryRun }) =>
-    matchTransactionBatch(ctx, transaction_id, body as MatchBatchInput, {
-      dryRun,
-      via: 'api_force',
-    }),
+  run: async (ctx, { transaction_id, ...body }, { dryRun }) => {
+    const input = body as MatchBatchInput
+    // A payment the bank holds for one of the supplier invoices (Betala via
+    // banken) stops nothing: the row may be that payment. It may as well be
+    // another debit, and a signed payment still goes out on its date, so the
+    // dry run (and with it the staged proposal) and the answer say so. Read
+    // before anything is written. Here, where the operations wire the blocks
+    // together: the transactions block sits below payments.
+    const supplierInvoiceIds = input.allocations.flatMap((a) =>
+      a.kind === 'supplier_invoice' && a.supplier_invoice_id ? [a.supplier_invoice_id] : [],
+    )
+    const bankPayments =
+      supplierInvoiceIds.length > 0
+        ? await checkBankHeldPayments(ctx.supabase, ctx.companyId, supplierInvoiceIds, 'bank_row')
+        : null
+    if (bankPayments?.failed) {
+      ctx.log.warn('match-batch: bank payment orders could not be read', bankPayments.error, { transactionId: transaction_id })
+    }
+    const outcome = await matchTransactionBatch(ctx, transaction_id, input, { dryRun, via: 'api_force' })
+    return bankPayments ? withBankHeldPaymentWarnings(outcome, bankPayments) : outcome
+  },
 })
 
 type AlreadyExplainedRefusalDetails = AlreadyExplainedDetails & {

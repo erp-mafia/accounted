@@ -29,6 +29,7 @@ import type { LineDimensions } from '@/components/bookkeeping/payment-line-dimen
 import type { PaymentLinePayload, PaymentPreviewLine } from '@/components/bookkeeping/payment-preview-lines'
 import { ORE_ROUNDING_ACCOUNT, parseDecimalInput } from '@/lib/money'
 import { PAYMENT_FEE_ACCOUNT } from '@/lib/bookkeeping/payment-fee'
+import { BankHeldPaymentNotes, useBankHeldPaymentWarnings } from '@/components/payments/BankHeldPaymentNotes'
 import type { TransactionWithInvoice } from './transaction-types'
 
 interface DuplicateCandidate {
@@ -241,6 +242,14 @@ export default function InvoiceMatchDialog({
 
   const invoiceId = transaction?.potential_invoice?.id ?? null
   const supplierInvoiceId = transaction?.potential_supplier_invoice?.id ?? null
+  // A payment the bank holds for the supplier invoice (Betala via banken):
+  // this row may be that payment, or another debit while a signed one still
+  // goes out on its date. Said before the confirm, never a block; the
+  // confirm only waits for the read (bankPayments.pending).
+  const bankPayments = useBankHeldPaymentWarnings(
+    open && isSupplierInvoice && supplierInvoiceId && !targetBlocked ? [supplierInvoiceId] : [],
+    'bank_row',
+  )
   const [preview, setPreview] = useState<MatchPreview | null>(null)
   const [previewFailure, setPreviewFailure] = useState<PreviewFailure | null>(null)
   // The "Bokföring" rows: read-only, or the user's edited grid (which then books).
@@ -531,6 +540,8 @@ export default function InvoiceMatchDialog({
   const confirmDisabled =
     isConfirming ||
     isCheckingDuplicate ||
+    // What the bank holds for the invoice is said before the confirm.
+    bankPayments.pending ||
     // A booked row: the plain match is refused again; the soft block's own
     // button is the only way on.
     !!alreadyBooked ||
@@ -595,7 +606,7 @@ export default function InvoiceMatchDialog({
                     <Button
                       variant="outline"
                       onClick={() => handleConfirm({ storno_existing: true })}
-                      disabled={isConfirming || !editor.validation.isValid}
+                      disabled={isConfirming || bankPayments.pending || !editor.validation.isValid}
                     >
                       {t('already_booked_storno_and_match', { label: alreadyBooked.voucher })}
                     </Button>
@@ -666,7 +677,7 @@ export default function InvoiceMatchDialog({
                           expected_journal_entry_id: candidate.journal_entry_id,
                         })
                       }
-                      disabled={isConfirming || !editor.validation.isValid}
+                      disabled={isConfirming || bankPayments.pending || !editor.validation.isValid}
                       className="-ml-2.5 text-muted-foreground"
                     >
                       {t('create_new_anyway')}
@@ -698,6 +709,11 @@ export default function InvoiceMatchDialog({
                 )}
               </div>
             )}
+
+            {/* A payment the bank holds for the supplier invoice: the way out
+                (cancel it under Betalningar, or another row) before the
+                confirm. */}
+            <BankHeldPaymentNotes warnings={bankPayments.warnings} failed={bankPayments.failed} />
 
             {/* The bank row and the invoice it pays, side by side: the
                 payment as the headline number, the invoice as one line. Both

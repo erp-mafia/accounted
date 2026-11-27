@@ -400,10 +400,9 @@ async function dispatchRequest(
 
   // Paywall: this dispatcher is the single chokepoint for the whole enabled-
   // extension API surface (same reasoning as the MFA gate above), so an
-  // extension whose workspace is a paid service (EXTENSION_REQUIRED_CAPABILITY,
-  // e.g. the AI-only invoice-inbox) gates EVERY one of its company-context routes
-  // here, not just its AI-extraction steps. Mirrors the sidebar/page gate off the
-  // same map. The skipAuth ingestion webhook (/inbound) returned above is exempt
+  // extension whose workspace is a paid service (EXTENSION_REQUIRED_CAPABILITY)
+  // gates EVERY one of its company-context routes here, not just its paid
+  // steps. Mirrors the sidebar/page gate off the same map. The skipAuth ingestion webhook (/inbound) returned above is exempt
   // by construction: a lapsed company's inbound documents must still be stored
   // (freeze-and-retain), and booked documents stay reachable via the verifikat.
   const requiredCapability = requiredCapabilityForExtensionId(extensionId)

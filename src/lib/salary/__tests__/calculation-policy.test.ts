@@ -161,6 +161,31 @@ describe('calendarLeaveDeduction (long_leave = calendar_after_five_workdays)', (
     ).toBe(11904.75)
   })
 
+  it('prices a window over two months month by month: a full month away deducts one monthly salary', () => {
+    const twoMonths = { ...input, periodStart: '2037-07-01', periodEnd: '2037-08-31' }
+    // Away all of August only, back at work in July.
+    expect(calendarLeaveDeduction({ ...twoMonths, days: weekdays('2037-08-01', '2037-08-31') })).toBe(50000)
+    // Away both months.
+    expect(calendarLeaveDeduction({ ...twoMonths, days: weekdays('2037-07-01', '2037-08-31') })).toBe(100000)
+  })
+
+  it('charges a part that holds only weekend days of an episode', () => {
+    // 2026-10-31 is a Saturday. Ten working days away, priced per calendar
+    // day: the window 10-31..11-30 charges Oct 31 through Nov 6, 7 days.
+    const days = [...weekdays('2026-10-26', '2026-10-30'), ...weekdays('2026-11-02', '2026-11-06')]
+    expect(calendarLeaveDeduction({ ...input, periodStart: '2026-10-31', periodEnd: '2026-11-30', days })).toBe(11506.88)
+    expect(
+      calendarLeaveDeduction({ ...input, periodStart: '2026-10-31', periodEnd: '2026-11-30', days, calendarFromStart: true }),
+    ).toBe(11506.88)
+  })
+
+  it('prices a window that starts mid-month by calendar days, then the full month', () => {
+    // Oct 16-31 is 16 calendar days at 1 643,84; November in full is the monthly salary.
+    expect(
+      calendarLeaveDeduction({ ...input, periodStart: '2026-10-16', periodEnd: '2026-11-30', days: weekdays('2026-10-16', '2026-11-30') }),
+    ).toBe(76301.44)
+  })
+
   it('prices sick day 15+ per calendar day from the first day (calendarFromStart)', () => {
     expect(calendarLeaveDeduction({ ...input, days: weekdays('2037-07-13', '2037-07-15', 8, 'sick'), calendarFromStart: true })).toBe(
       4931.52,

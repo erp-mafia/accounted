@@ -47,7 +47,6 @@ import type { EntityType } from '@/types'
 import {
   ENTITY_TYPE_LABELS_SV,
   creatableEntityTypes,
-  defaultAccountingMethod,
   fiscalYearLockedToCalendar,
   isEntityType,
   plannedLegalForms,
@@ -281,7 +280,6 @@ export default function OnboardingJourney({
   // calendar year, so the fiscal-year questions collapse to first-year-or-not.
   const personOwned = isEntityType(entity) && usesPersonnummerAsOrgNumber(entity)
   const calendarOnly = isEntityType(entity) && fiscalYearLockedToCalendar(entity)
-  const usualMethod = isEntityType(entity) ? defaultAccountingMethod(entity) : null
 
   const monthLong = useMemo(() => {
     const fmt = new Intl.DateTimeFormat(locale === 'en' ? 'en' : 'sv', { month: 'long' })
@@ -1300,15 +1298,10 @@ export default function OnboardingJourney({
             attn={state.serverError === 'generic' ? (submitErrorText ?? t('journey_err_generic')) : undefined}
           >
             <ChipRow
-              // The method the legal form usually keeps its books by
-              // (its profile's default) is marked, as the first-year
-              // question marks its suggestion: neither name says which
-              // one a new company is expected to take.
-              options={(['accrual', 'cash'] as const).map((method) => ({
-                key: method,
-                label: method === 'accrual' ? t('journey_method_accrual') : t('journey_method_cash'),
-                rec: usualMethod === method ? t('journey_suggested') : undefined,
-              }))}
+              options={[
+                { key: 'accrual', label: t('journey_method_accrual') },
+                { key: 'cash', label: t('journey_method_cash') },
+              ]}
               onPick={(k) => dispatch({ type: 'METHOD_PICKED', method: k as 'accrual' | 'cash' })}
               disabled={state.submitting}
               {...flyProps}

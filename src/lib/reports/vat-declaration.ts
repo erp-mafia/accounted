@@ -11,7 +11,12 @@ import { VAT_ACCOUNT_TABLE } from '@/lib/vat/moms-box-mapping'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { VatCheckAccountTotals } from './vat-declaration-checks'
 import { rcBasisTotalsByRate } from './vat-filing-gate'
-import { fetchDynamicVatAccounts, type DynamicVatAccounts } from './vat-revenue-accounts'
+import {
+  fetchDynamicVatAccounts,
+  isUnclassifiedRevenueAccount,
+  type DynamicVatAccounts,
+  type VatAccountClassificationRow,
+} from './vat-revenue-accounts'
 import { createLogger } from '@/lib/logger'
 import { codedRefusal } from '@/lib/errors/refusal'
 import { calculatePeriodDates, fiscalPeriodForVatYear } from './period-dates'
@@ -733,6 +738,23 @@ const NON_TURNOVER_REVENUE_ACCOUNTS: ReadonlySet<string> = new Set([
   '3960',
 ])
 
+/** A class 3 account the declaration needs no momskod for: a ruta sums it by its number, or it carries no omsättning. */
+function isRevenueAccountReadByNumber(account: string): boolean {
+  return Boolean(ACCOUNT_RUTA[account]) || NON_TURNOVER_REVENUE_ACCOUNTS.has(account)
+}
+
+/**
+ * Whether a class 3 account needs a momskod before the declaration can read
+ * it: no momskod, no momssats (configured, or inferred from its number and
+ * name), not summed by its number and not an account without omsättning. The
+ * account's half of revenueAccountsWithoutRuta, which adds the period's
+ * balance: the same resolution fetchDynamicVatAccounts runs, for a caller
+ * that holds the kontoplan and no period (the import result of the books act).
+ */
+export function revenueAccountNeedsVatCode(row: VatAccountClassificationRow): boolean {
+  return isUnclassifiedRevenueAccount(row) && !isRevenueAccountReadByNumber(row.account_number)
+}
+
 /**
  * 3950 Återvunna, tidigare avskrivna kundfordringar. A recovery booked by
  * lib/customer-loss reaches ruta 05 through the customer-loss rule below (its
@@ -913,7 +935,7 @@ export function revenueAccountsWithoutRuta(
 ): VatRevenueAccountWithoutRuta[] {
   const result: VatRevenueAccountWithoutRuta[] = []
   for (const [account, name] of dynamicVatAccounts.unconfiguredRevenueAccounts ?? []) {
-    if (ACCOUNT_RUTA[account] || NON_TURNOVER_REVENUE_ACCOUNTS.has(account)) continue
+    if (isRevenueAccountReadByNumber(account)) continue
     const t = totals.get(account)
     if (!t) continue
     const declaredElsewhere = account === CUSTOMER_LOSS_RECOVERY_ACCOUNT ? (customerLoss?.recoveredNet ?? 0) : 0

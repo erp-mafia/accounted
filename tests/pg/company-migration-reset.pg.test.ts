@@ -1512,3 +1512,148 @@ describe('company migration reset RPCs (pg)', () => {
     })
   })
 })
+
+// A company created through POST /api/v1/companies or the MCP tools without a
+// named team got no team until #3995, and its reset handed the replacement no
+// team either, although the owner has a personal team (20261126150000).
+describe('company migration reset: the replacement team (pg)', () => {
+  const reason = 'The first migration used the wrong fiscal periods.'
+
+  interface Queryable {
+    query(text: string, values?: unknown[]): Promise<{ rows: unknown[] }>
+  }
+
+  interface AfterReset {
+    source_team: string | null
+    replacement_team: string | null
+    members: Array<{ user_id: string; role: string; source: string }>
+    personal_teams: string[]
+  }
+
+  async function addTeam(userId: string, kind: 'personal' | 'byra', createdAt: string): Promise<string> {
+    const id = randomUUID()
+    await getPool().query(
+      `INSERT INTO public.teams (id, name, created_by, kind, created_at) VALUES ($1, $2, $3, $4, $5)`,
+      [id, kind === 'byra' ? 'Byrån' : 'Personal', userId, kind, createdAt],
+    )
+    await getPool().query(
+      `INSERT INTO public.team_members (team_id, user_id, role) VALUES ($1, $2, 'owner')`,
+      [id, userId],
+    )
+    return id
+  }
+
+  async function readAfterReset(
+    db: Queryable,
+    userId: string,
+    sourceId: string,
+    replacementId: string,
+  ): Promise<AfterReset> {
+    const { rows } = await db.query(
+      `SELECT
+         (SELECT team_id::text FROM public.companies WHERE id = $1) AS source_team,
+         (SELECT team_id::text FROM public.companies WHERE id = $2) AS replacement_team,
+         (SELECT coalesce(jsonb_agg(jsonb_build_object('user_id', user_id::text, 'role', role, 'source', source)), '[]'::jsonb)
+            FROM public.company_members WHERE company_id = $2) AS members,
+         (SELECT coalesce(array_agg(t.id::text), '{}')
+            FROM public.teams t JOIN public.team_members tm ON tm.team_id = t.id
+            WHERE tm.user_id = $3 AND t.kind = 'personal') AS personal_teams`,
+      [sourceId, replacementId, userId],
+    )
+    return rows[0] as AfterReset
+  }
+
+  /** The owner's own reset, read back inside its transaction: withUserContext rolls back. */
+  async function ownerReset(userId: string, companyId: string): Promise<AfterReset> {
+    return withUserContext(userId, async (client) => {
+      const { rows } = await client.query<{ result: RpcResult }>(
+        `SELECT public.reset_company_for_migration($1, 'Test AB', $2, true, true) AS result`,
+        [companyId, reason],
+      )
+      const result = rows[0]!.result
+      expect(result).toMatchObject({ ok: true })
+      await client.query('RESET ROLE')
+      return readAfterReset(client, userId, companyId, result.replacement_company_id!)
+    })
+  }
+
+  it("gives the replacement of a company without a team the owner's personal team, never an older byrå team", async () => {
+    const { userId, companyId } = await seedCompany()
+    await addTeam(userId, 'byra', '2026-01-01T00:00:00Z')
+    const personal = await addTeam(userId, 'personal', '2026-02-01T00:00:00Z')
+
+    const after = await ownerReset(userId, companyId)
+
+    expect(after.replacement_team).toBe(personal)
+    // The source is retained unchanged, and the owner stays the replacement's
+    // owner: the team's sync adds no second row for them.
+    expect(after.source_team).toBeNull()
+    expect(after.members).toEqual([{ user_id: userId, role: 'owner', source: 'direct' }])
+  })
+
+  it('gives the replacement a new personal team when the owner has none, as the web app does', async () => {
+    const { userId, companyId } = await seedCompany()
+
+    const after = await ownerReset(userId, companyId)
+
+    expect(after.personal_teams).toHaveLength(1)
+    expect(after.replacement_team).toBe(after.personal_teams[0])
+    expect(after.members).toEqual([{ user_id: userId, role: 'owner', source: 'direct' }])
+  })
+
+  it("keeps the source's team, a byrå client's byrå team included, though the owner has a personal team", async () => {
+    const { userId, companyId } = await seedCompany()
+    await addTeam(userId, 'personal', '2026-01-01T00:00:00Z')
+    const byra = await addTeam(userId, 'byra', '2026-02-01T00:00:00Z')
+    await getPool().query(`UPDATE public.companies SET team_id = $1 WHERE id = $2`, [byra, companyId])
+
+    const after = await ownerReset(userId, companyId)
+
+    expect(after.replacement_team).toBe(byra)
+    expect(after.source_team).toBe(byra)
+  })
+
+  it("gives the owner's personal team on a support-run reset too", async () => {
+    const { userId, companyId } = await seedCompany()
+    const personal = await addTeam(userId, 'personal', '2026-02-01T00:00:00Z')
+
+    const { rows } = await getPool().query<{ result: RpcResult }>(
+      `SELECT public.support_reset_company_for_migration($1, $2, 'Test AB', 'case-1', 'support', $3) AS result`,
+      [companyId, userId, reason],
+    )
+    const result = rows[0]!.result
+    expect(result).toMatchObject({ ok: true })
+
+    const after = await readAfterReset(getPool(), userId, companyId, result.replacement_company_id!)
+    expect(after.replacement_team).toBe(personal)
+    expect(after.source_team).toBeNull()
+  })
+
+  it('makes no team when the reset is refused', async () => {
+    const mismatch = await seedCompany()
+    const closed = await seedCompany({ isClosed: true })
+    const cases = [
+      { ...mismatch, name: 'Fel Namn AB', code: 'COMPANY_RESET_CONFIRMATION_MISMATCH' },
+      { ...closed, name: 'Test AB', code: 'COMPANY_RESET_INELIGIBLE' },
+    ]
+
+    for (const { userId, companyId, name, code } of cases) {
+      // A refusal returns rather than raises, so a team made before it would
+      // still be there: count inside the call's transaction.
+      const { result, teams } = await withUserContext(userId, async (client) => {
+        const { rows } = await client.query<{ result: RpcResult }>(
+          `SELECT public.reset_company_for_migration($1, $2, $3, true, true) AS result`,
+          [companyId, name, reason],
+        )
+        await client.query('RESET ROLE')
+        const count = await client.query<{ n: number }>(
+          `SELECT count(*)::int AS n FROM public.team_members WHERE user_id = $1`,
+          [userId],
+        )
+        return { result: rows[0]!.result, teams: count.rows[0]!.n }
+      })
+      expect(result).toMatchObject({ ok: false, code })
+      expect(teams).toBe(0)
+    }
+  })
+})

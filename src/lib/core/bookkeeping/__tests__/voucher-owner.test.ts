@@ -83,6 +83,78 @@ describe('resolveVoucherOwner', () => {
     expect(owner?.hint_sv).toContain('hör till leverantörsfaktura.')
   })
 
+  // Ångra kreditering is on the page of a credited invoice only, so the hint
+  // names it there and nowhere else. A paid invoice's page changes nothing of
+  // its verifikat, and the hint names no tool: correct_entry_lines_inline
+  // refuses a storno and a locked period, which this hint also reaches.
+  it.each(['paid', 'partially_paid'])('tells a %s supplier invoice its page does not change the voucher, not Ångra kreditering', async (status) => {
+    const { db, enqueueMany } = client()
+    enqueueMany([{ data: { id: 'si-1', supplier_invoice_number: '3744267', status, credited_invoice_id: null } }])
+
+    const owner = await resolveVoucherOwner(db, COMPANY, {
+      id: 'je-1',
+      source_type: 'supplier_invoice_registered',
+      source_id: 'si-1',
+    })
+
+    expect(owner).toMatchObject({ action: 'open_supplier_invoice', tool: null })
+    expect(owner?.hint_sv).not.toContain('Ångra kreditering')
+    expect(owner?.hint_en).not.toContain('Undo credit')
+    expect(owner?.hint_sv).toContain('dess sida ändrar inte verifikationen')
+    expect(owner?.hint_en).toContain('its page does not change the voucher')
+    expect(owner?.hint_sv).not.toContain('gnubok_')
+    expect(owner?.hint_en).not.toContain('gnubok_')
+  })
+
+  it('sends no storno of a paid supplier invoice voucher to a tool that refuses a storno', async () => {
+    const { db, enqueueMany } = client()
+    enqueueMany([
+      { data: { id: 'je-reg', source_type: 'supplier_invoice_registered', source_id: 'si-1', correction_of_id: null, reverses_id: null } },
+      { data: { id: 'si-1', supplier_invoice_number: '3744267', status: 'paid', credited_invoice_id: null } },
+    ])
+
+    const owner = await resolveVoucherOwner(db, COMPANY, {
+      id: 'je-storno',
+      source_type: 'storno',
+      source_id: 'si-1',
+      reverses_id: 'je-reg',
+    })
+
+    expect(owner).toMatchObject({ kind: 'supplier_invoice', owner_id: 'si-1', action: 'open_supplier_invoice' })
+    expect(owner?.hint_sv).not.toContain('Ångra kreditering')
+    expect(owner?.hint_sv).not.toContain('gnubok_')
+  })
+
+  it('names Ångra kreditering for a credited supplier invoice, whose page has it', async () => {
+    const { db, enqueueMany } = client()
+    enqueueMany([{ data: { id: 'si-1', supplier_invoice_number: '3744267', status: 'credited', credited_invoice_id: null } }])
+
+    const owner = await resolveVoucherOwner(db, COMPANY, {
+      id: 'je-1',
+      source_type: 'supplier_invoice_registered',
+      source_id: 'si-1',
+    })
+
+    expect(owner).toMatchObject({ action: 'open_supplier_invoice', href: '/supplier-invoices/si-1' })
+    expect(owner?.hint_sv).toContain('Ångra kreditering')
+    expect(owner?.hint_en).toContain('Undo credit')
+  })
+
+  it('names no Ångra kreditering for a registered supplier invoice that is not credited', async () => {
+    const { db, enqueueMany } = client()
+    enqueueMany([{ data: { id: 'si-1', supplier_invoice_number: null, status: 'registered', credited_invoice_id: null } }])
+
+    const owner = await resolveVoucherOwner(db, COMPANY, {
+      id: 'je-1',
+      source_type: 'supplier_invoice_registered',
+      source_id: 'si-1',
+    })
+
+    expect(owner).toMatchObject({ action: 'open_supplier_invoice' })
+    expect(owner?.hint_sv).not.toContain('Ångra kreditering')
+    expect(owner?.hint_en).not.toContain('Undo credit')
+  })
+
   it('sends a supplier credit note to the invoice it credits, where Ångra kreditering is', async () => {
     const { db, enqueueMany } = client()
     enqueueMany([{ data: { id: 'scn-1', supplier_invoice_number: 'K-9', status: 'credited', credited_invoice_id: 'si-1' } }])
@@ -94,6 +166,7 @@ describe('resolveVoucherOwner', () => {
     })
 
     expect(owner).toMatchObject({ kind: 'supplier_credit_note', owner_id: 'scn-1', href: '/supplier-invoices/si-1' })
+    expect(owner?.hint_sv).toContain('Ångra kreditering')
   })
 
   it('opens the periodisering a dissolution belongs to', async () => {

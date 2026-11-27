@@ -17,7 +17,7 @@ import {
 import { cn, formatDate, formatRowAmount } from '@/lib/utils'
 import { embeddedVoucherLabel, getLinkedJournalEntryIds } from '@/lib/transactions/is-booked'
 import { isImportedTransaction } from '@/lib/transactions/origin'
-import { getCategoryDisplayName } from '@/lib/tax/expense-warnings'
+import { bankRowCategoryLabel } from '@/lib/transactions/row-category-label'
 import {
   bankRowMatchesHistoryFilter,
   skattekontoRowMatchesHistoryFilter,
@@ -351,11 +351,7 @@ function BankHistoryRow({
     hasInvoiceMatch || (canDelete && !!onDelete) || (isBooked && canWrite) || showAttachItem || showDetachItem || showMatchVoucherItem
 
   const isPrivate = transaction.is_business === false
-  const categoryLabel =
-    transaction.is_business === true &&
-    !(transaction.category === 'uncategorized' && transaction.journal_entry_id)
-      ? getCategoryDisplayName(transaction.category)
-      : null
+  const categoryLabel = bankRowCategoryLabel(transaction)
 
   return (
     <tr

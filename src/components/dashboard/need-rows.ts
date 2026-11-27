@@ -36,8 +36,6 @@ export interface CountRowSpec {
 
 export interface CountRowInput {
   counts: Record<WorklistCategory, number>
-  /** The Dokumentinkorg is a paid surface: its row shows only with it. */
-  hasAi: boolean
   /** Where the company's inbox lives. */
   inboxHref: string
   /** Several-invoice matches that have rows of their own. */
@@ -60,7 +58,7 @@ export interface CountRowInput {
   toBook?: { bankRows: number; foundPairs: number } | null
 }
 
-export function countRowSpecs({ counts, hasAi, inboxHref, invoiceSetRows, personAttestRows, openQuestions = 0, bookingScreen = false, toBook = null }: CountRowInput): CountRowSpec[] {
+export function countRowSpecs({ counts, inboxHref, invoiceSetRows, personAttestRows, openQuestions = 0, bookingScreen = false, toBook = null }: CountRowInput): CountRowSpec[] {
   const specs: CountRowSpec[] = []
   const add = (count: number, spec: Omit<CountRowSpec, 'count' | 'things'> & { things?: number }) => {
     if (count > 0) specs.push({ ...spec, count, things: spec.things ?? count })
@@ -73,7 +71,7 @@ export function countRowSpecs({ counts, hasAi, inboxHref, invoiceSetRows, person
 
   if (bookingScreen) {
     const bankRows = toBook ? Math.max(0, toBook.bankRows) : n('book_transaction')
-    const documents = hasAi ? Math.max(0, n('inbox_document') - (toBook ? Math.max(0, toBook.foundPairs) : 0)) : 0
+    const documents = Math.max(0, n('inbox_document') - (toBook ? Math.max(0, toBook.foundPairs) : 0))
     add(bankRows + n('book_skattekonto') + documents, {
       key: 'to-book', items: 'to_book', earliest: 'oldest', group: 'book', href: TO_BOOK_PATH, labelKey: 'row_to_book', category: 'book_transaction',
     })
@@ -89,7 +87,7 @@ export function countRowSpecs({ counts, hasAi, inboxHref, invoiceSetRows, person
   add(Math.max(0, n('suggested_match') - Math.max(0, invoiceSetRows)), {
     key: 'suggested-matches', items: 'matches', earliest: 'oldest', group: 'book', href: '/transactions', labelKey: 'row_suggested_matches', things: 0,
   })
-  add(hasAi && !bookingScreen ? n('inbox_document') : 0, {
+  add(bookingScreen ? 0 : n('inbox_document'), {
     key: 'inbox-documents', items: 'inbox', earliest: 'oldest', group: 'book', href: inboxHref, labelKey: 'row_inbox_documents', hintKey: 'row_inbox_documents_detail', category: 'inbox_document',
   })
   add(n('collection_settlements_to_book'), {

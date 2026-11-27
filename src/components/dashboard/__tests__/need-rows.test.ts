@@ -6,7 +6,6 @@ import { NEED_GROUPS } from '../need-model'
 const zero = () => Object.fromEntries(WORKLIST_CATEGORIES.map((c) => [c, 0])) as Record<WorklistCategory, number>
 const input = (counts: Partial<Record<WorklistCategory, number>>, extra: Partial<CountRowInput> = {}): CountRowInput => ({
   counts: { ...zero(), ...counts },
-  hasAi: true,
   inboxHref: '/inkorg',
   invoiceSetRows: 0,
   personAttestRows: 0,
@@ -24,14 +23,14 @@ describe('countRowSpecs: with the booking screen switched on', () => {
     expect(specs[0]).toMatchObject({ href: '/att-bokfora', labelKey: 'row_to_book', items: 'to_book', group: 'book', count: 541, things: 541 })
   })
 
-  it('counts only the bank rows where documents are not read', () => {
-    expect(spec(on({ book_transaction: 5, inbox_document: 9 }, { hasAi: false }), 'to-book')).toMatchObject({ count: 5 })
+  it('counts the inbox documents on every plan, read or not', () => {
+    expect(spec(on({ book_transaction: 5, inbox_document: 9 }), 'to-book')).toMatchObject({ count: 14 })
   })
 
   it('counts with the list\'s own figures when it has them: every open bank row, a found receipt once', () => {
     const spec = countRowSpecs(on({ book_transaction: 498, book_skattekonto: 4, inbox_document: 43 }, { toBook: { bankRows: 510, foundPairs: 1 } }))
     expect(spec[0]).toMatchObject({ key: 'to-book', count: 510 + 4 + 42 })
-    expect(countRowSpecs(on({ inbox_document: 9 }, { hasAi: false, toBook: { bankRows: 3, foundPairs: 2 } }))[0]).toMatchObject({ count: 3 })
+    expect(countRowSpecs(on({ inbox_document: 9 }, { toBook: { bankRows: 3, foundPairs: 2 } }))[0]).toMatchObject({ count: 3 + 7 })
   })
 
   it('counts the skattekonto events in the same row', () => {
@@ -90,9 +89,8 @@ describe('countRowSpecs: which count rows Att göra has', () => {
     expect([...order].sort((a, b) => a - b)).toEqual(order)
   })
 
-  it('hides the inbox row without the paid surface', () => {
+  it('shows the inbox row on every plan', () => {
     expect(keys(input({ inbox_document: 4 }))).toEqual(['inbox-documents'])
-    expect(keys(input({ inbox_document: 4 }, { hasAi: false }))).toEqual([])
   })
 
   it('the inbox row leads where the company has its inbox', () => {

@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { addDaysIso } from '@/lib/dates/iso'
 
 /**
  * Avvikelseperiod: the calendar window a salary run reads its deviations
@@ -159,8 +160,9 @@ export interface ResolvedDeviationWindow {
 
 /**
  * Decide the window for a run that is about to be created. Explicit dates
- * win; otherwise company_settings.salary_deviation_period decides. A missing
- * settings row behaves as 'same_month'.
+ * win; otherwise company_settings.salary_deviation_period decides, started
+ * where the previous month's run stopped reading (startAfterPreviousRun). A
+ * missing settings row behaves as 'same_month'.
  */
 export async function resolveDeviationWindowForNewRun(
   supabase: SupabaseClient,
@@ -192,11 +194,49 @@ export async function resolveDeviationWindowForNewRun(
       setting,
     }
   }
+  const window = defaultDeviationWindow(params.periodYear, params.periodMonth, setting)
   return {
-    window: defaultDeviationWindow(params.periodYear, params.periodMonth, setting),
+    window: await startAfterPreviousRun(supabase, companyId, params, window),
     source: 'setting',
     setting,
   }
+}
+
+/**
+ * The setting's window, started the day after the window of the run of the
+ * month before when that one ended earlier. Otherwise the days between are
+ * read by no run: after a switch from previous_month to same_month, October's
+ * run read September and November's would read November, so October's
+ * absence, sick days, VAB and worked hours would be deducted, paid and
+ * reported nowhere. Read by November, they are deducted or paid there and
+ * their frånvarouppgifter go in November's AGI, the period whose pay they
+ * affect (Skatteverket, Teknisk beskrivning 1.1.18.2, 5.6 and 8.4). Only the
+ * run of the month before counts: a month without a run paid nobody. A window
+ * that would pass DEVIATION_WINDOW_MAX_DAYS stays as the setting says.
+ */
+async function startAfterPreviousRun(
+  supabase: SupabaseClient,
+  companyId: string,
+  params: { periodYear: number; periodMonth: number },
+  window: DateWindow,
+): Promise<DateWindow> {
+  const prev = previousMonth(params.periodYear, params.periodMonth)
+  const { data, error } = await supabase
+    .from('salary_runs')
+    .select('period_year, period_month, deviation_period_start, deviation_period_end')
+    .eq('company_id', companyId)
+    .eq('period_year', prev.year)
+    .eq('period_month', prev.month)
+  if (error) {
+    throw new Error(`Failed to load the previous salary run: ${error.message}`)
+  }
+  const rows = (Array.isArray(data) ? data : []) as RunDeviationSource[]
+  if (rows.length === 0) return window
+  // An original and its corrections share one window; the latest end is the edge.
+  const previousEnd = rows.map((row) => runDeviationWindow(row).end).reduce((a, b) => (b > a ? b : a))
+  const start = addDaysIso(previousEnd, 1)
+  if (start >= window.start || daysInclusive(start, window.end) > DEVIATION_WINDOW_MAX_DAYS) return window
+  return { start, end: window.end }
 }
 
 function windowsOverlap(a: DateWindow, b: DateWindow): boolean {

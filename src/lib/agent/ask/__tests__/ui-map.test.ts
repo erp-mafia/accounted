@@ -163,7 +163,6 @@ describe('renderUiGrounding: the menu', () => {
     expect(out).not.toContain('(/arkiv)')
     expect(out).not.toContain('(/skills)')
     expect(out).not.toContain('(/salary)')
-    expect(out).not.toContain('(/e/general/invoice-inbox)')
     expect(out).not.toContain('(/expenses)')
     expect(out).not.toContain('(/reports/ink2-declaration)')
     expect(out).toContain('(/reports/ne-declaration)')
