@@ -91,6 +91,21 @@ export function useBankSync() {
       return
     }
     setBusyConnection(conn.id)
+    // Enable Banking takes no renewal while the switch campaign is on: the
+    // connection goes where its row on the bank page sends it instead
+    // (closedRenewalDestination, loaded on the click, not with the page).
+    const destination = await import('@/components/bank-feed/closed-renewal')
+      .then((routing) => routing.closedRenewalDestination(conn))
+      .catch(() => {
+        // Safe to drop: the renewal below runs instead, and while the
+        // campaign is on the server refuses it.
+        return null
+      })
+    if (destination) {
+      clearBusyConnection(conn.id)
+      router.push(destination)
+      return
+    }
     try {
       const country = conn.provider?.split('-').pop()?.toUpperCase() || 'SE'
       const res = await fetch('/api/extensions/ext/enable-banking/connect', {
