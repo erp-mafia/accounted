@@ -184,6 +184,13 @@ describe('GET /api/v1/companies/:companyId/documents/search', () => {
     expect(data.hint).toMatch(/^1 document is not read yet: its file name is searched, its text only once it has been read\./)
   })
 
+  it('an empty answer with documents still unread claims no more than what was searched', async () => {
+    db({ unread: 2 })
+    const { data } = await (await get('?query=20769')).json()
+    expect(data.hint).toMatch(/^2 documents are not read yet: .* No file name and no text read so far matched\. It holds documents/)
+    expect(data.hint).not.toMatch(/Nothing in the archive matched/)
+  })
+
   it('an empty answer says the archive is not a search of the books', async () => {
     db()
     const res = await get('?query=20769')

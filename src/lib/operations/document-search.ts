@@ -51,8 +51,11 @@ function archiveSearchHint(count: number, unread: number): string | null {
     )
   }
   // The archive is not a search of the books: an order or invoice number finds nothing here.
+  // With documents still unread, an empty answer covers their file names, not their text.
   if (count === 0) {
-    parts.push('Nothing in the archive matched. It holds documents, agreements and facts; invoices, orders and bank rows are not in it: their own endpoints list them.')
+    parts.push(
+      `${unread > 0 ? 'No file name and no text read so far matched' : 'Nothing in the archive matched'}. It holds documents, agreements and facts; invoices, orders and bank rows are not in it: their own endpoints list them.`,
+    )
   }
   return parts.length > 0 ? parts.join(' ') : null
 }
