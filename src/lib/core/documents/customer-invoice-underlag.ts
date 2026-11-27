@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
+import { deliveredInvoiceDocument } from './delivered-invoice-document'
 import { firstAnchorableEntry } from './supplier-invoice-underlag'
 import { scopeFreeLinkBasisColumns } from '@/lib/links/link-basis'
 
@@ -33,6 +34,9 @@ const log = createLogger('customer-invoice-underlag')
  * Preference order mirrors the supplier side: the registration verifikat
  * (faktureringsmetoden), then payment verifikat oldest first.
  *
+ * `userId` is the member acting: on the service role the delivery history is
+ * read in their name (deliveredInvoiceDocument).
+ *
  * Returns the journal entry id the document was anchored to, or null when
  * nothing needed doing. Never throws: every caller runs after a committed
  * link, so a failure here must be logged, not surfaced.
@@ -41,6 +45,7 @@ export async function anchorCustomerInvoiceDocument(
   supabase: SupabaseClient,
   companyId: string,
   invoiceId: string,
+  userId: string,
 ): Promise<string | null> {
   try {
     const { data: invoice } = await supabase
@@ -51,21 +56,20 @@ export async function anchorCustomerInvoiceDocument(
       .maybeSingle()
     if (!invoice) return null
 
-    // The newest completed send that archived its file. A 'marked_sent'
-    // delivery never holds a document (the CHECK constraint forbids it).
-    const { data: delivery } = await supabase
-      .from('invoice_deliveries')
-      .select('document_attachment_id')
-      .eq('company_id', companyId)
-      .eq('invoice_id', invoiceId)
-      .eq('status', 'sent')
-      .not('document_attachment_id', 'is', null)
-      .order('sent_at', { ascending: false })
-      .limit(1)
-      .maybeSingle()
-
-    const documentId = (delivery as { document_attachment_id?: string | null } | null)
-      ?.document_attachment_id
+    // The newest completed send that archived its file, whoever in the
+    // company sent it. A 'marked_sent' delivery never holds a document (the
+    // CHECK constraint forbids it).
+    const delivered = await deliveredInvoiceDocument(supabase, companyId, invoiceId, userId)
+    if (!delivered.ok) {
+      log.warn('could not read the delivery history; customer invoice document left floating', {
+        companyId,
+        invoiceId,
+        code: delivered.error.code,
+        reason: delivered.error.message,
+      })
+      return null
+    }
+    const documentId = delivered.documentId
     if (!documentId) return null
 
     const { data: document } = await supabase
