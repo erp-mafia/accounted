@@ -10,6 +10,7 @@ import {
 } from '@/components/icons'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
+import { useExportDownload } from '@/lib/hooks/use-export-download'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -53,6 +54,7 @@ export function ReportExportMenu({
   variant?: 'outline' | 'default'
 }) {
   const t = useTranslations('reports')
+  const { pending, download } = useExportDownload()
   // Resolved after mount: the slot is a sibling rendered above, present
   // only on the focused report page (never on the standalone VAT page).
   const [slot, setSlot] = useState<HTMLElement | null>(null)
@@ -67,8 +69,8 @@ export function ReportExportMenu({
       {hasItems && (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant={variant} size={size}>
-              <ArrowDownTrayIcon className="h-4 w-4" />
+            <Button variant={variant} size={size} loading={pending}>
+              {!pending && <ArrowDownTrayIcon className="h-4 w-4" />}
               {t('export')}
             </Button>
           </DropdownMenuTrigger>
@@ -76,7 +78,7 @@ export function ReportExportMenu({
             {items!.map((item) => (
               <DropdownMenuItem
                 key={item.href}
-                onSelect={() => window.open(item.href, '_blank')}
+                onSelect={() => void download(item.href, `export.${item.format}`)}
               >
                 {item.format === 'pdf' ? (
                   <DocumentTextIcon className="h-4 w-4 mr-2" />

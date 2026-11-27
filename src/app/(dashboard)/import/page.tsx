@@ -96,6 +96,7 @@ import { FullArchiveDialog } from '@/components/import/FullArchiveDialog'
 import CloudBackupCard from '@/extensions/general/cloud-backup/components/CloudBackupCard'
 import { useViewerLock, ViewerLock } from '@/components/ui/viewer-lock'
 import BankSyncStatusChip from '@/components/transactions/BankSyncStatusChip'
+import { useExportDownload } from '@/lib/hooks/use-export-download'
 
 const MigrationWizard = dynamic(
   () => import('@/components/extensions/general/ArcimMigrationWorkspace'),
@@ -1760,6 +1761,7 @@ export default function ImportPage() {
   // Off by default: UTF-8 is the deliberate default (2026-08-08); CP437 is for
   // older desktop programs that read #FORMAT PC8 literally.
   const [exportCp437, setExportCp437] = useState(false)
+  const sieDownload = useExportDownload()
   const t = useTranslations('import')
   const tCommon = useTranslations('common')
   // The top bar says what the menu row says (design.md convention 2).
@@ -2184,12 +2186,13 @@ export default function ImportPage() {
                       const params = new URLSearchParams({ period_id: exportPeriodId })
                       if (exportExcludeClosing) params.set('exclude_closing', 'true')
                       if (exportCp437) params.set('encoding', 'cp437')
-                      window.open(`/api/reports/sie-export?${params.toString()}`, '_blank')
+                      void sieDownload.download(`/api/reports/sie-export?${params.toString()}`, 'export.se')
                     }
                   }}
                   disabled={!exportPeriodId}
+                  loading={sieDownload.pending}
                 >
-                  <ArrowDownTrayIcon className="h-4 w-4" />
+                  {!sieDownload.pending && <ArrowDownTrayIcon className="h-4 w-4" />}
                   {t('export_sie_button')}
                 </Button>
               </DialogFooter>

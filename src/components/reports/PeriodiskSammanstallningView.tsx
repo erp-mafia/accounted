@@ -40,6 +40,7 @@ import type {
   PsWarning,
 } from '@/lib/reports/periodisk-sammanstallning'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
+import { useExportDownload } from '@/lib/hooks/use-export-download'
 import { stockholmYearMonth } from '@/lib/dates/iso'
 import { lastEndedCalendarPeriod } from '@/lib/vat/period-defaults'
 
@@ -146,12 +147,12 @@ export function PeriodiskSammanstallningView() {
   const error = upToDate ? (result.error ?? null) : null
   const loading = !upToDate
 
-  const downloadCsv = () => {
-    window.open(
+  const csvDownload = useExportDownload()
+  const downloadCsv = () =>
+    void csvDownload.download(
       `/api/reports/periodisk-sammanstallning/csv?periodType=${periodType}&year=${year}&period=${period}`,
-      '_blank',
+      'periodisk-sammanstallning.csv',
     )
-  }
 
   const errors = data?.warnings.filter(w => w.level === 'error') ?? []
   const cautions = data?.warnings.filter(w => w.level === 'warning') ?? []
@@ -361,8 +362,9 @@ export function PeriodiskSammanstallningView() {
                     variant="outline"
                     onClick={downloadCsv}
                     disabled={hasBlockingErrors}
+                    loading={csvDownload.pending}
                   >
-                    <ArrowDownTrayIcon className="h-4 w-4" />
+                    {!csvDownload.pending && <ArrowDownTrayIcon className="h-4 w-4" />}
                     Ladda ner CSV (SKV 5740)
                   </Button>
                 </div>

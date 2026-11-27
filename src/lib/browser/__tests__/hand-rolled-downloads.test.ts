@@ -33,4 +33,25 @@ describe('browser downloads', () => {
 
     expect(offenders).toEqual([])
   })
+
+  /**
+   * A file route opened in a new tab: the route answers
+   * Content-Disposition: attachment, so the tab starts a download and closes
+   * itself, and a browser that asks where to save each file (Opera with that
+   * setting on) loses the download with the tab. Exports go through
+   * useExportDownload, which saves from the page. Opening a document to view
+   * it (an /inline route) is not a download.
+   */
+  it('never open a file route in a new tab', () => {
+    const offenders = sourceFiles(SRC)
+      .map((file) => relative(SRC, file))
+      .flatMap((file) =>
+        [...readFileSync(join(SRC, file), 'utf8').matchAll(/window\.open\(\s*([^,)]*)/g)]
+          .map((match) => match[1])
+          .filter((target) => /\/api\/|[eE]xport|\.href\b/.test(target) && !target.includes('/inline'))
+          .map((target) => `${file}: ${target.trim()}`),
+      )
+
+    expect(offenders).toEqual([])
+  })
 })
