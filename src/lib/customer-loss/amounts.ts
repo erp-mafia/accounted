@@ -20,7 +20,7 @@
  *   reserve covers the receivable excluding VAT; VAT moves only once the loss
  *   is konstaterad).
  */
-import { bookedOreRounding } from '@/lib/bookkeeping/ore-rounding'
+import { bookedOreRounding, oreRoundingLine, oreSettlementResidual } from '@/lib/bookkeeping/ore-rounding'
 import { ACCOUNT_RUTA } from '@/lib/reports/vat-declaration'
 import { ORE_ROUNDING_ACCOUNT, roundOre, sumOre } from '@/lib/money'
 import type { CreateJournalEntryLineInput } from '@/types'
@@ -217,6 +217,11 @@ export function liveConfirmed<T extends WriteOffRowLike>(rows: T[]): T | null {
   return liveRows(rows).find((r) => r.kind === 'confirmed') ?? null
 }
 
+/** What a recovery can still take off a written-off claim: the amount written off less what was recovered. */
+export function recoveryLeft(confirmed: WriteOffRowLike, priorRecoveries: WriteOffRowLike[]): number {
+  return roundOre(n(confirmed.amount) - sumOre(priorRecoveries.map((r) => n(r.amount))))
+}
+
 /**
  * The VAT share of a recovery of `amount` on a written-off claim: pro rata to
  * the written-off VAT per account, and the exact remainder when the
@@ -229,8 +234,7 @@ export function recoveryShares(
   amount: number,
 ): { shares: VatShare[]; left: number } {
   const writtenOff = n(confirmed.amount)
-  const recovered = sumOre(priorRecoveries.map((r) => n(r.amount)))
-  const left = roundOre(writtenOff - recovered)
+  const left = recoveryLeft(confirmed, priorRecoveries)
   if (amount <= 0 || writtenOff <= 0) return { shares: [], left }
   const prior = new Map<string, number>()
   for (const row of priorRecoveries) {
@@ -245,6 +249,35 @@ export function recoveryShares(
     shares.push({ account: s.account, rate: s.rate, vat, base: baseOf(vat, s.rate) })
   }
   return { shares, left }
+}
+
+/**
+ * The amounts other than `left` that close a written-off claim: what the
+ * invoice itself asked for, its "Att betala" (total + toPayRounding) or its
+ * exact total, less what was paid and recovered. The write-off took off what
+ * 151x carried (basis less paid), so the gap to either figure is constant:
+ * the figure less basis. A recovery of one of them settles the claim in
+ * full, its VAT reported again to the öre, and the gap goes to 3740 like the
+ * öre of any payment (oreSettlementResidual, the band every payment books
+ * by). Any other gap is not rounding: above what is left it is refused,
+ * below it a part payment. toPayRounding null (a credit note changed what
+ * the invoice asks for): no figure but `left` closes.
+ */
+export function recoveryClosingAmounts(params: {
+  left: number
+  total: number
+  basis: number
+  toPayRounding: number | null
+}): number[] {
+  const left = roundOre(params.left)
+  if (left <= 0 || params.toPayRounding === null) return []
+  const out: number[] = []
+  for (const asked of [roundOre(params.total + params.toPayRounding), roundOre(params.total)]) {
+    const amount = roundOre(left + asked - params.basis)
+    if (amount === left || amount <= 0 || oreSettlementResidual(left, amount) === 0 || out.includes(amount)) continue
+    out.push(amount)
+  }
+  return out
 }
 
 // ---------------------------------------------------------------------------
@@ -297,17 +330,26 @@ export function confirmedLines(params: {
   return out
 }
 
-/** H: Dr payment account / Cr 3950 (net) + Cr 26xx per account. */
+/**
+ * H: Dr payment account / Cr 3950 (net) + Cr 26xx per account, for the
+ * `amount` taken off the claim. When the money that came in (`received`)
+ * differs from it by the öresavrundning (recoveryClosingAmounts), the bank
+ * leg books what came in and 3740 the gap.
+ */
 export function recoveryLines(params: {
   amount: number
+  received?: number
   shares: VatShare[]
   paymentAccount: string
   tag: string
 }): CreateJournalEntryLineInput[] {
   const { amount, shares, paymentAccount, tag } = params
+  const received = roundOre(params.received ?? amount)
   const net = roundOre(amount - totalVat(shares))
-  const out: CreateJournalEntryLineInput[] = [line(paymentAccount, amount, 0, `Återvunnen kundförlust faktura ${tag}`)]
+  const out: CreateJournalEntryLineInput[] = [line(paymentAccount, received, 0, `Återvunnen kundförlust faktura ${tag}`)]
   if (net > 0) out.push(line('3950', 0, net, `Återvunnen kundförlust faktura ${tag}`))
   for (const s of shares) out.push(line(s.account, 0, s.vat, `Utgående moms ${s.rate} % återvunnen kundförlust faktura ${tag}`))
+  const ore = roundOre(amount - received)
+  if (ore !== 0) out.push(oreRoundingLine(ore, 'customer'))
   return out
 }

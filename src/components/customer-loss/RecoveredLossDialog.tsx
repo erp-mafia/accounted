@@ -9,7 +9,7 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/use-toast'
 import { isAccountNumber, isIsoDateShaped } from '@/lib/invariants'
-import { parseAmountInput } from '@/lib/money'
+import { parseAmountInput, roundOre } from '@/lib/money'
 import { usePaymentBankLedger } from '@/lib/reference-data/hooks'
 import { formatLossAmount } from '@/lib/customer-loss/text'
 import { postCustomerLoss } from './use-customer-loss'
@@ -19,6 +19,8 @@ interface Props {
   invoiceNumber: string | null
   /** How much a recovery can still take, VAT included. */
   left: number
+  /** The other amounts that close the claim: what the invoice asked for, a öresavrundning away. */
+  closing: number[]
   today: string
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -29,7 +31,7 @@ interface Props {
  * "Bokför återvunnen kundförlust": a payment after a konstaterad write-off is
  * income (3950) and its VAT is reported again; the invoice stays written off.
  */
-export function RecoveredLossDialog({ invoiceId, invoiceNumber, left, today, open, onOpenChange, onDone }: Props) {
+export function RecoveredLossDialog({ invoiceId, invoiceNumber, left, closing, today, open, onOpenChange, onDone }: Props) {
   const t = useTranslations('customer_loss')
   const { toast } = useToast()
   const [amount, setAmount] = useState('')
@@ -57,7 +59,7 @@ export function RecoveredLossDialog({ invoiceId, invoiceNumber, left, today, ope
   const canSend =
     Number.isFinite(parsed) &&
     parsed > 0 &&
-    parsed <= left &&
+    (parsed <= left || closing.includes(roundOre(parsed))) &&
     isAccountNumber(account) &&
     reason.trim().length > 0 &&
     isIsoDateShaped(entryDate)
@@ -93,6 +95,11 @@ export function RecoveredLossDialog({ invoiceId, invoiceNumber, left, today, ope
             <Label htmlFor="recovery-amount">{t('recovery_amount')}</Label>
             <Input id="recovery-amount" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} />
             <p className="text-xs text-muted-foreground">{t('recovery_left', { amount: formatLossAmount(left) })}</p>
+            {closing.length > 0 && (
+              <p className="text-xs text-muted-foreground">
+                {t('recovery_closing', { closing: closing.map(formatLossAmount).join(` ${t('recovery_closing_or')} `) })}
+              </p>
+            )}
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="recovery-account">{t('recovery_account')}</Label>

@@ -5,6 +5,7 @@
  * invoice's latest collection case. Pure derivations live in amounts.ts.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { getDisplayTotal } from '@/lib/bookkeeping/invoice-rounding'
 import { roundOre } from '@/lib/money'
 import {
   bookedOreOnLedger,
@@ -65,6 +66,11 @@ export interface CustomerLossState {
   basis: number
   /** The öresavrundning the invoice's own verifikat and its credit notes put on 3740, as a credit. */
   oreRounding: number
+  /**
+   * The invoice's own öresavrundning: its "Att betala" less its total
+   * (invoiceToPayRounding). null when a credit note changed what it asks for.
+   */
+  toPayRounding: number | null
   rows: WriteOffRow[]
   reserve: number
   confirmed: WriteOffRow | null
@@ -83,7 +89,7 @@ export async function loadCustomerLossState(
   const { data: invoiceRow, error: invoiceError } = await supabase
     .from('invoices')
     .select(
-      'id, invoice_number, status, currency, total, paid_amount, remaining_amount, due_date, journal_entry_id, deduction_total, document_type, credited_invoice_id',
+      'id, invoice_number, status, currency, total, paid_amount, remaining_amount, due_date, journal_entry_id, deduction_total, document_type, credited_invoice_id, ore_rounding',
     )
     .eq('company_id', companyId)
     .eq('id', invoiceId)
@@ -107,7 +113,7 @@ export async function loadCustomerLossState(
   }
 
   const [settings, ownLines, creditNoteLines, rows, latestCase] = await Promise.all([
-    supabase.from('company_settings').select('accounting_method').eq('company_id', companyId).maybeSingle(),
+    supabase.from('company_settings').select('accounting_method, ore_rounding').eq('company_id', companyId).maybeSingle(),
     loadPostedLines(supabase, companyId, invoice.journal_entry_id ? [invoice.journal_entry_id] : []),
     loadCreditNoteLines(supabase, companyId, invoice.id),
     loadWriteOffRows(supabase, companyId, invoice.id),
@@ -130,12 +136,36 @@ export async function loadCustomerLossState(
       openVat: booked ? openVatByAccount(ownLines, creditNoteLines) : new Map(),
       basis: booked ? receivableBasis(ownLines, creditNoteLines) : 0,
       oreRounding: booked ? bookedOreOnLedger(ownLines, creditNoteLines) : 0,
+      toPayRounding: invoiceToPayRounding({
+        invoice: { total: invoice.total, currency: invoice.currency, ore_rounding: invoiceRow.ore_rounding ?? null },
+        companyOreRounding: settings.data?.ore_rounding ?? null,
+        credited: creditNoteLines.length > 0,
+      }),
       rows,
       reserve: reserveOutstanding(rows),
       confirmed: liveConfirmed(rows),
       latestCase,
     },
   }
+}
+
+/**
+ * The invoice's öresavrundning, "Att betala" less the total, as the PDF and
+ * the collection claim compute it (getDisplayTotal: the invoice's own flag,
+ * else the company's, else on). null when a credit note's voucher stands
+ * against the invoice: what it asks for is then no longer its own total.
+ */
+export function invoiceToPayRounding(params: {
+  invoice: { total: number; currency: string | null; ore_rounding: boolean | null }
+  companyOreRounding: boolean | null
+  credited: boolean
+}): number | null {
+  if (params.credited) return null
+  const { invoice } = params
+  return getDisplayTotal(
+    { total: invoice.total, currency: invoice.currency ?? 'SEK', ore_rounding: invoice.ore_rounding },
+    { ore_rounding: params.companyOreRounding ?? true },
+  ).roundingDelta
 }
 
 /** Lines of the given vouchers, only while they are posted (a stornoed voucher no longer counts). */
