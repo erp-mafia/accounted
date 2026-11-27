@@ -566,7 +566,11 @@ export async function correctSalaryRun(
       companyId,
       userId,
       entryId,
-      // Built only while the port is on: off, reverseEntry gets the call it always did.
+      // The run's verifikat are reversed together here, so the salary run's
+      // reversal hook, which refuses a storno of one of them alone, lets
+      // these through.
+      options: { salaryRunCorrection: true },
+      // Built only while the port is on: off, no event is recorded.
       event: () => salaryRunCorrectionBusinessEvent(runId, correctedOn, linkBasisColumns('user_created')),
       role: 'reversal',
     })

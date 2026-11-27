@@ -31,6 +31,12 @@ import {
   assertValueAdjustmentReversible,
   releaseComponentsAfterReversal,
 } from '@/lib/bokslut/assets/component-reversal'
+import {
+  assertSupplierInvoiceRegistrationReversible,
+  releaseSupplierInvoiceRegistrationAfterReversal,
+} from '@/lib/supplier-invoices/registration-reversal'
+import { assertInvoiceVerifikatReversible } from '@/lib/invoices/invoice-verifikat-reversal'
+import { assertSalaryRunVerifikatReversible } from '@/lib/salary/run-verifikat-reversal'
 
 export const REVERSAL_HOOKS: readonly ReversalHook[] = Object.freeze<ReversalHook[]>([
   // A reversed payment voucher puts the linked invoice or supplier invoice
@@ -130,5 +136,41 @@ export const REVERSAL_HOOKS: readonly ReversalHook[] = Object.freeze<ReversalHoo
     },
     afterReversal: ({ supabase, companyId, entry }) =>
       releaseComponentsAfterReversal(supabase, companyId, entry.id),
+  },
+  // A supplier invoice's registration verifikat: refused while the invoice
+  // has payments (checked before a voucher number is spent); once reversed,
+  // the invoice no longer points at it, so it reads not booked and Bokför
+  // books it again (lib/supplier-invoices/registration-reversal.ts). A
+  // registration no invoice points at passes untouched.
+  {
+    id: 'supplier-invoice-registration',
+    module: 'supplier-invoices',
+    sourceTypes: ['supplier_invoice_registered'],
+    beforeReversal: ({ supabase, companyId, entry }) =>
+      assertSupplierInvoiceRegistrationReversible(supabase, companyId, entry.id),
+    afterReversal: ({ supabase, companyId, entry }) =>
+      releaseSupplierInvoiceRegistrationAfterReversal(supabase, companyId, entry.id),
+  },
+  // A customer invoice's verifikat: refused once the invoice is sent or
+  // paid, which is withdrawn with Kreditera instead
+  // (lib/invoices/invoice-verifikat-reversal.ts).
+  {
+    id: 'customer-invoice-verifikat',
+    module: 'invoicing',
+    sourceTypes: ['invoice_created'],
+    beforeReversal: ({ supabase, companyId, entry }) => assertInvoiceVerifikatReversible(supabase, companyId, entry.id),
+  },
+  // A booked salary run's verifikat: refused on its own, since Korrigera
+  // lönekörning reverses all of them together
+  // (lib/salary/run-verifikat-reversal.ts). Its own stornos carry
+  // salaryRunCorrection and pass.
+  {
+    id: 'salary-run-verifikat',
+    module: 'payroll',
+    sourceTypes: ['salary_payment'],
+    beforeReversal: async ({ supabase, companyId, entry, salaryRunCorrection }) => {
+      if (salaryRunCorrection) return
+      await assertSalaryRunVerifikatReversible(supabase, companyId, entry)
+    },
   },
 ])

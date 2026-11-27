@@ -12,6 +12,9 @@
  * Rules, in order:
  *   - the invoice exists in the company, is not a credit note and is not
  *     booked yet;
+ *   - no registration verifikat booked from the invoice stands: one can,
+ *     after its storno was deleted (standing-registration.ts), and the
+ *     invoice is then handed back to it instead of being booked again;
  *   - status registered, approved or overdue. A settlement never reaches an
  *     unbooked invoice of a deferring company first: every door that settles
  *     one books its registration through this function beforehand
@@ -46,6 +49,7 @@ import {
   createSupplierInvoiceRegistrationEntry,
 } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { anchorSupplierInvoiceDocument } from '@/lib/core/documents/supplier-invoice-underlag'
+import { findStandingRegistration } from '@/lib/supplier-invoices/standing-registration'
 import { linkBasisColumns } from '@/lib/links/stamp'
 import type { OperationContext, OperationOutcome, OperationWarning } from '@/lib/operations/types'
 import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
@@ -111,6 +115,38 @@ export async function bookSupplierInvoice(
   if (invoice.is_credit_note) return { ok: false, code: 'SI_BOOK_NOT_BOOKABLE' }
   if (!SUPPLIER_INVOICE_BOOKABLE_STATUSES.includes(invoice.status)) {
     return { ok: false, code: 'SI_BOOK_INVALID_STATUS', details: { currentStatus: invoice.status } }
+  }
+
+  // A registration booked from this invoice can stand while the invoice
+  // names none (standing-registration.ts). The invoice takes that verifikat
+  // back instead of being booked a second time. A failed read aborts: booking
+  // without the answer could post the registration twice.
+  let standing: { id: string } | null
+  try {
+    standing = await findStandingRegistration(supabase, companyId, supplierInvoiceId)
+  } catch (err) {
+    log.error('failed to look for a standing registration before booking', err as Error, {
+      invoiceId: supplierInvoiceId,
+    })
+    return { ok: false, code: 'SI_BOOK_FAILED' }
+  }
+  if (standing) {
+    if (!options.dryRun) {
+      const { error: relinkError } = await supabase
+        .from('supplier_invoices')
+        .update({ registration_journal_entry_id: standing.id })
+        .eq('id', supplierInvoiceId)
+        .eq('company_id', companyId)
+        .is('registration_journal_entry_id', null)
+      if (relinkError) {
+        log.error('failed to hand the invoice back to its standing registration', relinkError, {
+          invoiceId: supplierInvoiceId,
+          journalEntryId: standing.id,
+        })
+        return { ok: false, code: 'SI_BOOK_FAILED' }
+      }
+    }
+    return { ok: false, code: 'SI_BOOK_ALREADY_BOOKED' }
   }
 
   // The registration entry is a faktureringsmetoden concept; under
