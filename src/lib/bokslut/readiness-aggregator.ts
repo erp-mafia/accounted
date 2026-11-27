@@ -7,6 +7,8 @@ import { resolveCashAccountScope } from '@/lib/reconciliation/cash-account-scope
 import { generateARReconciliation } from '@/lib/reports/ar-reconciliation'
 import { generateReconciliation as generateAPReconciliation } from '@/lib/reports/supplier-reconciliation'
 import { computeEfDeclarationPreview } from '@/lib/bokslut/enskild-firma/ef-declaration-preview'
+import { assetRegisterDifferences } from '@/lib/bokslut/assets/register-ledger-tie-out'
+import { formatCurrency } from '@/lib/utils'
 import { createLogger } from '@/lib/logger'
 import { codedRefusal } from '@/lib/errors/refusal'
 import { describeFiscalYearGap, findFiscalYearGaps, type PeriodLike } from '@/lib/bookkeeping/fiscal-year-gaps'
@@ -220,7 +222,35 @@ async function startPeriodChecks(
 
   const gapWarningsRead = fiscalYearGapWarnings(supabase, companyId)
 
-  return { period, entityType, reconciliationRead, tieOutsRead, bilagorReminderRead, efPreviewRead, gapWarningsRead }
+  // The anläggningsregister against its asset accounts. Planenlig avskrivning
+  // is proposed from the register, so a register that does not match the
+  // balance sheet is worth knowing before the avskrivning is booked. Advisory:
+  // a failed read costs only this reminder.
+  const assetRegisterReminderRead = (async (): Promise<BokslutReminder | null> => {
+    try {
+      const differences = await assetRegisterDifferences(supabase, companyId, period)
+      if (differences.length === 0) return null
+      const named = differences
+        .slice(0, 3)
+        .map(
+          (d) =>
+            `konto ${d.account_number} har ${formatCurrency(d.register_cost)} i registret och ${formatCurrency(d.ledger_balance)} i bokföringen`,
+        )
+        .join('; ')
+      const more = differences.length > 3 ? ` (och ${differences.length - 3} konton till)` : ''
+      return {
+        code: 'asset_register_mismatch',
+        severity: 'warning',
+        message: `Anläggningsregistret stämmer inte med bokföringen: ${named}${more}. Avskrivningarna föreslås från registret: rätta registret eller bokföringen innan de bokförs.`,
+        href: '/assets',
+      }
+    } catch (err) {
+      log.warn('asset register reminder failed', { companyId, fiscalPeriodId, error: err instanceof Error ? err.message : String(err) })
+      return null
+    }
+  })()
+
+  return { period, entityType, reconciliationRead, tieOutsRead, bilagorReminderRead, efPreviewRead, gapWarningsRead, assetRegisterReminderRead }
 }
 
 /**
@@ -325,7 +355,7 @@ export async function buildBokslutReadinessReport(
   if (!periodResult.data || !checks) {
     throw codedRefusal('PERIOD_NOT_FOUND', 'Fiscal period not found')
   }
-  const { period, entityType, reconciliationRead, tieOutsRead, bilagorReminderRead, efPreviewRead, gapWarningsRead } =
+  const { period, entityType, reconciliationRead, tieOutsRead, bilagorReminderRead, efPreviewRead, gapWarningsRead, assetRegisterReminderRead } =
     checks
 
   const reconciliation = await reconciliationRead
@@ -387,6 +417,9 @@ export async function buildBokslutReadinessReport(
 
   const bilagorReminder = await bilagorReminderRead
   if (bilagorReminder) reminders.push(bilagorReminder)
+
+  const assetRegisterReminder = await assetRegisterReminderRead
+  if (assetRegisterReminder) reminders.push(assetRegisterReminder)
 
   if (efPreviewRead) {
     // Surface a soft warning when kapitalunderlag is missing AND the booked

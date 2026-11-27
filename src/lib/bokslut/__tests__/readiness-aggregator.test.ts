@@ -23,6 +23,13 @@ vi.mock('@/lib/reconciliation/service', () => ({
 vi.mock('@/lib/reports/supplier-reconciliation', () => ({
   generateReconciliation: vi.fn(),
 }))
+// The asset register tie-out reads the register and a trial balance of its
+// own (covered in assets/__tests__/register-ledger-tie-out.test.ts); here it
+// answers "no difference" unless a test says otherwise.
+const assetDifferencesMock = vi.fn(async (): Promise<unknown[]> => [])
+vi.mock('@/lib/bokslut/assets/register-ledger-tie-out', () => ({
+  assetRegisterDifferences: (...args: unknown[]) => assetDifferencesMock(...(args as [])),
+}))
 // The EF declaration preview refuses every form but the NE filer itself; the
 // aggregator must only call it for that form, with the form it resolved.
 vi.mock('@/lib/bokslut/enskild-firma/ef-declaration-preview', () => ({
@@ -639,5 +646,42 @@ describe('imported history (klarmarkera prompt)', () => {
 
     expect(report.holdsImportedHistory).toBe(false)
     expect(report.ready).toBe(true)
+  })
+})
+
+describe('buildBokslutReadinessReport: asset register reminder', () => {
+  const supabase = () =>
+    makeSupabase({ period: { data: PERIOD, error: null }, settings: { data: { entity_type: 'aktiebolag' }, error: null } })
+
+  it('names the asset accounts where the register and the books differ', async () => {
+    vi.mocked(validateYearEndReadiness).mockResolvedValue(baseValidation())
+    listAccountsMock.mockResolvedValue([])
+    assetDifferencesMock.mockResolvedValueOnce([
+      { account_number: '1220', register_cost: 120000, ledger_balance: 80000, difference: 40000 },
+    ])
+
+    const report = await buildBokslutReadinessReport(supabase(), 'company-1', 'user-1', 'fp-1')
+
+    const reminder = report.reminders.find((r) => r.code === 'asset_register_mismatch')
+    expect(reminder).toMatchObject({ severity: 'warning', href: '/assets' })
+    expect(reminder?.message).toMatch(/konto 1220/)
+    expect(assetDifferencesMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      expect.objectContaining({ period_end: PERIOD.period_end }),
+    )
+  })
+
+  it('stays silent when they agree, and when the read fails', async () => {
+    vi.mocked(validateYearEndReadiness).mockResolvedValue(baseValidation())
+    listAccountsMock.mockResolvedValue([])
+
+    const agree = await buildBokslutReadinessReport(supabase(), 'company-1', 'user-1', 'fp-1')
+    expect(agree.reminders.find((r) => r.code === 'asset_register_mismatch')).toBeUndefined()
+
+    assetDifferencesMock.mockRejectedValueOnce(new Error('down'))
+    const failed = await buildBokslutReadinessReport(supabase(), 'company-1', 'user-1', 'fp-1')
+    expect(failed.reminders.find((r) => r.code === 'asset_register_mismatch')).toBeUndefined()
+    expect(failed.ready).toBe(agree.ready)
   })
 })
