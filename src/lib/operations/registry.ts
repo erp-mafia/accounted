@@ -168,6 +168,7 @@ import {
   inboxItemsMatchTransaction,
 } from './inbox-matches'
 import { inboxItemsSetPurchaseCategory } from './inbox-purchase-category'
+import { documentsSearch } from './document-search'
 import {
   transactionsBulkBook,
   transactionsDelete,
@@ -435,6 +436,8 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   // documents (Dokument's own routes call the same services)
   documentsList,
   documentsGet,
+  // the archive's search (v1; MCP keeps its listed gnubok_search_records, both call lib/arkiv/search.ts searchArchive)
+  documentsSearch,
   documentsDelete,
   documentsSetType,
   transactionsAttachDocument,

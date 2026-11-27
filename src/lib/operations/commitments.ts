@@ -171,7 +171,8 @@ const EXAMPLE_GROUP_LINK = {
   notes: null,
 }
 
-const UNAVAILABLE_PITFALL = 'COMMITMENTS_UNAVAILABLE: Avtal och åtaganden is not switched on for this company yet.'
+const UNAVAILABLE_PITFALL =
+  'COMMITMENTS_UNAVAILABLE: Avtal och åtaganden is switched on company by company and is not on for this company (GET /capabilities says so under the year-end module); support switches it on, and a self-hosted instance lists the company in BOLAGET_COMPANY_IDS.'
 
 // ── Agreements ────────────────────────────────────────────────────
 

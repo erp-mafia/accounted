@@ -13812,6 +13812,7 @@
     "ob_edit_title": "Review and edit",
     "ob_edit_description": "Check that the account numbers and amounts are right. You can add, remove and change lines. Debit and credit must balance before you can continue.",
     "ob_edit_continue": "Continue",
+    "ob_fill_difference_tooltip": "Double-click to fill in the amount that brings the difference to zero",
     "ib_continuity_source_edits": "The file's opening balance differs from the previous year's closing balance in the same file on {count, plural, one {# account} other {# accounts}}. It was probably edited by hand in the old program. The import books the file's opening balance as it stands.",
     "ib_continuity_missing_years": "Fiscal year missing: {from} to {to}. Import that year as well, otherwise the opening balance is carried forward from an older year.",
     "ib_continuity_no_vouchers": "The file has no vouchers for the year. If the company kept books then, they are missing from the file, and later years' opening balances will be wrong.",
