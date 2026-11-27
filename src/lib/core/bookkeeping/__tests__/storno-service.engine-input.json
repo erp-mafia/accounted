@@ -180,6 +180,27 @@
         }
       ],
       [
+        "invoice_payments",
+        "update",
+        {
+          "journal_entry_id": "00000000-0000-4000-8000-0000000e0003"
+        }
+      ],
+      [
+        "supplier_invoice_payments",
+        "update",
+        {
+          "journal_entry_id": "00000000-0000-4000-8000-0000000e0003"
+        }
+      ],
+      [
+        "supplier_invoices",
+        "update",
+        {
+          "payment_journal_entry_id": "00000000-0000-4000-8000-0000000e0003"
+        }
+      ],
+      [
         "invoices",
         "update",
         {
@@ -764,6 +785,27 @@
         "update",
         {
           "journal_entry_id": "00000000-0000-4000-8000-0000000e0003"
+        }
+      ],
+      [
+        "invoice_payments",
+        "update",
+        {
+          "journal_entry_id": "00000000-0000-4000-8000-0000000e0003"
+        }
+      ],
+      [
+        "supplier_invoice_payments",
+        "update",
+        {
+          "journal_entry_id": "00000000-0000-4000-8000-0000000e0003"
+        }
+      ],
+      [
+        "supplier_invoices",
+        "update",
+        {
+          "payment_journal_entry_id": "00000000-0000-4000-8000-0000000e0003"
         }
       ],
       [

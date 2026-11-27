@@ -851,7 +851,7 @@ export async function correctEntry(
     }
     // The invoice payment rows follow too, so the invoice reads as paid by the
     // verifikat that stands, not by the reversed original (PH 227).
-    await relinkPaymentRowsToEntry(supabase, companyId, original, correctedEntry!.id)
+    await relinkPaymentRowsToEntry(supabase, companyId, originalEntryId, correctedEntry!.id)
     // So do the records the original books, each by its own verifikat
     // pointer: the invoice, the inbox item it was booked from and the utlägg.
     // The corrected verifikat books them now.

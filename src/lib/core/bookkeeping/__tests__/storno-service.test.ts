@@ -1081,12 +1081,7 @@ describe('correctEntry', () => {
       await correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', correctedLines)
 
       expect(mockRelinkPaymentRows).toHaveBeenCalledTimes(1)
-      expect(mockRelinkPaymentRows).toHaveBeenCalledWith(
-        supabase,
-        'company-1',
-        expect.objectContaining({ id: 'orig-1' }),
-        'corrected-1',
-      )
+      expect(mockRelinkPaymentRows).toHaveBeenCalledWith(supabase, 'company-1', 'orig-1', 'corrected-1')
     })
 
     // The records the original books follow as well, each by its own

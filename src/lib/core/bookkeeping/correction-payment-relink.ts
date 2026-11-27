@@ -18,9 +18,14 @@
  * The amount on the row is the payment's, in the invoice's currency, and is
  * left as it is.
  *
- * Only the payment source types carry these rows from a booking door, and
- * a correction of one is itself corrected under source_type 'correction', so
- * both are relinked; every other source type is skipped without a query.
+ * No source type is skipped. A payment row names the original exactly when
+ * the original is its payment verifikat, which its source type does not say:
+ * beside the payment doors named above, a privately paid supplier invoice is
+ * paid by the verifikat of its utlägg, a payment is linked to a verifikat
+ * that was already in the books (imported, or booked by hand), and a
+ * corrected payment verifikat is itself corrected under 'correction'. A
+ * filter would save three indexed updates that match no row, and would leave
+ * those rows on the reversed original.
  *
  * Best-effort, as the other relinks in correctEntry: a failure is logged and
  * returned, never thrown, because the correction is already posted and the
@@ -47,9 +52,9 @@
  * is reversed posts no storno (deleteExpenseClaim), which would leave the
  * corrected verifikat in the books with no claim behind it.
  *
- * That move skips no source type. A pointer equals the original's id exactly
- * when the original is the record's verifikat, which its source type does not
- * say: beside the registration doors (invoice_created, credit_note,
+ * That move skips no source type either. A pointer equals the original's id
+ * exactly when the original is the record's verifikat, which its source type
+ * does not say: beside the registration doors (invoice_created, credit_note,
  * supplier_invoice_registered, supplier_credit_note) an invoice is linked to
  * a verifikat that was already in the books, the imported voucher of a
  * migrated invoice (link-migrated-registration-vouchers.ts) or any posted
@@ -70,8 +75,6 @@
  * member of the company.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { isPaymentSourceType } from '@/lib/bookkeeping/payment-sync'
-import type { JournalEntry } from '@/types'
 
 type EntryPointer = { readonly table: string; readonly column: string }
 
@@ -88,10 +91,6 @@ const BOOKED_RECORD_POINTERS: readonly EntryPointer[] = [
   { table: 'invoice_inbox_items', column: 'created_journal_entry_id' },
   { table: 'expense_claims', column: 'journal_entry_id' },
 ]
-
-export function correctionCarriesPaymentRows(sourceType: string | null | undefined): boolean {
-  return sourceType === 'correction' || isPaymentSourceType(sourceType)
-}
 
 /** Each pointer in turn, company-scoped; the first failure is returned, every failure logged. */
 async function moveEntryPointers(
@@ -123,11 +122,10 @@ async function moveEntryPointers(
 export async function relinkPaymentRowsToEntry(
   supabase: SupabaseClient,
   companyId: string,
-  original: Pick<JournalEntry, 'id' | 'source_type'>,
+  fromEntryId: string,
   toEntryId: string,
 ): Promise<string | undefined> {
-  if (!correctionCarriesPaymentRows(original.source_type)) return undefined
-  return moveEntryPointers(supabase, companyId, original.id, toEntryId, PAYMENT_ROW_POINTERS, 'relinkPaymentRowsToEntry')
+  return moveEntryPointers(supabase, companyId, fromEntryId, toEntryId, PAYMENT_ROW_POINTERS, 'relinkPaymentRowsToEntry')
 }
 
 export async function relinkBookedRecordsToEntry(
