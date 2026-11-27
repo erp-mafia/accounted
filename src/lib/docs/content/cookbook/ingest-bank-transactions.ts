@@ -7,7 +7,7 @@ This is the operational companion to the [Transactions reference](/docs/api/refe
 ## What you'll need
 
 - A **live** API key with \`transactions:write\`, \`transactions:read\`, and \`operations:read\` scopes. A test key (\`gnubok_sk_test_*\`) only previews: every write that supports a dry run is forced into one, and a write without dry-run support answers \`403 TEST_KEY_WRITE_BLOCKED\`, so it cannot run this flow. (There is no \`imports:write\` scope: the bank import runs under \`transactions:write\`, and polling the operation needs \`operations:read\`.)
-- A bank statement file in one of the supported formats: CSV (SEB / Swedbank / Handelsbanken / Nordea / Nordea Business / Länsförsäkringar / ICA Banken / Skandia / Lunar / Northmill / Wise transaction history / Wise balance statement / generic CSV auto-detected), an Excel workbook (.xls / .xlsx), CAMT.053 XML, or a generic account-statement CSV with at minimum date + amount + description columns. At most 10 MB.
+- A bank statement file in one of the supported formats: CSV (SEB / Swedbank / Handelsbanken / Nordea / Nordea Business / Länsförsäkringar / ICA Banken / Skandia / Lunar / Northmill / Wise transaction history / Wise balance statement / Mynt card export / generic CSV auto-detected), an Excel workbook (.xls / .xlsx), CAMT.053 XML, or a generic account-statement CSV with at minimum date + amount + description columns. At most 10 MB.
 - The settlement account for the bank: typically \`1930\` for an SEK business account (check via \`GET /accounts\`, which needs \`reports:read\`). \`/imports/bank\` resolves the settlement account automatically; \`settlement_account\` is an explicit parameter of \`POST /transactions/ingest\`, not of the file upload.
 
 ## 1. Upload the bank file
