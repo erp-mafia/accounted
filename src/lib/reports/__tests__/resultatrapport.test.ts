@@ -197,6 +197,112 @@ describe('generateResultatrapport', () => {
     expect(report.net_result_current).toBe(0)
   })
 
+  it('splits class 8 into finansiella poster, bokslutsdispositioner and skatter, each with its sum', async () => {
+    const q = createQueuedMockSupabase()
+    q.enqueue({
+      data: { period_start: '2026-01-01', period_end: '2026-12-31', previous_period_id: 'period-0' },
+      error: null,
+    })
+    q.enqueue({
+      data: { id: 'period-0', period_start: '2025-01-01', period_end: '2025-12-31' },
+      error: null,
+    })
+
+    mockTrialBalance
+      .mockResolvedValueOnce(
+        tb([
+          makeRow({ account_number: '3001', account_name: 'Försäljning', account_class: 3, closing_credit: 500000 }),
+          makeRow({ account_number: '5010', account_name: 'Lokalhyra', account_class: 5, closing_debit: 120000 }),
+          makeRow({ account_number: '8314', account_name: 'Skattefria ränteintäkter', account_class: 8, closing_credit: 1000 }),
+          makeRow({ account_number: '8410', account_name: 'Räntekostnader', account_class: 8, closing_debit: 3000 }),
+          makeRow({ account_number: '8811', account_name: 'Avsättning till periodiseringsfond', account_class: 8, closing_debit: 50000 }),
+          makeRow({ account_number: '8910', account_name: 'Skatt som belastar årets resultat', account_class: 8, closing_debit: 68000 }),
+        ])
+      )
+      .mockResolvedValueOnce(
+        tb([
+          makeRow({ account_number: '3001', account_name: 'Försäljning', account_class: 3, closing_credit: 400000 }),
+          makeRow({ account_number: '8410', account_name: 'Räntekostnader', account_class: 8, closing_debit: 2000 }),
+        ])
+      )
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const report = await generateResultatrapport(q.supabase as any, 'company-1', 'period-1')
+
+    const class8 = report.groups.find((g) => g.class === 8)!
+    // The class keeps every row; the blocks hold them again in the
+    // resultaträkning's split.
+    expect(class8.rows.map((r) => r.account_number)).toEqual(['8314', '8410', '8811', '8910'])
+    expect(
+      class8.subgroups!.map((s) => [s.label, s.total_label, s.rows.map((r) => r.account_number), s.subtotal_current, s.subtotal_prior]),
+    ).toEqual([
+      ['Finansiella poster', 'Summa finansiella poster', ['8314', '8410'], -2000, -2000],
+      ['Bokslutsdispositioner', 'Summa bokslutsdispositioner', ['8811'], -50000, 0],
+      ['Skatter', 'Summa skatter', ['8910'], -68000, 0],
+    ])
+    expect(class8.subgroups!.map((s) => s.above_result_after_financial)).toEqual([true, false, false])
+
+    // Classes 3-7 and the finansiella poster, not the dispositions or the tax.
+    expect(report.result_after_financial).toEqual({
+      label: 'Resultat efter finansiella poster',
+      current: 378000,
+      prior: 398000,
+    })
+    expect(report.net_result_current).toBe(260000)
+    // Only class 8 is split.
+    expect(report.groups.filter((g) => g.subgroups).map((g) => g.class)).toEqual([8])
+  })
+
+  it('has no Resultat efter finansiella poster when class 8 holds only the tax', async () => {
+    const q = createQueuedMockSupabase()
+    q.enqueue({
+      data: { period_start: '2026-01-01', period_end: '2026-12-31', previous_period_id: null },
+      error: null,
+    })
+
+    mockTrialBalance.mockResolvedValueOnce(
+      tb([
+        makeRow({ account_number: '3001', account_name: 'Försäljning', account_class: 3, closing_credit: 100000 }),
+        makeRow({ account_number: '8910', account_name: 'Skatt som belastar årets resultat', account_class: 8, closing_debit: 20000 }),
+      ])
+    )
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const report = await generateResultatrapport(q.supabase as any, 'company-1', 'period-1')
+
+    expect(report.groups.find((g) => g.class === 8)!.subgroups!.map((s) => s.key)).toEqual(['skatter'])
+    expect(report.result_after_financial).toBeUndefined()
+  })
+
+  it('lists a booked 8999 in the Skatter block, as BAS groups it with the tax', async () => {
+    const q = createQueuedMockSupabase()
+    q.enqueue({
+      data: { period_start: '2026-01-01', period_end: '2026-12-31', previous_period_id: null },
+      error: null,
+    })
+
+    mockTrialBalance.mockResolvedValueOnce(
+      tb([
+        makeRow({ account_number: '3001', account_name: 'Revenue', account_class: 3, closing_credit: 100000 }),
+        makeRow({ account_number: '8410', account_name: 'Räntekostnader', account_class: 8, closing_debit: 1000 }),
+        makeRow({ account_number: '8999', account_name: 'Årets resultat', account_class: 8, closing_debit: 99000 }),
+      ])
+    )
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const report = await generateResultatrapport(q.supabase as any, 'company-1', 'period-1')
+
+    const subgroups = report.groups.find((g) => g.class === 8)!.subgroups!
+    expect(subgroups.map((s) => [s.key, s.rows.map((r) => r.account_number)])).toEqual([
+      ['finansiella_poster', ['8410']],
+      ['skatter', ['8999']],
+    ])
+    // The omföring stays below the line: Resultat efter finansiella poster is
+    // the year's result, Beräknat resultat reads zero after the omföring.
+    expect(report.result_after_financial?.current).toBe(99000)
+    expect(report.net_result_current).toBe(0)
+  })
+
   it('ignores balance accounts (class 1-2)', async () => {
     const q = createQueuedMockSupabase()
     q.enqueue({

@@ -2928,17 +2928,48 @@ export interface ResultatrapportRow {
   budget?: BudgetComparison
 }
 
-export interface ResultatrapportGroup {
-  class: number
-  class_label: string
+import type { Class8GroupKey } from '@/lib/reports/class-8-groups'
+
+/**
+ * One block of class 8 in the resultatrapport, as the resultaträkning's
+ * uppställningsform splits it (src/lib/reports/class-8-groups.ts).
+ */
+export interface ResultatrapportSubgroup {
+  key: Class8GroupKey
+  label: string
+  total_label: string
+  /** Counted in Resultat efter finansiella poster, which follows the last such block. */
+  above_result_after_financial: boolean
   rows: ResultatrapportRow[]
   subtotal_current: number
   subtotal_prior: number
   subtotal_budget?: BudgetComparison
 }
 
+export interface ResultatrapportGroup {
+  class: number
+  class_label: string
+  /** Every row of the class, class 8's included. */
+  rows: ResultatrapportRow[]
+  subtotal_current: number
+  subtotal_prior: number
+  subtotal_budget?: BudgetComparison
+  /** Class 8 only: its rows again, in the uppställningsform's blocks, each with its sum. */
+  subgroups?: ResultatrapportSubgroup[]
+}
+
 export interface ResultatrapportReport {
   groups: ResultatrapportGroup[]
+  /**
+   * Resultat efter finansiella poster: classes 3-7 and the class-8 blocks
+   * above that line. Omitted when class 8 has no such block.
+   */
+  result_after_financial?: {
+    label: string
+    current: number
+    prior: number
+    budget?: BudgetComparison
+  }
   net_result_current: number
   net_result_prior: number
   period: { start: string; end: string }

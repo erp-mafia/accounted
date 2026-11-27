@@ -13,6 +13,8 @@ import type {
   DimensionCrossReport,
   LatestVoucherPerSeries,
   ResultatrapportReport,
+  ResultatrapportRow,
+  ResultatrapportSubgroup,
   BalansrapportReport,
   BalansrapportSection,
 } from '@/types'
@@ -388,6 +390,39 @@ export function ResultatrapportPDF({ report, company, generatedAt, filterNote, b
   // Budget, Avvikelse and Avvikelse % need the width of a landscape page.
   const hasBudget = report.budget?.applied === true
 
+  const renderRow = (row: ResultatrapportRow) => (
+    <View key={row.account_number} style={styles.row} wrap={false}>
+      <Text style={styles.colAccount}>{row.account_number}</Text>
+      <Text style={styles.colName}>{row.account_name}</Text>
+      <Text style={styles.colAmount}>{formatAmount(row.current_period)}</Text>
+      {hasBudget && <BudgetCells figures={row.budget} style={styles.colAmount} />}
+      {hasPrior && (
+        <Text style={styles.colAmountMuted}>{formatAmount(row.prior_period)}</Text>
+      )}
+    </View>
+  )
+
+  const renderSum = (label: string, current: number, prior: number, budget: BudgetComparison | undefined) => (
+    <View style={styles.subtotalRow} wrap={false}>
+      <Text style={styles.subtotalLabel}>{label}</Text>
+      <Text style={styles.subtotalAmount}>{formatAmount(current)}</Text>
+      {hasBudget && <BudgetCells figures={budget} style={styles.subtotalAmount} />}
+      {hasPrior && (
+        <Text style={[styles.subtotalAmount, { color: '#666' }]}>
+          {formatAmount(prior)}
+        </Text>
+      )}
+    </View>
+  )
+
+  const renderSubgroup = (sub: ResultatrapportSubgroup) => (
+    <View key={sub.key}>
+      <Text style={styles.subsectionHeading}>{sub.label}</Text>
+      {sub.rows.map(renderRow)}
+      {renderSum(sub.total_label, sub.subtotal_current, sub.subtotal_prior, sub.subtotal_budget)}
+    </View>
+  )
+
   return (
     <Document>
       <Page size="A4" orientation={hasBudget ? 'landscape' : 'portrait'} style={styles.page}>
@@ -422,27 +457,35 @@ export function ResultatrapportPDF({ report, company, generatedAt, filterNote, b
           // flowing onto the next page.
           <View key={group.class}>
             <Text style={styles.groupHeading}>{group.class_label}</Text>
-            {group.rows.map((row) => (
-              <View key={row.account_number} style={styles.row} wrap={false}>
-                <Text style={styles.colAccount}>{row.account_number}</Text>
-                <Text style={styles.colName}>{row.account_name}</Text>
-                <Text style={styles.colAmount}>{formatAmount(row.current_period)}</Text>
-                {hasBudget && <BudgetCells figures={row.budget} style={styles.colAmount} />}
-                {hasPrior && (
-                  <Text style={styles.colAmountMuted}>{formatAmount(row.prior_period)}</Text>
+            {group.subgroups ? (
+              // Class 8 in the resultaträkning's blocks: Resultat efter
+              // finansiella poster after the blocks above that line.
+              <>
+                {group.subgroups.filter((sub) => sub.above_result_after_financial).map(renderSubgroup)}
+                {report.result_after_financial && (
+                  <View style={styles.summaryRow} wrap={false}>
+                    <Text style={styles.summaryEmphasis}>{report.result_after_financial.label}</Text>
+                    <Text style={styles.summaryAmountEmphasis}>
+                      {formatAmount(report.result_after_financial.current)}
+                    </Text>
+                    {hasBudget && (
+                      <BudgetCells figures={report.result_after_financial.budget} style={styles.summaryAmountEmphasis} />
+                    )}
+                    {hasPrior && (
+                      <Text style={[styles.summaryAmountEmphasis, { color: '#666' }]}>
+                        {formatAmount(report.result_after_financial.prior)}
+                      </Text>
+                    )}
+                  </View>
                 )}
-              </View>
-            ))}
-            <View style={styles.subtotalRow} wrap={false}>
-              <Text style={styles.subtotalLabel}>Summa</Text>
-              <Text style={styles.subtotalAmount}>{formatAmount(group.subtotal_current)}</Text>
-              {hasBudget && <BudgetCells figures={group.subtotal_budget} style={styles.subtotalAmount} />}
-              {hasPrior && (
-                <Text style={[styles.subtotalAmount, { color: '#666' }]}>
-                  {formatAmount(group.subtotal_prior)}
-                </Text>
-              )}
-            </View>
+                {group.subgroups.filter((sub) => !sub.above_result_after_financial).map(renderSubgroup)}
+              </>
+            ) : (
+              <>
+                {group.rows.map(renderRow)}
+                {renderSum('Summa', group.subtotal_current, group.subtotal_prior, group.subtotal_budget)}
+              </>
+            )}
           </View>
         ))}
 

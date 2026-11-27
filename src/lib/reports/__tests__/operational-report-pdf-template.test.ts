@@ -221,4 +221,82 @@ describe('operational report PDFs', () => {
     },
     RENDER_TIMEOUT
   )
+
+  it(
+    'prints class 8 in its blocks with Resultat efter finansiella poster between them',
+    async () => {
+      const row = (account_number: string, account_name: string, amount: number) => ({
+        account_number,
+        account_name,
+        current_period: amount,
+        prior_period: 0,
+      })
+      const finansiella = [row('8410', 'Räntekostnader', -3000)]
+      const skatter = [row('8910', 'Skatt som belastar årets resultat', -20000)]
+      const text = pdfTextStrings(await renderToBuffer(
+        ResultatrapportPDF({
+          report: resultatrapport({
+            groups: [
+              ...resultatrapport().groups,
+              {
+                class: 8,
+                class_label: '8 Finansiella poster och bokslutsdispositioner',
+                rows: [...finansiella, ...skatter],
+                subtotal_current: -23000,
+                subtotal_prior: 0,
+                subgroups: [
+                  {
+                    key: 'finansiella_poster',
+                    label: 'Finansiella poster',
+                    total_label: 'Summa finansiella poster',
+                    above_result_after_financial: true,
+                    rows: finansiella,
+                    subtotal_current: -3000,
+                    subtotal_prior: 0,
+                  },
+                  {
+                    key: 'skatter',
+                    label: 'Skatter',
+                    total_label: 'Summa skatter',
+                    above_result_after_financial: false,
+                    rows: skatter,
+                    subtotal_current: -20000,
+                    subtotal_prior: 0,
+                  },
+                ],
+              },
+            ],
+            result_after_financial: { label: 'Resultat efter finansiella poster', current: 97000, prior: 80000 },
+            net_result_current: 77000,
+          }),
+          company: fakeCompany(),
+          generatedAt: '2026-07-28T10:00:00.000Z',
+        })
+      )).join('\n')
+
+      // Each label is looked for after the end of the one before it.
+      let from = 0
+      const missing: string[] = []
+      for (const label of [
+        '8 Finansiella poster och bokslutsdispositioner',
+        'Finansiella poster',
+        'Räntekostnader',
+        'Summa finansiella poster',
+        'Resultat efter finansiella poster',
+        'Skatter',
+        'Skatt som belastar årets resultat',
+        'Summa skatter',
+        'Beräknat resultat',
+      ]) {
+        const at = text.indexOf(label, from)
+        if (at < 0) missing.push(label)
+        else from = at + label.length
+      }
+      expect(missing).toEqual([])
+      // The line reads the report's figure; the class-8 total is not printed.
+      expect(text).toContain(`Resultat efter finansiella poster${formatAmount(97000).replace(/\s/g, ' ')}`)
+      expect(text).not.toContain('23 000,00')
+    },
+    RENDER_TIMEOUT
+  )
 })

@@ -8,12 +8,14 @@ import type {
   ResultatrapportReport,
   ResultatrapportRow,
   ResultatrapportGroup,
+  ResultatrapportSubgroup,
   TrialBalanceRow,
 } from '@/types'
 import { roundOre } from '@/lib/money'
 import { loadReportBudget, type LoadedReportBudget } from '@/lib/budgets/report-budget'
 import { figures } from '@/lib/budgets/budget-vs-actual'
 import { RESULT_CLASS_LABELS as CLASS_LABELS } from './result-class-labels'
+import { RESULT_AFTER_FINANCIAL_LABEL, splitClass8 } from './class-8-groups'
 
 /**
  * Resultatrapport: operational P&L report.
@@ -22,6 +24,10 @@ import { RESULT_CLASS_LABELS as CLASS_LABELS } from './result-class-labels'
  * values side by side. Unlike Resultaträkning (formal, ÅRL Bilaga 2), this
  * keeps account numbers and is meant for ongoing reconciliation, not for
  * årsbokslut/årsredovisning.
+ *
+ * Class 8 is split as the resultaträkning splits it (class-8-groups.ts):
+ * finansiella poster, the line Resultat efter finansiella poster,
+ * bokslutsdispositioner and skatter, each block with its own sum.
  *
  * Account 8999 is listed like any other class-8 account (#2455). It only
  * carries a balance when the user books or imports the omföring of årets
@@ -189,13 +195,16 @@ export async function generateResultatrapport(
   const priorByAccount = new Map<string, TrialBalanceRow>()
   for (const r of priorRows) priorByAccount.set(r.account_number, r)
 
-  const groups = buildGroups(currentRows, priorByAccount, budget?.info.applied ? budget : null)
+  const appliedBudget = budget?.info.applied ? budget : null
+  const groups = buildGroups(currentRows, priorByAccount, appliedBudget)
+  const resultAfterFinancial = resultAfterFinancialLine(groups, appliedBudget !== null)
 
   const netResultCurrent = sumNet(currentRows)
   const netResultPrior = sumNet(priorRows)
 
   return {
     groups,
+    ...(resultAfterFinancial ? { result_after_financial: resultAfterFinancial } : {}),
     net_result_current: roundOre(netResultCurrent),
     net_result_prior: roundOre(netResultPrior),
     period: { start: effectiveFromDate, end: effectiveToDate },
@@ -356,9 +365,52 @@ function buildGroups(
       subtotal_current: roundOre(subtotalCurrent),
       subtotal_prior: roundOre(subtotalPrior),
       ...(budget ? { subtotal_budget: comparison(subtotalBudget, subtotalCurrent) } : {}),
+      ...(klass === 8 ? { subgroups: class8Subgroups(rows, budget !== null) } : {}),
     })
   }
 
   return groups
+}
+
+/** Class 8's rows in the resultaträkning's blocks, each summed as the class is. */
+function class8Subgroups(rows: ResultatrapportRow[], withBudget: boolean): ResultatrapportSubgroup[] {
+  return splitClass8(rows, (row) => row.account_number).map(({ group, items }) => {
+    const current = items.reduce((sum, row) => sum + row.current_period, 0)
+    return {
+      key: group.key,
+      label: group.heading,
+      total_label: group.totalLabel,
+      above_result_after_financial: group.aboveResultAfterFinancial,
+      rows: items,
+      subtotal_current: roundOre(current),
+      subtotal_prior: roundOre(items.reduce((sum, row) => sum + row.prior_period, 0)),
+      ...(withBudget
+        ? { subtotal_budget: comparison(items.reduce((sum, row) => sum + (row.budget?.budget ?? 0), 0), current) }
+        : {}),
+    }
+  })
+}
+
+/**
+ * Resultat efter finansiella poster: classes 3-7 and the class-8 blocks above
+ * that line. Null when class 8 has none, as the resultaträkning prints no such
+ * line then.
+ */
+function resultAfterFinancialLine(
+  groups: ResultatrapportGroup[],
+  withBudget: boolean,
+): ResultatrapportReport['result_after_financial'] | null {
+  const above = groups.find((g) => g.class === 8)?.subgroups?.filter((s) => s.above_result_after_financial) ?? []
+  if (above.length === 0) return null
+  const parts = [...groups.filter((g) => g.class < 8), ...above]
+  const current = parts.reduce((sum, part) => sum + part.subtotal_current, 0)
+  return {
+    label: RESULT_AFTER_FINANCIAL_LABEL,
+    current: roundOre(current),
+    prior: roundOre(parts.reduce((sum, part) => sum + part.subtotal_prior, 0)),
+    ...(withBudget
+      ? { budget: comparison(parts.reduce((sum, part) => sum + (part.subtotal_budget?.budget ?? 0), 0), current) }
+      : {}),
+  }
 }
 
