@@ -8,6 +8,9 @@ import { generateARReconciliation } from '@/lib/reports/ar-reconciliation'
 import { generateReconciliation as generateAPReconciliation } from '@/lib/reports/supplier-reconciliation'
 import { computeEfDeclarationPreview } from '@/lib/bokslut/enskild-firma/ef-declaration-preview'
 import { assetRegisterDifferences } from '@/lib/bokslut/assets/register-ledger-tie-out'
+import { bankRowsBookedTwice } from '@/lib/bokslut/bank-rows-booked-twice'
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
+import { voucherPageHref } from '@/lib/bookkeeping/voucher-peek'
 import { formatCurrency } from '@/lib/utils'
 import { createLogger } from '@/lib/logger'
 import { codedRefusal } from '@/lib/errors/refusal'
@@ -250,7 +253,41 @@ async function startPeriodChecks(
     }
   })()
 
-  return { period, entityType, reconciliationRead, tieOutsRead, bilagorReminderRead, efPreviewRead, gapWarningsRead, assetRegisterReminderRead }
+  // Bank rows booked twice in the year: two or more verifikat booked from one
+  // row that stand with the same lines, so the bank account carries the row
+  // more than once. The extra copies are named by voucher number, so the owner
+  // can reverse them. Advisory: a failed read costs only this reminder.
+  const bankRowsBookedTwiceReminderRead = (async (): Promise<BokslutReminder | null> => {
+    try {
+      const rows = await bankRowsBookedTwice(supabase, companyId, fiscalPeriodId)
+      const extras = rows
+        .flatMap((row) => row.extras)
+        .sort(
+          (a, b) =>
+            (a.voucher_series ?? 'A').localeCompare(b.voucher_series ?? 'A') ||
+            (a.voucher_number ?? 0) - (b.voucher_number ?? 0),
+        )
+      if (extras.length === 0) return null
+      const named = extras.slice(0, 3).map((e) => formatVoucher(e)).join(', ')
+      const more = extras.length > 3 ? ` (och ${extras.length - 3} till)` : ''
+      const head = rows.length === 1 ? '1 banktransaktion är bokförd' : `${rows.length} banktransaktioner är bokförda`
+      const copies =
+        extras.length === 1
+          ? `verifikat ${named} är en extra kopia. Återför den med en storno`
+          : `verifikat ${named}${more} är extra kopior. Återför varje extra kopia med en storno`
+      return {
+        code: 'bank_row_booked_twice',
+        severity: 'warning',
+        message: `${head} mer än en gång med samma rader: ${copies}, så att bankkontot stämmer med banken.`,
+        href: voucherPageHref(extras[0].journal_entry_id),
+      }
+    } catch (err) {
+      log.warn('bank rows booked twice reminder failed', { companyId, fiscalPeriodId, error: err instanceof Error ? err.message : String(err) })
+      return null
+    }
+  })()
+
+  return { period, entityType, reconciliationRead, tieOutsRead, bilagorReminderRead, efPreviewRead, gapWarningsRead, assetRegisterReminderRead, bankRowsBookedTwiceReminderRead }
 }
 
 /**
@@ -355,7 +392,7 @@ export async function buildBokslutReadinessReport(
   if (!periodResult.data || !checks) {
     throw codedRefusal('PERIOD_NOT_FOUND', 'Fiscal period not found')
   }
-  const { period, entityType, reconciliationRead, tieOutsRead, bilagorReminderRead, efPreviewRead, gapWarningsRead, assetRegisterReminderRead } =
+  const { period, entityType, reconciliationRead, tieOutsRead, bilagorReminderRead, efPreviewRead, gapWarningsRead, assetRegisterReminderRead, bankRowsBookedTwiceReminderRead } =
     checks
 
   const reconciliation = await reconciliationRead
@@ -372,6 +409,9 @@ export async function buildBokslutReadinessReport(
       href: '/reconciliation',
     })
   }
+
+  const bankRowsBookedTwiceReminder = await bankRowsBookedTwiceReminderRead
+  if (bankRowsBookedTwiceReminder) reminders.push(bankRowsBookedTwiceReminder)
 
   if (tieOutsRead) {
     const [arResult, apResult] = await tieOutsRead
