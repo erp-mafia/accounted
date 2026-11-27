@@ -1,4 +1,4 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
+import type { PostgrestError, SupabaseClient } from '@supabase/supabase-js'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import {
@@ -7,6 +7,7 @@ import {
 } from '@/lib/bookkeeping/accruals/from-invoices'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
+import { latestSentDeliveryDocumentId } from '@/lib/invoices/invoice-pdf-source'
 import type { Logger } from '@/lib/logger'
 import type { Customer, EntityType, Invoice, InvoiceItem } from '@/types'
 import { linkBasisColumns } from '@/lib/links/stamp'
@@ -45,6 +46,40 @@ export type BookInvoiceDeferredResult =
       errorCode: string
       details?: Record<string, unknown>
     }
+
+/**
+ * The PDF the customer was emailed (latestSentDeliveryDocumentId), read
+ * through the masked delivery history, never invoice_deliveries itself, whose
+ * row holds the mail's exact payload. The session's reader serves a person's
+ * own session. On the service role (the MCP, v1 and grant doors) auth.uid()
+ * is null and it refuses with 42501, so the history is read through its
+ * sibling, which names the acting member and checks that membership itself.
+ * A session has no EXECUTE on the sibling, so a refusal there stands.
+ */
+async function deliveredInvoiceDocument(
+  supabase: SupabaseClient,
+  companyId: string,
+  invoiceId: string,
+  userId: string,
+): Promise<
+  | { ok: true; documentId: string | null }
+  | { ok: false; error: PostgrestError; sessionError?: PostgrestError }
+> {
+  const session = await supabase.rpc('list_invoice_delivery_summaries', {
+    p_company_id: companyId,
+    p_invoice_id: invoiceId,
+  })
+  if (!session.error) return { ok: true, documentId: latestSentDeliveryDocumentId(session.data ?? []) }
+  if (session.error.code !== '42501') return { ok: false, error: session.error }
+
+  const service = await supabase.rpc('list_invoice_delivery_summaries_for_service', {
+    p_company_id: companyId,
+    p_user_id: userId,
+    p_invoice_id: invoiceId,
+  })
+  if (service.error) return { ok: false, error: service.error, sessionError: session.error }
+  return { ok: true, documentId: latestSentDeliveryDocumentId(service.data ?? []) }
+}
 
 /**
  * The deferred "Bokför" core (#967): create the revenue verifikat for an
@@ -129,20 +164,23 @@ export async function bookInvoiceDeferred(opts: {
 
   // The send flow archived the exact delivered PDF before this deferred
   // journal entry existed. Attach the newest successful delivery snapshot now.
-  const { data: deliveryDocumentId, error: deliveryDocumentError } = await supabase.rpc(
-    'latest_sent_invoice_delivery_document',
-    { p_company_id: companyId, p_invoice_id: id },
-  )
+  const delivered = await deliveredInvoiceDocument(supabase, companyId, id, userId)
+  const deliveryDocumentId = delivered.ok ? delivered.documentId : null
 
-  if (deliveryDocumentError) {
-    log.error('failed to find delivered invoice PDF for deferred booking', deliveryDocumentError, {
+  if (!delivered.ok) {
+    // The last reader's refusal; when the service reader was asked, the
+    // session's (expected on the service role) rides along.
+    log.error('failed to find delivered invoice PDF for deferred booking', delivered.error, {
       invoiceId: id,
+      ...(delivered.sessionError
+        ? { sessionReadCode: delivered.sessionError.code, sessionReadError: delivered.sessionError.message }
+        : {}),
     })
     warnings.push({
       code: 'PDF_LINK_FAILED',
       message: 'Fakturan bokfördes, men den arkiverade PDF-filen kunde inte kopplas till verifikationen.',
     })
-  } else if (typeof deliveryDocumentId === 'string') {
+  } else if (deliveryDocumentId) {
     try {
       await linkToJournalEntry(
         supabase,

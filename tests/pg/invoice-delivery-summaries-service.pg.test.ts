@@ -304,3 +304,33 @@ describe('list_invoice_delivery_summaries_for_service: masked result', () => {
     })
   })
 })
+
+// The deferred Bokför step (lib/invoices/book-invoice-deferred.ts) reads the
+// session's delivery history and, when that refuses with 42501, this sibling
+// naming the acting member. The MCP, v1 and grant doors book on the service
+// role, where the session readers refuse every call, so the emailed PDF was
+// left off the verifikat. Both answers the step relies on are pinned here.
+describe('the deferred Bokför step on the service role', () => {
+  it('is refused by the session readers and served the emailed file by the sibling', async () => {
+    const a = await seedCompany()
+    const invoiceId = await insertInvoice({ userId: a.userId, companyId: a.companyId })
+    const documentAttachmentId = await insertDocumentAttachment({ userId: a.userId, companyId: a.companyId })
+    await insertSentEmailDelivery({ companyId: a.companyId, userId: a.userId, invoiceId, documentAttachmentId })
+
+    await expect(
+      withServiceRoleContext((client) =>
+        client.query(`SELECT * FROM public.list_invoice_delivery_summaries($1, $2)`, [a.companyId, invoiceId]),
+      ),
+    ).rejects.toMatchObject({ code: '42501' })
+    await expect(
+      withServiceRoleContext((client) =>
+        client.query(`SELECT public.latest_sent_invoice_delivery_document($1, $2)`, [a.companyId, invoiceId]),
+      ),
+    ).rejects.toMatchObject({ code: '42501' })
+
+    const res = await withServiceRoleContext((client) => client.query(FN, [a.companyId, a.userId, invoiceId]))
+    expect(res.rows).toEqual([
+      expect.objectContaining({ status: 'sent', document_attachment_id: documentAttachmentId, sent_at: expect.anything() }),
+    ])
+  })
+})
