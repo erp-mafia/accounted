@@ -61,11 +61,16 @@ export async function anchorCustomerInvoiceDocument(
     // CHECK constraint forbids it).
     const delivered = await deliveredInvoiceDocument(supabase, companyId, invoiceId, userId)
     if (!delivered.ok) {
+      // The last reader's refusal; when the service reader was asked, the
+      // session's rides along (on a session it names the cause).
       log.warn('could not read the delivery history; customer invoice document left floating', {
         companyId,
         invoiceId,
         code: delivered.error.code,
         reason: delivered.error.message,
+        ...(delivered.sessionError
+          ? { sessionReadCode: delivered.sessionError.code, sessionReadError: delivered.sessionError.message }
+          : {}),
       })
       return null
     }

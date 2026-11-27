@@ -1,6 +1,27 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase } from '@/tests/helpers'
+
+// The warn level is recorded and passed on to the real logger: a history the
+// anchor cannot read must say so.
+const logWarn = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/logger', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/logger')>()
+  return {
+    ...actual,
+    createLogger: (module: string, base?: Parameters<typeof actual.createLogger>[1]) => {
+      const real = actual.createLogger(module, base)
+      return {
+        ...real,
+        warn: (message: string, ...args: unknown[]) => {
+          logWarn(message, ...args)
+          real.warn(message, ...args)
+        },
+      }
+    },
+  }
+})
+
 import { anchorCustomerInvoiceDocument } from '../customer-invoice-underlag'
 
 /**
@@ -103,6 +124,26 @@ describe('anchorCustomerInvoiceDocument', () => {
     expect(await anchorCustomerInvoiceDocument(sb(supabase), 'company-1', 'inv-1', 'user-1')).toBeNull()
     // Nothing past the history: no document read, no UPDATE.
     expect(supabase.from).toHaveBeenCalledTimes(1)
+    expect(logWarn).toHaveBeenCalledWith(
+      'could not read the delivery history; customer invoice document left floating',
+      expect.objectContaining({ invoiceId: 'inv-1', code: '42501', sessionReadCode: '42501' }),
+    )
+  })
+
+  it('does not ask the service reader when the session read fails for another reason', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: { id: 'inv-1', journal_entry_id: null } },
+      { data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } },
+    ])
+
+    expect(await anchorCustomerInvoiceDocument(sb(supabase), 'company-1', 'inv-1', 'user-1')).toBeNull()
+    expect(supabase.rpc).toHaveBeenCalledTimes(1)
+    expect(supabase.from).toHaveBeenCalledTimes(1)
+    expect(logWarn).toHaveBeenCalledWith(
+      'could not read the delivery history; customer invoice document left floating',
+      expect.not.objectContaining({ sessionReadCode: expect.anything() }),
+    )
   })
 
   it('prefers the registration verifikat when the invoice has one', async () => {
