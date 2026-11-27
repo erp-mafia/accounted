@@ -1104,6 +1104,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/extensions/ext/zettle/sync': gap('P3', EXT_SYNC),
   'POST /api/extensions/ext/zettle/backfill': covered(['gnubok_backfill_feed']),
   'POST /api/extensions/ext/zettle/transaction-sync': gap('P3', EXT_SYNC_SWITCH),
+  'POST /api/extensions/ext/zettle/organization-name': gap('P3', 'name the Zettle store shown as Butik on the Orders page; no door'),
 }
 
 /**
@@ -1195,4 +1196,4 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * pull request raised 160 -> 161 beside the one above, and the two merged as
  * one raise.
  */
-export const GAP_CEILING = 162
+export const GAP_CEILING = 163

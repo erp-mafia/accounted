@@ -718,6 +718,7 @@ const POS_AND_WEBSHOP: PackageDoors = {
     'POST /api/extensions/ext/woocommerce/transaction-sync',
     'POST /api/extensions/ext/zettle/backfill',
     'DELETE /api/extensions/ext/zettle/disconnect',
+    'POST /api/extensions/ext/zettle/organization-name',
     'POST /api/extensions/ext/zettle/sync',
     'POST /api/extensions/ext/zettle/transaction-sync',
     'POST /api/pos-sales/connections/:id/disconnect',

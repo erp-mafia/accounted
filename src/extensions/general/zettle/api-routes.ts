@@ -11,10 +11,12 @@ import { DEFAULT_PAYMENT_ACCOUNT } from '@/lib/webshop-orders/booking-lines'
 import { isZettleConfigured, refreshTokenOf } from './lib/credentials'
 import { buildAuthorizeUrl, disconnectApplication, refreshAccessToken } from './lib/oauth'
 import { syncZettlePurchases, type ZettleSyncSummary } from './lib/order-sync'
+import { parseZettleOrganizationName } from './lib/organization-name'
 import { MAX_BACKFILL_YEARS } from './types'
 import type { ZettleConnection } from './types'
 
 const RATE_LIMIT_CONNECT = { maxRequests: 10, windowMs: 60_000 }
+const RATE_LIMIT_RENAME = { maxRequests: 20, windowMs: 60_000 }
 
 const NOT_CONFIGURED_MESSAGE =
   'Zettle-integrationen är inte konfigurerad på den här installationen.'
@@ -56,6 +58,57 @@ async function guardConnectPreconditions(ctx: ExtensionContext): Promise<NextRes
   const sandboxBlocked = await guardSandbox(ctx.supabase, ctx.companyId)
   if (sandboxBlocked) return sandboxBlocked
   return requireCapability(ctx.supabase, ctx.companyId, CAPABILITY.zettle_sync)
+}
+
+/**
+ * POST /organization-name: the merchant names the store. Zettle's users/self
+ * carries no name, so Accounted holds it in zettle_connections.organization_name
+ * and copies it to webshop_orders.store_label (Butik on the Orders page).
+ * One RPC renames the connection and backfills the orders in one transaction,
+ * so two concurrent renames cannot leave the orders on an older name.
+ */
+async function handlePostOrganizationName(request: Request, ctx: ExtensionContext): Promise<NextResponse> {
+  const blocked = await requireCapability(ctx.supabase, ctx.companyId, CAPABILITY.zettle_sync)
+  if (blocked) return blocked
+
+  const rl = await checkRateLimit({
+    prefix: 'zettle:organization-name',
+    identifier: ctx.userId,
+    ...RATE_LIMIT_RENAME,
+  })
+  if (!rl.ok) return rl.response!
+
+  const body = (await request.json().catch(() => ({}))) as { organization_name?: unknown }
+  const parsed = parseZettleOrganizationName(body.organization_name)
+  if (!parsed.ok) {
+    return NextResponse.json({ error: parsed.error }, { status: 400 })
+  }
+
+  const { data: result, error: renameError } = await ctx.supabase.rpc('rename_zettle_store', {
+    p_company_id: ctx.companyId,
+    p_name: parsed.name,
+  })
+  if (renameError) {
+    ctx.log.error('[zettle] Failed to rename the store', {
+      message: renameError.message,
+      code: renameError.code,
+      companyId: ctx.companyId,
+    })
+    return NextResponse.json({ error: 'Kunde inte spara butiksnamnet. Försök igen.' }, { status: 500 })
+  }
+
+  const outcome = (result ?? {}) as { updated?: boolean; backfilled?: boolean }
+  if (!outcome.updated) {
+    return NextResponse.json({ error: zettleFeed.notConnectedMessage }, { status: 404 })
+  }
+  if (outcome.backfilled === false) {
+    return NextResponse.json({
+      success: true,
+      organization_name: parsed.name,
+      warning: 'Namnet sparades, men befintliga ordrar kunde inte uppdateras.',
+    })
+  }
+  return NextResponse.json({ success: true, organization_name: parsed.name })
 }
 
 export const zettleApiRoutes: ApiRouteDefinition[] = [
@@ -135,6 +188,11 @@ export const zettleApiRoutes: ApiRouteDefinition[] = [
         return NextResponse.json({ error: NOT_CONFIGURED_MESSAGE }, { status: 503 })
       }
     },
+  },
+  {
+    method: 'POST',
+    path: '/organization-name',
+    handler: handlePostOrganizationName,
   },
   ...feedConnectorRoutes(zettleFeed),
 ]

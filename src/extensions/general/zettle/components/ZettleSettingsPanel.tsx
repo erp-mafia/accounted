@@ -16,18 +16,25 @@ import {
   ZETTLE_SYNC_TIMEOUT_MS,
   type ZettleSyncPayload,
 } from '../lib/settings-actions'
+import { zettleStoreDisplayName } from '../lib/organization-name'
 import { MAX_BACKFILL_YEARS } from '../types'
 import type { ZettleStatusResponse } from '../types'
+import { StoreNameRow } from './StoreNameRow'
 
 type ConnectionInfo = NonNullable<ZettleStatusResponse['connection']>
 
-/** Zettle on the shared feed panel; connecting is an OAuth round trip to Zettle. */
+/**
+ * Zettle on the shared feed panel; connecting is an OAuth round trip to Zettle.
+ * Zettle gives no store name, so the card carries a row to name the store.
+ */
 export default function ZettleSettingsPanel() {
   const t = useTranslations('zettle')
   const tf = useTranslations('feed_connector')
   const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const [connecting, setConnecting] = useState(false)
+  // Names saved on this page, so the card's heading follows a rename at once.
+  const [savedNames, setSavedNames] = useState<Record<string, string>>({})
 
   return (
     <FeedConnectorPanel<ConnectionInfo, ZettleSyncPayload>
@@ -38,16 +45,25 @@ export default function ZettleSettingsPanel() {
       syncTimeoutMs={ZETTLE_SYNC_TIMEOUT_MS}
       maxBackfillYears={MAX_BACKFILL_YEARS}
       summarize={syncSummary}
+      // The organization UUID is an identifier, never the store's name.
       identity={(c) => ({
-        name: c.organization_name || c.organization_uuid || t('unnamed_store'),
-        detail: c.organization_name ? c.organization_uuid : null,
+        name: zettleStoreDisplayName(savedNames[c.id] ?? c.organization_name),
+        detail: c.organization_uuid,
       })}
       lastSyncedAt={(c) => c.last_order_synced_at}
       // The store scope is the organization UUID (client twin of
       // zettleStoreScope(), which is the identity).
       renderExtras={(c) =>
-        c.status === 'active' && c.organization_uuid ? (
-          <PaymentMethodMappingForm platform="zettle" storeScope={c.organization_uuid} />
+        c.status === 'active' ? (
+          <>
+            <StoreNameRow
+              storedName={savedNames[c.id] ?? c.organization_name}
+              onSaved={(name) => setSavedNames((prev) => ({ ...prev, [c.id]: name }))}
+            />
+            {c.organization_uuid && (
+              <PaymentMethodMappingForm platform="zettle" storeScope={c.organization_uuid} />
+            )}
+          </>
         ) : null
       }
       renderConnect={({ failureCopy }) => {
