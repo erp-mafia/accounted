@@ -397,3 +397,46 @@ describe('TIC lookup route: SCB fallback after a miss', () => {
     warn.mockRestore()
   })
 })
+
+// The register as core asks for it (lib/company-lookup/registry-lookup.ts,
+// behind POST /api/v1/.../company-lookup): the extension's service, never a
+// throw for the register's own failures.
+describe('TIC lookup service for core', () => {
+  const service = ticExtension.services!.lookupCompanyByOrgNumber as (
+    orgNumber: string,
+    charge?: { purpose?: unknown; subject?: unknown },
+  ) => Promise<unknown>
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('answers the company, charged as core asked', async () => {
+    mockSearch.mockResolvedValue(mockDoc)
+    const out = (await service('5560360793', { purpose: 'mcp_lookup', subject: 'user-1' })) as { status: string; result: { companyName: string } }
+    expect(out.status).toBe('found')
+    expect(out.result.companyName).toBe('Test AB')
+    expect(mockSearch).toHaveBeenCalledWith('5560360793', { purpose: 'mcp_lookup', subject: 'user-1' })
+  })
+
+  it('answers a miss as not_found, and a purpose it does not know as other', async () => {
+    mockSearch.mockResolvedValue(null)
+    expect(await service('5560360793', { purpose: 'everything', subject: 42 })).toEqual({ status: 'not_found' })
+    expect(mockSearch).toHaveBeenCalledWith('5560360793', { purpose: 'other', subject: null })
+  })
+
+  it.each([
+    ['NOT_CONFIGURED', 'not_configured'],
+    ['RATE_LIMIT_EXCEEDED', 'rate_limited'],
+    ['TIMEOUT', 'timeout'],
+    [undefined, 'registry_error'],
+  ])('answers TIC\'s %s as unavailable: %s', async (code, reason) => {
+    mockSearch.mockRejectedValue(new TICAPIError('TIC failed', 503, code))
+    expect(await service('5560360793', { purpose: 'mcp_lookup', subject: 'user-1' })).toEqual({ status: 'unavailable', reason })
+  })
+
+  it('lets an error that is not the register\'s through', async () => {
+    mockSearch.mockRejectedValue(new TypeError('boom'))
+    await expect(service('5560360793')).rejects.toThrow('boom')
+  })
+})

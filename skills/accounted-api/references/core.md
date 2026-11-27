@@ -2,7 +2,7 @@
 
 # Core endpoints
 
-Connectivity, the calling key's own grant, company discovery, which modules a company can use (capabilities), its packages with their status and the staged switch (packages), async-operation polling, company settings, and service accounts (an integration's own principal, with a human sponsor). Every session starts with GET /companies to resolve the companyId that all other URLs need.
+Connectivity, the calling key's own grant, company discovery, a company in the public register by organisationsnummer (company-lookup), which modules a company can use (capabilities), its packages with their status and the staged switch (packages), async-operation polling, company settings, and service accounts (an integration's own principal, with a human sponsor). Every session starts with GET /companies to resolve the companyId that all other URLs need.
 
 Conventions (auth, envelope, pagination, dry-run, idempotency, standard errors)
 are in SKILL.md and are not repeated per endpoint.
@@ -351,6 +351,98 @@ Example response `200`:
   },
   "meta": {
     "request_id": "req_...",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/company-lookup`
+
+**Look up a Swedish company in the public register by organisationsnummer.**
+`scope:companies:read · risk:low · idempotent`
+
+Asks the public company register for the company behind an organisationsnummer: its registered name, address, legal form, F-skatt and VAT registration, fiscal year, registration date and SNI codes, and whether it has ceased. status found answers the company; not_found means the register knows no such number; unavailable means the register could not be asked (reason). The same register answer accounted_lookup_company gives over MCP. A read sent as POST, so the number (a sole trader's is a personnummer) stays out of URLs and logs.
+
+**Use when:** Before creating a customer or supplier from an organisationsnummer, or to check a counterparty's name, address, F-skatt or VAT registration.
+**Do not use for:** The company's own settings (GET /settings), Bankgirot's name for a giro number (GET /payments/creditor-lookup), or searching the register by name.
+
+**Pitfalls:**
+- Every lookup the register is asked spends from a shared monthly budget, with a daily cap per user: past it the answer is unavailable, reason rate_limited, until the next day. Keep the answer instead of asking again.
+- A newly registered company can take days to appear: not_found is the register's answer today, not proof the number is wrong.
+- vat_registered false also covers a register that says nothing: confirm VAT with the company before invoicing without it.
+- A sole trader's number is the owner's personnummer, and the register answers the owner's name: treat the answer as personal data.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+
+Request body:
+```ts
+{ org_number: string }
+```
+
+Example request:
+```json
+{
+  "org_number": "556677-8899"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    status: "found" | "not_found" | "unavailable",
+    company: { name: string, org_number: string, legal_entity_type: string | null, is_ceased: boolean, address: { street: string | null, postal_code: string | null, city: string | null } | null, f_skatt: boolean, vat_registered: boolean, fiscal_year: { start_month_day: string | null, end_month_day: string | null } | null, registration_date: string | null, sni_codes: { code: string, name: string }[] } | null,
+    reason: "not_configured" | "rate_limited" | "timeout" | "registry_error" | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string }, payment_order_id?: string, supplier_invoice_id?: string }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "status": "found",
+    "company": {
+      "name": "Exempelbolaget AB",
+      "org_number": "5566778899",
+      "legal_entity_type": "AB",
+      "is_ceased": false,
+      "address": {
+        "street": "Storgatan 1",
+        "postal_code": "111 22",
+        "city": "Stockholm"
+      },
+      "f_skatt": true,
+      "vat_registered": true,
+      "fiscal_year": {
+        "start_month_day": "01-01",
+        "end_month_day": "12-31"
+      },
+      "registration_date": "2018-03-01",
+      "sni_codes": [
+        {
+          "code": "62010",
+          "name": "Dataprogrammering"
+        }
+      ]
+    },
+    "reason": null
+  },
+  "meta": {
+    "request_id": "req_…",
     "api_version": "2026-05-12"
   }
 }

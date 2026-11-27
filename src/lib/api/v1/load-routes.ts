@@ -398,6 +398,8 @@ import '@/app/api/v1/companies/[companyId]/payment-orders/verification/start/rou
 import '@/app/api/v1/companies/[companyId]/payment-orders/signing-link/route'
 // Bankgiro Lookup (premium, behind OPENPAYMENTS_BANKGIRO_LOOKUP).
 import '@/app/api/v1/companies/[companyId]/payments/creditor-lookup/route'
+// The public company register by organisationsnummer (company-lookup.get).
+import '@/app/api/v1/companies/[companyId]/company-lookup/route'
 import '@/app/api/v1/companies/[companyId]/payments/giro-numbers/route'
 // The payment signing link: someone without a login signs approved payments with BankID (operation payment-signing-links.create).
 import '@/app/api/v1/companies/[companyId]/payments/signing-links/route'
