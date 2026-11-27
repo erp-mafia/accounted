@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { dbError } from '@/lib/errors/db-error'
 import { createLogger } from '@/lib/logger'
 import { chunk } from '@/lib/utils'
 import { ID_READ_CHUNK } from '@/lib/supabase/read-in-slices'
@@ -37,11 +38,15 @@ export async function hasStoredPages(supabase: SupabaseClient, documentId: strin
 /**
  * Fills the type of every booked row that has none from its current
  * classification, in place. Best effort: a failed lookup leaves the rows as
- * they are and is logged, since a list is better untyped than absent.
+ * they are and is logged, since a list is better untyped than absent. With
+ * `strict`, a failed lookup throws instead: for an answer whose type must
+ * agree with a filter on it or with a preview pinned to it (the v1 list, a
+ * dry run).
  */
 export async function fillTypeFromClassification<T extends { id: string; doc_type: string | null; journal_entry_id?: string | null; journal_entry_line_id?: string | null }>(
   supabase: SupabaseClient,
   rows: T[],
+  options: { strict?: boolean } = {},
 ): Promise<T[]> {
   const ids = rows.filter((r) => r.doc_type == null && isBookedRow(r)).map((r) => r.id)
   if (ids.length === 0) return rows
@@ -51,6 +56,7 @@ export async function fillTypeFromClassification<T extends { id: string; doc_typ
   for (const slice of chunk(ids, ID_READ_CHUNK)) {
     const { data, error } = await supabase.from('document_classifications').select('document_id, doc_type').in('document_id', slice).eq('is_current', true)
     if (error) {
+      if (options.strict) throw dbError(error, 'classification lookup failed')
       log.warn('classification lookup failed', { documents: ids.length, reason: error.message })
       return rows
     }

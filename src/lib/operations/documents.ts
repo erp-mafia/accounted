@@ -26,6 +26,7 @@ import { z } from 'zod'
 import { AttachDocumentSchema } from '@/lib/api/schemas'
 import { getDocumentMetadata, listDocumentsPage, removeDocument } from '@/lib/documents/document-actions'
 import { setDocumentTypeByPerson } from '@/lib/documents/classify/set-type'
+import { fillTypeFromClassification } from '@/lib/documents/locked-period'
 import { DOC_TYPES } from '@/lib/documents/classify/taxonomy'
 import { FOLDER_ORDER } from '@/lib/arkiv/folders'
 import { typesFor } from '@/lib/arkiv/list-records'
@@ -489,13 +490,21 @@ export const documentsSetType = defineOperation({
     if (dryRun) {
       const { data, error } = await ctx.supabase
         .from('document_attachments')
-        .select('id, file_name, doc_type')
+        .select('id, file_name, doc_type, journal_entry_id, journal_entry_line_id')
         .eq('id', document_id)
         .eq('company_id', ctx.companyId)
         .maybeSingle()
       if (error) return { ok: false, code: 'UNKNOWN_ERROR', error }
       if (!data) return { ok: false, code: 'DOC_NOT_FOUND' }
-      const row = data as { id: string; file_name: string; doc_type: string | null }
+      const row = data as { id: string; file_name: string; doc_type: string | null; journal_entry_id: string | null; journal_entry_line_id: string | null }
+      // The type the document shows now (GET /documents/{id}): a booked one
+      // typed after its period closed keeps it on the classification, and a
+      // pinned preview must notice when that changes.
+      try {
+        await fillTypeFromClassification(ctx.supabase, [row], { strict: true })
+      } catch (err) {
+        return { ok: false, code: 'UNKNOWN_ERROR', error: err }
+      }
       return {
         ok: true,
         dryRun: true,

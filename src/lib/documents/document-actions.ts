@@ -183,8 +183,14 @@ export async function listDocumentsPage(
   const rows = (data ?? []) as unknown as DocumentRow[]
   const page = rows.slice(0, limit)
   const last = page[page.length - 1]
-  // A booked document typed after its period closed keeps the type on its classification.
-  await fillTypeFromClassification(ctx.supabase, page)
+  // A booked document typed after its period closed keeps the type on its
+  // classification. Strict: a page whose type failed to read would contradict
+  // its own doc_type filter.
+  try {
+    await fillTypeFromClassification(ctx.supabase, page, { strict: true })
+  } catch (err) {
+    return failed(err)
+  }
   return {
     ok: true,
     data: {
@@ -215,7 +221,11 @@ export async function getDocumentMetadata(
   if (!data) return NOT_FOUND
   const row = data as unknown as DocumentDetailRow
   // The type the list shows, read the same way (the reading below names it too).
-  await fillTypeFromClassification(ctx.supabase, [row])
+  try {
+    await fillTypeFromClassification(ctx.supabase, [row], { strict: true })
+  } catch (err) {
+    return failed(err)
+  }
 
   const [{ data: txs, error: txError }, { data: inbox, error: inboxError }] = await Promise.all([
     ctx.supabase

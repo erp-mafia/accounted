@@ -155,6 +155,14 @@ describe('PUT /api/v1/companies/:companyId/documents/:id/type', () => {
     expect(mock.payloads('pending_operations', 'insert')).toHaveLength(0)
   })
 
+  it('previews the type a booked document shows when its period lock kept the type on the classification', async () => {
+    const mock = db({ id: DOC_ID, file_name: 'kvitto.pdf', doc_type: null, journal_entry_id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', journal_entry_line_id: null })
+    mock.setTable('document_classifications', { data: [{ document_id: DOC_ID, doc_type: 'receipt' }] })
+    const res = await put({ doc_type: 'supplier_invoice' }, '?dry_run=true')
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.preview).toMatchObject({ doc_type_before: 'receipt', current_type: 'Kvitto', doc_type: 'supplier_invoice' })
+  })
+
   it('sets the type as the key\'s person, through the service role, in the key\'s company', async () => {
     db({ id: DOC_ID, file_name: 'protokoll.pdf', doc_type: 'other' })
     mockSetType.mockResolvedValue({ status: 'set', documentId: DOC_ID, docType: 'minutes.board', previousDocType: 'other', withdrawnAgreementId: null })

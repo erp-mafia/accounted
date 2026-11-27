@@ -250,6 +250,21 @@ describe('GET /api/v1/companies/:companyId/documents: doc_type', () => {
     expect(calls).toContainEqual(expect.objectContaining({ method: 'is', args: ['journal_entry_id', null] }))
   })
 
+  it('answers an error, not a page that contradicts its own filter, when the type cannot be read', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      document_attachments: { data: [docRow({ id: BOOKED_ID, journal_entry_id: JE_ID })], error: null },
+      document_classifications: { data: null, error: { message: 'canceling statement due to statement timeout' } },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await get('?doc_type=receipt')
+    // A statement timeout is the retryable 503; no page is answered.
+    expect(res.status).toBe(503)
+    const body = await res.json()
+    expect(body.data).toBeUndefined()
+    expect(body.error.code).toEqual(expect.any(String))
+  })
+
   it.each(['invoice', 'booked', 'receipt,other'])('400 on doc_type=%s, which is neither a type, a folder nor untyped', async (value) => {
     const client = makeClient({ company_members: MEMBER })
     mockServiceClient.mockReturnValue(client)
