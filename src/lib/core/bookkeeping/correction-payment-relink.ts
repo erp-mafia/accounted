@@ -1,5 +1,6 @@
 /**
- * The payment rows of a corrected verifikat follow the correction.
+ * The payment rows of a corrected verifikat follow the correction, and so
+ * does the pointer of the invoice the verifikat books.
  *
  * A payment verifikat (invoice_paid, invoice_cash_payment and the supplier
  * pair) has a mirror outside the ledger: the invoice_payments or
@@ -26,13 +27,80 @@
  * correction_of_id chain keeps it traceable. A payment row with a bank row is
  * held to the same anchor rule as the bank row (guard_cash_transaction_anchor):
  * when the correction takes the bank leg out, the row stays where it was.
+ *
+ * The invoice's own verifikat pointer follows the correction too
+ * (relinkRegistrationPointersToEntry). invoices.journal_entry_id and
+ * supplier_invoices.registration_journal_entry_id name the verifikat that
+ * books the invoice or the credit note: the receivable or the skuld.
+ * correctEntry reverses that verifikat and posts the corrected one in its
+ * place. Left behind, the invoice names the reversed original, and the
+ * corrected verifikat that now carries the receivable or the skuld has no
+ * invoice: what reads the pointer from either side (the underlag references
+ * and counts of a verifikat among others) gets the wrong verifikat.
+ *
+ * That move skips no source type. The pointer equals the original's id
+ * exactly when the original is the invoice's verifikat, which its source type
+ * does not say: beside the registration doors (invoice_created, credit_note,
+ * supplier_invoice_registered, supplier_credit_note) an invoice is linked to
+ * a verifikat that was already in the books, the imported voucher of a
+ * migrated invoice (link-migrated-registration-vouchers.ts) or any posted
+ * voucher that booked it (register-booked.ts, register-booked-invoice.ts),
+ * and a corrected registration is itself corrected under 'correction'. A
+ * filter would save two indexed updates that match no row, and would leave
+ * those pointers on the reversed original.
+ *
+ * One trigger guards the two columns: guard_kontantmetod_carry_link holds the
+ * pointer of a posted kontantmetod year-end carry. It does not meet this move,
+ * since correctEntry refuses to correct a carry and the original is
+ * 'reversed' before its pointers are moved. A refusal, from it or from
+ * anything else, leaves the row where it is and is returned like the others.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { isPaymentSourceType } from '@/lib/bookkeeping/payment-sync'
 import type { JournalEntry } from '@/types'
 
+type EntryPointer = { readonly table: string; readonly column: string }
+
+const PAYMENT_ROW_POINTERS: readonly EntryPointer[] = [
+  { table: 'invoice_payments', column: 'journal_entry_id' },
+  { table: 'supplier_invoice_payments', column: 'journal_entry_id' },
+  { table: 'supplier_invoices', column: 'payment_journal_entry_id' },
+]
+
+const REGISTRATION_POINTERS: readonly EntryPointer[] = [
+  { table: 'invoices', column: 'journal_entry_id' },
+  { table: 'supplier_invoices', column: 'registration_journal_entry_id' },
+]
+
 export function correctionCarriesPaymentRows(sourceType: string | null | undefined): boolean {
   return sourceType === 'correction' || isPaymentSourceType(sourceType)
+}
+
+/** Each pointer in turn, company-scoped; the first failure is returned, every failure logged. */
+async function moveEntryPointers(
+  supabase: SupabaseClient,
+  companyId: string,
+  fromEntryId: string,
+  toEntryId: string,
+  pointers: readonly EntryPointer[],
+  caller: string,
+): Promise<string | undefined> {
+  let firstError: string | undefined
+  for (const { table, column } of pointers) {
+    const { error } = await supabase
+      .from(table)
+      .update({ [column]: toEntryId })
+      .eq('company_id', companyId)
+      .eq(column, fromEntryId)
+    if (error) {
+      console.error(
+        `[storno] ${caller}: failed to move ${table}.${column} ${fromEntryId} → ${toEntryId}:`,
+        error.message,
+      )
+      firstError ??= error.message
+    }
+  }
+  return firstError
 }
 
 export async function relinkPaymentRowsToEntry(
@@ -42,27 +110,14 @@ export async function relinkPaymentRowsToEntry(
   toEntryId: string,
 ): Promise<string | undefined> {
   if (!correctionCarriesPaymentRows(original.source_type)) return undefined
+  return moveEntryPointers(supabase, companyId, original.id, toEntryId, PAYMENT_ROW_POINTERS, 'relinkPaymentRowsToEntry')
+}
 
-  const moves = [
-    { table: 'invoice_payments', column: 'journal_entry_id' },
-    { table: 'supplier_invoice_payments', column: 'journal_entry_id' },
-    { table: 'supplier_invoices', column: 'payment_journal_entry_id' },
-  ] as const
-
-  let firstError: string | undefined
-  for (const { table, column } of moves) {
-    const { error } = await supabase
-      .from(table)
-      .update({ [column]: toEntryId })
-      .eq('company_id', companyId)
-      .eq(column, original.id)
-    if (error) {
-      console.error(
-        `[storno] relinkPaymentRowsToEntry: failed to move ${table}.${column} ${original.id} → ${toEntryId}:`,
-        error.message,
-      )
-      firstError ??= error.message
-    }
-  }
-  return firstError
+export async function relinkRegistrationPointersToEntry(
+  supabase: SupabaseClient,
+  companyId: string,
+  fromEntryId: string,
+  toEntryId: string,
+): Promise<string | undefined> {
+  return moveEntryPointers(supabase, companyId, fromEntryId, toEntryId, REGISTRATION_POINTERS, 'relinkRegistrationPointersToEntry')
 }

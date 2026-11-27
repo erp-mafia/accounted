@@ -1,9 +1,15 @@
 /**
  * relinkPaymentRowsToEntry: a corrected payment verifikat's invoice payment
  * rows follow the correction, as the bank rows and the underlag do (PH 227).
+ * relinkRegistrationPointersToEntry: so does the invoice's own verifikat
+ * pointer when the corrected verifikat is the one that books the invoice.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { correctionCarriesPaymentRows, relinkPaymentRowsToEntry } from '../correction-payment-relink'
+import {
+  correctionCarriesPaymentRows,
+  relinkPaymentRowsToEntry,
+  relinkRegistrationPointersToEntry,
+} from '../correction-payment-relink'
 
 type Result = { error: { message: string } | null }
 
@@ -77,5 +83,36 @@ describe('relinkPaymentRowsToEntry', () => {
     const error = await relinkPaymentRowsToEntry(client, 'company-1', { id: 'c2', source_type: 'invoice_paid' }, 'c4')
     expect(error).toBe('BANK_ANCHOR_SETTLEMENT_CHANGED')
     expect(calls.map((c) => c.table)).toEqual(['invoice_payments', 'supplier_invoice_payments', 'supplier_invoices'])
+  })
+})
+
+describe('relinkRegistrationPointersToEntry', () => {
+  it('re-points the customer invoice and the supplier invoice to the corrected verifikat, scoped by company', async () => {
+    const { client, calls } = makeClient()
+    const error = await relinkRegistrationPointersToEntry(client, 'company-1', 'a2', 'a4')
+
+    expect(error).toBeUndefined()
+    expect(calls).toEqual([
+      { table: 'invoices', payload: { journal_entry_id: 'a4' }, eqs: [['company_id', 'company-1'], ['journal_entry_id', 'a2']] },
+      { table: 'supplier_invoices', payload: { registration_journal_entry_id: 'a4' }, eqs: [['company_id', 'company-1'], ['registration_journal_entry_id', 'a2']] },
+    ])
+  })
+
+  it('returns the first failure without throwing and still moves the other pointer', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { client, calls } = makeClient({ invoices: { error: { message: 'KONTANTMETOD_CARRY_LINK_LOCKED' } } })
+    const error = await relinkRegistrationPointersToEntry(client, 'company-1', 'a2', 'a4')
+
+    expect(error).toBe('KONTANTMETOD_CARRY_LINK_LOCKED')
+    expect(calls.map((c) => c.table)).toEqual(['invoices', 'supplier_invoices'])
+    expect(logged).toHaveBeenCalledTimes(1)
+  })
+
+  it('returns the supplier side failure when only that one fails', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { client } = makeClient({ supplier_invoices: { error: { message: 'permission denied for table supplier_invoices' } } })
+    const error = await relinkRegistrationPointersToEntry(client, 'company-1', 'a2', 'a4')
+
+    expect(error).toBe('permission denied for table supplier_invoices')
   })
 })
