@@ -7,6 +7,7 @@ import {
   findForeignRecurringArticleIds,
   insertRecurringScheduleItems,
   toRecurringScheduleItemRow,
+  toRecurringScheduleRow,
 } from '@/lib/invoices/recurring-schedule-items'
 import {
   computeInitialRunDate,
@@ -142,25 +143,7 @@ export const POST = withRouteContext(
 
     const { data: schedule, error: insertError } = await supabase
       .from('recurring_invoice_schedules')
-      .insert({
-        company_id: companyId,
-        user_id: user.id,
-        customer_id: input.customer_id,
-        name: input.name,
-        day_of_month: input.day_of_month,
-        interval_months: input.interval_months,
-        send_hour: input.send_hour,
-        payment_terms_days: input.payment_terms_days,
-        currency: input.currency,
-        your_reference: input.your_reference ?? null,
-        our_reference: input.our_reference ?? null,
-        notes: input.notes ?? null,
-        period_start: input.period_start ?? null,
-        auto_send: input.auto_send,
-        default_dimensions: input.default_dimensions ?? {},
-        next_run_date: nextRunDate,
-        status: 'active',
-      })
+      .insert(toRecurringScheduleRow(companyId, user.id, input, nextRunDate))
       .select()
       .single()
 

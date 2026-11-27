@@ -1507,6 +1507,8 @@
     "type_create_recurring_schedule": "Ny återkommande faktura",
     "type_update_recurring_schedule": "Ändra återkommande faktura",
     "warning_recurring_schedule_auto_send": "Genom att klicka godkänn så skickar schemat sina fakturor automatiskt: vid varje körning får fakturan nummer, utfärdas och mejlas till kunden, utan att någon godkänner det enskilda utskicket. Schemat kan pausas eller tas bort före nästa körning.",
+    "warning_create_recurring_schedule": "Genom att klicka godkänn så skapas schemat: vid varje körning skapas fakturan som ett utkast, som någon i företaget granskar och skickar.",
+    "warning_update_recurring_schedule": "Genom att klicka godkänn så ändras schemat, och ändringen gäller fakturorna det skapar från och med nästa körning.",
     "type_post_kontantmetod_cutoff": "Obetalt vid årsskiftet (kontantmetoden)",
     "warning_post_kontantmetod_cutoff": "Genom att klicka godkänn så bokförs kontantmetodens bokslutsavgränsning: varje obetald kund- och leverantörsfaktura som förslaget visar bokförs som fordran eller skuld med ett eget verifikat på räkenskapsårets sista dag. Har en sådan faktura redan bokförts när den betalades efter årsskiftet rättas det verifikatet, så att intäkten eller kostnaden och momsen bara bokförs en gång. Verifikaten kan inte ändras i efterhand, bara rättas med storno.",
     "type_update_salary_run": "Uppdatera lönekörning",

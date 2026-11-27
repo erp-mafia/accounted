@@ -316,8 +316,8 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     layer: 'process',
     uses: ['payments', 'transactions', 'vat'],
     libFolders: ['invoices', 'customers', 'articles', 'sales-orders', 'customer-loss'],
-    operationPrefixes: ['invoices', 'peppol', 'customers'],
-    v1Segments: ['invoices', 'customers', 'articles', 'peppol', 'setoffs'],
+    operationPrefixes: ['invoices', 'peppol', 'customers', 'recurring-invoice-schedules'],
+    v1Segments: ['invoices', 'customers', 'articles', 'peppol', 'setoffs', 'recurring-invoice-schedules'],
     jurisdictions: SE,
   },
   {

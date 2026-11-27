@@ -1,5 +1,14 @@
+/**
+ * The recurring invoice schedule tools, generated from the operations in
+ * src/lib/operations/recurring-invoice-schedules.ts (operation-tools.ts):
+ * gnubok_list_recurring_schedules reads, gnubok_create_recurring_schedule and
+ * gnubok_update_recurring_schedule stage what their v1 endpoints write. The
+ * MCP door adds one thing of its own: a dimension value may be given by its
+ * name and is resolved to its code before the operation runs
+ * (prepareRecurringScheduleDimensions in ../server.ts).
+ */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { createQueuedMockSupabase } from '@/tests/helpers'
+import { createTableMockSupabase, type TableMockResolver, type TableMockResult } from '@/tests/helpers'
 import { TOOL_SCOPE_MAP } from '@/lib/auth/api-keys'
 import { OPERATION_RISK_TIERS } from '@/lib/pending-operations/risk-tiers'
 import { eventBus } from '@/lib/events/bus'
@@ -7,10 +16,13 @@ import { tools } from '../server'
 
 const CUSTOMER_ID = '11111111-1111-4111-8111-111111111111'
 const SCHEDULE_ID = '22222222-2222-4222-8222-222222222222'
+const ARTICLE_ID = '33333333-3333-4333-8333-333333333333'
 
 const listTool = () => tools.find((t) => t.name === 'gnubok_list_recurring_schedules')!
 const createTool = () => tools.find((t) => t.name === 'gnubok_create_recurring_schedule')!
 const updateTool = () => tools.find((t) => t.name === 'gnubok_update_recurring_schedule')!
+
+const CUSTOMER = { id: CUSTOMER_ID, name: 'Test Customer AB', email: 'billing@example.test' }
 
 function currentSchedule(overrides: Record<string, unknown> = {}) {
   return {
@@ -19,21 +31,41 @@ function currentSchedule(overrides: Record<string, unknown> = {}) {
     status: 'active',
     customer_id: CUSTOMER_ID,
     day_of_month: 25,
+    interval_months: 1,
     send_hour: 8,
     payment_terms_days: 30,
     currency: 'SEK',
     your_reference: null,
     our_reference: null,
     notes: null,
+    period_start: null,
     auto_send: false,
+    default_dimensions: {},
     next_run_date: '2999-01-25',
     customer: { name: 'Test Customer AB', email: 'billing@example.test' },
-    items: [
-      { description: 'Support', quantity: 1, unit: 'st', unit_price: 5000, vat_rate: null, sort_order: 0 },
-    ],
+    items: [{ description: 'Support', quantity: 1, unit: 'st', unit_price: 5000, vat_rate: null, sort_order: 0 }],
     ...overrides,
   }
 }
+
+type Tables = Record<string, TableMockResult | TableMockResult[] | TableMockResolver>
+
+/** One company's database; pending_operations answers the staged row. */
+function db(tables: Tables = {}) {
+  return createTableMockSupabase({
+    pending_operations: (calls) => {
+      const insert = calls.find((c) => c.method === 'insert')
+      return { data: insert ? { id: 'op-recurring-1', ...(insert.args[0] as object) } : null }
+    },
+    ...tables,
+  })
+}
+
+type Tool = ReturnType<typeof listTool>
+const run = (tool: Tool, args: Record<string, unknown>, mock: ReturnType<typeof db>) =>
+  tool.execute(args, 'company-1', 'user-1', mock.supabase as never) as Promise<Record<string, unknown>>
+
+const staged = (mock: ReturnType<typeof db>) => mock.payloads('pending_operations', 'insert') as Array<Record<string, unknown>>
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -49,6 +81,7 @@ describe('recurring schedule tools: registration', () => {
     expect(listTool().annotations.readOnlyHint).toBe(true)
     expect(createTool().annotations.readOnlyHint).toBe(false)
     expect(updateTool().annotations.readOnlyHint).toBe(false)
+    expect((updateTool().inputSchema as { required?: string[] }).required).toEqual(['schedule_id'])
   })
 
   it('maps scopes and risk tiers', () => {
@@ -76,54 +109,32 @@ describe('recurring schedule tools: registration', () => {
 })
 
 describe('gnubok_list_recurring_schedules', () => {
-  it('returns qualified ids and sorted items', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({
-      data: [
-        {
-          id: SCHEDULE_ID,
-          name: 'Månadsavgift',
-          status: 'active',
-          customer_id: CUSTOMER_ID,
-          day_of_month: 31,
-          send_hour: 8,
-          payment_terms_days: 30,
-          currency: 'SEK',
-          auto_send: false,
-          next_run_date: '2026-08-31',
-          last_run_at: null,
-          last_invoice_id: null,
-          last_run_warning: null,
-          generated_count: 0,
-          customer: { name: 'Test Customer AB' },
-          items: [
-            { description: 'Timmar', quantity: 1, unit: 'tim', unit_price: 50, vat_rate: 25, sort_order: 1 },
-            { description: 'Support', quantity: 2, unit: 'st', unit_price: 100, vat_rate: null, sort_order: 0 },
-          ],
-        },
-      ],
-      count: 1,
+  it('returns qualified ids and sorted items, and the article each line links', async () => {
+    const mock = db({
+      recurring_invoice_schedules: {
+        data: [
+          currentSchedule({
+            items: [
+              { description: 'Timmar', quantity: 1, unit: 'tim', unit_price: 50, vat_rate: 25, sort_order: 1, article_id: ARTICLE_ID },
+              // A row read before migration 20261101003800 has no article_id key.
+              { description: 'Support', quantity: 2, unit: 'st', unit_price: 100, vat_rate: null, sort_order: 0 },
+            ],
+          }),
+        ],
+        count: 1,
+      },
     })
-
-    const result = (await listTool().execute({}, 'company-1', 'user-1', supabase as never)) as {
-      schedules: Array<Record<string, unknown>>
-      count: number
-      total_count: number
-    }
-
-    expect(result.count).toBe(1)
-    expect(result.total_count).toBe(1)
+    const result = (await run(listTool(), {}, mock)) as { schedules: Array<Record<string, unknown>> }
+    expect(result).toMatchObject({ count: 1, total_count: 1, has_more: false })
     const row = result.schedules[0]
     expect(row.recurring_schedule_id).toBe(SCHEDULE_ID)
     expect(row).not.toHaveProperty('id')
-    expect(row.customer_id).toBe(CUSTOMER_ID)
-    expect(row.customer_name).toBe('Test Customer AB')
-    expect(row.last_invoice_id).toBeNull()
-    expect(row.monthly_total_excl_vat).toBe(250)
-    expect((row.items as Array<{ description: string }>).map((i) => i.description)).toEqual([
-      'Support',
-      'Timmar',
-    ])
+    expect(row).toMatchObject({ customer_id: CUSTOMER_ID, customer_name: 'Test Customer AB', last_invoice_id: null, monthly_total_excl_vat: 250 })
+    const items = row.items as Array<{ description: string; article_id: string | null }>
+    expect(items.map((i) => i.description)).toEqual(['Support', 'Timmar'])
+    expect(items.map((i) => i.article_id)).toEqual([null, ARTICLE_ID])
+    // '*' on the line join: tolerates the column not being migrated yet.
+    expect(String(mock.findCall('recurring_invoice_schedules', 'select')?.[0])).toContain('recurring_invoice_schedule_items(*)')
   })
 })
 
@@ -135,370 +146,175 @@ describe('gnubok_create_recurring_schedule: validation and staging', () => {
     items: [{ description: 'Support', quantity: 1, unit: 'st', unit_price: 5000 }],
   }
 
-  it('rejects missing items before querying the database', async () => {
-    const { supabase } = createQueuedMockSupabase()
-
+  it('rejects missing items and a VAT rate outside the Swedish set before querying the database', async () => {
+    const mock = db()
+    await expect(run(createTool(), { customer_id: CUSTOMER_ID, name: 'X', day_of_month: 25 }, mock)).rejects.toThrow()
     await expect(
-      createTool().execute(
-        { customer_id: CUSTOMER_ID, name: 'X', day_of_month: 25 },
-        'company-1',
-        'user-1',
-        supabase as never,
-      ),
-    ).rejects.toThrow(/items/i)
-    expect(supabase.from).not.toHaveBeenCalled()
-  })
-
-  it('rejects a VAT rate outside the Swedish set before querying the database', async () => {
-    const { supabase } = createQueuedMockSupabase()
-
-    await expect(
-      createTool().execute(
-        {
-          ...validArgs,
-          items: [{ description: 'Support', quantity: 1, unit: 'st', unit_price: 5000, vat_rate: 10 }],
-        },
-        'company-1',
-        'user-1',
-        supabase as never,
-      ),
-    ).rejects.toThrow(/vat_rate/i)
-    expect(supabase.from).not.toHaveBeenCalled()
+      run(createTool(), { ...validArgs, items: [{ description: 'Support', quantity: 1, unit: 'st', unit_price: 5000, vat_rate: 10 }] }, mock),
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' })
+    expect(mock.calls).toEqual([])
   })
 
   it('fails when the customer is outside the selected company', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: null })
-
-    await expect(
-      createTool().execute({ ...validArgs, dry_run: true }, 'company-1', 'user-1', supabase as never),
-    ).rejects.toThrow(/not found/i)
+    const mock = db({ customers: { data: null } })
+    await expect(run(createTool(), { ...validArgs, dry_run: true }, mock)).rejects.toMatchObject({ code: 'CUSTOMER_NOT_FOUND' })
+    expect(mock.findCalls('customers', 'eq')).toContainEqual(['company_id', 'company-1'])
   })
 
   it('rejects auto_send when the customer has no email', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: { id: CUSTOMER_ID, name: 'Test Customer AB', email: null } })
-
-    await expect(
-      createTool().execute(
-        { ...validArgs, auto_send: true, dry_run: true },
-        'company-1',
-        'user-1',
-        supabase as never,
-      ),
-    ).rejects.toThrow(/email/i)
+    const mock = db({ customers: { data: { ...CUSTOMER, email: null } } })
+    await expect(run(createTool(), { ...validArgs, auto_send: true, dry_run: true }, mock)).rejects.toMatchObject({
+      code: 'VALIDATION_ERROR',
+      details: { field: 'auto_send' },
+    })
   })
 
   it('defaults auto_send to false and surfaces it explicitly in the dry-run preview', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: { id: CUSTOMER_ID, name: 'Test Customer AB', email: 'billing@example.test' } })
-
-    const result = (await createTool().execute(
-      { ...validArgs, dry_run: true },
-      'company-1',
-      'user-1',
-      supabase as never,
-    )) as { staged: boolean; dry_run?: boolean; preview: Record<string, unknown> }
-
-    expect(result.staged).toBe(false)
-    expect(result.dry_run).toBe(true)
-    expect(result.preview.auto_send).toBe(false)
-    expect(result.preview.monthly_total_excl_vat).toBe(5000)
-    expect(result.preview.projected_first_run_date).toMatch(/^\d{4}-\d{2}-\d{2}$/)
-    // Preview only: nothing staged.
-    expect(supabase.from).toHaveBeenCalledTimes(1)
+    const mock = db({ customers: { data: CUSTOMER } })
+    const result = await run(createTool(), { ...validArgs, dry_run: true }, mock)
+    expect(result).toMatchObject({ staged: false, dry_run: true })
+    const preview = result.preview as Record<string, unknown>
+    expect(preview.auto_send).toBe(false)
+    expect(preview.monthly_total_excl_vat).toBe(5000)
+    expect(preview.projected_first_run_date).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+    expect(staged(mock)).toHaveLength(0)
   })
 
-  it('rejects a start_date off the day_of_month grid at staging, before writing anything', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: { id: CUSTOMER_ID, name: 'Test Customer AB', email: 'billing@example.test' } })
-
-    await expect(
-      createTool().execute(
-        { ...validArgs, day_of_month: 1, start_date: '2999-09-10' },
-        'company-1',
-        'user-1',
-        supabase as never,
-      ),
-    ).rejects.toThrow(/day_of_month/)
-    // Customer lookup only; no pending_operations insert.
-    expect(supabase.from).toHaveBeenCalledTimes(1)
-  })
-
-  it('rejects a start_date in the past at staging', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: { id: CUSTOMER_ID, name: 'Test Customer AB', email: 'billing@example.test' } })
-
-    await expect(
-      createTool().execute(
-        { ...validArgs, day_of_month: 25, start_date: '2020-01-25' },
-        'company-1',
-        'user-1',
-        supabase as never,
-      ),
-    ).rejects.toThrow(/past/)
-    expect(supabase.from).toHaveBeenCalledTimes(1)
-  })
-
-  it('stages the schedule for approval at medium risk', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: { id: CUSTOMER_ID, name: 'Test Customer AB', email: 'billing@example.test' } })
-    enqueue({ data: { id: 'op-recurring-1' } })
-
-    const result = (await createTool().execute(validArgs, 'company-1', 'user-1', supabase as never)) as {
-      staged: boolean
-      operation_id?: string
-      risk_level: string
-      preview: Record<string, unknown>
-    }
-
-    expect(result).toMatchObject({
-      staged: true,
-      operation_id: 'op-recurring-1',
-      risk_level: 'medium',
+  it.each([
+    { start_date: '2999-09-10', day_of_month: 1 },
+    { start_date: '2020-01-25', day_of_month: 25 },
+  ])('rejects start_date $start_date (off the grid or in the past) at staging', async ({ start_date, day_of_month }) => {
+    const mock = db({ customers: { data: CUSTOMER } })
+    await expect(run(createTool(), { ...validArgs, day_of_month, start_date }, mock)).rejects.toMatchObject({
+      code: 'VALIDATION_ERROR',
+      details: { field: 'start_date' },
     })
-    expect(result.preview.auto_send).toBe(false)
-    expect(supabase.from).toHaveBeenNthCalledWith(2, 'pending_operations')
+    expect(staged(mock)).toHaveLength(0)
+  })
+
+  it('stages the schedule for approval at medium risk, with the follow-up call', async () => {
+    const mock = db({ customers: { data: CUSTOMER } })
+    const result = await run(createTool(), validArgs, mock)
+    expect(result).toMatchObject({ staged: true, operation_id: 'op-recurring-1', risk_level: 'medium' })
+    expect((result.preview as Record<string, unknown>).auto_send).toBe(false)
+    expect(staged(mock)[0]).toMatchObject({
+      operation_type: 'create_recurring_schedule',
+      title: 'Nytt återkommande fakturaschema: Månadsavgift',
+    })
+    expect(JSON.stringify(result)).toContain('gnubok_list_recurring_schedules')
   })
 
   it('stages an explicit auto_send=true at HIGH risk with the flag visible in the preview', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: { id: CUSTOMER_ID, name: 'Test Customer AB', email: 'billing@example.test' } })
-    enqueue({ data: { id: 'op-recurring-2' } })
-
-    const result = (await createTool().execute(
-      { ...validArgs, auto_send: true },
-      'company-1',
-      'user-1',
-      supabase as never,
-    )) as { staged: boolean; risk_level: string; preview: Record<string, unknown> }
-
+    const mock = db({ customers: { data: CUSTOMER } })
+    const result = await run(createTool(), { ...validArgs, auto_send: true }, mock)
     expect(result.staged).toBe(true)
-    expect(result.preview.auto_send).toBe(true)
-    // Param escalation (risk-tiers paramEscalatedRisk): an auto-sending
-    // schedule is a standing order for outbound customer email with no
-    // per-send approval, the same external side-effect that puts one-off
-    // send_invoice at 'high'. The static tier stays 'medium' (asserted
-    // above); the staged operation must carry the escalated level so
-    // auto-commit can never touch it and approval requires confirmed=true.
+    expect((result.preview as Record<string, unknown>).auto_send).toBe(true)
+    // An auto-sending schedule emails every invoice with no per-send
+    // approval: the static tier stays medium, the staged row is high.
     expect(result.risk_level).toBe('high')
   })
 })
 
 describe('gnubok_update_recurring_schedule: validation and staging', () => {
-  it('requires at least one changed field', async () => {
-    const { supabase } = createQueuedMockSupabase()
-
-    await expect(
-      updateTool().execute({ schedule_id: SCHEDULE_ID, dry_run: true }, 'company-1', 'user-1', supabase as never),
-    ).rejects.toThrow(/at least one/i)
-    expect(supabase.from).not.toHaveBeenCalled()
-  })
-
-  it('rejects an unknown status before querying the database', async () => {
-    const { supabase } = createQueuedMockSupabase()
-
-    await expect(
-      updateTool().execute(
-        { schedule_id: SCHEDULE_ID, status: 'stopped', dry_run: true },
-        'company-1',
-        'user-1',
-        supabase as never,
-      ),
-    ).rejects.toThrow(/status/i)
-    expect(supabase.from).not.toHaveBeenCalled()
+  it('requires a changed field, a known status and a well-formed date, before querying the database', async () => {
+    const mock = db()
+    await expect(run(updateTool(), { schedule_id: SCHEDULE_ID, dry_run: true }, mock)).rejects.toThrow()
+    await expect(run(updateTool(), { schedule_id: SCHEDULE_ID, status: 'stopped', dry_run: true }, mock)).rejects.toMatchObject({
+      code: 'VALIDATION_ERROR',
+    })
+    await expect(run(updateTool(), { schedule_id: SCHEDULE_ID, next_run_date: 'februari', dry_run: true }, mock)).rejects.toMatchObject({
+      code: 'VALIDATION_ERROR',
+    })
+    expect(mock.calls).toEqual([])
   })
 
   it('fails when the schedule is outside the selected company', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: null })
-
-    await expect(
-      updateTool().execute(
-        { schedule_id: SCHEDULE_ID, status: 'paused', dry_run: true },
-        'company-1',
-        'user-1',
-        supabase as never,
-      ),
-    ).rejects.toThrow(/not found/i)
+    const mock = db({ recurring_invoice_schedules: { data: null } })
+    await expect(run(updateTool(), { schedule_id: SCHEDULE_ID, status: 'paused', dry_run: true }, mock)).rejects.toMatchObject({
+      code: 'RECURRING_SCHEDULE_NOT_FOUND',
+    })
+    expect(mock.findCalls('recurring_invoice_schedules', 'eq')).toContainEqual(['company_id', 'company-1'])
   })
 
   it('rejects enabling auto_send when the current customer has no email', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: currentSchedule({ customer: { name: 'Test Customer AB', email: null } }) })
-
-    await expect(
-      updateTool().execute(
-        { schedule_id: SCHEDULE_ID, auto_send: true, dry_run: true },
-        'company-1',
-        'user-1',
-        supabase as never,
-      ),
-    ).rejects.toThrow(/email/i)
+    const mock = db({ recurring_invoice_schedules: { data: currentSchedule({ customer: { name: 'Test Customer AB', email: null } }) } })
+    await expect(run(updateTool(), { schedule_id: SCHEDULE_ID, auto_send: true, dry_run: true }, mock)).rejects.toMatchObject({
+      details: { field: 'auto_send' },
+    })
   })
 
-  it('stages an update that enables auto_send at HIGH risk', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: currentSchedule() }) // current has auto_send: false + customer email
-    enqueue({ data: { id: 'op-recurring-4' } })
-
-    const result = (await updateTool().execute(
-      { schedule_id: SCHEDULE_ID, auto_send: true },
-      'company-1',
-      'user-1',
-      supabase as never,
-    )) as { staged: boolean; risk_level: string }
-
-    expect(result.staged).toBe(true)
-    // Same escalation as the create tool: turning auto_send on converts the
-    // schedule into recurring outbound email, so the staged op is 'high'.
-    expect(result.risk_level).toBe('high')
+  it('stages an update that enables auto_send at HIGH risk, with flat params', async () => {
+    const mock = db({ recurring_invoice_schedules: { data: currentSchedule() } })
+    const result = await run(updateTool(), { schedule_id: SCHEDULE_ID, auto_send: true }, mock)
+    expect(result).toMatchObject({ staged: true, risk_level: 'high' })
+    expect(staged(mock)[0].params).toEqual({ schedule_id: SCHEDULE_ID, auto_send: true })
   })
 
   it('stages a pause via the status field', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: currentSchedule() })
-    enqueue({ data: { id: 'op-recurring-3' } })
-
-    const result = (await updateTool().execute(
-      { schedule_id: SCHEDULE_ID, status: 'paused' },
-      'company-1',
-      'user-1',
-      supabase as never,
-    )) as {
-      staged: boolean
-      operation_id?: string
-      preview: { current: Record<string, unknown>; proposed: Record<string, unknown> }
-    }
-
-    expect(result.staged).toBe(true)
-    expect(result.operation_id).toBe('op-recurring-3')
-    expect(result.preview.current.status).toBe('active')
-    expect(result.preview.proposed.status).toBe('paused')
-    expect(result.preview.current.recurring_schedule_id).toBe(SCHEDULE_ID)
+    const mock = db({ recurring_invoice_schedules: { data: currentSchedule() } })
+    const result = await run(updateTool(), { schedule_id: SCHEDULE_ID, status: 'paused' }, mock)
+    expect(result).toMatchObject({ staged: true, operation_id: 'op-recurring-1' })
+    const preview = result.preview as { current: Record<string, unknown>; proposed: Record<string, unknown> }
+    expect(preview.current).toMatchObject({ status: 'active', recurring_schedule_id: SCHEDULE_ID })
+    expect(preview.proposed.status).toBe('paused')
+    expect(staged(mock)[0].title).toBe('Uppdatera återkommande fakturaschema: Månadsavgift')
   })
 
   it('stages an explicit next_run_date so an agent can re-phase a yearly schedule', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: currentSchedule({ interval_months: 12 }) })
-    enqueue({ data: { id: 'op-recurring-5' } })
-
-    const result = (await updateTool().execute(
-      { schedule_id: SCHEDULE_ID, next_run_date: '2999-02-25' },
-      'company-1',
-      'user-1',
-      supabase as never,
-    )) as {
-      staged: boolean
-      preview: { current: Record<string, unknown>; proposed: Record<string, unknown> }
-    }
-
-    expect(result.staged).toBe(true)
-    expect(result.preview.current.next_run_date).toBe('2999-01-25')
-    expect(result.preview.proposed.next_run_date).toBe('2999-02-25')
+    const mock = db({ recurring_invoice_schedules: { data: currentSchedule({ interval_months: 12 }) } })
+    const result = await run(updateTool(), { schedule_id: SCHEDULE_ID, next_run_date: '2999-02-25' }, mock)
+    const preview = result.preview as { current: Record<string, unknown>; proposed: Record<string, unknown> }
+    expect(preview.current.next_run_date).toBe('2999-01-25')
+    expect(preview.proposed.next_run_date).toBe('2999-02-25')
   })
 
-  it('rejects a next_run_date off the effective day_of_month grid at staging', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: currentSchedule({ day_of_month: 15 }) })
+  it('checks next_run_date against the day_of_month in effect, a new one included', async () => {
+    const offGrid = db({ recurring_invoice_schedules: { data: currentSchedule({ day_of_month: 15 }) } })
+    await expect(run(updateTool(), { schedule_id: SCHEDULE_ID, next_run_date: '2999-11-01' }, offGrid)).rejects.toMatchObject({
+      details: { field: 'next_run_date' },
+    })
+    expect(staged(offGrid)).toHaveLength(0)
 
-    await expect(
-      updateTool().execute(
-        { schedule_id: SCHEDULE_ID, next_run_date: '2999-11-01' },
-        'company-1',
-        'user-1',
-        supabase as never,
-      ),
-    ).rejects.toThrow(/day_of_month 15/)
-    expect(supabase.from).toHaveBeenCalledTimes(1)
-  })
-
-  it('validates next_run_date against a day_of_month changed in the same call', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: currentSchedule({ day_of_month: 15 }) })
-    enqueue({ data: { id: 'op-recurring-6' } })
-
-    const result = (await updateTool().execute(
-      { schedule_id: SCHEDULE_ID, day_of_month: 1, next_run_date: '2999-11-01' },
-      'company-1',
-      'user-1',
-      supabase as never,
-    )) as { staged: boolean; preview: { proposed: Record<string, unknown> } }
-
-    expect(result.staged).toBe(true)
-    expect(result.preview.proposed).toMatchObject({ day_of_month: 1, next_run_date: '2999-11-01' })
+    const moved = db({ recurring_invoice_schedules: { data: currentSchedule({ day_of_month: 15 }) } })
+    const result = await run(updateTool(), { schedule_id: SCHEDULE_ID, day_of_month: 1, next_run_date: '2999-11-01' }, moved)
+    expect((result.preview as { proposed: Record<string, unknown> }).proposed).toMatchObject({ day_of_month: 1, next_run_date: '2999-11-01' })
   })
 
   it('rejects a next_run_date that is not after today at staging', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: currentSchedule() })
-
-    await expect(
-      updateTool().execute(
-        { schedule_id: SCHEDULE_ID, next_run_date: '2020-01-25' },
-        'company-1',
-        'user-1',
-        supabase as never,
-      ),
-    ).rejects.toThrow(/after today/)
-    expect(supabase.from).toHaveBeenCalledTimes(1)
-  })
-
-  it('rejects a malformed next_run_date before querying the database', async () => {
-    const { supabase } = createQueuedMockSupabase()
-
-    await expect(
-      updateTool().execute(
-        { schedule_id: SCHEDULE_ID, next_run_date: 'februari', dry_run: true },
-        'company-1',
-        'user-1',
-        supabase as never,
-      ),
-    ).rejects.toThrow(/next_run_date/i)
-    expect(supabase.from).not.toHaveBeenCalled()
+    const mock = db({ recurring_invoice_schedules: { data: currentSchedule() } })
+    await expect(run(updateTool(), { schedule_id: SCHEDULE_ID, next_run_date: '2020-01-25' }, mock)).rejects.toMatchObject({
+      details: { field: 'next_run_date' },
+    })
+    expect(staged(mock)).toHaveLength(0)
   })
 
   it('previews an item replace against the current lines', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: currentSchedule() })
-
-    const result = (await updateTool().execute(
-      {
-        schedule_id: SCHEDULE_ID,
-        items: [{ description: 'Ny rad', quantity: 2, unit: 'tim', unit_price: 1200 }],
-        dry_run: true,
-      },
-      'company-1',
-      'user-1',
-      supabase as never,
-    )) as {
-      dry_run?: boolean
-      preview: {
-        current: { items: Array<{ description: string }> }
-        proposed: { items: Array<{ description: string }> }
-      }
-    }
-
+    const mock = db({ recurring_invoice_schedules: { data: currentSchedule() } })
+    const result = await run(
+      updateTool(),
+      { schedule_id: SCHEDULE_ID, items: [{ description: 'Ny rad', quantity: 2, unit: 'tim', unit_price: 1200 }], dry_run: true },
+      mock,
+    )
+    const preview = result.preview as { current: { items: Array<{ description: string }> }; proposed: { items: Array<{ description: string }> } }
     expect(result.dry_run).toBe(true)
-    expect(result.preview.current.items.map((i) => i.description)).toEqual(['Support'])
-    expect(result.preview.proposed.items.map((i) => i.description)).toEqual(['Ny rad'])
+    expect(preview.current.items.map((i) => i.description)).toEqual(['Support'])
+    expect(preview.proposed.items.map((i) => i.description)).toEqual(['Ny rad'])
   })
 
   it('verifies a new customer belongs to the company', async () => {
-    const otherCustomerId = '33333333-3333-4333-8333-333333333333'
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: currentSchedule() })
-    enqueue({ data: null })
-
+    const mock = db({ recurring_invoice_schedules: { data: currentSchedule() }, customers: { data: null } })
     await expect(
-      updateTool().execute(
-        { schedule_id: SCHEDULE_ID, customer_id: otherCustomerId, dry_run: true },
-        'company-1',
-        'user-1',
-        supabase as never,
-      ),
-    ).rejects.toThrow(/not found/i)
-    expect(supabase.from).toHaveBeenNthCalledWith(2, 'customers')
+      run(updateTool(), { schedule_id: SCHEDULE_ID, customer_id: '44444444-4444-4444-8444-444444444444', dry_run: true }, mock),
+    ).rejects.toMatchObject({ code: 'CUSTOMER_NOT_FOUND' })
+    expect(mock.findCalls('customers', 'eq')).toContainEqual(['company_id', 'company-1'])
+  })
+
+  it('refuses period placeholders without a period_start in effect at staging, as the approval would', async () => {
+    const mock = db({ recurring_invoice_schedules: { data: currentSchedule() } })
+    await expect(run(updateTool(), { schedule_id: SCHEDULE_ID, notes: 'Avser {periodstart} till {periodslut}' }, mock)).rejects.toMatchObject({
+      details: { field: 'period_start' },
+    })
+    expect(staged(mock)).toHaveLength(0)
   })
 })
 
@@ -507,6 +323,7 @@ describe('recurring schedule tools: dimension bags', () => {
     id: 'dim-6',
     sie_dim_no: 6,
     name: 'Projekt',
+    parent_sie_dim_no: null,
     resets_annually: false,
     is_system: true,
     is_active: true,
@@ -521,41 +338,16 @@ describe('recurring schedule tools: dimension bags', () => {
     start_date: null,
     end_date: null,
   }
+  const registry = (enabled: boolean): Tables => ({
+    company_settings: { data: { dimensions_enabled: enabled } },
+    dimensions: { data: [PROJEKT_DIM] },
+    dimension_values: { data: [PROJEKT_VALUE] },
+  })
 
-  /**
-   * The queued mock's chain proxy discards call args by design, so capture
-   * .insert payloads per table with a thin wrapper around the original
-   * implementation. Lets the tests assert what actually lands in
-   * pending_operations.params.
-   */
-  function captureInserts(supabase: ReturnType<typeof createQueuedMockSupabase>['supabase']) {
-    const inserted: Record<string, unknown[]> = {}
-    const originalFrom = supabase.from.getMockImplementation()!
-    supabase.from.mockImplementation((table: string) => {
-      const chain = originalFrom(table) as object
-      return new Proxy(chain, {
-        get(target, prop, receiver) {
-          if (prop === 'insert') {
-            return (rows: unknown) => {
-              ;(inserted[table] ??= []).push(rows)
-              return (Reflect.get(target, prop, receiver) as (r: unknown) => unknown)(rows)
-            }
-          }
-          return Reflect.get(target, prop, receiver)
-        },
-      })
-    })
-    return inserted
-  }
-
-  it('create: stages schedule + item bags verbatim while dimensions are disabled (free-text passthrough)', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    const inserted = captureInserts(supabase)
-    enqueue({ data: { dimensions_enabled: false } }) // company_settings (resolver)
-    enqueue({ data: { id: CUSTOMER_ID, name: 'Test Customer AB', email: 'billing@example.test' } })
-    enqueue({ data: { id: 'op-dims-1' } }) // pending_operations insert
-
-    const result = (await createTool().execute(
+  it('create: stages schedule and line bags verbatim while dimensions are disabled (free-text passthrough)', async () => {
+    const mock = db({ ...registry(false), customers: { data: CUSTOMER } })
+    const result = await run(
+      createTool(),
       {
         customer_id: CUSTOMER_ID,
         name: 'Projekt-retainer',
@@ -566,33 +358,22 @@ describe('recurring schedule tools: dimension bags', () => {
           { description: 'Timmar', quantity: 2, unit: 'tim', unit_price: 1000 },
         ],
       },
-      'company-1',
-      'user-1',
-      supabase as never,
-    )) as { staged: boolean; preview: Record<string, unknown> }
-
+      mock,
+    )
     expect(result.staged).toBe(true)
-    const opRow = inserted['pending_operations'][0] as { params: Record<string, unknown> }
-    expect(opRow.params.default_dimensions).toEqual({ '1': 'KS1' })
-    const items = opRow.params.items as Array<Record<string, unknown>>
+    const params = staged(mock)[0].params as Record<string, unknown>
+    expect(params.default_dimensions).toEqual({ '1': 'KS1' })
+    const items = params.items as Array<Record<string, unknown>>
     expect(items[0].dimensions).toEqual({ '6': 'P001' })
-    // Untagged template items stage without the key: the commit executor and
-    // the cron both treat a missing bag as {}.
+    // An untagged line stages without the key: the commit and the cron read a missing bag as {}.
     expect(items[1]).not.toHaveProperty('dimensions')
-    expect(result.preview.default_dimensions).toEqual({ '1': 'KS1' })
+    expect((result.preview as Record<string, unknown>).default_dimensions).toEqual({ '1': 'KS1' })
   })
 
   it('create: resolves a value NAME to its registry code and echoes the resolution', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    const inserted = captureInserts(supabase)
-    enqueue({ data: { dimensions_enabled: true } }) // company_settings
-    enqueue({ data: null }) // ensure_company_dimensions rpc
-    enqueue({ data: [PROJEKT_DIM] }) // dimensions
-    enqueue({ data: [PROJEKT_VALUE] }) // dimension_values
-    enqueue({ data: { id: CUSTOMER_ID, name: 'Test Customer AB', email: 'billing@example.test' } })
-    enqueue({ data: { id: 'op-dims-2' } })
-
-    const result = (await createTool().execute(
+    const mock = db({ ...registry(true), customers: { data: CUSTOMER } })
+    const result = await run(
+      createTool(),
       {
         customer_id: CUSTOMER_ID,
         name: 'Villaprojektet',
@@ -600,27 +381,19 @@ describe('recurring schedule tools: dimension bags', () => {
         default_dimensions: { '6': 'Villa Almgren' },
         items: [{ description: 'Support', quantity: 1, unit: 'st', unit_price: 5000 }],
       },
-      'company-1',
-      'user-1',
-      supabase as never,
-    )) as { staged: boolean; preview: Record<string, unknown> }
-
+      mock,
+    )
     expect(result.staged).toBe(true)
-    const opRow = inserted['pending_operations'][0] as { params: Record<string, unknown> }
-    expect(opRow.params.default_dimensions).toEqual({ '6': 'P001' })
-    const resolutions = result.preview.dimension_resolutions as Array<Record<string, unknown>>
-    expect(resolutions.length).toBeGreaterThan(0)
+    expect((staged(mock)[0].params as Record<string, unknown>).default_dimensions).toEqual({ '6': 'P001' })
+    const resolutions = (result.preview as Record<string, unknown>).dimension_resolutions as Array<Record<string, unknown>>
+    expect(resolutions).toEqual([expect.objectContaining({ dimension: 6, input: 'Villa Almgren', resolved_code: 'P001' })])
   })
 
   it('create: rejects an unknown dimension value instead of auto-creating it', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: { dimensions_enabled: true } })
-    enqueue({ data: null })
-    enqueue({ data: [PROJEKT_DIM] })
-    enqueue({ data: [PROJEKT_VALUE] })
-
+    const mock = db({ ...registry(true), customers: { data: CUSTOMER } })
     await expect(
-      createTool().execute(
+      run(
+        createTool(),
         {
           customer_id: CUSTOMER_ID,
           name: 'X',
@@ -628,40 +401,24 @@ describe('recurring schedule tools: dimension bags', () => {
           default_dimensions: { '6': 'Helt Okänt Projekt' },
           items: [{ description: 'S', quantity: 1, unit: 'st', unit_price: 100 }],
         },
-        'company-1',
-        'user-1',
-        supabase as never,
+        mock,
       ),
     ).rejects.toThrow(/matcha|Kandidater|gnubok_create_dimension_value/i)
+    expect(staged(mock)).toHaveLength(0)
   })
 
   it('update: stages {} as the clear-all-tags bag replace', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: currentSchedule() })
-    enqueue({ data: { id: 'op-dims-3' } })
-
-    const result = (await updateTool().execute(
-      { schedule_id: SCHEDULE_ID, default_dimensions: {} },
-      'company-1',
-      'user-1',
-      supabase as never,
-    )) as {
-      staged: boolean
-      preview: {
-        current: Record<string, unknown>
-        changes: Record<string, unknown>
-        proposed: Record<string, unknown>
-      }
-    }
-
+    const mock = db({ recurring_invoice_schedules: { data: currentSchedule({ default_dimensions: { '6': 'P001' } }) } })
+    const result = await run(updateTool(), { schedule_id: SCHEDULE_ID, default_dimensions: {} }, mock)
     expect(result.staged).toBe(true)
-    expect(result.preview.changes.default_dimensions).toEqual({})
-    expect(result.preview.proposed.default_dimensions).toEqual({})
+    const preview = result.preview as { changes: Record<string, unknown>; proposed: Record<string, unknown> }
+    expect(preview.changes.default_dimensions).toEqual({})
+    expect(preview.proposed.default_dimensions).toEqual({})
+    expect(staged(mock)[0].params).toEqual({ schedule_id: SCHEDULE_ID, default_dimensions: {} })
   })
 })
 
 describe('recurring schedule tools: article links (accounted#52)', () => {
-  const ARTICLE_ID = '33333333-3333-4333-8333-333333333333'
   const createArgs = {
     customer_id: CUSTOMER_ID,
     name: 'Hosting',
@@ -669,71 +426,28 @@ describe('recurring schedule tools: article links (accounted#52)', () => {
     items: [{ description: 'Hosting', quantity: 1, unit: 'st', unit_price: 500, article_id: ARTICLE_ID }],
   }
 
-  it('list: returns each line\'s article_id so an update can send it back', async () => {
-    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
-    enqueue({
-      data: [
-        {
-          ...currentSchedule(),
-          items: [
-            { description: 'Hosting', quantity: 1, unit: 'st', unit_price: 500, vat_rate: null, sort_order: 0, article_id: ARTICLE_ID },
-            // A row read before migration 20261101003800 has no article_id key.
-            { description: 'Support', quantity: 1, unit: 'st', unit_price: 100, vat_rate: null, sort_order: 1 },
-          ],
-        },
-      ],
-      count: 1,
-    })
-
-    const result = (await listTool().execute({}, 'company-1', 'user-1', supabase as never)) as {
-      schedules: Array<{ items: Array<{ article_id: string | null }> }>
-    }
-
-    expect(result.schedules[0].items.map((i) => i.article_id)).toEqual([ARTICLE_ID, null])
-    // '*' on the line join: tolerates the column not being migrated yet.
-    expect(String(findCall('recurring_invoice_schedules', 'select')?.[0])).toContain('recurring_invoice_schedule_items(*)')
-  })
-
   it('create: stages a line linked to one of the company\'s articles', async () => {
-    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
-    enqueue({ data: { id: CUSTOMER_ID, name: 'Test Customer AB', email: 'billing@example.test' } })
-    enqueue({ data: [{ id: ARTICLE_ID }] }) // articles (company-scoped)
-    enqueue({ data: { id: 'op-recurring-1' } })
-
-    const result = (await createTool().execute(createArgs, 'company-1', 'user-1', supabase as never)) as {
-      staged: boolean
-      preview: { items: Array<{ article_id?: string }> }
-    }
-
+    const mock = db({ customers: { data: CUSTOMER }, articles: { data: [{ id: ARTICLE_ID }] } })
+    const result = await run(createTool(), createArgs, mock)
     expect(result.staged).toBe(true)
-    expect(result.preview.items[0].article_id).toBe(ARTICLE_ID)
-    expect(findCalls('articles', 'eq')).toContainEqual(['company_id', 'company-1'])
+    expect((result.preview as { items: Array<{ article_id?: string }> }).items[0].article_id).toBe(ARTICLE_ID)
+    expect(mock.findCalls('articles', 'eq')).toContainEqual(['company_id', 'company-1'])
   })
 
   it('create: refuses another company\'s article at staging', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: { id: CUSTOMER_ID, name: 'Test Customer AB', email: 'billing@example.test' } })
-    enqueue({ data: [] }) // articles: none in this company
-
-    await expect(
-      createTool().execute(createArgs, 'company-1', 'user-1', supabase as never),
-    ).rejects.toThrow(/Article not found in this company/)
-    expect(supabase.from).not.toHaveBeenCalledWith('pending_operations')
+    const mock = db({ customers: { data: CUSTOMER }, articles: { data: [] } })
+    await expect(run(createTool(), createArgs, mock)).rejects.toMatchObject({
+      code: 'VALIDATION_ERROR',
+      details: { field: 'items', article_ids: [ARTICLE_ID] },
+    })
+    expect(staged(mock)).toHaveLength(0)
   })
 
   it('update: refuses another company\'s article in replacement lines', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: currentSchedule() })
-    enqueue({ data: [] }) // articles: none in this company
-
-    await expect(
-      updateTool().execute(
-        { schedule_id: SCHEDULE_ID, items: createArgs.items },
-        'company-1',
-        'user-1',
-        supabase as never,
-      ),
-    ).rejects.toThrow(/Article not found in this company/)
-    expect(supabase.from).not.toHaveBeenCalledWith('pending_operations')
+    const mock = db({ recurring_invoice_schedules: { data: currentSchedule() }, articles: { data: [] } })
+    await expect(run(updateTool(), { schedule_id: SCHEDULE_ID, items: createArgs.items }, mock)).rejects.toMatchObject({
+      details: { field: 'items' },
+    })
+    expect(staged(mock)).toHaveLength(0)
   })
 })
