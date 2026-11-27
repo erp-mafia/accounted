@@ -214,6 +214,7 @@ import {
 import { invoiceTotalSek, type AttestInvoiceFacts } from '@/lib/supplier-invoices/attest-policy'
 import { inboxStatedPaymentDetails, planSupplierPaymentBackfill, type SupplierPaymentColumns } from '@/lib/supplier-invoices/payment-details-backfill'
 import { loadOpenPaymentInstructions } from '@/lib/supplier-invoices/lifecycle-stages'
+import { releasedForRegistration } from '@/lib/supplier-invoices/released-underlag'
 import { readAttestHold, type AttestHold } from '@/lib/supplier-invoices/attest-hold'
 import { loadAttestPolicyOn } from '@/lib/supplier-invoices/attest-policy-read'
 import { PAYABLE_SUPPLIER_INVOICE_STATUSES } from '@/lib/payments/batch-eligibility'
@@ -19027,10 +19028,18 @@ export const tools: McpTool[] = [
       // The refusals below were plain Errors: UNKNOWN_ERROR, "try again", for
       // calls that fail the same way until something else changes (13 in 30 days).
       if (inboxErr || !inbox) throw inboxItemNotFound(inboxItemId)
-      if (inbox.created_supplier_invoice_id) {
+      // The item as the conversion reads it: an invoice it became that was
+      // credited (or reversed) no longer holds it, so its underlag can be
+      // registered again (lib/supplier-invoices/released-underlag.ts).
+      const { item: registrable, release: underlagRelease } = await releasedForRegistration(
+        supabase,
+        companyId,
+        inbox as unknown as InboxItemBookingRow & { document_id: string | null },
+      )
+      if (registrable.created_supplier_invoice_id) {
         throw codedRefusal(
           'INBOX_ITEM_ALREADY_CONVERTED',
-          `Inbox item already converted to supplier invoice ${inbox.created_supplier_invoice_id}`,
+          `Inbox item already converted to supplier invoice ${registrable.created_supplier_invoice_id}`,
           { description: 'Do not stage it again: that supplier invoice registers this item (gnubok_list_supplier_invoices).' },
         )
       }
@@ -19449,7 +19458,7 @@ export const tools: McpTool[] = [
       // What the approval refuses (convertInboxItemToSupplierInvoice): a
       // verifikat of its own next to the one that books the purchase already.
       if (bookingMoment === 'issue') {
-        const booking = await bookingStateOfItem(supabase, companyId, withDocumentHold(inbox as unknown as InboxItemBookingRow))
+        const booking = await bookingStateOfItem(supabase, companyId, registrable)
         if (booking.state === 'booked') {
           throw codedRefusal(
             'INBOX_ITEM_ALREADY_BOOKED',
@@ -19981,6 +19990,17 @@ export const tools: McpTool[] = [
         inbox_item_id: inboxItemId,
         supplier_id: supplierId,
         supplier_resolution: supplierResolution,
+        // Registered again: the invoice it was registered as is credited.
+        ...(underlagRelease.supplier_invoice_id
+          ? {
+              registers_again: {
+                credited_supplier_invoice_id: underlagRelease.supplier_invoice_id,
+                note: underlagRelease.copy_from_document_id
+                  ? 'The invoice this item was registered as is credited. Approving registers the underlag again; the credited verifikat keeps the document and the new registration gets a byte-identical copy of it.'
+                  : 'The invoice this item was registered as is credited. Approving registers the underlag again.',
+              },
+            }
+          : {}),
         extracted_supplier_name: supplierIdentity.name,
         extracted_org_number: supplierIdentity.orgNumber,
         extracted_vat_number: supplierIdentity.vatNumber,

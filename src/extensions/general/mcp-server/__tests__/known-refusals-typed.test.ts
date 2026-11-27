@@ -140,6 +140,15 @@ describe('gnubok_create_supplier_invoice_from_inbox', () => {
     })
   })
 
+  it('registered as an invoice that was credited since: released, so the staging goes on to its next check', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ...ITEM, created_supplier_invoice_id: 'si-1', extracted_data: null }, error: null })
+    // The invoice the item names: credited, so it no longer holds the underlag.
+    enqueue({ data: { id: 'si-1', status: 'credited', is_credit_note: false }, error: null })
+    const error = await refusal(stage(supabase))
+    expect(error).toMatchObject({ code: 'INBOX_ITEM_NO_READING' })
+  })
+
   it('no reading: INBOX_ITEM_NO_READING, write one with set_inbox_extracted_data', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { ...ITEM, extracted_data: null }, error: null })

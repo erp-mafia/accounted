@@ -8872,6 +8872,7 @@
     "bank_entered_hint": "Tick if you enter the payment yourself in the internet bank instead of through a payment file.",
     "credit_note_button": "Credit note",
     "uncredit_button": "Undo credit",
+    "register_again_button": "Register again",
     "load_failed_title": "Could not load supplier invoice",
     "approve_failed_title": "Approval failed",
     "approved_title": "Approved",

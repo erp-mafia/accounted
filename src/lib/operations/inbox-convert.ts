@@ -12,7 +12,12 @@
  *   - the item and the supplier must belong to the company; an item already
  *     converted is refused, and so is one a live verifikat books already,
  *     when the conversion would post a verifikat of its own: the second
- *     booking of the purchase (lib/documents/inbox-item-claim.ts). A
+ *     booking of the purchase (lib/documents/inbox-item-claim.ts). An item
+ *     whose invoice was credited, or whose verifikat books nothing any more,
+ *     is released: it is registered again, the new invoice takes its
+ *     pointer, and a document the old verifikat keeps goes onto the new
+ *     registration as a byte-identical copy
+ *     (lib/supplier-invoices/released-underlag.ts). A
  *     conversion that posts nothing passes: a company fills its reskontra that
  *     way and settles the invoice against the verifikat. The next step reads
  *     no hold, so a deferring company's Bokför, or a bank match the duplicate
@@ -101,7 +106,8 @@ import { refuseWhenPairBooked } from './inbox-pair-guard'
 import { checkAccountingMethod } from '@/lib/company/accounting-method'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { bookingStateOfItem } from '@/lib/documents/inbox-item-claim'
-import { INBOX_ITEM_DOCUMENT_HOLD, withDocumentHold, type DocumentHoldRow } from '@/lib/documents/inbox-item-state'
+import { INBOX_ITEM_DOCUMENT_HOLD, type DocumentHoldRow } from '@/lib/documents/inbox-item-state'
+import { copyReleasedUnderlag, releasedForRegistration } from '@/lib/supplier-invoices/released-underlag'
 import {
   exceedsSupplierInvoiceTotalsTolerance,
   supplierInvoiceLinesInclVat,
@@ -274,7 +280,13 @@ export async function convertInboxItemToSupplierInvoice(
     .eq('company_id', companyId)
     .single()
   if (fetchError || !stored) return { ok: false, code: 'INBOX_ITEM_NOT_FOUND' }
-  const item = withDocumentHold(stored as unknown as InvoiceInboxItem & DocumentHoldRow)
+  // A credited (or reversed) invoice no longer holds the item, nor does the
+  // verifikat its document sits on once that books nothing: the underlag can
+  // be registered again (released-underlag.ts). Fails closed on a read error.
+  const released = await releasedForRegistration(supabase, companyId, stored as unknown as InvoiceInboxItem & DocumentHoldRow)
+    .catch((err: unknown) => (err instanceof Error ? err : new Error(String(err))))
+  if (released instanceof Error) return failed(released)
+  const { item, release } = released
   if (item.created_supplier_invoice_id) {
     return { ok: false, code: 'INBOX_ITEM_ALREADY_CONVERTED', details: { supplier_invoice_id: item.created_supplier_invoice_id } }
   }
@@ -611,6 +623,16 @@ export async function convertInboxItemToSupplierInvoice(
           : {}),
         would_create_registration_journal_entry: booksOnRegistration,
         ...(registration ? { verifikat: registration.verifikat } : {}),
+        // Registered again after a credit: the invoice that held the item,
+        // and whether the new registration gets its own copy of the document.
+        ...(release.supplier_invoice_id || release.copy_from_document_id
+          ? {
+              registers_again: {
+                released_supplier_invoice_id: release.supplier_invoice_id,
+                copies_document: release.copy_from_document_id !== null,
+              },
+            }
+          : {}),
       },
     }
   }
@@ -721,10 +743,19 @@ export async function convertInboxItemToSupplierInvoice(
 
         // The verifikat has its underlag (BFL 5 kap 6 §). It was booked from
         // this document. A failed link fails nothing: the verifikat is posted
-        // and immutable, and the invoice stays usable.
+        // and immutable, and the invoice stays usable. A document that stays
+        // on the verifikat of a credited registration goes on as a copy.
         if (item.document_id) {
           try {
-            await linkToJournalEntry(supabase, companyId, item.document_id, journalEntry.id, linkBasisColumns('user_created'))
+            if (release.copy_from_document_id) {
+              await copyReleasedUnderlag(supabase, companyId, userId, {
+                sourceDocumentId: release.copy_from_document_id,
+                supplierInvoiceId: invoice.id as string,
+                journalEntryId: journalEntry.id,
+              })
+            } else {
+              await linkToJournalEntry(supabase, companyId, item.document_id, journalEntry.id, linkBasisColumns('user_created'))
+            }
           } catch (linkError) {
             log.warn('inbox convert: document not linked to the registration verifikat', {
               documentId: item.document_id,
@@ -780,8 +811,26 @@ export async function convertInboxItemToSupplierInvoice(
         details: { reason: err instanceof Error ? err.message : 'unknown', step: 'registration_journal_entry' },
       }
     }
+  } else if (release.copy_from_document_id) {
+    // Registered again with no verifikat now: the invoice gets its own copy
+    // of the underlag, which its booking anchors later.
+    try {
+      await copyReleasedUnderlag(supabase, companyId, userId, {
+        sourceDocumentId: release.copy_from_document_id,
+        supplierInvoiceId: invoice.id as string,
+        journalEntryId: null,
+      })
+    } catch (copyError) {
+      log.warn('inbox convert: no copy of the released underlag for the invoice', {
+        documentId: release.copy_from_document_id,
+        supplierInvoiceId: invoice.id,
+        error: copyError instanceof Error ? copyError.message : String(copyError),
+      })
+    }
   }
 
+  // The item names its invoice. Registered again after a credit, the new
+  // invoice takes the pointer over from the credited one.
   const { error: stampError } = await supabase
     .from('invoice_inbox_items')
     .update({ created_supplier_invoice_id: invoice.id })

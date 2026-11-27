@@ -20,6 +20,8 @@
  *   - only from the original: a credit note's own id is refused, whatever
  *     its status (it rests at 'credited' too, so the status alone cannot
  *     tell the two apart);
+ *   - never once the underlag the credit released was registered again on a
+ *     live invoice (released-underlag.ts): the purchase would be booked twice;
  *   - the credit note's posted verifikat is cancelled with a storno
  *     (reverseEntry, through the posting port), never edited or deleted; an
  *     already reversed or never posted verifikat is fine and the row cleanup
@@ -61,6 +63,7 @@ import {
   resolveUnsettledStatus,
 } from '@/lib/supplier-invoices/lifecycle'
 import { loadAttestPolicyOn } from '@/lib/supplier-invoices/attest-policy-read'
+import { registeredAgainAs } from '@/lib/supplier-invoices/released-underlag'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
@@ -324,6 +327,19 @@ export async function uncreditSupplierInvoice(
       ok: true,
       data: { supplier_invoice: original, reversal_entry_id: null, changed: false, reversed_credit_note_id: null },
     }
+  }
+
+  // The credit released the underlag and it was registered again
+  // (released-underlag.ts): undone, the credit would bring this invoice back
+  // beside the new one, the purchase booked twice. Credit the new one first.
+  let registeredAgain: string | null
+  try {
+    registeredAgain = await registeredAgainAs(supabase, companyId, original)
+  } catch (err) {
+    return failed(err)
+  }
+  if (registeredAgain) {
+    return { ok: false, code: 'SI_UNCREDIT_REGISTERED_AGAIN', details: { supplier_invoice_id: registeredAgain } }
   }
 
   // Re-crediting after an earlier uncredit leaves a reversed credit row

@@ -74,6 +74,14 @@ vi.mock('@/lib/core/documents/document-service', () => ({
   linkToJournalEntry: (...args: unknown[]) => mockLinkToJournalEntry(...args),
 }))
 
+// The byte-identical copy a credited invoice's underlag goes onto a new
+// registration as (lib/documents/link-document.ts, tested there).
+const mockLinkDocumentCopyToVoucher = vi.fn()
+vi.mock('@/lib/documents/link-document', () => ({
+  linkDocumentCopyToVoucher: (...args: unknown[]) => mockLinkDocumentCopyToVoucher(...args),
+  archiveDocumentCopy: vi.fn(),
+}))
+
 // Riksbanken is the only external dependency of the new server-side rate
 // lookup. Spread the real module so anything else importing from it (e.g.
 // convertToSEK) keeps working.
@@ -598,6 +606,80 @@ describe('POST /api/supplier-invoices', () => {
       'je-document',
       { link_basis: 'user_created', link_evidence: null },
     )
+  })
+
+  describe('the underlag of a credited invoice', () => {
+    // si-credited was registered from the document, booked on je-credited
+    // (which keeps the document), then credited.
+    const has = (chain: { method: string; args: unknown[] }[], method: string, ...args: unknown[]) =>
+      chain.some((c) => c.method === method && args.every((arg, i) => c.args[i] === arg))
+
+    function stubCreditedUse(createdInvoice: object, usedBy: object[]) {
+      setTable('document_attachments', {
+        data: { id: DOCUMENT_UUID, journal_entry_id: 'je-credited', entry: { status: 'posted' } },
+      })
+      setTable('supplier_invoices', (chain) => {
+        if (has(chain, 'insert')) return { data: createdInvoice }
+        if (has(chain, 'update')) return { data: null }
+        if (has(chain, 'eq', 'registration_journal_entry_id', 'je-credited')) {
+          return { data: [{ id: 'si-credited', status: 'credited', is_credit_note: false }] }
+        }
+        if (has(chain, 'eq', 'document_id', DOCUMENT_UUID)) return { data: usedBy }
+        return { data: null }
+      })
+    }
+
+    const request = () =>
+      createMockRequest('/api/supplier-invoices', {
+        method: 'POST',
+        body: {
+          supplier_id: VALID_UUID,
+          document_id: DOCUMENT_UUID,
+          supplier_invoice_number: 'LF-AGAIN',
+          invoice_date: '2024-06-01',
+          due_date: '2024-07-01',
+          items: [{ description: 'Service', quantity: 1, unit_price: 1000, account_number: '6200' }],
+        },
+      })
+
+    it('is registered again, and the new verifikat gets a copy instead of the original', async () => {
+      const createdInvoice = makeSupplierInvoice({ id: 'si-again', document_id: DOCUMENT_UUID })
+      stubRegistration({ invoice: createdInvoice, arrival: 8 })
+      stubCreditedUse(createdInvoice, [{ id: 'si-credited', status: 'credited', is_credit_note: false }])
+      mockCreateSupplierInvoiceRegistrationEntry.mockResolvedValue({ id: 'je-again' })
+      mockLinkDocumentCopyToVoucher.mockResolvedValue({ ok: true, document: { id: 'copy-1' }, source_document_id: DOCUMENT_UUID, reused: false })
+
+      const response = await POST(request())
+      const { status, body } = await parseJsonResponse<{ data: { document_id: string } }>(response)
+
+      expect(status).toBe(200)
+      expect(mockLinkDocumentCopyToVoucher).toHaveBeenCalledWith(
+        mockSupabase,
+        'company-1',
+        'user-1',
+        { document_id: DOCUMENT_UUID, journal_entry_id: 'je-again' },
+        { linkBasis: { link_basis: 'user_created', link_evidence: null } },
+      )
+      // The original stays on the credited verifikat.
+      expect(mockLinkToJournalEntry).not.toHaveBeenCalled()
+      expect(findCalls('supplier_invoices', 'update').map(([row]) => row)).toContainEqual({ document_id: 'copy-1' })
+      expect(body.data.document_id).toBe('copy-1')
+    })
+
+    it('a live invoice on the same document still refuses it as used', async () => {
+      stubRegistration()
+      stubCreditedUse(makeSupplierInvoice(), [
+        { id: 'si-credited', status: 'credited', is_credit_note: false },
+        { id: 'si-live', status: 'approved', is_credit_note: false },
+      ])
+
+      const response = await POST(request())
+      const { status, body } = await parseJsonResponse<{ error: { code: string; details?: { reason?: string } } }>(response)
+
+      expect(status).toBe(400)
+      expect(body.error.details?.reason).toBe('document_already_used')
+      expect(findCall('supplier_invoices', 'insert')).toBeUndefined()
+    })
   })
 
   it('rejects a document that is missing or outside the active company', async () => {
