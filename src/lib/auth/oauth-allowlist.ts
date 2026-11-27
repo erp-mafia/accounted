@@ -194,7 +194,13 @@ export function isBuiltInRedirectUri(uri: string): boolean {
  * Google documents none of them, so nobody can say who receives a code there.
  */
 const GEMINI_RELAY_CALLBACK =
-  /^https:\/\/oauth-redirect(?:-test|-sandbox)?\.googleusercontent\.com\/[ar]\/user_bound_custom-mcp-[A-Za-z0-9_-]+$/
+  /^https:\/\/oauth-redirect(?:-test|-sandbox)?\.googleusercontent\.com\/[ar]\/(user_bound_custom-mcp-[A-Za-z0-9_-]+)$/
+
+/** The user-bound id of a Gemini relay callback, or null for any other URI. */
+function geminiRelayId(uri: unknown): string | null {
+  if (typeof uri !== 'string') return null
+  return GEMINI_RELAY_CALLBACK.exec(uri)?.[1] ?? null
+}
 
 /**
  * The redirect URIs a dynamic registration keeps; /register checks each one.
@@ -206,8 +212,14 @@ const GEMINI_RELAY_CALLBACK =
  */
 export function registrableRedirectUris(uris: readonly unknown[]): unknown[] {
   const isGemini = (u: unknown) => typeof u === 'string' && builtInRedirectProvider(u) === 'gemini'
-  if (!uris.some(isGemini)) return [...uris]
-  return uris.filter((u) => isGemini(u) || typeof u !== 'string' || !GEMINI_RELAY_CALLBACK.test(u))
+  // Only a twin of an admitted callback is dropped: a relay callback with
+  // another id stays, so it refuses the registration as any unknown URI does.
+  const admittedIds = new Set(uris.filter(isGemini).map(geminiRelayId).filter((id) => id !== null))
+  if (admittedIds.size === 0) return [...uris]
+  return uris.filter((u) => {
+    const id = geminiRelayId(u)
+    return isGemini(u) || id === null || !admittedIds.has(id)
+  })
 }
 
 /**

@@ -235,6 +235,9 @@ describe('POST /api/mcp-oauth/register', () => {
       'https://evil.com/callback',
       'https://oauth-redirect-test.googleusercontent.com/r/some-cloud-project',
       'https://oauth-redirect.googleusercontent.com/a/some-cloud-project',
+      // A twin of another user-bound id is not a twin of the admitted one.
+      'https://oauth-redirect-test.googleusercontent.com/r/user_bound_custom-mcp-otherid',
+      'https://oauth-redirect.googleusercontent.com/a/user_bound_custom-mcp-otherid',
     ]) {
       const response = await POST(createRequest({ redirect_uris: [...geminiSix, extra] }))
       expect(response.status, extra).toBe(400)
