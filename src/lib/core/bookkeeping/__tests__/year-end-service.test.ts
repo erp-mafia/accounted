@@ -245,6 +245,9 @@ vi.mock('../period-service', () => ({
   createNextPeriod: vi.fn(),
   findNextPeriod: vi.fn().mockResolvedValue(null),
   fiscalYearInTheWay: vi.fn().mockResolvedValue(null),
+  // Default: a first year, without a read. The previous-year tests run the
+  // real lookup against seeded tables.
+  resolvePreviousFiscalPeriod: vi.fn().mockResolvedValue(null),
 }))
 
 // Default: no lock on the year's last day, without a read (the positional
@@ -291,7 +294,7 @@ import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { previewCurrencyRevaluation } from '@/lib/bookkeeping/currency-revaluation'
 import { priorResultCarry } from '../prior-result-carry'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
-import { countUnbookedInPeriod, findNextPeriod } from '../period-service'
+import { countUnbookedInPeriod, findNextPeriod, resolvePreviousFiscalPeriod } from '../period-service'
 import { resolvePeriodLockForDate } from '../period-status'
 import {
   buildCutoffLines,
@@ -1737,6 +1740,152 @@ describe('validateYearEndReadiness: the company lock date over the year\'s last 
     const result = await readiness(null, null)
     expect(result.ready).toBe(false)
     expect(result.blockers.map((b) => b.code)).toEqual(['COMPANY_LOCK_DATE_CHECK_FAILED'])
+  })
+})
+
+describe('validateYearEndReadiness: the year before still takes verifikat', () => {
+  // This year's opening balances are the previous year's closing balances, so
+  // a verifikat posted in that year after this close changes them. Readiness
+  // warns while that year's last day still takes one, by the write verdict
+  // (closed, locked, or behind the company lock date all refuse it).
+  const PREVIOUS_START = '2023-01-01'
+  const PREVIOUS_END = '2023-12-31'
+  const LOCKED_AT = '2024-02-01T00:00:00Z'
+
+  beforeEach(async () => {
+    const status = await vi.importActual<typeof import('../period-status')>('../period-status')
+    const periods = await vi.importActual<typeof import('../period-service')>('../period-service')
+    vi.mocked(resolvePeriodLockForDate).mockImplementation(status.resolvePeriodLockForDate)
+    vi.mocked(resolvePreviousFiscalPeriod).mockImplementation(periods.resolvePreviousFiscalPeriod)
+    vi.mocked(generateTrialBalance).mockResolvedValue({
+      rows: [],
+      isBalanced: true,
+      totalDebit: 10000,
+      totalCredit: 10000,
+    } as never)
+    vi.mocked(findNextPeriod).mockResolvedValue(null as never)
+  })
+  afterEach(() => {
+    vi.mocked(resolvePeriodLockForDate).mockResolvedValue(NO_LOCK)
+    vi.mocked(resolvePreviousFiscalPeriod).mockResolvedValue(null)
+  })
+
+  /**
+   * Books that pass every other gate for 2024 (fp-1), with an earlier year in
+   * the given state (null: no earlier year) and this company lock date.
+   */
+  const readiness = (earlier: Row | null, lockedThrough: string | null = null) => {
+    const tables = fxBaseTables()
+    if (earlier) {
+      tables.fiscal_periods = [
+        {
+          ...(makeFiscalPeriod({
+            id: 'fp-0',
+            company_id: 'company-1',
+            period_start: PREVIOUS_START,
+            period_end: PREVIOUS_END,
+          }) as unknown as Row),
+          ...earlier,
+        },
+        ...tables.fiscal_periods!,
+      ]
+    }
+    tables.company_settings = [{ company_id: 'company-1', bookkeeping_locked_through: lockedThrough }]
+    return validateYearEndReadiness(makeFilteringClient(tables) as never, 'company-1', 'user-1', 'fp-1')
+  }
+  type Readiness = Awaited<ReturnType<typeof validateYearEndReadiness>>
+  const openYearWarning = (result: Readiness) =>
+    result.warnings.find((w) => w.includes('Föregående räkenskapsår') && w.includes('varken stängt eller låst'))
+  const checkFailedWarning = (result: Readiness) =>
+    result.warnings.find((w) => w.includes('föregående räkenskapsår') && w.includes('kunde inte genomföras'))
+
+  it('warns, without blocking, when the year before is open', async () => {
+    const result = await readiness({})
+
+    const warning = openYearWarning(result)
+    expect(warning).toContain(`${PREVIOUS_START} till ${PREVIOUS_END}`)
+    expect(warning).toContain('ändrar det här årets ingående balanser efter bokslutet')
+    expect(warning).toContain('Stäng eller lås det året först, eller klarmarkera det')
+    expect(checkFailedWarning(result)).toBeUndefined()
+    expect(result.blockers).toEqual([])
+    expect(result.ready).toBe(true)
+  })
+
+  it('does not warn when the year before is closed', async () => {
+    const result = await readiness({ is_closed: true, closed_at: LOCKED_AT, locked_at: LOCKED_AT })
+    expect(openYearWarning(result)).toBeUndefined()
+    expect(checkFailedWarning(result)).toBeUndefined()
+    expect(result.ready).toBe(true)
+  })
+
+  it('does not warn when the year before was marked closed in an earlier system', async () => {
+    const result = await readiness({
+      is_closed: true,
+      closed_externally: true,
+      closed_at: LOCKED_AT,
+      locked_at: LOCKED_AT,
+    })
+    expect(openYearWarning(result)).toBeUndefined()
+  })
+
+  it('does not warn when the year before is locked', async () => {
+    const result = await readiness({ locked_at: LOCKED_AT })
+    expect(openYearWarning(result)).toBeUndefined()
+    expect(checkFailedWarning(result)).toBeUndefined()
+  })
+
+  it('does not warn when the company lock date covers the last day of the year before', async () => {
+    const result = await readiness({}, PREVIOUS_END)
+    expect(openYearWarning(result)).toBeUndefined()
+    expect(checkFailedWarning(result)).toBeUndefined()
+    expect(result.ready).toBe(true)
+  })
+
+  it('still warns when the company lock date stops the day before that last day', async () => {
+    const result = await readiness({}, '2023-12-30')
+    expect(openYearWarning(result)).toBeDefined()
+  })
+
+  it('does not warn for a first year', async () => {
+    const result = await readiness(null)
+    expect(openYearWarning(result)).toBeUndefined()
+    expect(checkFailedWarning(result)).toBeUndefined()
+  })
+
+  it('does not warn about an open earlier year across a gap: it is not the year before', async () => {
+    const result = await readiness({ period_start: '2022-01-01', period_end: '2022-12-31' })
+    expect(openYearWarning(result)).toBeUndefined()
+    expect(checkFailedWarning(result)).toBeUndefined()
+  })
+
+  it('says the check could not be made, without blocking, when the year before cannot be read', async () => {
+    vi.mocked(resolvePreviousFiscalPeriod).mockRejectedValueOnce(
+      new Error('Failed to read the previous fiscal year: simulated'),
+    )
+
+    const result = await readiness({})
+
+    expect(checkFailedWarning(result)).toContain('kontrollera det manuellt innan bokslut')
+    expect(openYearWarning(result)).toBeUndefined()
+    expect(result.blockers).toEqual([])
+    expect(result.ready).toBe(true)
+  })
+
+  it('says the same when the verdict for its last day cannot be read', async () => {
+    // The verdict fails closed (reported as locked): that must not read as
+    // "the year before is locked".
+    vi.mocked(resolvePeriodLockForDate).mockImplementation(async (_supabase, _companyId, date) =>
+      date === PREVIOUS_END
+        ? { status: { period_id: null, status: 'locked' as const, lock_date: null, lookup_failed: true }, layer: null }
+        : NO_LOCK,
+    )
+
+    const result = await readiness({})
+
+    expect(checkFailedWarning(result)).toBeDefined()
+    expect(openYearWarning(result)).toBeUndefined()
+    expect(result.blockers).toEqual([])
+    expect(result.ready).toBe(true)
   })
 })
 
