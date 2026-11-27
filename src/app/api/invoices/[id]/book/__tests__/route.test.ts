@@ -227,7 +227,11 @@ describe('POST /api/invoices/[id]/book', () => {
     enqueue({ data: null, error: null })
     mockCreateInvoiceJournalEntry.mockResolvedValue({ id: 'je-1' })
     enqueue({ data: { ...invoice, journal_entry_id: 'je-1' }, error: null })
-    enqueue({ data: 'document-1', error: null })
+    // The session's delivery history: the emailed copy kept its file.
+    enqueue({
+      data: [{ id: 'delivery-1', status: 'sent', document_attachment_id: 'document-1', sent_at: '2026-11-25T16:33:41+00:00' }],
+      error: null,
+    })
 
     const { status } = await parseJsonResponse(await bookRequest())
 
@@ -240,7 +244,7 @@ describe('POST /api/invoices/[id]/book', () => {
       { link_basis: 'system_derived', link_evidence: null },
     )
     expect(mockSupabase.rpc).toHaveBeenCalledWith(
-      'latest_sent_invoice_delivery_document',
+      'list_invoice_delivery_summaries',
       { p_company_id: 'company-1', p_invoice_id: 'inv-1' },
     )
   })

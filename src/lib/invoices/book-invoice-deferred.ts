@@ -1,4 +1,4 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
+import type { PostgrestError, SupabaseClient } from '@supabase/supabase-js'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import {
@@ -45,6 +45,58 @@ export type BookInvoiceDeferredResult =
       errorCode: string
       details?: Record<string, unknown>
     }
+
+/** One row of an invoice's delivery history, as both summary readers list it. */
+interface DeliverySummary {
+  status: string
+  document_attachment_id: string | null
+  sent_at: string | null
+}
+
+/**
+ * The PDF the customer was emailed: the file of the newest delivery that
+ * completed as sent and kept it. A manual mark (marked_sent) keeps no file,
+ * so a later mark leaves the emailed copy in place.
+ *
+ * Read through the masked delivery history, never invoice_deliveries itself,
+ * whose row holds the mail's exact payload. The session's reader serves a
+ * person's own session. On the service role (the MCP, v1 and grant doors)
+ * auth.uid() is null and it refuses with 42501, so the history is read
+ * through its sibling, which names the acting member and checks that
+ * membership itself. A session has no EXECUTE on the sibling, so a refusal
+ * there stands.
+ */
+async function deliveredInvoiceDocument(
+  supabase: SupabaseClient,
+  companyId: string,
+  invoiceId: string,
+  userId: string,
+): Promise<{ documentId: string | null; error: PostgrestError | null; serviceError?: PostgrestError }> {
+  const session = await supabase.rpc('list_invoice_delivery_summaries', {
+    p_company_id: companyId,
+    p_invoice_id: invoiceId,
+  })
+  let history = session
+  let serviceError: PostgrestError | undefined
+  if (session.error?.code === '42501') {
+    const service = await supabase.rpc('list_invoice_delivery_summaries_for_service', {
+      p_company_id: companyId,
+      p_user_id: userId,
+      p_invoice_id: invoiceId,
+    })
+    if (service.error) serviceError = service.error
+    else history = service
+  }
+  if (history.error) return { documentId: null, error: history.error, ...(serviceError ? { serviceError } : {}) }
+
+  let newest: { documentId: string; sentAt: number } | null = null
+  for (const delivery of (history.data ?? []) as DeliverySummary[]) {
+    if (delivery.status !== 'sent' || !delivery.document_attachment_id || !delivery.sent_at) continue
+    const sentAt = Date.parse(delivery.sent_at)
+    if (!newest || sentAt > newest.sentAt) newest = { documentId: delivery.document_attachment_id, sentAt }
+  }
+  return { documentId: newest?.documentId ?? null, error: null }
+}
 
 /**
  * The deferred "Bokför" core (#967): create the revenue verifikat for an
@@ -129,20 +181,21 @@ export async function bookInvoiceDeferred(opts: {
 
   // The send flow archived the exact delivered PDF before this deferred
   // journal entry existed. Attach the newest successful delivery snapshot now.
-  const { data: deliveryDocumentId, error: deliveryDocumentError } = await supabase.rpc(
-    'latest_sent_invoice_delivery_document',
-    { p_company_id: companyId, p_invoice_id: id },
-  )
+  const delivered = await deliveredInvoiceDocument(supabase, companyId, id, userId)
+  const deliveryDocumentId = delivered.documentId
 
-  if (deliveryDocumentError) {
-    log.error('failed to find delivered invoice PDF for deferred booking', deliveryDocumentError, {
+  if (delivered.error) {
+    log.error('failed to find delivered invoice PDF for deferred booking', delivered.error, {
       invoiceId: id,
+      ...(delivered.serviceError
+        ? { serviceReadCode: delivered.serviceError.code, serviceReadError: delivered.serviceError.message }
+        : {}),
     })
     warnings.push({
       code: 'PDF_LINK_FAILED',
       message: 'Fakturan bokfördes, men den arkiverade PDF-filen kunde inte kopplas till verifikationen.',
     })
-  } else if (typeof deliveryDocumentId === 'string') {
+  } else if (deliveryDocumentId) {
     try {
       await linkToJournalEntry(
         supabase,

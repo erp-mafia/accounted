@@ -49,6 +49,14 @@ function makeSentInvoice(overrides: Record<string, unknown> = {}) {
   }
 }
 
+/** A completed email delivery that archived the PDF it sent, as the summary readers list it. */
+function sentDelivery(documentId: string, sentAt: string) {
+  return { id: `delivery-${documentId}`, status: 'sent', document_attachment_id: documentId, sent_at: sentAt }
+}
+
+/** What the session's reader answers when there is no auth.uid(), as on the service role. */
+const SESSION_REFUSAL = { code: '42501', message: 'not authorized to list invoice delivery summaries' }
+
 function book(invoice = makeSentInvoice()) {
   return bookInvoiceDeferred({
     supabase: mockSupabase as never,
@@ -76,7 +84,7 @@ describe('bookInvoiceDeferred', () => {
     const invoice = makeSentInvoice()
     mockCreateInvoiceJournalEntry.mockResolvedValue({ id: 'je-1' })
     enqueue({ data: { ...invoice, journal_entry_id: 'je-1' }, error: null }) // CAS link
-    enqueue({ data: 'document-1', error: null }) // delivery-document rpc
+    enqueue({ data: [sentDelivery('document-1', '2026-11-25T16:33:41+00:00')], error: null }) // the session's delivery history
 
     const result = await book(invoice)
 
@@ -102,7 +110,94 @@ describe('bookInvoiceDeferred', () => {
       'je-1',
       { link_basis: 'system_derived', link_evidence: null },
     )
+    expect(mockSupabase.rpc).toHaveBeenCalledWith('list_invoice_delivery_summaries', {
+      p_company_id: 'company-1',
+      p_invoice_id: 'inv-1',
+    })
+    expect(mockSupabase.rpc).not.toHaveBeenCalledWith('list_invoice_delivery_summaries_for_service', expect.anything())
     expect(mockCreateSchedules).toHaveBeenCalled()
+  })
+
+  // The MCP, v1 and grant doors book on the service role, where auth.uid() is
+  // null: the session's reader refuses (42501) and the emailed PDF used to be
+  // left off the verifikat with a PDF_LINK_FAILED warning.
+  it('links the delivered PDF when the booking runs on the service role', async () => {
+    const invoice = makeSentInvoice()
+    mockCreateInvoiceJournalEntry.mockResolvedValue({ id: 'je-1' })
+    enqueue({ data: { ...invoice, journal_entry_id: 'je-1' }, error: null }) // CAS link
+    enqueue({ data: null, error: SESSION_REFUSAL }) // the session's reader: no auth.uid()
+    enqueue({
+      // Newest first, as the reader lists them: a later manual mark keeps no
+      // file, so the emailed copy is the one the verifikat gets.
+      data: [
+        { id: 'delivery-3', status: 'marked_sent', document_attachment_id: null, sent_at: '2026-11-26T09:00:00+00:00' },
+        sentDelivery('document-2', '2026-11-25T16:33:41+00:00'),
+        { id: 'delivery-x', status: 'failed', document_attachment_id: null, sent_at: null },
+        sentDelivery('document-1', '2026-11-20T08:00:00+00:00'),
+      ],
+      error: null,
+    })
+
+    const result = await book(invoice)
+
+    expect(result).toEqual(expect.objectContaining({ ok: true, journalEntryId: 'je-1', warnings: [] }))
+    expect(mockSupabase.rpc).toHaveBeenCalledWith('list_invoice_delivery_summaries_for_service', {
+      p_company_id: 'company-1',
+      p_user_id: 'user-1',
+      p_invoice_id: 'inv-1',
+    })
+    expect(mockLinkToJournalEntry).toHaveBeenCalledTimes(1)
+    expect(mockLinkToJournalEntry).toHaveBeenCalledWith(
+      mockSupabase,
+      'company-1',
+      'document-2',
+      'je-1',
+      { link_basis: 'system_derived', link_evidence: null },
+    )
+  })
+
+  it('books and warns when neither reader can read the delivery history', async () => {
+    const invoice = makeSentInvoice()
+    mockCreateInvoiceJournalEntry.mockResolvedValue({ id: 'je-1' })
+    enqueue({ data: { ...invoice, journal_entry_id: 'je-1' }, error: null }) // CAS link
+    enqueue({ data: null, error: SESSION_REFUSAL })
+    // A session has no EXECUTE on the service sibling.
+    enqueue({
+      data: null,
+      error: { code: '42501', message: 'permission denied for function list_invoice_delivery_summaries_for_service' },
+    })
+
+    const result = await book(invoice)
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        ok: true,
+        journalEntryId: 'je-1',
+        warnings: [expect.objectContaining({ code: 'PDF_LINK_FAILED' })],
+      }),
+    )
+    expect(mockLinkToJournalEntry).not.toHaveBeenCalled()
+    expect(log.error).toHaveBeenCalledWith(
+      'failed to find delivered invoice PDF for deferred booking',
+      SESSION_REFUSAL,
+      expect.objectContaining({ invoiceId: 'inv-1', serviceReadCode: '42501' }),
+    )
+  })
+
+  it('links nothing and warns nothing when no delivery kept a file', async () => {
+    const invoice = makeSentInvoice()
+    mockCreateInvoiceJournalEntry.mockResolvedValue({ id: 'je-1' })
+    enqueue({ data: { ...invoice, journal_entry_id: 'je-1' }, error: null }) // CAS link
+    enqueue({ data: null, error: SESSION_REFUSAL })
+    enqueue({
+      data: [{ id: 'delivery-1', status: 'marked_sent', document_attachment_id: null, sent_at: '2026-11-25T16:33:40+00:00' }],
+      error: null,
+    })
+
+    const result = await book(invoice)
+
+    expect(result).toEqual(expect.objectContaining({ ok: true, warnings: [] }))
+    expect(mockLinkToJournalEntry).not.toHaveBeenCalled()
   })
 
   it('returns INVOICE_BOOK_NO_FISCAL_PERIOD when no period covers the date', async () => {
