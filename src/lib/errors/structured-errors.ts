@@ -7961,6 +7961,59 @@ const SUPPLIER_INVOICE_WAVE4: Record<string, StructuredErrorEntry> = {
       tool: 'gnubok_uncredit_supplier_invoice',
     },
   },
+  // Byt leverantör (lib/supplier-invoices/change-supplier.ts): an invoice
+  // registered on the wrong supplier moves to the right one while nothing has
+  // been decided on it. Each refusal names what has, and the way that is left.
+  SI_CHANGE_SUPPLIER_CREDIT_NOTE: {
+    httpStatus: 409,
+    message_sv: 'En kreditfaktura byter inte leverantör: den följer fakturan den krediterar.',
+    message_en: 'A credit note does not change supplier: it follows the invoice it credits.',
+  },
+  SI_CHANGE_SUPPLIER_NOT_UNPAID: {
+    httpStatus: 409,
+    message_sv: 'Bara en obetald faktura kan byta leverantör. En betald, delbetald eller krediterad faktura rättas med kreditfaktura.',
+    message_en:
+      'Only an unpaid supplier invoice can change supplier. A paid, part-paid or credited one is corrected with a credit note (details.reason payments: a payment is recorded on it).',
+  },
+  SI_CHANGE_SUPPLIER_ATTESTED: {
+    httpStatus: 409,
+    message_sv: `Fakturan är attesterad, och attesten gällde den leverantören. Kreditera fakturan och registrera underlaget igen på rätt leverantör.`,
+    message_en: `The invoice is attested, and the attest was given for that supplier (details.reason approval_in_round: an approval of the current round, the attest mark not yet set). Credit the invoice and register its underlag again on the right supplier.`,
+    remediation: {
+      description: 'An attest is never moved to another payee. Credit the invoice (gnubok_credit_supplier_invoice), then register its inbox item again on the right supplier.',
+      tool: 'gnubok_credit_supplier_invoice',
+    },
+  },
+  SI_CHANGE_SUPPLIER_PAYMENT_UNDER_WAY: {
+    httpStatus: 409,
+    message_sv: 'Fakturan är på väg att betalas till den nuvarande leverantören (betalfil, bankbetalning eller inlagd i banken). Ta tillbaka betalningen först.',
+    message_en:
+      'A payment of the invoice to its current supplier is under way (details.reason: payment_file, bank_payment or the "inlagd i banken" mark). Withdraw that payment first.',
+  },
+  SI_CHANGE_SUPPLIER_OTHER_KIND: {
+    httpStatus: 409,
+    message_sv: `Den nya leverantören är av ett annat slag (svensk, EU eller utanför EU), och då bokförs momsen på ett annat sätt. Kreditera fakturan och registrera underlaget igen på rätt leverantör.`,
+    message_en: `The new supplier is of another kind (details.from_kind, details.to_kind): the moms is booked another way, which changes the verifikat's lines. Credit the invoice and register its underlag again on the right supplier.`,
+  },
+  SI_CHANGE_SUPPLIER_DUPLICATE_NUMBER: {
+    httpStatus: 409,
+    message_sv: 'Den nya leverantören har redan en faktura med samma nummer.',
+    message_en: 'The new supplier already holds a live invoice with this number (details.existing).',
+  },
+  SI_CHANGE_SUPPLIER_PERIOD_LOCKED: {
+    httpStatus: 409,
+    message_sv: `Verifikationen ligger i en stängd eller låst period, och där rättas den bara med en ny verifikation. Kreditera fakturan och registrera underlaget igen på rätt leverantör.`,
+    message_en: `The registration verifikat lies in a closed or locked period, or behind the lock date: its text can no longer be corrected inside it. Credit the invoice and register its underlag again on the right supplier.`,
+    remediation: {
+      description: 'Past a lock only a new verifikat corrects the books: credit the invoice (gnubok_credit_supplier_invoice), then register its inbox item again on the right supplier.',
+      tool: 'gnubok_credit_supplier_invoice',
+    },
+  },
+  SI_CHANGE_SUPPLIER_CONFLICT: {
+    httpStatus: 409,
+    message_sv: 'Fakturan ändrades medan leverantören byttes. Ladda om fakturan och försök igen.',
+    message_en: 'The invoice changed while the supplier was being changed (a payment, an attest or a booking landed). Read it again and retry.',
+  },
   SI_ITEM_NOT_FOUND: {
     httpStatus: 404,
     message_sv: 'Fakturaraden kunde inte hittas.',

@@ -21,6 +21,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import {
   ArrowUturnLeftIcon,
+  ArrowsRightLeftIcon,
   BuildingLibraryIcon,
   CalendarDaysIcon,
   CheckCircleIcon,
@@ -78,6 +79,8 @@ import {
 import { DetailPager } from '@/components/common/DetailPager'
 import { SupplierPaymentDialog } from '@/components/supplier-invoices/SupplierPaymentDialog'
 import { PaymentReferenceDialog } from '@/components/supplier-invoices/PaymentReferenceDialog'
+import { ChangeSupplierDialog } from '@/components/supplier-invoices/ChangeSupplierDialog'
+import { supplierChangeRowRefusal } from '@/lib/supplier-invoices/change-supplier-rules'
 import { SupplierInvoiceAttestPanel, useSupplierInvoiceAttest } from '@/components/supplier-invoices/SupplierInvoiceAttestPanel'
 import { useAttestPolicyOn } from '@/components/supplier-invoices/use-attest-policy-on'
 import { listContextKey } from '@/lib/navigation/list-context'
@@ -250,6 +253,7 @@ export default function SupplierInvoiceDetailPage() {
   const [isFileDialogOpen, setIsFileDialogOpen] = useState(false)
   const [isBankDialogOpen, setIsBankDialogOpen] = useState(false)
   const [isOcrDialogOpen, setIsOcrDialogOpen] = useState(false)
+  const [isChangeSupplierOpen, setIsChangeSupplierOpen] = useState(false)
   // Betala via banken is offered where bank payments are switched on for the
   // company (GET /api/payments/availability), beside the payment file.
   const [bankPaymentsAvailable, setBankPaymentsAvailable] = useState(false)
@@ -822,9 +826,13 @@ export default function SupplierInvoiceDetailPage() {
     !invoice.is_credit_note &&
     !invoice.registration_journal_entry_id &&
     payments.length === 0
+  // Byt leverantör: the row's own rules (change-supplier-rules.ts), and no
+  // payment file or bank payment open. The server reads the rest.
+  const canChangeSupplier =
+    supplierChangeRowRefusal(invoice) === null && payments.length === 0 && !lifecycle?.batch && !lifecycle?.payment_order
   // Secondary actions collapse into one overflow menu (convention 9: one
   // obvious next step in the header, the alternatives behind a caret).
-  const hasMenu = canCredit || canDelete
+  const hasMenu = canCredit || canDelete || canChangeSupplier
   // The ways to pay collapse into one split button (convention 9) whose face
   // is the last-used mode; each mode keeps its own gate above. Attest gates
   // payment, so while attest is pending the button steps back to outline and
@@ -996,6 +1004,12 @@ export default function SupplierInvoiceDetailPage() {
               <DropdownMenuContent align="end" className="min-w-[240px]">
                 {/* On a phone the bar's other actions are listed here first. */}
                 <PageHeaderOverflowItems />
+                {canChangeSupplier && (
+                  <DropdownMenuItem onSelect={() => setIsChangeSupplierOpen(true)} disabled={isProcessing || !canWrite}>
+                    <ArrowsRightLeftIcon className="h-4 w-4" />
+                    {t('change_supplier_button')}
+                  </DropdownMenuItem>
+                )}
                 {canCredit && (
                   <DropdownMenuItem onSelect={() => void handleCredit()} disabled={isProcessing || !canWrite}>
                     <DocumentTextIcon className="h-4 w-4" />
@@ -1004,7 +1018,7 @@ export default function SupplierInvoiceDetailPage() {
                 )}
                 {canDelete && (
                   <>
-                    {canCredit && <DropdownMenuSeparator />}
+                    {(canCredit || canChangeSupplier) && <DropdownMenuSeparator />}
                     <DropdownMenuItem
                       onSelect={() => void handleDelete()}
                       disabled={isProcessing || !canWrite}
@@ -1388,6 +1402,17 @@ export default function SupplierInvoiceDetailPage() {
             setIsFileDialogOpen(false)
             void mutateLifecycle()
           }}
+        />
+      )}
+      {isChangeSupplierOpen && invoice.supplier_id && (
+        <ChangeSupplierDialog
+          invoiceId={invoice.id}
+          currentSupplierId={invoice.supplier_id}
+          booked={!!invoice.registration_journal_entry_id}
+          onOpenChange={(open) => {
+            if (!open) setIsChangeSupplierOpen(false)
+          }}
+          onChanged={() => void fetchInvoice()}
         />
       )}
       {isOcrDialogOpen && (

@@ -2,13 +2,15 @@
  * Supplier-invoice actions outside create/approve/book/pay/credit: delete an
  * unbooked invoice, undo a credit, change the header (numbers, dates,
  * reference, notes), move one line to another account (inline rättelse of the
- * registration verifikat), and the "inlagd i banken" mark. Rules live in
- * lib/supplier-invoices/manage.ts, lib/supplier-invoices/update-header.ts and
- * lib/supplier-invoices/item-account.ts, shared with the dashboard routes
- * under /api/supplier-invoices/[id].
+ * registration verifikat), change the supplier of an unpaid, unattested
+ * invoice (the verifikat's text corrected inline), and the "inlagd i banken"
+ * mark. Rules live in lib/supplier-invoices/manage.ts,
+ * lib/supplier-invoices/update-header.ts, lib/supplier-invoices/item-account.ts
+ * and lib/supplier-invoices/change-supplier.ts, shared with the dashboard
+ * routes under /api/supplier-invoices/[id].
  *
- * MCP: delete, uncredit, the header change and the line move stage for
- * approval. The header change has no v1 binding of its own: the hand-written
+ * MCP: delete, uncredit, the header change, the line move and the supplier
+ * change stage for approval. The header change has no v1 binding of its own: the hand-written
  * PATCH /supplier-invoices/{id} is its v1 door (it keeps a narrower public
  * contract) and calls the same service. The bank mark
  * is v1 only: it books nothing, and an agent that paid an invoice records the
@@ -23,6 +25,7 @@ import {
   uncreditSupplierInvoice,
 } from '@/lib/supplier-invoices/manage'
 import { moveSupplierInvoiceItemAccount } from '@/lib/supplier-invoices/item-account'
+import { changeSupplierInvoiceSupplier } from '@/lib/supplier-invoices/change-supplier'
 import { updateSupplierInvoiceHeader } from '@/lib/supplier-invoices/update-header'
 import { UpdateSupplierInvoiceSchema } from '@/lib/api/schemas'
 import { defineOperation } from './types'
@@ -378,6 +381,100 @@ export const supplierInvoicesUpdateItemAccount = defineOperation({
   },
   run: (ctx, { supplier_invoice_id, supplier_invoice_item_id, account_number }, { dryRun }) =>
     moveSupplierInvoiceItemAccount(ctx, supplier_invoice_id, supplier_invoice_item_id, account_number, { dryRun }),
+})
+
+// ---------------------------------------------------------------------------
+// supplier-invoices.change-supplier
+// ---------------------------------------------------------------------------
+
+export const supplierInvoicesChangeSupplier = defineOperation({
+  id: 'supplier-invoices.change-supplier',
+  kind: 'write',
+  scope: 'suppliers:write',
+  // High: the supplier decides who is paid, and a posted verifikat's text is
+  // corrected.
+  risk: 'high',
+  reversible: true,
+  docs: {
+    summary: 'Move an unpaid, unattested supplier invoice to another supplier, correcting the registration verifikat\'s text inline.',
+    description:
+      'Byt leverantör: for a supplier invoice registered on the wrong supplier. Only while nothing has been decided on it: unsettled (registered or overdue), nothing paid, not attested (no attest mark and no approval in the attest round), no payment file, bank payment or "inlagd i banken" mark under way, never a credit note or a självfaktura. The new supplier must be of the same kind (svensk, EU, utanför EU), since the kind decides how the moms is booked, and must not already hold a live invoice with the same number. A posted registration verifikat names the supplier in its text (the motpart, BFL 5 kap 7 §): the text is corrected inside the same verifikat through the inline rättelse, logged with who and when (BFL 5 kap 5 § and 9 §), which only an open, unlocked period takes. Amounts, accounts, lines and dates do not change. The payee check follows the new supplier\'s card from then on. Idempotent. Dry-runnable: the preview carries the new verifikat text.',
+    useWhen:
+      'A supplier invoice was registered on the wrong supplier (a similar name, a mismatched bank account in the payee alert) and is not yet attested or paid.',
+    doNotUseFor:
+      'Attested, paid or credited invoices, a verifikat in a closed or locked period, or a supplier of another kind: credit the invoice (gnubok_credit_supplier_invoice) and register its inbox item again on the right supplier. Not for correcting the supplier card itself (gnubok_update_supplier).',
+    pitfalls: [
+      'An attested invoice answers 409 SI_CHANGE_SUPPLIER_ATTESTED: an attest is never moved to another payee.',
+      'A payment recorded, or a paid or credited status, answers 409 SI_CHANGE_SUPPLIER_NOT_UNPAID; a payment file, bank payment or the inlagd-i-banken mark answers 409 SI_CHANGE_SUPPLIER_PAYMENT_UNDER_WAY.',
+      'A new supplier of another kind answers 409 SI_CHANGE_SUPPLIER_OTHER_KIND; one already holding the number answers 409 SI_CHANGE_SUPPLIER_DUPLICATE_NUMBER with details.existing.',
+      'A registration verifikat in a closed or locked period, or behind the lock date, answers 409 SI_CHANGE_SUPPLIER_PERIOD_LOCKED: past a lock only a credit and a new registration correct it.',
+      'A payment, attest or booking that lands between staging and approval answers 409 SI_CHANGE_SUPPLIER_CONFLICT: read the invoice again and stage anew.',
+    ],
+    example: {
+      request: { supplier_id: '7a8b…' },
+      response: {
+        data: {
+          supplier_invoice_id: '3b4c…',
+          supplier_id: '7a8b…',
+          previous_supplier_id: '1c2d…',
+          changed: true,
+          corrected_journal_entry_id: '6d7e…',
+        },
+        meta: META,
+      },
+    },
+  },
+  input: z.object({
+    supplier_invoice_id: SUPPLIER_INVOICE_ID,
+    supplier_id: z.string().uuid().describe('The supplier the invoice belongs to, from GET /suppliers.'),
+  }),
+  output: z.object({
+    supplier_invoice_id: z.string().uuid(),
+    supplier_id: z.string().uuid(),
+    previous_supplier_id: z.string().uuid(),
+    changed: z.boolean().describe('False when the invoice was on that supplier already.'),
+    corrected_journal_entry_id: z
+      .string()
+      .uuid()
+      .nullable()
+      .describe('The registration verifikat whose text was corrected inline, when one was.'),
+  }),
+  errorCodes: [
+    'SI_NOT_FOUND',
+    'SUPPLIER_NOT_FOUND',
+    'SI_CHANGE_SUPPLIER_CREDIT_NOTE',
+    'SI_SELF_BILL_IMMUTABLE',
+    'SI_CHANGE_SUPPLIER_NOT_UNPAID',
+    'SI_CHANGE_SUPPLIER_ATTESTED',
+    'SI_CHANGE_SUPPLIER_PAYMENT_UNDER_WAY',
+    'SI_CHANGE_SUPPLIER_OTHER_KIND',
+    'SI_CHANGE_SUPPLIER_DUPLICATE_NUMBER',
+    'SI_CHANGE_SUPPLIER_PERIOD_LOCKED',
+    'SI_CHANGE_SUPPLIER_CONFLICT',
+    'JOURNAL_RATTELSE_REFUSED',
+  ],
+  http: {
+    method: 'POST',
+    path: '/api/v1/companies/:companyId/supplier-invoices/:id/change-supplier',
+    pathParams: { id: 'supplier_invoice_id' },
+  },
+  mcp: {
+    name: 'gnubok_change_supplier_invoice_supplier',
+    title: 'Change Supplier Invoice Supplier',
+    description:
+      'Stage moving an unpaid, unattested supplier invoice to the right supplier; a posted registration verifikat gets its text corrected inline. Refused when attested, paid, in payment, another supplier kind or past a lock: credit it and register the inbox item again.',
+    keywords: ['byt leverantör', 'fel leverantör', 'ändra leverantör', 'flytta faktura till annan leverantör', 'wrong supplier', 'change supplier'],
+    stage: {
+      pendingType: 'change_supplier_invoice_supplier',
+      title: (_input, preview) => {
+        const to = (preview?.to as { name?: string } | undefined)?.name
+        const number = preview?.supplier_invoice_number ?? (preview?.arrival_number != null ? `ankomst ${String(preview.arrival_number)}` : '')
+        return `Byt leverantör på leverantörsfaktura ${String(number)}${to ? ` till ${to}` : ''}`.replace(/\s+/g, ' ').trim()
+      },
+    },
+  },
+  run: (ctx, { supplier_invoice_id, supplier_id }, { dryRun }) =>
+    changeSupplierInvoiceSupplier(ctx, supplier_invoice_id, supplier_id, { dryRun }),
 })
 
 // ---------------------------------------------------------------------------

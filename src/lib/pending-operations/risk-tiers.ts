@@ -105,6 +105,8 @@ const RISK_TIERS = {
   // like update_invoice: the due date and the reference steer the payment.
   update_supplier_invoice: 'medium',
   update_supplier_invoice_item_account: 'high',
+  // Byt leverantör: who the invoice is paid to, and a verifikat's text corrected inline.
+  change_supplier_invoice_supplier: 'high',
   // Operation registry, wave 3: documents, transactions, rättelse, filing.
   delete_document: 'medium',
   delete_inbox_item: 'medium',
