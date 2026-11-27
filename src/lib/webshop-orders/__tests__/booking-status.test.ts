@@ -4,6 +4,7 @@ import {
   isCancelledInStore,
   isCancelledWithoutRefund,
   isVoidable,
+  isVoidOutdated,
   webshopOrderBookingStatus,
 } from '../booking-status'
 
@@ -52,6 +53,24 @@ describe('isCancelledWithoutRefund and isVoidable', () => {
 
   it('an order the store did not cancel is not voidable', () => {
     expect(isVoidable(row())).toBe(false)
+  })
+})
+
+describe('isVoidOutdated', () => {
+  const voided = { manually_booked_at: MARKED, manually_voided: true }
+
+  it('holds while the store still reports the order cancelled with nothing refunded', () => {
+    expect(isVoidOutdated(row({ status: 'cancelled', ...voided }))).toBe(false)
+  })
+
+  it('flags a void once the store reopens the order or refunds money on it', () => {
+    expect(isVoidOutdated(row({ status: 'processing', ...voided }))).toBe(true)
+    expect(isVoidOutdated(row({ status: 'cancelled', refunded_total: 100, ...voided }))).toBe(true)
+  })
+
+  it('says nothing about a row that is not voided', () => {
+    expect(isVoidOutdated(row({ status: 'processing', manually_booked_at: MARKED }))).toBe(false)
+    expect(isVoidOutdated(row({ status: 'processing' }))).toBe(false)
   })
 })
 

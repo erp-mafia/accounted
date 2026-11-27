@@ -28,6 +28,7 @@ import { getCountryName } from '@/lib/vat/country-codes'
 import {
   isCancelledWithoutRefund,
   isVoidable,
+  isVoidOutdated,
   webshopOrderBookingStatus,
 } from '@/lib/webshop-orders/booking-status'
 import type { WebshopOrder, WebshopStoreSettings } from '@/types'
@@ -757,9 +758,15 @@ function OrderStatus({
       ) : (
         <span className="text-xs text-muted-foreground">{t('status_marked_booked')}</span>
       )
-    // Voided after the store cancelled it: done, nothing booked.
+    // Voided after the store cancelled it: done, nothing booked. When the
+    // store has since reopened the order or refunded money on it, the void
+    // no longer holds: a warning chip, and the menu's undo is the way back.
     case 'voided':
-      return <span className="text-xs text-muted-foreground">{t('status_voided')}</span>
+      return isVoidOutdated(order) ? (
+        <Badge variant="warning">{t('status_voided_store_changed')}</Badge>
+      ) : (
+        <span className="text-xs text-muted-foreground">{t('status_voided')}</span>
+      )
     case 'invoiced':
       return (
         <Link

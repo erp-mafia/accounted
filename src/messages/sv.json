@@ -11474,6 +11474,7 @@
     "status_to_book": "Ej bokförd",
     "status_marked_booked": "Bokförd manuellt",
     "status_voided": "Makulerad",
+    "status_voided_store_changed": "Makulerad, ändrad i butiken",
     "status_cancelled": "Avbruten",
     "action_book": "Bokför",
     "action_create_invoice": "Skapa faktura",

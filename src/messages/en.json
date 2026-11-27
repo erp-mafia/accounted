@@ -11474,6 +11474,7 @@
     "status_to_book": "Not booked",
     "status_marked_booked": "Booked manually",
     "status_voided": "Voided",
+    "status_voided_store_changed": "Voided, changed in the store",
     "status_cancelled": "Cancelled",
     "action_book": "Book",
     "action_create_invoice": "Create invoice",

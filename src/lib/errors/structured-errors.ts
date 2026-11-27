@@ -11579,6 +11579,13 @@ const WEBSHOP_ORDERS: Record<string, StructuredErrorEntry> = {
     message_en:
       'The order is marked as voided. Undo the void first if you want to book or invoice it from here.',
   },
+  WEBSHOP_ORDER_REFUND_PARENT_VOIDED: {
+    httpStatus: 409,
+    message_sv:
+      'Ordern som återbetalningen hör till är markerad som makulerad. Butiken har betalat tillbaka pengar, så ångra makuleringen och bokför ordern och återbetalningen.',
+    message_en:
+      'The order this refund belongs to is marked as voided. The store has refunded money, so undo the void and book the order and its refund.',
+  },
   WEBSHOP_ORDER_NOT_CANCELLED: {
     httpStatus: 409,
     message_sv:

@@ -46,6 +46,7 @@ export interface OrderBookableFailure {
     | 'WEBSHOP_ORDER_MANUALLY_BOOKED'
     | 'WEBSHOP_ORDER_VOIDED'
     | 'WEBSHOP_ORDER_REFUND_PARENT_INVOICED'
+    | 'WEBSHOP_ORDER_REFUND_PARENT_VOIDED'
     | 'WEBSHOP_ORDER_NOT_PAID'
     | 'WEBSHOP_ORDER_LEGACY_TRANSACTION_BOOKED'
     | 'WEBSHOP_ORDER_LEGACY_TRANSACTION_OPEN'
@@ -83,11 +84,14 @@ export async function assertOrderBookable(
       details: { manually_booked_at: order.manually_booked_at },
     }
   }
-  // Refunds of an invoiced order belong in the credit-note flow.
+  // Refunds of an invoiced order belong in the credit-note flow. A refund of
+  // a voided order would book a return of a sale that was never booked: the
+  // store refunded money after the void, so the void is undone and the order
+  // and its refund book together.
   if (order.row_type === 'refund' && order.parent_order_id) {
     const { data: parent } = await supabase
       .from('webshop_orders')
-      .select('invoice_id')
+      .select('invoice_id, manually_voided')
       .eq('id', order.parent_order_id)
       .eq('company_id', companyId)
       .maybeSingle()
@@ -96,6 +100,9 @@ export async function assertOrderBookable(
         code: 'WEBSHOP_ORDER_REFUND_PARENT_INVOICED',
         details: { invoice_id: parent.invoice_id },
       }
+    }
+    if (parent?.manually_voided) {
+      return { code: 'WEBSHOP_ORDER_REFUND_PARENT_VOIDED', details: { parent_order_id: order.parent_order_id } }
     }
   }
   if (!order.is_paid && order.row_type === 'order') {

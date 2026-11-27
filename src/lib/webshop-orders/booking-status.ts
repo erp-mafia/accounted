@@ -55,6 +55,17 @@ export function isVoidable(
 }
 
 /**
+ * A void the store no longer backs: the row is voided, but the store has
+ * since reopened the order or refunded money on it. The row stays closed
+ * until a person undoes the void; the Orders page flags it so they do.
+ */
+export function isVoidOutdated(
+  order: Pick<WebshopOrder, 'row_type' | 'status' | 'refunded_total' | 'manually_booked_at' | 'manually_voided'>,
+): boolean {
+  return order.manually_booked_at !== null && order.manually_voided === true && !isCancelledWithoutRefund(order)
+}
+
+/**
  * The PostgREST or-filter for rows closed by an exit that books: booked
  * through the integration, or marked as booked outside it. A voided row
  * carries the mark too but booked nothing, so it is neither booked nor open.

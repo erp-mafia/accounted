@@ -5064,8 +5064,8 @@ Lists the rows the Shopify, WooCommerce and Zettle syncs store: one per paid ord
 
 **Pitfalls:**
 - customer_country is ISO 3166-1 alpha-2. Shopify stores the shipping (destination) country, or the billing country when nothing on the order ships (digital products, services); WooCommerce the billing country. It is null for a Shopify local pickup or when the store withholds addresses.
-- booked=unbooked also returns unpaid and invoiced rows: only booking_status to_book can be booked.
-- booking_status cancelled: the store cancelled the order (platform_status cancelled). With refunded_total 0 the day booking leaves it out; a person voids it or books it on its own. voided: marked makulerad on the Orders page, nothing is booked, and booked=booked leaves it out.
+- booked=unbooked also returns unpaid, invoiced and cancelled rows. A to_book row can be booked. A cancelled row (the store cancelled the order, platform_status cancelled) with refunded_total 0 is left out of the day booking and books only one at a time, when the customer paid and kept no refund; otherwise a person voids it on the Orders page.
+- voided: marked makulerad on the Orders page after the store cancelled the order. Nothing is booked, and booked=booked leaves it out.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -5325,6 +5325,7 @@ Posts one verifikat for the order row through the bookkeeping engine (source_typ
 - The account choice is yours: Accounted only checks balance, period, lock and that the accounts exist. Shopify's amounts and VAT are the source; the lines should add up to them.
 - customer_country is ISO 3166-1 alpha-2. Shopify stores the shipping (destination) country, or the billing country when nothing on the order ships (digital products, services); WooCommerce the billing country. It is null for a Shopify local pickup or when the store withholds addresses.
 - A posted verifikat is permanent: undo it with storno (POST /journal-entries/{id}/reverse), never by editing.
+- An order with booking_status cancelled books only when money moved and stayed: the store cancelled it, so ask the person before booking it as a sale. A voided one is refused (WEBSHOP_ORDER_VOIDED), and so is a refund of a voided order (WEBSHOP_ORDER_REFUND_PARENT_VOIDED).
 - transaction_id links the bank row that paid the order (a Swish payment on the bank account, a Stripe charge on 1686) to the verifikat in the same approval. Refused before anything is posted unless the row is unbooked and unlinked, its amount is the order total in its currency (negative for a refund) and the lines book exactly that amount on the row's account. A link refused after posting leaves the booking standing: transaction_link.linked is false with the refusal; link the row with POST /transactions/{id}/link-journal-entry.
 
 | Parameter | In | Type | Required | Notes |

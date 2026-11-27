@@ -91,6 +91,14 @@ describe('deriveUnattendedOrderLines', () => {
     expect(await derive(o, null, { persistFx: false })).toMatchObject({ ok: false, code })
   })
 
+  it('refuses a refund whose order was voided: the store refunded money after the void', async () => {
+    const parent = order({ id: 'order-0', status: 'cancelled', refunded_total: 125, manually_booked_at: '2026-11-20T10:00:00Z', manually_voided: true })
+    const refund = order({ id: 'refund-1', row_type: 'refund', parent_order_id: 'order-0', status: 'refund', total: -125, total_tax: -25, total_sek: -125 })
+    const db = createFakeDb({ webshop_orders: [parent, refund] as unknown as Record<string, unknown>[] })
+    const outcome = await deriveUnattendedOrderLines({ supabase: db.client as never, companyId: COMPANY, order: refund, settings: null, log })
+    expect(outcome).toMatchObject({ ok: false, code: 'WEBSHOP_ORDER_REFUND_PARENT_VOIDED' })
+  })
+
   it('books a cancelled order the store refunded money on, like any other: its refund row books against it', async () => {
     const outcome = await derive(order({ status: 'cancelled', refunded_total: 125 }))
     expect(outcome.ok).toBe(true)
