@@ -110,6 +110,7 @@ import {
 } from '@/lib/salary/deviation-period'
 import { resolveSalaryRunSeries } from '@/lib/salary/create-run'
 import { isSalaryExtraRunsEnabled } from '@/lib/env/salary-extra-runs-switch'
+import { findRosterClashes, readSiblingRuns } from '@/lib/salary/extra-runs'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import {
   DEFAULT_REVERSE_CHARGE_KIND,
@@ -21586,11 +21587,29 @@ export const tools: McpTool[] = [
       // Preview: count active employees and surface base monthly salaries so
       // the approver knows what would be seeded. No writes here: the commit
       // path re-runs createSalaryRunWithEmployees atomically.
-      const { count: employeeCount } = await supabase
+      const { count: activeCount } = await supabase
         .from('employees')
         .select('id', { count: 'exact', head: true })
         .eq('company_id', companyId)
         .eq('is_active', true)
+      // An extra run is seeded with the active employees no other run of
+      // its period or payout month has (lib/salary/extra-runs.ts).
+      let employeeCount = activeCount
+      if (extraRun) {
+        const { data: active, error: activeError } = await supabase
+          .from('employees')
+          .select('id')
+          .eq('company_id', companyId)
+          .eq('is_active', true)
+        if (activeError) throw dbError(activeError)
+        const siblings = await readSiblingRuns(supabase, companyId, { period_year, period_month, payment_date })
+        if (!siblings.ok) throw dbError(siblings.error)
+        const ids = ((active ?? []) as Array<{ id: string }>).map((employee) => employee.id)
+        const clashes = await findRosterClashes(supabase, companyId, siblings.runs, ids)
+        if (!clashes.ok) throw dbError(clashes.error)
+        const taken = new Set(clashes.clashes.map((clash) => clash.employee_id))
+        employeeCount = ids.filter((id) => !taken.has(id)).length
+      }
 
       const period = `${period_year}-${String(period_month).padStart(2, '0')}`
       return stage({
@@ -21599,7 +21618,7 @@ export const tools: McpTool[] = [
         userId,
         type: 'create_salary_run',
         title: extraRun
-          ? `Skapa extra löneutbetalning: ${period}, utbetalning ${payment_date}`
+          ? `Skapa extra löneutbetalning: ${period}, utbetalning ${payment_date} (${employeeCount ?? 0} anställda)`
           : `Skapa löneutbetalning: ${period} (${employeeCount ?? 0} anställda)`,
         params: {
           period_year,
@@ -21612,9 +21631,7 @@ export const tools: McpTool[] = [
         },
         preview: {
           period,
-          ...(extraRun
-            ? { extra_run: true, employees: 'the active employees no other run of the period or payout month has' }
-            : {}),
+          ...(extraRun ? { extra_run: true } : {}),
           payment_date,
           deviation_period_start: deviationWindow.start,
           deviation_period_end: deviationWindow.end,

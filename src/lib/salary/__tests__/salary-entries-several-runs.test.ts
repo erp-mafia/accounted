@@ -65,7 +65,9 @@ describe('splitAvgifterLiability: a month with several runs', () => {
   })
 
   it("books the month's declared avgift less what the month's other runs booked", () => {
-    const second = run([employee('emp-3', 25002, 7855.63)], { month_avgifter: { otherRows: [BOOKED_ROW] } })
+    const second = run([employee('emp-3', 25002, 7855.63)], {
+      month_avgifter: { otherRows: [BOOKED_ROW], otherPostedLiability: 9426 },
+    })
     // trunc(55 004 × 31,42 %) = 17 282; the first run booked 9 426.
     const split = splitAvgifterLiability(second, 7855.63)
     expect(split.liabilityAvgifter).toBe(7856)
@@ -81,8 +83,23 @@ describe('splitAvgifterLiability: a month with several runs', () => {
     expect(9426 + split.liabilityAvgifter).toBe(month.totalAmount)
   })
 
+  it("keeps the month's 2731 at the declared avgift when a run booked before the other is corrected", () => {
+    // The second run posted 7 856 (the first run's 9 426 already on 2731).
+    // The first run is corrected: its storno takes 9 426 off, and the
+    // correction books against what the second run actually posted.
+    const secondRow = { ...BOOKED_ROW, avgifter_basis: 25002 }
+    const correction = run([employee('emp-1', 30002, 9426.63)], {
+      month_avgifter: { otherRows: [secondRow], otherPostedLiability: 7856 },
+    })
+    const split = splitAvgifterLiability(correction, 9426.63)
+    expect(7856 + split.liabilityAvgifter).toBe(17282)
+    expect(split.liabilityAvgifter).toBe(9426)
+  })
+
   it('posts a balanced avgifter verifikat with the krona on the debit side of 3740', () => {
-    const second = run([employee('emp-3', 25002, 7855.63)], { month_avgifter: { otherRows: [BOOKED_ROW] } })
+    const second = run([employee('emp-3', 25002, 7855.63)], {
+      month_avgifter: { otherRows: [BOOKED_ROW], otherPostedLiability: 9426 },
+    })
     const lines = buildSalaryRunEntryLines(second, 'Lön 2026-11', '1930').avgifterLines
     const debit = lines.reduce((s, l) => s + l.debit_amount, 0)
     const credit = lines.reduce((s, l) => s + l.credit_amount, 0)

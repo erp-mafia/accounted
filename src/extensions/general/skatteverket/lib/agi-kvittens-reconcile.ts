@@ -168,19 +168,27 @@ export async function declarationKvittens(
 
   // A company with several runs in one month files the payout month's runs
   // together: an earlier filing of the month may be a run of another period
-  // paid out in it, so the month is read by payout month.
-  const filedQuery = supabase
-    .from('salary_runs')
-    .select('agi_submitted_at')
-    .eq('company_id', companyId)
+  // paid out in it, and the run holding the row may itself be one the
+  // earlier filing covered (whichever run generates last holds it), so the
+  // whole payout month is read, the holder included.
   const payout = agiReportingPeriod(run as { period_year: number; period_month: number; payment_date?: string | null })
   const monthStart = `${formatAgiPeriodDashed(payout)}-01`
-  const { data: filedRuns, error: filedError } = await (isSalaryExtraRunsEnabled(companyId)
-    ? filedQuery.gte('payment_date', monthStart).lte('payment_date', previousMonthEndIso(addMonthsIso(monthStart, 1)))
-    : filedQuery.eq('period_year', run.period_year).eq('period_month', run.period_month)
-  )
-    .neq('id', salaryRunId)
-    .not('agi_submitted_at', 'is', null)
+  const { data: filedRuns, error: filedError } = isSalaryExtraRunsEnabled(companyId)
+    ? await supabase
+        .from('salary_runs')
+        .select('agi_submitted_at')
+        .eq('company_id', companyId)
+        .gte('payment_date', monthStart)
+        .lte('payment_date', previousMonthEndIso(addMonthsIso(monthStart, 1)))
+        .not('agi_submitted_at', 'is', null)
+    : await supabase
+        .from('salary_runs')
+        .select('agi_submitted_at')
+        .eq('company_id', companyId)
+        .eq('period_year', run.period_year)
+        .eq('period_month', run.period_month)
+        .neq('id', salaryRunId)
+        .not('agi_submitted_at', 'is', null)
   if (filedError) return { ok: false, error: `Kunde inte läsa månadens tidigare inlämningar: ${filedError.message}` }
 
   let earlierFiling: number | null = null
@@ -375,7 +383,9 @@ export async function promoteAgiDeclaration(
     .eq('id', declarationId)
     .eq('company_id', companyId)
     .in('status', [...(opts.fromStatuses ?? ['pending_signature'])])
-    .select('id, salary_run_ids')
+    // salary_run_ids only where a declaration can have it (several runs in
+    // one month), so the claim reads the same columns as before elsewhere.
+    .select(isSalaryExtraRunsEnabled(companyId) ? 'id, salary_run_ids' : 'id')
 
   if (claimError) {
     return { status: 'error', error: `Kunde inte uppdatera deklarationen: ${claimError.message}` }

@@ -7,6 +7,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createTableMockSupabase } from '@/tests/helpers'
 import { readAgiPaymentPeriodConflict } from '../agi-payable-declaration'
 
+/** The rollout as the environment had it, restored after each test that sets it. */
+const rolloutBefore = process.env.SALARY_EXTRA_RUNS_COMPANY_IDS
+
 const COMPANY = 'company-1'
 type Chain = Array<{ method: string; args: unknown[] }>
 
@@ -147,7 +150,8 @@ describe('readAgiPaymentPeriodConflict: several runs in one month', () => {
   })
 
   afterEach(() => {
-    delete process.env.SALARY_EXTRA_RUNS_COMPANY_IDS
+    if (rolloutBefore === undefined) delete process.env.SALARY_EXTRA_RUNS_COMPANY_IDS
+    else process.env.SALARY_EXTRA_RUNS_COMPANY_IDS = rolloutBefore
   })
 
   it("pays the month's declaration when it is summed over every live run of the month", async () => {
@@ -156,6 +160,38 @@ describe('readAgiPaymentPeriodConflict: several runs in one month', () => {
       agi_declarations: () => ({ data: { salary_run_ids: ['run-other', 'run-own'] } }),
     })
     expect(await readAgiPaymentPeriodConflict(db.supabase as never, COMPANY, UNFILED)).toEqual({ ok: true, conflict: null })
+  })
+
+  it('pays a filed declaration that covers every live run of the month', async () => {
+    db = createTableMockSupabase({
+      salary_runs: salaryRuns(OWN_RUN, [OWN_LIVE, OTHER_LIVE]),
+      agi_declarations: () => ({ data: { salary_run_ids: ['run-own', 'run-other'] } }),
+    })
+    const filed = { ...UNFILED, status: 'submitted' }
+    expect(await readAgiPaymentPeriodConflict(db.supabase as never, COMPANY, filed)).toEqual({ ok: true, conflict: null })
+  })
+
+  it('refuses a filed declaration once a run joined the month after the filing: the rättelse sums it', async () => {
+    db = createTableMockSupabase({
+      salary_runs: salaryRuns(OWN_RUN, [OWN_LIVE, OTHER_LIVE]),
+      agi_declarations: () => ({ data: { salary_run_ids: null } }),
+    })
+    const filed = { ...UNFILED, status: 'submitted' }
+    const result = await readAgiPaymentPeriodConflict(db.supabase as never, COMPANY, filed)
+    expect(result).toMatchObject({
+      ok: true,
+      conflict: { code: 'AGI_PAYMENT_PERIOD_CONFLICT', details: { other_salary_run_id: 'run-other', period: '2026-11' } },
+    })
+    if (result.ok && result.conflict) expect(result.conflict.messageSv).toContain('rättelse')
+  })
+
+  it('refuses a declaration that still counts a run that left the month', async () => {
+    db = createTableMockSupabase({
+      salary_runs: salaryRuns(OWN_RUN, [OWN_LIVE, OTHER_LIVE]),
+      agi_declarations: () => ({ data: { salary_run_ids: ['run-own', 'run-other', 'run-recalled'] } }),
+    })
+    const result = await readAgiPaymentPeriodConflict(db.supabase as never, COMPANY, UNFILED)
+    expect(result).toMatchObject({ ok: true, conflict: { code: 'AGI_PAYMENT_PERIOD_CONFLICT' } })
   })
 
   it('refuses a declaration that leaves a live run of the month out', async () => {

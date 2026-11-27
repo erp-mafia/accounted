@@ -7,6 +7,9 @@ import {
   SalaryRunExistsError,
 } from '../create-run'
 
+/** The rollout as the environment had it, restored after each test that sets it. */
+const rolloutBefore = process.env.SALARY_EXTRA_RUNS_COMPANY_IDS
+
 const mockEmit = vi.hoisted(() => vi.fn())
 vi.mock('@/lib/events', () => ({ eventBus: { emit: (...a: unknown[]) => mockEmit(...a) } }))
 
@@ -434,7 +437,8 @@ describe('an extra run (several runs in one month)', () => {
   })
 
   afterEach(() => {
-    delete process.env.SALARY_EXTRA_RUNS_COMPANY_IDS
+    if (rolloutBefore === undefined) delete process.env.SALARY_EXTRA_RUNS_COMPANY_IDS
+    else process.env.SALARY_EXTRA_RUNS_COMPANY_IDS = rolloutBefore
   })
 
   it("takes the period's next number, shares its window, and seeds only the employees no other run pays", async () => {

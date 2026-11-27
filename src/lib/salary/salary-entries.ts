@@ -136,12 +136,15 @@ export interface SalaryRunData {
  * sums with this run's. Skatteverket drops öre once per sats on the month's
  * summed underlag (declared-avgifter.ts), so the runs' own declared amounts
  * can add up to a krona per sats below what it draws; each run books the
- * month's declared avgift with it less the month's without it, and the
- * month's 2731 credits add up to what the AGI declares.
+ * month's declared avgift with it less what the month's other runs posted on
+ * 2731, and the month's 2731 credits add up to what the AGI declares, also
+ * after one of the runs is corrected.
  */
 export interface MonthAvgifterContext {
   /** Roster rows of the month's other booked runs, as stored. */
   otherRows: DeclaredAvgifterRunRow[]
+  /** What those runs' avgifter verifikat posted on 2731 (credit less debit). */
+  otherPostedLiability: number
 }
 
 /** The salary_runs columns the run input reads. */
@@ -1007,9 +1010,8 @@ export function splitAvgifterLiability(
   let monthDrift = 0
   if (run.month_avgifter && run.month_avgifter.otherRows.length > 0) {
     const otherRows = declaredAvgifterRowsForRun(run.month_avgifter.otherRows)
-    const without = computeDeclaredAvgifterWithOverrides(otherRows, params).totalAmount
     const together = computeDeclaredAvgifterWithOverrides([...otherRows, ...ownRows], params).totalAmount
-    liability = together - without
+    liability = roundOre(together - run.month_avgifter.otherPostedLiability)
     monthDrift = 3
   }
   const remainder = roundOre(roundedAvgifter - liability)

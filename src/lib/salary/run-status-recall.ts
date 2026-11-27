@@ -146,15 +146,28 @@ export async function unapproveSalaryRun(
   // is what this check exists to stop (accounted#58).
   // A month summed over several runs (SALARY_EXTRA_RUNS_COMPANY_IDS) is the
   // declaration of every run it lists, whichever run holds the row.
-  const agiQuery = supabase.from('agi_declarations').select('id, status').eq('company_id', companyId)
-  const { data: agiRows, error: agiError } = await (isSalaryExtraRunsEnabled(companyId)
-    ? agiQuery.or(`salary_run_id.eq.${salaryRunId},salary_run_ids.cs.{${salaryRunId}}`)
-    : agiQuery.eq('salary_run_id', salaryRunId))
+  const severalRuns = isSalaryExtraRunsEnabled(companyId)
+  const { data: agiRows, error: agiError } = severalRuns
+    ? await supabase
+        .from('agi_declarations')
+        .select('id, status, salary_run_id, salary_run_ids')
+        .eq('company_id', companyId)
+        .or(`salary_run_id.eq.${salaryRunId},salary_run_ids.cs.{${salaryRunId}}`)
+    : await supabase
+        .from('agi_declarations')
+        .select('id, status')
+        .eq('company_id', companyId)
+        .eq('salary_run_id', salaryRunId)
   if (agiError) {
     log.error('salary run unapprove: AGI declaration read failed', agiError as Error)
     return { ok: false, code: 'SALARY_RUN_UNAPPROVE_FAILED' }
   }
-  const declarations = (agiRows ?? []) as Array<{ id: string; status: string }>
+  const declarations = (agiRows ?? []) as Array<{
+    id: string
+    status: string
+    salary_run_id?: string | null
+    salary_run_ids?: string[] | null
+  }>
   const filedAgi = declarations.find((row) => AGI_FILED_STATUSES.includes(row.status))
   // Only a run's one declaration is replaced as stale; with several, none is
   // deleted, as before.
@@ -173,6 +186,14 @@ export async function unapproveSalaryRun(
   // tax payment tracking and stays. Its XML goes stale like any other, but the
   // cleared agi_generated_at makes the panel and the submit regenerate it.
   const staleAgi = agi && AGI_STALE_STATUSES.includes(agi.status) && !runRow.is_correction ? agi : null
+  // The month's declaration of several runs is not deleted with one of them:
+  // it carries the month's tax payment tracking. The recalled run leaves the
+  // runs it covers instead, so the declaration no longer covers the month and
+  // is neither paid nor answered as filed until it is generated again.
+  const monthCovered = staleAgi
+    ? (staleAgi.salary_run_ids ?? (staleAgi.salary_run_id ? [staleAgi.salary_run_id] : []))
+    : []
+  const keepMonthDeclaration = severalRuns && monthCovered.some((id) => id !== salaryRunId)
 
   if (options.dryRun) {
     // Payslips already emailed are not recalled by this; the approver should
@@ -192,7 +213,7 @@ export async function unapproveSalaryRun(
         would_change_status_from: 'approved',
         would_change_status_to: 'review',
         would_clear: ['approved_by', 'approved_at', 'agi_generated_at', 'payment_file_format', 'payment_file_generated_at'],
-        would_delete_agi_declaration_id: staleAgi?.id ?? null,
+        would_delete_agi_declaration_id: keepMonthDeclaration ? null : (staleAgi?.id ?? null),
         payment_file_generated_at: runRow.payment_file_generated_at,
         payslips_already_sent: payslipsSent ?? 0,
         warnings: [
@@ -258,7 +279,17 @@ export async function unapproveSalaryRun(
   // since the read. A rejected declaration is kept: it documents the
   // rejection.
   let deletedAgiDeclarationId: string | null = null
-  if (staleAgi) {
+  if (staleAgi && keepMonthDeclaration) {
+    const { error: uncoverError } = await supabase
+      .from('agi_declarations')
+      .update({ salary_run_ids: monthCovered.filter((id) => id !== salaryRunId) })
+      .eq('id', staleAgi.id)
+      .eq('company_id', companyId)
+      .in('status', AGI_STALE_STATUSES)
+    if (uncoverError) {
+      log.warn('month AGI declaration uncover failed', { agiDeclarationId: staleAgi.id, error: uncoverError.message })
+    }
+  } else if (staleAgi) {
     const { data: deletedRows, error: deleteError } = await supabase
       .from('agi_declarations')
       .delete()

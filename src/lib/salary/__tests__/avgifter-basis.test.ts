@@ -104,8 +104,10 @@ describe('generateAvgifterBasis: several runs in one month', () => {
     row({ id: 'r2', avgifter_basis: 25002, salary_run: RUN }),
   ]
 
+  const rolloutBefore = process.env.SALARY_EXTRA_RUNS_COMPANY_IDS
   afterEach(() => {
-    delete process.env.SALARY_EXTRA_RUNS_COMPANY_IDS
+    if (rolloutBefore === undefined) delete process.env.SALARY_EXTRA_RUNS_COMPANY_IDS
+    else process.env.SALARY_EXTRA_RUNS_COMPANY_IDS = rolloutBefore
   })
 
   it("states the month's one declaration, summed over its runs", async () => {
@@ -118,6 +120,7 @@ describe('generateAvgifterBasis: several runs in one month', () => {
   })
 
   it('keeps one run per computation for a company outside the list', async () => {
+    delete process.env.SALARY_EXTRA_RUNS_COMPANY_IDS
     h.rows = rows()
     const { totals } = await generateAvgifterBasis({} as SupabaseClient, 'c', 2026)
     expect(totals.totalAmount).toBe(9426 + 7855)

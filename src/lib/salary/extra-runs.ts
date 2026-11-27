@@ -25,6 +25,8 @@ import { isSalaryExtraRunsEnabled } from '@/lib/env/salary-extra-runs-switch'
 import { agiReportingPeriod, formatAgiPeriodDashed } from './agi/reporting-period'
 import { resolveDeclaredAvgifterParams, type DeclaredAvgifterRunRow } from './declared-avgifter'
 import { regionalSupportEnabled } from './regional-support'
+import { SALARY_ACCOUNTS } from './account-mapping'
+import { roundOre } from '@/lib/money'
 
 /** The run fields the sibling read starts from (a salary_runs row, or one about to be created). */
 export interface SiblingSource {
@@ -121,16 +123,27 @@ export async function findRosterClashes(
 export function rosterClashDetails(clashes: RosterClash[]) {
   const [first] = clashes
   const other = first.run
+  const runs = [...new Map(clashes.map((clash) => [clash.run.id, clash.run])).values()]
+  const named = runs.map((run) => `${runPeriodLabelSv(run)} med utbetalning ${run.payment_date}`)
+  const listed = named.length > 1 ? `${named.slice(0, -1).join(', ')} och ${named[named.length - 1]}` : named[0]
   return {
     employee_ids: [...new Set(clashes.map((clash) => clash.employee_id))],
+    // The first other run under the keys every door reads, then each clash.
     other_salary_run_id: other.id,
     other_run_period: formatAgiPeriodDashed({ periodYear: other.period_year, periodMonth: other.period_month }),
     other_run_number: other.run_number ?? 1,
     other_payment_date: other.payment_date,
+    clashes: clashes.map((clash) => ({
+      employee_id: clash.employee_id,
+      salary_run_id: clash.run.id,
+      run_period: formatAgiPeriodDashed({ periodYear: clash.run.period_year, periodMonth: clash.run.period_month }),
+      run_number: clash.run.run_number ?? 1,
+      payment_date: clash.run.payment_date,
+    })),
     message:
-      `${clashes.length > 1 ? 'Anställda finns' : 'Den anställda finns'} redan i lönekörningen för ` +
-      `${runPeriodLabelSv(other)} med utbetalning ${other.payment_date}. En anställd kan vara med i en lönekörning ` +
-      'per utbetalningsmånad och period. Ta bort den anställda från den andra körningen först.',
+      `${clashes.length > 1 ? 'Anställda finns' : 'Den anställda finns'} redan i ${runs.length > 1 ? 'lönekörningarna' : 'lönekörningen'} för ` +
+      `${listed}. En anställd kan vara med i en lönekörning per utbetalningsmånad och period. ` +
+      'Ta bort den anställda från den andra körningen först.',
   }
 }
 
@@ -183,7 +196,10 @@ export async function loadMonthAvgifterContext(
   supabase: SupabaseClient,
   companyId: string,
   run: MonthContextRun,
-): Promise<{ ok: true; context: { otherRows: DeclaredAvgifterRunRow[] } | null } | { ok: false; error: unknown }> {
+): Promise<
+  | { ok: true; context: { otherRows: DeclaredAvgifterRunRow[]; otherPostedLiability: number } | null }
+  | { ok: false; error: unknown }
+> {
   if (!isSalaryExtraRunsEnabled(companyId) || regionalSupportEnabled(run.calculation_params)) {
     return { ok: true, context: null }
   }
@@ -194,11 +210,12 @@ export async function loadMonthAvgifterContext(
 
   const { data: params, error: paramsError } = await supabase
     .from('salary_runs')
-    .select('id, calculation_params')
+    .select('id, calculation_params, avgifter_entry_id')
     .eq('company_id', companyId)
     .in('id', bookedIds)
   if (paramsError) return { ok: false, error: paramsError }
-  const combinable = ((params ?? []) as Array<{ calculation_params: Record<string, unknown> | null }>).every(
+  const booked = (params ?? []) as Array<{ calculation_params: Record<string, unknown> | null; avgifter_entry_id: string | null }>
+  const combinable = booked.every(
     (other) =>
       !regionalSupportEnabled(other.calculation_params) &&
       sameDeclaredRates(other.calculation_params, run.calculation_params),
@@ -213,5 +230,28 @@ export async function loadMonthAvgifterContext(
     .eq('company_id', companyId)
     .in('salary_run_id', bookedIds)
   if (rowsError) return { ok: false, error: rowsError }
-  return { ok: true, context: { otherRows: (rows ?? []) as unknown as DeclaredAvgifterRunRow[] } }
+
+  // What the other runs actually posted on 2731, not their avgift computed
+  // again: after a correction of one run the month's sum must still be the
+  // declared one.
+  const entryIds = booked.map((other) => other.avgifter_entry_id).filter((id): id is string => Boolean(id))
+  let otherPostedLiability = 0
+  if (entryIds.length > 0) {
+    const { data: lines, error: linesError } = await supabase
+      .from('journal_entry_lines')
+      .select('debit_amount, credit_amount')
+      .in('journal_entry_id', entryIds)
+      .eq('account_number', SALARY_ACCOUNTS.AVGIFTER_LIABILITY)
+    if (linesError) return { ok: false, error: linesError }
+    otherPostedLiability = roundOre(
+      ((lines ?? []) as Array<{ debit_amount: number | null; credit_amount: number | null }>).reduce(
+        (sum, line) => sum + (Number(line.credit_amount) || 0) - (Number(line.debit_amount) || 0),
+        0,
+      ),
+    )
+  }
+  return {
+    ok: true,
+    context: { otherRows: (rows ?? []) as unknown as DeclaredAvgifterRunRow[], otherPostedLiability },
+  }
 }

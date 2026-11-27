@@ -15,6 +15,9 @@ import {
   setRunEmployeeSalary,
 } from '@/lib/salary/run-employees'
 
+/** The rollout as the environment had it, restored after each test that sets it. */
+const rolloutBefore = process.env.SALARY_EXTRA_RUNS_COMPANY_IDS
+
 // The step every input write takes has its own suite (invalidate-calculation.test.ts).
 vi.mock('@/lib/salary/invalidate-calculation', async (original) => ({
   ...(await original<typeof import('@/lib/salary/invalidate-calculation')>()),
@@ -821,7 +824,8 @@ describe('addEmployeeToRun: several runs in one month', () => {
   })
 
   afterEach(() => {
-    delete process.env.SALARY_EXTRA_RUNS_COMPANY_IDS
+    if (rolloutBefore === undefined) delete process.env.SALARY_EXTRA_RUNS_COMPANY_IDS
+    else process.env.SALARY_EXTRA_RUNS_COMPANY_IDS = rolloutBefore
   })
 
   it('refuses an employee another run of the payout month already pays, naming that run', async () => {

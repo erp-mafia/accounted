@@ -10,6 +10,9 @@ import { createQueuedMockSupabase } from '@/tests/helpers'
 import { eventBus } from '@/lib/events'
 import type { Logger } from '@/lib/logger'
 
+/** The rollout as the environment had it, restored after each test that sets it. */
+const rolloutBefore = process.env.SALARY_EXTRA_RUNS_COMPANY_IDS
+
 vi.mock('../personnummer', () => ({
   decryptPersonnummer: (encrypted: string) => {
     if (encrypted === 'emp1_encrypted') return '199001011234'
@@ -111,6 +114,7 @@ function enqueueMonth(
     { data: [] }, // run A: absence in its window
     { data: [] }, // run A: late days carried to it
     { data: [{ ...RUN_B }] }, // the month's other live runs
+    { data: opts.stored ?? null }, // the period's declaration: filed for exactly these runs?
     { data: [] }, // no correction of a month's run waiting in draft
     { data: [RUN_B] }, // the other runs in full
     { data: opts.rosterB ?? [ROW_B] }, // run B's roster
@@ -128,7 +132,8 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  delete process.env.SALARY_EXTRA_RUNS_COMPANY_IDS
+  if (rolloutBefore === undefined) delete process.env.SALARY_EXTRA_RUNS_COMPANY_IDS
+  else process.env.SALARY_EXTRA_RUNS_COMPANY_IDS = rolloutBefore
 })
 
 describe('generateAgiDeclaration: two runs paid out in one month', () => {

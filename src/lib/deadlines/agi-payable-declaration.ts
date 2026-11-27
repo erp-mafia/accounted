@@ -54,13 +54,19 @@ function describeOtherRunsEn(runs: Array<{ run_period: string; payment_date: str
  * The refusal to pay `declaration`, or null when it may be paid: it is
  * filed, or no other live run is paid out in its month. A read that fails
  * answers ok false, and the caller refuses rather than pays.
+ *
+ * A company with several runs in one month (SALARY_EXTRA_RUNS_COMPANY_IDS)
+ * is asked about coverage even when the declaration is filed: a run that
+ * joined the month after the filing is owed too, and is declared by the
+ * month's rättelse, so the filed declaration alone is not what the month owes.
  */
 export async function readAgiPaymentPeriodConflict(
   supabase: SupabaseClient,
   companyId: string,
   declaration: StoredAgiDeclarationToPay,
 ): Promise<{ ok: true; conflict: AgiPaymentPeriodConflict | null } | { ok: false; error: unknown }> {
-  if (AGI_RECEIPT_STATUSES.includes(declaration.status)) return { ok: true, conflict: null }
+  const severalRuns = isSalaryExtraRunsEnabled(companyId)
+  if (!severalRuns && AGI_RECEIPT_STATUSES.includes(declaration.status)) return { ok: true, conflict: null }
 
   // The run the declaration was built from: its correction and the run it
   // corrects are the same pay, not another payment. A row whose run is gone
@@ -85,8 +91,9 @@ export async function readAgiPaymentPeriodConflict(
   // Several runs in one month (SALARY_EXTRA_RUNS_COMPANY_IDS): the month's
   // declaration is summed over its runs and lists them (salary_run_ids).
   // When it lists every live run of the month, its total is what the month
-  // owes.
-  if (isSalaryExtraRunsEnabled(companyId)) {
+  // owes. One that leaves a run out is not paid: generating the month's
+  // declaration again sums them (a rättelse when it is filed).
+  if (severalRuns) {
     const { data: covering, error: coverError } = await supabase
       .from('agi_declarations')
       .select('salary_run_ids')
@@ -96,9 +103,25 @@ export async function readAgiPaymentPeriodConflict(
       .maybeSingle()
     if (coverError) return { ok: false, error: coverError }
     const covered = (covering as { salary_run_ids?: string[] | null } | null)?.salary_run_ids ?? null
-    if (covered && covered.includes(run.id) && others.runs.every((other) => covered.includes(other.id))) {
+    // Exactly the month's live runs: a run it covers that left the month
+    // (moved, recalled, corrected) is pay the month no longer owes.
+    const live = new Set([run.id, ...others.runs.map((other) => other.id)])
+    if (covered && covered.length === live.size && covered.every((id) => live.has(id))) {
       return { ok: true, conflict: null }
     }
+    const details = agiPeriodConflictDetails(
+      agiPeriod,
+      others.runs,
+      (named, period) =>
+        `${named} hör också till redovisningsperiod ${period}, men arbetsgivardeklarationen som Accounted har för ` +
+        `${period} räknar inte med den, så dess belopp betalas inte från Accounted. Ta fram deklarationen för ${period} ` +
+        'igen från en av körningarna, så summeras alla (en rättelse om den redan är inlämnad), och betala det belopp den ger.',
+    )
+    const messageEn =
+      `${describeOtherRunsEn(details.other_runs)} also ${details.other_runs.length > 1 ? 'belong' : 'belongs'} to reporting period ${details.period}, ` +
+      `but the employer declaration Accounted holds for ${details.period} does not count it, so its amount is not paid from Accounted. ` +
+      `Generate the declaration for ${details.period} again from one of the runs to sum them all (a correction if it is already filed), and pay the amount it gives.`
+    return { ok: true, conflict: { code: 'AGI_PAYMENT_PERIOD_CONFLICT', details, messageSv: details.message, messageEn } }
   }
 
   const details = agiPeriodConflictDetails(

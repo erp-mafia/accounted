@@ -29,6 +29,9 @@ import { runSalaryCalculation } from '@/lib/salary/run-calculation'
 import { SalaryDeviationPeriodError } from '@/lib/salary/deviation-period'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 
+/** The rollout as the environment had it, restored after each test that sets it. */
+const rolloutBefore = process.env.SALARY_EXTRA_RUNS_COMPANY_IDS
+
 const mockUser = { id: 'user-1', email: 'test@test.se' }
 
 function authed(supabase: unknown) {
@@ -435,10 +438,12 @@ describe('GET /api/salary/runs', () => {
   })
 
   afterEach(() => {
-    delete process.env.SALARY_EXTRA_RUNS_COMPANY_IDS
+    if (rolloutBefore === undefined) delete process.env.SALARY_EXTRA_RUNS_COMPANY_IDS
+    else process.env.SALARY_EXTRA_RUNS_COMPANY_IDS = rolloutBefore
   })
 
   it('says whether the company may start an extra run in a month that has one', async () => {
+    delete process.env.SALARY_EXTRA_RUNS_COMPANY_IDS
     const off = createQueuedMockSupabase()
     authed(off.supabase)
     off.enqueue({ data: [{ id: 'run-1' }] })

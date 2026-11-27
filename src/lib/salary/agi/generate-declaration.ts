@@ -383,16 +383,31 @@ function monthRunsRefusal(
  * summed over them, with the checks that make the sum one declaration: no
  * correction of one of them still in draft (the month would be declared
  * without that run's people), one set of frozen rates (sats and caps), and
- * no regionalt stöd, whose monthly cap each run claimed on its own.
+ * no regionalt stöd, whose monthly cap each run claimed on its own. A month
+ * whose filed declaration covers exactly these runs is answered with it
+ * (`filed`), so the checks, which guard a new declaration, are not asked.
  */
 async function readMonthRunsForAgi(
   supabase: SupabaseClient,
   companyId: string,
   run: AgiSourceRun,
   agiPeriod: AgiReportingPeriod,
-): Promise<{ ok: true; others: AgiSourceRun[] } | Extract<GenerateAgiDeclarationResult, { ok: false }>> {
+): Promise<{ ok: true; others: AgiSourceRun[]; filed: boolean } | Extract<GenerateAgiDeclarationResult, { ok: false }>> {
   const listed = await readOtherRunsPaidInPeriod(supabase, companyId, agiPeriod, run)
   if (!listed.ok) return { ok: false, code: 'DATABASE_ERROR', details: listed.error }
+
+  const { data: stored, error: storedError } = await supabase
+    .from('agi_declarations')
+    .select('salary_run_id, salary_run_ids, status')
+    .eq('company_id', companyId)
+    .eq('period_year', agiPeriod.periodYear)
+    .eq('period_month', agiPeriod.periodMonth)
+    .maybeSingle()
+  if (storedError) return { ok: false, code: 'DATABASE_ERROR', details: storedError }
+  const ids = [run.id, ...listed.runs.map((other) => other.id)]
+  const filed =
+    decideMonthAgiWrite(stored as Pick<StoredAgiDeclaration, 'salary_run_id' | 'salary_run_ids' | 'status'> | null, ids) ===
+    'filed'
 
   const monthStart = `${formatAgiPeriodDashed(agiPeriod)}-01`
   const monthEnd = previousMonthEndIso(addMonthsIso(monthStart, 1))
@@ -406,7 +421,7 @@ async function readMonthRunsForAgi(
     .lte('payment_date', monthEnd)
   if (draftsError) return { ok: false, code: 'DATABASE_ERROR', details: draftsError }
   const pending = (drafts ?? []) as Array<{ id: string; period_year: number; period_month: number; run_number?: number | null }>
-  if (pending.length > 0) {
+  if (!filed && pending.length > 0) {
     return monthRunsRefusal(
       agiPeriod,
       'correction_pending',
@@ -416,7 +431,7 @@ async function readMonthRunsForAgi(
         'annars saknas dess anställda i deklarationen.',
     )
   }
-  if (listed.runs.length === 0) return { ok: true, others: [] }
+  if (listed.runs.length === 0) return { ok: true, others: [], filed }
 
   const { data: rows, error: rowsError } = await supabase
     .from('salary_runs')
@@ -428,6 +443,7 @@ async function readMonthRunsForAgi(
     (a, b) => a.payment_date.localeCompare(b.payment_date) || a.id.localeCompare(b.id),
   )
   const all = [run, ...others]
+  if (filed) return { ok: true, others, filed }
   if (all.some((r) => regionalSupportEnabled(r.calculation_params))) {
     return monthRunsRefusal(
       agiPeriod,
@@ -447,7 +463,7 @@ async function readMonthRunsForAgi(
         `Räkna om körningarna med utbetalning i ${formatAgiPeriodDashed(agiPeriod)} så att de har samma satser.`,
     )
   }
-  return { ok: true, others }
+  return { ok: true, others, filed }
 }
 
 /** The run holding the period's row, for the conflict answer. */
@@ -472,13 +488,21 @@ async function readAgiPeriod(
   companyId: string,
   period: { periodYear: number; periodMonth: number },
   run: AgiWriteRun,
+  options: { monthRuns?: boolean } = {},
 ): Promise<AgiPeriodRead> {
   // maybeSingle: no row is the first generation, not an error. The stored
   // XML and totals are read too, for the filed answer and writeOnlyIfChanged
-  // (one literal select, so the column guard can check it).
-  const { data, error } = await supabase
-    .from('agi_declarations')
-    .select('id, salary_run_id, salary_run_ids, status, submitted_at, xml_content, total_gross, total_tax, total_avgifter_basis, total_avgifter, employee_count')
+  // (literal selects, so the column guard can check them). salary_run_ids
+  // only for a month summed over several runs: everywhere else the read is
+  // the one it always was.
+  const { data, error } = await (options.monthRuns
+    ? supabase
+        .from('agi_declarations')
+        .select('id, salary_run_id, salary_run_ids, status, submitted_at, xml_content, total_gross, total_tax, total_avgifter_basis, total_avgifter, employee_count')
+    : supabase
+        .from('agi_declarations')
+        .select('id, salary_run_id, status, submitted_at, xml_content, total_gross, total_tax, total_avgifter_basis, total_avgifter, employee_count')
+  )
     .eq('company_id', companyId)
     .eq('period_year', period.periodYear)
     .eq('period_month', period.periodMonth)
@@ -1135,7 +1159,7 @@ export async function generateAgiDeclaration(
       seen.add(sre.employee_id)
       return false
     })
-    if (twice) {
+    if (twice && !month.filed) {
       return monthRunsRefusal(
         agiPeriod,
         'same_employee',
@@ -1272,7 +1296,7 @@ export async function generateAgiDeclaration(
     ...(filed ? { filed: true } : {}),
   })
   const readAndDecide = async (): Promise<{ answer: GenerateAgiDeclarationResult } | AgiWriteTarget> => {
-    const read = await readAgiPeriod(supabase, companyId, agiPeriod, run)
+    const read = await readAgiPeriod(supabase, companyId, agiPeriod, run, { monthRuns: monthRuns !== null })
     if (!read.ok) return { answer: { ok: false, code: 'DATABASE_ERROR', details: read.error } }
     if (monthRuns && monthRunIds) {
       const monthDecision = decideMonthAgiWrite(read.row, monthRunIds)

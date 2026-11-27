@@ -7,6 +7,9 @@ import { createQueuedMockSupabase } from '@/tests/helpers'
 import { invalidateRunCalculation } from '../invalidate-calculation'
 import { updateDraftSalaryRun } from '../update-run'
 
+/** The rollout as the environment had it, restored after each test that sets it. */
+const rolloutBefore = process.env.SALARY_EXTRA_RUNS_COMPANY_IDS
+
 // The step every input write takes has its own suite (invalidate-calculation.test.ts).
 vi.mock('@/lib/salary/invalidate-calculation', async (original) => ({
   ...(await original<typeof import('@/lib/salary/invalidate-calculation')>()),
@@ -160,7 +163,8 @@ describe('updateDraftSalaryRun: several runs in one month', () => {
   })
 
   afterEach(() => {
-    delete process.env.SALARY_EXTRA_RUNS_COMPANY_IDS
+    if (rolloutBefore === undefined) delete process.env.SALARY_EXTRA_RUNS_COMPANY_IDS
+    else process.env.SALARY_EXTRA_RUNS_COMPANY_IDS = rolloutBefore
   })
 
   it('refuses a payment date that moves the run into a month where another run pays one of its employees', async () => {
