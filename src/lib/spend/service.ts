@@ -130,13 +130,16 @@ export async function listAvailableSpendProviders(ctx: OperationContext): Promis
 }
 
 async function liveConnection(ctx: OperationContext, provider: string): Promise<{ id: string; status: string } | null> {
-  const { data } = await admin()
+  const { data, error } = await admin()
     .from('spend_connections')
     .select('id, status')
     .eq('company_id', ctx.companyId)
     .eq('provider', provider)
     .neq('status', 'disconnected')
     .maybeSingle()
+  // A failed read is not "no connection": starting one at the provider that
+  // cannot be stored here would leave it connected there.
+  if (error) throw new Error(`spend connection lookup failed: ${error.message}`)
   return (data as { id: string; status: string } | null) ?? null
 }
 
@@ -342,6 +345,19 @@ export async function connectSpendWithApiKey(
   } catch (err) {
     return connectFailure(err)
   }
+  // The same check as the consent path (completeSpendConnectReturn): Connect
+  // refuses another entity's provider company, and this keeps a misbehaving
+  // service from mixing two companies' spend in one ledger.
+  const ours = orgNumberKey(orgNumber)
+  const theirs = orgNumberKey(connection.providerOrgNumber)
+  if (ours && theirs && ours !== theirs) {
+    try {
+      await disconnectAtConnect(ctx.companyId, connection.connectionHandle, connectDeps)
+    } catch {
+      // nothing was stored here, so nothing is left to end
+    }
+    return { ok: false, code: 'SPEND_COMPANY_MISMATCH' }
+  }
   const client = admin()
   if (existing) await client.from('spend_connections').delete().eq('id', existing.id).eq('status', 'connecting')
   const { data, error } = await client
@@ -374,12 +390,14 @@ export async function connectSpendWithApiKey(
 
 /** The handle Connect gave, read with the service role: members never read it. */
 async function connectionHandle(companyId: string, connectionId: string): Promise<string | null> {
-  const { data } = await admin()
+  const { data, error } = await admin()
     .from('spend_connections')
     .select('connection_handle')
     .eq('id', connectionId)
     .eq('company_id', companyId)
     .maybeSingle()
+  // A failed read is not "no handle": disconnecting would skip the revocation at the provider.
+  if (error) throw new Error(`spend connection handle read failed: ${error.message}`)
   return (data as unknown as { connection_handle: string | null } | null)?.connection_handle ?? null
 }
 

@@ -227,6 +227,16 @@ describe('the spend Connect client', () => {
 
     const busy = respond(429, { error: 'slow down', code: 'CONNECTOR_RATE_LIMITED' }, { 'retry-after': '1.5' })
     await expect(listSpendProviders(COMPANY, deps(busy))).rejects.toMatchObject({ code: 'CONNECTOR_RATE_LIMITED', retryable: true, retryAfterSec: 2 })
+
+    // An HTTP date counts too: the wait until then, in whole seconds.
+    const until = new Date(Date.now() + 600_000).toUTCString()
+    const dated = respond(429, { error: 'slow down', code: 'CONNECTOR_RATE_LIMITED' }, { 'retry-after': until })
+    const err = (await listSpendProviders(COMPANY, deps(dated)).then(
+      () => null,
+      (e: unknown) => e,
+    )) as { retryAfterSec: number | null } | null
+    expect(err?.retryAfterSec).toBeGreaterThanOrEqual(598)
+    expect(err?.retryAfterSec).toBeLessThanOrEqual(600)
   })
 
   it('answers HTTP_<status> for a body that is not an envelope: retryable on 5xx, not on 4xx', async () => {
@@ -234,9 +244,11 @@ describe('the spend Connect client', () => {
     await expect(disconnectSpendConnection(COMPANY, HANDLE, deps(respond(404, '')))).rejects.toMatchObject({ code: 'HTTP_404', status: 404, retryable: false })
   })
 
-  it('ignores a Retry-After that is not a number of seconds', async () => {
-    const fetchImpl = respond(503, { error: 'x', code: 'CONNECTOR_SPEND_PROVIDER_ERROR', retryable: true }, { 'retry-after': 'Wed, 21 Oct 2026 07:28:00 GMT' })
-    await expect(fetchSpendStatus(COMPANY, HANDLE, deps(fetchImpl))).rejects.toMatchObject({ retryAfterSec: null })
+  it('reads a Retry-After date as the wait until then, a date already past as no wait, and ignores one it cannot read', async () => {
+    const past = respond(503, { error: 'x', code: 'CONNECTOR_SPEND_PROVIDER_ERROR', retryable: true }, { 'retry-after': 'Wed, 21 Oct 2026 07:28:00 GMT' })
+    await expect(fetchSpendStatus(COMPANY, HANDLE, deps(past))).rejects.toMatchObject({ retryAfterSec: 0 })
+    const unreadable = respond(503, { error: 'x', code: 'CONNECTOR_SPEND_PROVIDER_ERROR', retryable: true }, { 'retry-after': 'soon' })
+    await expect(fetchSpendStatus(COMPANY, HANDLE, deps(unreadable))).rejects.toMatchObject({ retryAfterSec: null })
   })
 
   it('refuses an answer that breaks the contract instead of using it', async () => {

@@ -498,6 +498,19 @@ describe('connecting with an API key', () => {
     if (outcome.ok && !outcome.dryRun) expect('connection_handle' in outcome.data.connection).toBe(false)
   })
 
+  it('refuses a provider company that is another entity, and ends it at Connect without storing anything', async () => {
+    const fetchImpl = connectFetch({
+      '/connect-key': () => json(connectionAnswer({ mode: 'api_key', providerOrgNumber: '5560001111' })),
+      '/disconnect': () => json({ disconnected: true }),
+    })
+    expect(await connectSpendWithApiKey(ctx(), { provider: 'pleo', api_key: API_KEY })).toEqual({ ok: false, code: 'SPEND_COMPANY_MISMATCH' })
+    expect(h.db.tables.spend_connections).toHaveLength(0)
+    expect(fetchImpl.mock.calls.map(([url]) => new URL(String(url)).pathname)).toEqual([
+      '/api/connect/spend/connect-key',
+      '/api/connect/spend/disconnect',
+    ])
+  })
+
   it('replaces an unfinished consent attempt for the same provider', async () => {
     h.db.tables.spend_connections.push(pendingRow())
     connectFetch({ '/connect-key': () => json(connectionAnswer({ mode: 'api_key' })) })

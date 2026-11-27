@@ -28,11 +28,14 @@ export interface SpendCompanyContext {
 }
 
 export async function loadSpendCompanyContext(supabase: SupabaseClient, companyId: string): Promise<SpendCompanyContext> {
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('company_settings')
     .select('vat_registered, dimensions_enabled')
     .eq('company_id', companyId)
     .maybeSingle()
+  // A failed read is not an unknown registration: the VAT treatment of every
+  // expense depends on it, so nothing is evaluated on a guess.
+  if (error) throw new Error(`spend company settings read failed: ${error.message}`)
   const row = (data ?? {}) as { vat_registered?: boolean | null; dimensions_enabled?: boolean | null }
   return { vatRegistered: row.vat_registered ?? null, dimensionsEnabled: row.dimensions_enabled === true }
 }
@@ -72,13 +75,15 @@ export async function buildSpendMasterData(
 
   const dimensions: SpendDimension[] = []
   if (context.dimensionsEnabled) {
-    const { data: dimensionRows } = await supabase
+    const { data: dimensionRows, error: dimensionError } = await supabase
       .from('dimensions')
       .select('id, sie_dim_no, name, is_active, sort_order')
       .eq('company_id', companyId)
       .eq('is_active', true)
       .order('sort_order', { ascending: true })
       .order('sie_dim_no', { ascending: true })
+    // A failed read is not "no dimensions": Connect would publish an empty list as the vocabulary.
+    if (dimensionError) throw new Error(`spend dimensions read failed: ${dimensionError.message}`)
     const valueRows = await fetchAllRows<{ dimension_id: string; code: string; name: string }>(({ from, to }) =>
       supabase
         .from('dimension_values')

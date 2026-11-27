@@ -494,7 +494,7 @@ export const spendItemsBook = defineOperation({
     booked: z.array(z.record(z.string(), z.unknown())),
     failed: z.array(z.object({ item_id: z.string(), code: z.string() })),
   }),
-  errorCodes: ['VALIDATION_ERROR'],
+  errorCodes: ['VALIDATION_ERROR', 'SPEND_READ_FAILED'],
   http: { method: 'POST', path: '/api/v1/companies/:companyId/spend/items/book' },
   mcp: {
     name: 'gnubok_book_spend_items',

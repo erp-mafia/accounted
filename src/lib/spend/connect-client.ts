@@ -18,6 +18,7 @@ import {
 } from '@accounted/connect-contract'
 import type { z } from 'zod'
 import { getConnectorConfig } from '@/lib/connect/instance/config'
+import { parseRetryAfterSeconds } from '@/lib/connect/instance/connector-fetch'
 
 /**
  * The ledger's one adapter for the spend capability: Accounted Connect's
@@ -83,7 +84,9 @@ function retryAfterOf(response: Response): number | null {
   const header = response.headers.get('retry-after')
   if (!header) return null
   const seconds = Number(header)
-  return Number.isFinite(seconds) && seconds >= 0 ? Math.ceil(seconds) : null
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.ceil(seconds)
+  // An HTTP date (RFC 9110 10.2.3): the wait until then, in whole seconds.
+  return parseRetryAfterSeconds(header)
 }
 
 async function call<T>(

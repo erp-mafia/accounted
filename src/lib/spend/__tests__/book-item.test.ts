@@ -414,6 +414,25 @@ describe('bookSpendItems', () => {
     ])
   }
 
+  it('answers a failed lookup as a failure, not as expenses that wait for a look', async () => {
+    seedMany()
+    const failing = {
+      from: (table: string) => {
+        const builder = (h.db.client as unknown as { from: (t: string) => Record<string, unknown> }).from(table)
+        if (table !== 'spend_items') return builder
+        const chain: Record<string, unknown> = {
+          select: () => chain,
+          eq: () => chain,
+          in: () => Promise.resolve({ data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } }),
+        }
+        return chain
+      },
+    }
+    const outcome = await bookSpendItems({ ...ctx(), supabase: failing as never }, { item_ids: ['item-1', 'item-2'] })
+    expect(outcome).toEqual({ ok: false, code: 'SPEND_READ_FAILED' })
+    expect(h.commitEntry).not.toHaveBeenCalled()
+  })
+
   it('books each ready expense as its own verifikat and reports the rest by code', async () => {
     seedMany()
     const outcome = await bookSpendItems(ctx(), { item_ids: ['item-1', 'item-2', 'item-review', 'item-booked', 'nope'] })

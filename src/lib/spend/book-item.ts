@@ -337,11 +337,16 @@ export async function bookSpendItems(
   options: { dryRun?: boolean } = {},
 ): Promise<OperationOutcome<BookSpendItemsResult>> {
   const ids = [...new Set(input.item_ids)].slice(0, SPEND_BOOK_BATCH_MAX)
-  const { data } = await ctx.supabase
+  const { data, error } = await ctx.supabase
     .from('spend_items')
     .select('id, status, amount, journal_entry_id')
     .eq('company_id', ctx.companyId)
     .in('id', ids)
+  // A failed read is not "none ready": the person would be told every expense waits for a look.
+  if (error) {
+    ctx.log.error('spend batch lookup failed', error, { count: ids.length })
+    return { ok: false, code: 'SPEND_READ_FAILED' }
+  }
   const rows = (data ?? []) as Array<{ id: string; status: string; amount: number | string; journal_entry_id: string | null }>
   const ready = rows.filter((row) => row.status === 'ready' && !row.journal_entry_id)
   const skipped = ids.filter((id) => !ready.some((row) => row.id === id))
