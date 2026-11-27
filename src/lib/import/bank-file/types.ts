@@ -99,6 +99,7 @@ export type BankFileFormatId =
   | 'skandia'
   | 'lunar'
   | 'northmill'
+  | 'avanza'
   | 'wise'
   | 'wise_statement'
   | 'generic_csv'

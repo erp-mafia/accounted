@@ -30,6 +30,7 @@ import type { BankFileFormat, BankFileParseResult, ParsedBankTransaction, BankFi
 import { prepareContent } from '../../shared/encoding'
 import { normalizeDate } from '../date-utils'
 import { parseCSVLine } from './nordea'
+import { finishParseResult } from '../parse-result'
 import { parseSwedishAmount, roundOre } from '@/lib/money'
 
 
@@ -235,22 +236,13 @@ export const wiseFormat: BankFileFormat = {
       }
     }
 
-    const dates = transactions.map((t) => t.date).sort()
-
-    return {
+    return finishParseResult({
       format: 'wise',
       format_name: 'Wise',
       transactions,
-      date_from: dates[0] || null,
-      date_to: dates[dates.length - 1] || null,
       issues,
-      stats: {
-        total_rows: lines.length - 1,
-        parsed_rows: transactions.length,
-        skipped_rows: skippedRows,
-        total_income: roundOre(transactions.filter((t) => t.amount > 0).reduce((s, t) => s + t.amount, 0)),
-        total_expenses: roundOre(transactions.filter((t) => t.amount < 0).reduce((s, t) => s + t.amount, 0)),
-      },
-    }
+      totalRows: lines.length - 1,
+      skippedRows,
+    })
   },
 }

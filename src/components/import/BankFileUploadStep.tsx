@@ -34,6 +34,7 @@ const FORMAT_NAMES: Record<string, string> = {
   skandia: 'Skandia',
   lunar: 'Lunar',
   northmill: 'Northmill',
+  avanza: 'Avanza',
   wise: 'Wise',
   generic_csv: 'CSV (manuell mappning)',
   camt053: 'ISO 20022 camt.053',
@@ -53,6 +54,7 @@ const EXPORT_PATH_KEYS: Partial<Record<BankFileFormatId, string>> = {
   skandia: 'bank_export_skandia',
   lunar: 'bank_export_lunar',
   northmill: 'bank_export_northmill',
+  avanza: 'bank_export_avanza',
 }
 
 interface BankFileUploadStepProps {
@@ -139,6 +141,7 @@ export default function BankFileUploadStep({
                   <SelectItem value="skandia">Skandia</SelectItem>
                   <SelectItem value="lunar">Lunar</SelectItem>
                   <SelectItem value="northmill">Northmill</SelectItem>
+                  <SelectItem value="avanza">Avanza</SelectItem>
                   <SelectItem value="wise">Wise</SelectItem>
                   <SelectItem value="wise_statement">{t('bank_format_wise_statement')}</SelectItem>
                   <SelectItem value="camt053">ISO 20022 camt.053 (XML)</SelectItem>

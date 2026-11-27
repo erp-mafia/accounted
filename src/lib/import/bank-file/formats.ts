@@ -16,6 +16,7 @@ import { icaBankenFormat } from './formats/ica-banken'
 import { skandiaFormat } from './formats/skandia'
 import { lunarFormat } from './formats/lunar'
 import { northmillFormat } from './formats/northmill'
+import { avanzaFormat } from './formats/avanza'
 import { wiseFormat } from './formats/wise'
 import { wiseStatementFormat } from './formats/wise-statement'
 import { camt053Format } from './formats/camt053'
@@ -34,6 +35,9 @@ const FORMATS: BankFileFormat[] = [
   sebFormat,
   swedbankFormat,
   handelsbankenFormat,
+  // Before Länsförsäkringar: its header check matches any "typ" column and
+  // would claim Avanza's "Typ av transaktion" export.
+  avanzaFormat,
   lansforsakringarFormat,
   icaBankenFormat,
   skandiaFormat,

@@ -6535,8 +6535,9 @@ export const MileageDistanceQuerySchema = z.object({
  * (lib/import/bank-file/types.ts). `satisfies` pins every member to the union
  * at compile time; a format id added to the union but not listed here only
  * degrades the ADVISORY duplicate preview (400), never the import itself.
+ * The v1 bank import's `format` override validates against the same list.
  */
-const BANK_FILE_FORMAT_IDS = [
+export const BANK_FILE_FORMAT_IDS = [
   'nordea',
   'nordea_business',
   'seb',
@@ -6547,6 +6548,7 @@ const BANK_FILE_FORMAT_IDS = [
   'skandia',
   'lunar',
   'northmill',
+  'avanza',
   'wise',
   'wise_statement',
   'generic_csv',
