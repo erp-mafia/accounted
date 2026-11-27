@@ -442,6 +442,8 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_book_collection_settlement: 'bookkeeping:write',
   // Kundförlust (served while CUSTOMER_LOSS_ENABLED is set).
   gnubok_record_customer_loss: 'invoices:write',
+  // Riksbanken's SEK rate for a currency on a date (lib/operations/exchange-rates.ts).
+  gnubok_get_exchange_rate: 'reports:read',
   gnubok_list_inventory_counts: 'reports:read',
   gnubok_get_inventory_count: 'reports:read',
   gnubok_save_inventory_count: 'bookkeeping:write',

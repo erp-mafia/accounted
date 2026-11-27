@@ -175,6 +175,7 @@ import {
   transactionsRefreshExchangeRate,
   transactionsUpdate,
 } from './transactions'
+import { exchangeRatesGet } from './exchange-rates'
 import {
   importsBankUndo,
   importsOpeningBalanceReviewAcknowledge,
@@ -457,6 +458,8 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   transactionsLinkJournalEntry,
   transactionsMatchBatch,
   transactionsBulkBook,
+  // exchange-rates (MCP only: the app's forms read the same lookup through /api/currency/rate)
+  exchangeRatesGet,
   // imports
   importsBankUndo,
   importsSieUndo,

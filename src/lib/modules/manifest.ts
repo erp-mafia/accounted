@@ -249,6 +249,9 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
       // Bokföring package like the other reports.
       'cash-forecast',
       'cash-forecast-rows',
+      // Riksbanken's rate for a currency and day (lib/currency, shared): the
+      // rate the books translate foreign amounts at, read on its own.
+      'exchange-rates',
     ],
     v1Segments: [
       'journal-entries',
