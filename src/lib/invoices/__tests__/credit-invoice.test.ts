@@ -454,6 +454,25 @@ describe('creditInvoice', () => {
     expect(payloads('invoices', 'insert')).toEqual([])
   })
 
+  it('refuses when a concurrent credit won the number and that credit note was undone since', async () => {
+    const undone = draftOf(ORIGINAL, { status: 'cancelled', credit_undone_at: '2026-11-27T10:00:00Z' })
+    const { supabase, payloads } = createTableMockSupabase({
+      invoices: [
+        { data: ORIGINAL },
+        { data: null }, // no credit note when the draft request looked
+        { error: { code: '23505', message: 'duplicate key value violates unique constraint' } }, // insert
+        { data: undone }, // the note that holds the number
+      ],
+      journal_entries: { data: null },
+      company_settings: { data: SETTINGS },
+    })
+
+    const result = await creditInvoice(ctx(supabase), ORIGINAL_ID, {})
+
+    expect(result).toMatchObject({ ok: false, code: 'INVOICE_CREDIT_UNDONE_BEFORE' })
+    expect(payloads('invoices', 'update')).toEqual([])
+  })
+
   it('reports a verifikat that posted before a later step failed with its ids (repair)', async () => {
     const { supabase } = setup(ORIGINAL, {
       invoices: [

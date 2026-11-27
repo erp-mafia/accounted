@@ -160,9 +160,10 @@ interface CreditNoteRow {
   journal_entry_id: string | null
   paid_amount: number | null
   creation_complete: boolean | null
+  credit_undone_at: string | null
 }
 
-const CREDIT_NOTE_COLUMNS = 'id, invoice_number, status, journal_entry_id, paid_amount, creation_complete'
+const CREDIT_NOTE_COLUMNS = 'id, invoice_number, status, journal_entry_id, paid_amount, creation_complete, credit_undone_at'
 
 export interface UncreditInvoiceInput {
   /**
@@ -221,17 +222,24 @@ export async function uncreditInvoice(
 
   // The credit is undone only when it is one issued credit note: two
   // (partial credits), one still a draft or an imported one at rest in
-  // 'credited' is not a credit this restores.
+  // 'credited' is not a credit this restores. With no live one, a credit
+  // note already kept as undone is a run that stopped before the original
+  // was restored (a failed write, a lost connection): this one finishes it.
   const { data: creditRows, error: creditError } = await supabase
     .from('invoices')
     .select(CREDIT_NOTE_COLUMNS)
     .eq('company_id', companyId)
     .eq('credited_invoice_id', original.id)
-    .neq('status', 'cancelled')
+    .or('status.neq.cancelled,credit_undone_at.not.is.null')
   if (creditError) return failed(creditError)
-  const creditNotes = ((creditRows ?? []) as CreditNoteRow[]).filter(isActiveCreditNote)
+  const rows = (creditRows ?? []) as CreditNoteRow[]
+  const live = rows.filter(isActiveCreditNote)
+  const creditNotes = live.length > 0 ? live : rows.filter((c) => !!c.credit_undone_at)
   const creditNote = creditNotes.length === 1 ? creditNotes[0] : null
-  if (!creditNote || !(REFUNDABLE_CREDIT_NOTE_STATUSES as readonly string[]).includes(creditNote.status)) {
+  const issued =
+    !!creditNote &&
+    (!!creditNote.credit_undone_at || (REFUNDABLE_CREDIT_NOTE_STATUSES as readonly string[]).includes(creditNote.status))
+  if (!creditNote || !issued) {
     return {
       ok: false,
       code: 'INVOICE_UNCREDIT_NOT_REVERSIBLE',

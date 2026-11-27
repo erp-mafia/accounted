@@ -262,6 +262,22 @@ describe('uncreditInvoice', () => {
     )
   })
 
+  it('finishes a run that stopped after it kept the credit note as undone: the original is restored', async () => {
+    const uncredited = vi.fn()
+    eventBus.on('invoice.uncredited', uncredited)
+    mocks.liveEntryOf.mockResolvedValue({ none: true })
+    const undone = { ...CREDIT_NOTE, status: 'cancelled', credit_undone_at: '2026-11-27T10:00:00Z' }
+    const { supabase, payloads, findCall } = setup({ creditNotes: [undone] })
+
+    const result = await uncreditInvoice(ctx(supabase), ORIGINAL_ID)
+
+    expect(findCall('invoices', 'or')).toEqual(['status.neq.cancelled,credit_undone_at.not.is.null'])
+    expect(result).toMatchObject({ ok: true, data: { changed: true, credit_note_id: CREDIT_ID, reversal_entry_id: null } })
+    expect(mocks.reverseJournalEntry).not.toHaveBeenCalled()
+    expect(invoiceUpdates(payloads)).toContainEqual({ status: 'paid', remaining_amount: 0 })
+    expect(uncredited).toHaveBeenCalledTimes(1)
+  })
+
   it('stornoes the live correction when the credit verifikat was corrected', async () => {
     mocks.liveEntryOf.mockResolvedValue({ id: 'je-correction' })
     const { supabase } = setup()

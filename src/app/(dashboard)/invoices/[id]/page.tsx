@@ -815,7 +815,8 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           ? loadDeductionPersonnummerMasked()
           : Promise.resolve(null),
         !data.credited_invoice_id &&
-        ['sent', 'paid', 'overdue', 'credited'].includes(data.status)
+        // partially_paid: what an undone credit can restore (the undone credit note is linked).
+        ['sent', 'paid', 'partially_paid', 'overdue', 'credited'].includes(data.status)
           ? supabase
               .from('invoices')
               .select('id, invoice_number, status, credit_undone_at')
@@ -2127,9 +2128,10 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     !isCreditNoteDocument(invoice) &&
     !creditNote &&
     !undoneCreditNote
-  // Ångra kreditering: the original of a credit note this app issued. The
-  // server decides whether it may be undone (lib/invoices/uncredit-invoice.ts).
-  const canUncredit = invoice.status === 'credited' && !!creditNote && canWrite
+  // Ångra kreditering: the original of a credit note this app issued, or of
+  // one already kept as undone by a run that stopped before the original was
+  // restored. The server decides (lib/invoices/uncredit-invoice.ts).
+  const canUncredit = invoice.status === 'credited' && !!(creditNote ?? undoneCreditNote) && canWrite
   // Download/prepare need the F-number (the XML carries it); sending a draft
   // assigns the number server-side, so the menu shows once a provider is on.
   const showPeppolActions = !isSelfBilled && isRealInvoice && !isCreditNote

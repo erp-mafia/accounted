@@ -242,6 +242,7 @@ export async function createCreditNoteDraft(
         .eq('company_id', companyId)
         .eq('creation_complete', true)
         .maybeSingle()
+      if (raced?.credit_undone_at) return { ok: false, code: 'INVOICE_CREDIT_UNDONE_BEFORE' }
       if (raced) return { ok: true, creditNote: raced as CreditRow, outcome: 'existing' }
     }
     log.error('credit note insert failed', creditNoteError)
