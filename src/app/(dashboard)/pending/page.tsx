@@ -644,6 +644,11 @@ export default function PendingOperationsPage() {
   // One dialog at a time, in the order the approvals answered: the queue can
   // bring a second one while the first is being read.
   const [voucherConfirms, setVoucherConfirms] = useState<Array<{ op: PendingOperation; warnings: VoucherWarning[] }>>([])
+  // A salary run's bank payments where the pay may already have left
+  // (SALARY_RUN_BANK_PAYMENT_CONFIRMATION_REQUIRED): the person answers here,
+  // never the agent that staged it, and the approval goes again with the answer.
+  const [salaryUnpaidConfirm, setSalaryUnpaidConfirm] = useState<PendingOperation | null>(null)
+  const [salaryUnpaidChecked, setSalaryUnpaidChecked] = useState(false)
   const { toast } = useToast()
   // Whether the "Bokför utkasten" toast CTA leads anywhere: bulk Bokför on
   // /invoices only selects drafts when the company books at issue. Under
@@ -1146,6 +1151,11 @@ export default function PendingOperationsPage() {
     if (refusal.code === 'VOUCHER_NEEDS_CONFIRMATION' && Array.isArray(warnings) && warnings.length > 0) {
       const prompt = { op, warnings: warnings as VoucherWarning[] }
       setVoucherConfirms((prev) => [...prev.filter((waiting) => waiting.op.id !== op.id), prompt])
+      return true
+    }
+    if (refusal.code === 'SALARY_RUN_BANK_PAYMENT_CONFIRMATION_REQUIRED') {
+      setSalaryUnpaidChecked(false)
+      setSalaryUnpaidConfirm(op)
       return true
     }
     const copy = FIXABLE_REFUSAL_COPY[refusal.code]
@@ -2322,6 +2332,35 @@ export default function PendingOperationsPage() {
           void queueApproval(op, undefined, warnings.map((warning) => warning.code))
         }}
       />
+
+      {/* Salary bank payments for a run that may already be paid: the person
+          confirms the pay has not left another way, and the same approval is
+          sent again with that answer. */}
+      <ConfirmationDialog
+        open={salaryUnpaidConfirm !== null}
+        onOpenChange={(open) => {
+          if (!open) setSalaryUnpaidConfirm(null)
+        }}
+        title={salaryUnpaidConfirm?.title || t('salary_unpaid_title')}
+        warningText={t('salary_unpaid_body')}
+        confirmLabel={t('approve')}
+        confirmDisabled={!salaryUnpaidChecked}
+        isSubmitting={false}
+        onConfirm={() => {
+          const op = salaryUnpaidConfirm
+          setSalaryUnpaidConfirm(null)
+          if (op) void queueApproval(op, undefined, ['SALARY_RUN_BANK_PAYMENT_CONFIRMATION_REQUIRED'])
+        }}
+      >
+        <label className="flex items-start gap-2 text-[13px]">
+          <Checkbox
+            checked={salaryUnpaidChecked}
+            onCheckedChange={(v) => setSalaryUnpaidChecked(v === true)}
+            className="mt-0.5"
+          />
+          <span>{t('salary_unpaid_label')}</span>
+        </label>
+      </ConfirmationDialog>
 
       {/* Bulk commit confirmation dialog */}
       <ConfirmationDialog

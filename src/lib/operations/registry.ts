@@ -85,6 +85,7 @@ import {
   employeesWorkedDaysUpsert,
 } from './salary-employee-setup'
 import { salaryRunsPaymentFilesList } from './salary-payment-files'
+import { salaryRunsPrepareBankPayment } from './salary-run-bank-payment'
 import { salaryForaReportGet } from './salary-fora-report'
 import { salaryVacationLiabilityReconcile } from './salary-vacation-liability'
 import {
@@ -347,6 +348,8 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   salaryRunsMarkPaid,
   // salary-payment-files (MCP only, metadata only: no door builds or hands over a file)
   salaryRunsPaymentFilesList,
+  // salary-run-bank-payment (MCP only, staged: the run page has its own route over the same service)
+  salaryRunsPrepareBankPayment,
   // salary-fora-report (v1 + MCP, summary only: the file is the salary run page's download)
   salaryForaReportGet,
   // salary-vacation-liability (v1; the dashboard route calls the same service)

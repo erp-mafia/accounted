@@ -404,7 +404,9 @@ export interface CommitOptions {
    * The booking-time warning codes the approver read and confirmed in the
    * app (VOUCHER_NEEDS_CONFIRMATION answered in the warnings dialog), added
    * to the ones acknowledged at staging. The guard still runs again: a
-   * warning not named here refuses the approval once more.
+   * warning not named here refuses the approval once more. An operation of
+   * the registry reads them as OperationContext.acknowledgedWarnings (a paid
+   * or booked salary run's confirmation that the pay has not left).
    */
   acknowledgedWarnings?: readonly string[]
   /**
@@ -564,6 +566,8 @@ async function commitRegisteredOperation(
   companyId: string,
   params: Record<string, unknown>,
   pendingOperationId: string,
+  /** The codes a person confirmed at approval in the app (CommitOptions.acknowledgedWarnings). */
+  acknowledgedWarnings?: readonly string[],
 ): Promise<ExecutorResult> {
   const upgrade = operation.mcp?.stage?.upgradeParams
   const parsed = (operation.input as unknown as z.ZodTypeAny).safeParse(upgrade ? upgrade(params) : params)
@@ -576,7 +580,14 @@ async function commitRegisteredOperation(
     }
   }
   const outcome = await operation.run(
-    { supabase, companyId, userId, log: log.child({ operation: operation.id }), pendingOperationId },
+    {
+      supabase,
+      companyId,
+      userId,
+      log: log.child({ operation: operation.id }),
+      pendingOperationId,
+      ...(acknowledgedWarnings?.length ? { acknowledgedWarnings } : {}),
+    },
     parsed.data,
     { dryRun: false },
   )
@@ -7233,7 +7244,15 @@ async function commitPendingOperationInner(
             http_status: 400,
           }
         }
-        result = await commitRegisteredOperation(operation, supabase, userId, companyId, pendingOp.params, pendingOp.id)
+        result = await commitRegisteredOperation(
+          operation,
+          supabase,
+          userId,
+          companyId,
+          pendingOp.params,
+          pendingOp.id,
+          opts.acknowledgedWarnings,
+        )
         break
       }
     }

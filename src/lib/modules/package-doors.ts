@@ -641,6 +641,7 @@ const PAYROLL: PackageDoors = {
     'op:salary-runs.lines.create',
     'op:salary-runs.lines.delete',
     'op:salary-runs.mark-paid',
+    'op:salary-runs.prepare-bank-payment',
     'op:salary-runs.revert',
     'op:salary-runs.send-payslips',
     'op:salary-runs.unapprove',

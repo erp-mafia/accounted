@@ -1072,11 +1072,15 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
   // Betala via banken is the way to pay an approved run where bank payments
   // are on and none is live yet: the header's button, the payment file folded
   // under the section as the other way. Markera som betald moves to the menu.
-  const canPayViaBank = canWrite && bankPayments.available === true && run.status === 'approved' && !noPayout
+  // A booked run may not have paid out yet either (booked before payday): the
+  // section offers it there, and the dialog asks the person to confirm the
+  // pay has not left another way.
+  const canPayViaBank =
+    canWrite && bankPayments.available === true && (run.status === 'approved' || run.status === 'booked') && !noPayout
   // Until both answers are in, the way to pay is unknown: no pay button and no
   // payment panels yet, rather than the file first and then folded away.
   const bankPaymentsKnown = bankPayments.available !== null && bankPayments.orders !== null
-  const payViaBankFirst = canPayViaBank && bankPaymentsKnown && !inBankPayment
+  const payViaBankFirst = canPayViaBank && run.status === 'approved' && bankPaymentsKnown && !inBankPayment
 
   // The one next step for the current status, mirrored as a prominent header
   // button - the rail alone buried it (nobody found Godkänn).
@@ -1161,7 +1165,13 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
   // something to pay out (a zero-payout run generates no file rows).
   const payPanels = ['approved', 'paid', 'booked'].includes(run.status) && !noPayout && bankPaymentsKnown && (
     <>
-      <SalaryBankPaymentSection payments={bankPayments} canPay={canPayViaBank} onPay={() => setPayDialogOpen(true)}>
+      <SalaryBankPaymentSection
+        payments={bankPayments}
+        canPay={canPayViaBank}
+        // A booked run's header button is the AGI: the section carries the pay button.
+        payButton={run.status === 'booked'}
+        onPay={() => setPayDialogOpen(true)}
+      >
         {payViaBankFirst && paymentFile}
       </SalaryBankPaymentSection>
       {!payViaBankFirst && paymentFile}

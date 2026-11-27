@@ -115,8 +115,10 @@ export function SalaryBankPaymentDialog({
 
 interface SalaryBankPaymentSectionProps {
   payments: SalaryBankPayments
-  /** The run can be paid through the bank now: approved, bank payments on, and the person may write. */
+  /** The run can be paid through the bank now: approved or booked, bank payments on, and the person may write. */
   canPay: boolean
+  /** Show Betala via banken in the section before any payment: a booked run, whose header button is the AGI. */
+  payButton?: boolean
   /** Opens the dialog for Betala igen. */
   onPay: () => void
   /** The other way to pay, under the prompt before any payment: the payment file, folded. */
@@ -130,7 +132,7 @@ interface SalaryBankPaymentSectionProps {
  * After: one line per employee with the payment's status, and Betala igen
  * when the bank refused one.
  */
-export function SalaryBankPaymentSection({ payments, canPay, onPay, children }: SalaryBankPaymentSectionProps) {
+export function SalaryBankPaymentSection({ payments, canPay, payButton = false, onPay, children }: SalaryBankPaymentSectionProps) {
   const t = useTranslations('salary_bank_payment')
   const tb = useTranslations('bank_payments')
   const { orders, live } = payments
@@ -142,6 +144,11 @@ export function SalaryBankPaymentSection({ payments, canPay, onPay, children }: 
     return (
       <DetailSection kicker={t('section_title')}>
         <p className="text-[13px] leading-6 text-muted-foreground">{t('section_prompt')}</p>
+        {payButton && canPay && (
+          <Button variant="outline" className="mt-3" onClick={onPay}>
+            {t('pay_button')}
+          </Button>
+        )}
         {children && <div className="mt-3">{children}</div>}
       </DetailSection>
     )

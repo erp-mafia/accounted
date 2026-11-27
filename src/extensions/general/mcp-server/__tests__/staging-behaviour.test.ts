@@ -1318,6 +1318,22 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
     },
     empty: ['supplier_payment_batch_items', 'payment_orders'],
   },
+  // A salary run's net pay as bank payments: an approved run with one
+  // employee whose card holds a valid account, a payable company account and
+  // no payment of the run yet. The preview stops before
+  // create_salary_payment_orders and asks no bank.
+  gnubok_prepare_salary_payments: {
+    rows: {
+      'rpc:company_capability_grant_rows': { expires_at: null },
+      cash_accounts: { iban: 'SE3550000000054910000003', currency: 'SEK', name: 'Företagskonto', enabled: true, bank_connection: { bank_name: 'SEB' } },
+      salary_runs: { status: 'approved', period_year: 2099, period_month: 11, payment_date: '2099-11-25', payment_file_generated_at: null, corrects_run_id: null },
+      salary_run_employees: {
+        employee_id: SOME_UUID, net_salary: 21500.5, tax_withheld: 6000, tax_withheld_override: null,
+        employee: { first_name: 'Anna', last_name: 'Andersson', clearing_number: '6000', bank_account_number: '123456789' },
+      },
+    },
+    empty: ['payment_orders'],
+  },
   // A draft the bank does not have: cancelled here, so the preview asks no bank.
   gnubok_cancel_payment_order: { rows: { payment_orders: { status: 'draft', provider_payment_id: null, outcome_unknown_at: null } } },
   // The payment signing link: approved orders from one account, an owner

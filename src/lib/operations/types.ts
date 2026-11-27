@@ -54,6 +54,14 @@ export interface OperationContext {
    */
   pendingOperationId?: string
   /**
+   * Set only by the staged-operation commit path, from a person's single
+   * approval in the app: the refusal codes they read and confirmed when the
+   * first approval asked (the commit route's acknowledged_warnings). No other
+   * door sets it, so an operation reads a person's answer from here, never
+   * from its input.
+   */
+  acknowledgedWarnings?: readonly string[]
+  /**
    * Set to 'mcp' by the MCP door of a direct write (OperationMcpBinding.direct),
    * for an operation that records who wrote a row (a forecast row's source);
    * undefined on every other door.

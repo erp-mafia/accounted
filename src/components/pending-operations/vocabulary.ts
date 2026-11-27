@@ -147,6 +147,7 @@ export const SINGLE_ACTION_WARNING_KEYS: Readonly<Record<string, string>> = {
   create_supplier_payment_batch: 'warning_create_supplier_payment_batch',
   cancel_supplier_payment_batch: 'warning_cancel_supplier_payment_batch',
   prepare_payment_orders: 'warning_prepare_payment_orders',
+  prepare_salary_payment_orders: 'warning_prepare_salary_payment_orders',
   cancel_payment_order: 'warning_cancel_payment_order',
   confirm_supplier_payee: 'warning_confirm_supplier_payee',
   bank_feed_invite: 'warning_bank_feed_invite',
