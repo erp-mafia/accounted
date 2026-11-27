@@ -646,8 +646,9 @@ export default function PendingOperationsPage() {
   const [voucherConfirms, setVoucherConfirms] = useState<Array<{ op: PendingOperation; warnings: VoucherWarning[] }>>([])
   // A salary run's bank payments where the pay may already have left
   // (SALARY_RUN_BANK_PAYMENT_CONFIRMATION_REQUIRED): the person answers here,
-  // never the agent that staged it, and the approval goes again with the answer.
-  const [salaryUnpaidConfirm, setSalaryUnpaidConfirm] = useState<PendingOperation | null>(null)
+  // never the agent that staged it, and the approval goes again with the
+  // answer. One prompt at a time, in the order the approvals answered.
+  const [salaryUnpaidConfirms, setSalaryUnpaidConfirms] = useState<PendingOperation[]>([])
   const [salaryUnpaidChecked, setSalaryUnpaidChecked] = useState(false)
   const { toast } = useToast()
   // Whether the "Bokför utkasten" toast CTA leads anywhere: bulk Bokför on
@@ -1019,6 +1020,12 @@ export default function PendingOperationsPage() {
 
   const voucherConfirm = voucherConfirms[0] ?? null
   const closeVoucherConfirm = () => setVoucherConfirms((prev) => prev.slice(1))
+  const salaryUnpaidConfirm = salaryUnpaidConfirms[0] ?? null
+  // The next prompt starts unticked.
+  const closeSalaryUnpaidConfirm = () => {
+    setSalaryUnpaidChecked(false)
+    setSalaryUnpaidConfirms((prev) => prev.slice(1))
+  }
   const duplicatePrompt = duplicatePrompts[0] ?? null
   const closeDuplicatePrompt = () => setDuplicatePrompts((prev) => prev.slice(1))
   const duplicatePromptTransactionId =
@@ -1154,8 +1161,7 @@ export default function PendingOperationsPage() {
       return true
     }
     if (refusal.code === 'SALARY_RUN_BANK_PAYMENT_CONFIRMATION_REQUIRED') {
-      setSalaryUnpaidChecked(false)
-      setSalaryUnpaidConfirm(op)
+      setSalaryUnpaidConfirms((prev) => [...prev.filter((waiting) => waiting.id !== op.id), op])
       return true
     }
     const copy = FIXABLE_REFUSAL_COPY[refusal.code]
@@ -2339,7 +2345,7 @@ export default function PendingOperationsPage() {
       <ConfirmationDialog
         open={salaryUnpaidConfirm !== null}
         onOpenChange={(open) => {
-          if (!open) setSalaryUnpaidConfirm(null)
+          if (!open) closeSalaryUnpaidConfirm()
         }}
         title={salaryUnpaidConfirm?.title || t('salary_unpaid_title')}
         warningText={t('salary_unpaid_body')}
@@ -2348,7 +2354,7 @@ export default function PendingOperationsPage() {
         isSubmitting={false}
         onConfirm={() => {
           const op = salaryUnpaidConfirm
-          setSalaryUnpaidConfirm(null)
+          closeSalaryUnpaidConfirm()
           if (op) void queueApproval(op, undefined, ['SALARY_RUN_BANK_PAYMENT_CONFIRMATION_REQUIRED'])
         }}
       >

@@ -75,6 +75,8 @@ describe('/pending, a refused approval', () => {
     expect(dialog).toContain('confirmDisabled={!salaryUnpaidChecked}')
     expect(dialog).toContain("void queueApproval(op, undefined, ['SALARY_RUN_BANK_PAYMENT_CONFIRMATION_REQUIRED'])")
     expect(page).toContain("if (refusal.code === 'SALARY_RUN_BANK_PAYMENT_CONFIRMATION_REQUIRED') {")
+    // Queued, as the voucher warnings are: a second refusal never replaces the prompt being read.
+    expect(page).toContain('setSalaryUnpaidConfirms((prev) => [...prev.filter((waiting) => waiting.id !== op.id), op])')
     for (const key of ['salary_unpaid_title', 'salary_unpaid_body', 'salary_unpaid_label'] as const) {
       expect(sv.pending[key]).toBeTruthy()
       expect(en.pending[key]).toBeTruthy()
