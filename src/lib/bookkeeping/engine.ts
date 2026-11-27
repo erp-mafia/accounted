@@ -3336,6 +3336,30 @@ export async function reverseEntry(
     }
   }
 
+  // Same hazard on the tax account: a row booked from the skattekonto names
+  // this voucher as its booking (skattekonto_transactions.journal_entry_id).
+  // Left in place, the row reads as booked against a voucher that no longer
+  // stands: it is not open work, and booking it again is refused until
+  // someone unlinks it by hand. Clearing the pointer is the module's own
+  // unlink (unlinkSkattekontoRow writes exactly this), and the row is open
+  // work again. Scoped to this entryId. A skattekonto booking is source_type
+  // 'tax_account', and 'system' when it was booked before that type existed
+  // (migration 20261109170200). Should the storno itself be deleted and this
+  // voucher stand again, journal_entries_system_source_live_unique refuses a
+  // second live voucher for the row, so the release cannot book it twice.
+  if (original.source_type === 'tax_account' || original.source_type === 'system') {
+    const { error: taxRowReleaseError } = await supabase
+      .from('skattekonto_transactions')
+      .update({ journal_entry_id: null })
+      .eq('company_id', companyId)
+      .eq('journal_entry_id', entryId)
+    if (taxRowReleaseError) {
+      log.error('failed to release tax account rows from reversed entry', taxRowReleaseError, {
+        entryId,
+      })
+    }
+  }
+
   // The business-state mirrors selected above (the invoice behind a payment
   // voucher, a ROT/RUT begäran, a migrated invoice's deduction, a collections
   // payout, a kundförlust decision), in list order, one at a time, each with
