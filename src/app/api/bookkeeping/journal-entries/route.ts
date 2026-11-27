@@ -107,6 +107,9 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
   // dialog's "Visa saknade underlag" toggle). Committed view only: the
   // predicate is posted-only, so it is meaningless for the drafts view.
   const missingUnderlag = searchParams.get('missing_underlag') === 'true' && status !== 'draft'
+  // With it, also the imported verifikat whose underlag is in the earlier
+  // system (underlagInEarlierSystem): left out unless asked for.
+  const includeImported = missingUnderlag && searchParams.get('include_imported') === 'true'
   // What the needle is besides text (lib/bookkeeping/verifikat-search.ts): a
   // voucher label, an account number (crm#1847), an amount or a
   // bokföringsdatum. The account and the amount look at the lines, through a
@@ -190,7 +193,7 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
       page = await listMissingUnderlagPage(
         supabase,
         companyId,
-        { periodId, series: seriesFilter, dateFrom, dateTo, search },
+        { periodId, series: seriesFilter, dateFrom, dateTo, search, includeImported },
         { order: missingUnderlagOrder(sortKeys, sortDate), limit, offset },
       )
     } catch (err) {

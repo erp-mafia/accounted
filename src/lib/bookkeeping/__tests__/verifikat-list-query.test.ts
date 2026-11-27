@@ -37,9 +37,11 @@ describe('readVerifikatListQuery', () => {
       search: 'hyra',
       correctionView: 'hide',
       missingOnly: true,
+      includeImported: false,
       visitScope: { periodId: PERIOD },
       page: 2,
     })
+    expect(read('missing=true&imported=true').includeImported).toBe(true)
     expect(read('status=draft').mode).toBe('drafts')
     expect(read('scope=all').visitScope).toEqual({ periodId: null })
     expect(read('corrections=all').correctionView).toBe('all')
@@ -56,6 +58,11 @@ describe('readVerifikatListQuery', () => {
 
   it('never reads the saknade-underlag filter into the Utkast view', () => {
     expect(read('status=draft&missing=true').missingOnly).toBe(false)
+  })
+
+  it('reads the imported verifikat only beside the saknade-underlag filter', () => {
+    expect(read('imported=true').includeImported).toBe(false)
+    expect(read('status=draft&missing=true&imported=true').includeImported).toBe(false)
   })
 
   it('takes a lower-case series letter as the letter', () => {
@@ -116,6 +123,11 @@ describe('writeVerifikatListQuery', () => {
       scope: 'all',
       page: '5',
     })
+  })
+
+  it('writes the imported verifikat beside the saknade-underlag filter, and never alone', () => {
+    expect(writeVerifikatListQuery('', view({ missingOnly: true, includeImported: true })).get('imported')).toBe('true')
+    expect(writeVerifikatListQuery('', view({ includeImported: true })).has('imported')).toBe(false)
   })
 
   it('keeps parameters that are not the list view', () => {

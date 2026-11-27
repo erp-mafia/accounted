@@ -335,6 +335,8 @@ function BankHistoryRow({
   const jeStatus = primaryEntryId ? jeUnderlagStatus?.[primaryEntryId] : undefined
   const hasJeDoc = jeStatus === 'has'
   const missingUnderlag = isBooked && !transaction.document_id && jeStatus === 'missing'
+  // An imported verifikat's underlag is kept in the earlier system.
+  const underlagInEarlierSystem = isBooked && !transaction.document_id && jeStatus === 'imported'
   const showAttachItem = canWrite && !!onOpenAttachDocument
   // Detach is narrower than attach: only unbooked rows, and only with a pin.
   const showDetachItem = canDetachDocument({
@@ -387,6 +389,7 @@ function BankHistoryRow({
             journalEntryId={primaryEntryId}
             hasJeDoc={hasJeDoc}
             missing={missingUnderlag}
+            earlierSystem={underlagInEarlierSystem}
             onAttach={
               showAttachItem ? () => onOpenAttachDocument!(transaction) : undefined
             }

@@ -32,6 +32,12 @@ export interface MissingUnderlagFilters {
   dateTo?: string | null
   /** Free-text ilike over the voucher description; a voucher label also matches series + number. */
   search?: string | null
+  /**
+   * Also the imported verifikat without an underlag here, whose underlag is
+   * kept in the earlier system (underlagInEarlierSystem, lib/worklist/types.ts):
+   * left out unless asked for.
+   */
+  includeImported?: boolean
 }
 
 /** A column the RPC can order the missing set by (its p_order allowlist). */
@@ -164,10 +170,14 @@ export async function listMissingUnderlagPage(
     p_order: order.map((t) => `${t.column}.${t.ascending ? 'asc' : 'desc'}`),
     p_limit: limit,
     p_offset: offset,
+    p_include_imported: filters.includeImported === true,
   })
   if (error) throw new MissingUnderlagQueryError(getUserErrorMessage(error), error)
 
-  const result = data as { ok?: boolean; code?: string; total_count?: number; ids?: string[] } | null
+  // A jsonb answer, read like fiscal-year-service's (a client may wrap it).
+  const result = (Array.isArray(data) ? data[0] : data) as
+    | { ok?: boolean; code?: string; total_count?: number; ids?: string[] }
+    | null
   if (!result?.ok) {
     const code = result?.code ?? 'LIST_VERIFIKAT_MISSING_UNDERLAG_NO_RESULT'
     throw new MissingUnderlagQueryError(getUserErrorMessage(new Error(code)), code)

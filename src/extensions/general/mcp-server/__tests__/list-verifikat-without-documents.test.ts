@@ -35,6 +35,15 @@ async function run(args: Record<string, unknown>) {
   return { result, rpc: supabase.rpc }
 }
 
+describe('gnubok_list_verifikat_without_documents: imported verifikat', () => {
+  it('leaves imported verifikat out unless include_imported: their underlag is in the earlier system', async () => {
+    const plain = await run({})
+    expect(plain.rpc.mock.calls[0][1]).toMatchObject({ p_include_imported: false })
+    const asked = await run({ include_imported: true })
+    expect(asked.rpc.mock.calls[0][1]).toMatchObject({ p_include_imported: true })
+  })
+})
+
 describe('gnubok_list_verifikat_without_documents: since and until', () => {
   it('sends until to the RPC as p_until, beside since', async () => {
     const { result, rpc } = await run({ since: '2026-01-01', until: '2026-03-31', limit: 10 })
@@ -45,6 +54,7 @@ describe('gnubok_list_verifikat_without_documents: since and until', () => {
       p_limit: 10,
       p_offset: 0,
       p_until: '2026-03-31',
+      p_include_imported: false,
     })
     expect(result).toMatchObject({ verifikat: PAGE.verifikat, total_count: 1, count: 1, has_more: false })
   })
@@ -57,6 +67,7 @@ describe('gnubok_list_verifikat_without_documents: since and until', () => {
       p_min_amount: 0,
       p_limit: 20,
       p_offset: 0,
+      p_include_imported: false,
     })
   })
 

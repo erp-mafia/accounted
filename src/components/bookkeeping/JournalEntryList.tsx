@@ -46,6 +46,7 @@ import {
 } from '@/components/ui/dry-table'
 import {
   AdjustmentsHorizontalIcon,
+  ArchiveBoxIcon,
   BookOpenIcon,
   ChatBubbleLeftIcon,
   CheckIcon,
@@ -99,7 +100,7 @@ import { useUiState } from '@/lib/hooks/use-ui-state'
 import { saveUiState } from '@/lib/ui-state/client'
 import { createOrderedSave } from '@/lib/ui-state/ordered-save'
 import { listContextKey, writeListContext } from '@/lib/navigation/list-context'
-import { NEEDS_DOC_SOURCE_TYPES } from '@/lib/worklist/types'
+import { NEEDS_DOC_SOURCE_TYPES, underlagInEarlierSystem } from '@/lib/worklist/types'
 import { collectPages } from '@/lib/lists/collect-pages'
 import type { JournalEntry, JournalEntryLine, UserUiState } from '@/types'
 import { todayIsoStockholm } from '@/lib/dates/iso'
@@ -282,6 +283,10 @@ export default function JournalEntryList({
   const [rattelseFlags, setRattelseFlags] = useState<Set<string>>(new Set())
   const [noDocRequired, setNoDocRequired] = useState<Map<string, string | null>>(new Map())
   const [showMissingOnly, setShowMissingOnly] = useState(initialQuery.missingOnly)
+  // With the missing-underlag filter: also the imported verifikat whose
+  // underlag is in the earlier system (underlagInEarlierSystem), left out
+  // unless asked for.
+  const [includeImported, setIncludeImported] = useState(initialQuery.includeImported)
   // Unexplained voucher gaps the VoucherGapNotice attn line is showing. The
   // page has one attn slot (convention 6) and a missing BFNAR 2013:2
   // explanation outranks the SIE import pointer, so that line yields.
@@ -576,6 +581,7 @@ export default function JournalEntryList({
       // across ALL pages (count included). Filtering the fetched page here
       // could only ever show this page's missing rows.
       if (showMissingOnly) params.set('missing_underlag', 'true')
+      if (showMissingOnly && includeImported) params.set('include_imported', 'true')
     }
     if (search) params.set('search', search)
 
@@ -719,7 +725,7 @@ export default function JournalEntryList({
   useEffect(() => {
     if (!sortHydrated || !periodHydrated || !pageSizeHydrated) return
     fetchEntries()
-  }, [periodId, page, pageSize, sortParam, dateFrom, dateTo, seriesFilter, search, listMode, correctionView, showMissingOnly, sortHydrated, periodHydrated, pageSizeHydrated])
+  }, [periodId, page, pageSize, sortParam, dateFrom, dateTo, seriesFilter, search, listMode, correctionView, showMissingOnly, includeImported, sortHydrated, periodHydrated, pageSizeHydrated])
 
   // The address follows the view (crm#1998): the list's own keys are
   // rewritten, every other parameter stays. The History API with no state of
@@ -733,6 +739,7 @@ export default function JournalEntryList({
     search,
     correctionView,
     missingOnly: showMissingOnly,
+    includeImported: showMissingOnly && includeImported,
     visitScope,
     page,
   }
@@ -880,16 +887,15 @@ export default function JournalEntryList({
     [attachmentCounts, invoiceReferenced, noDocRequired],
   )
 
-  // Imported verifikat missing underlag: the rows that used to carry the
-  // per-row "Underlag saknas" chip, counted once in the line above the table
-  // instead (2026-10-18: a migrated year was a wall of chips). Same
-  // population as the chip: posted, import, no attachment, not
-  // invoice-referenced, not marked "Inget underlag krävs". Counted over the
-  // loaded rows, so the line says "på den här sidan" unless the whole scope
-  // is on screen. NEEDS_DOC_SOURCE_TYPES and the worklist counts are
-  // untouched; only the list rows change.
+  // Imported verifikat without an underlag here: their underlag is kept
+  // where the earlier books were kept (underlagInEarlierSystem), so each row
+  // carries a quiet mark, never the "Underlag saknas" chip, and they are
+  // counted once in the line above the table (2026-10-18: a migrated year was
+  // a wall of chips). Posted, import, no attachment, not invoice-referenced,
+  // not marked "Inget underlag krävs". Counted over the loaded rows, so the
+  // line says "på den här sidan" unless the whole scope is on screen.
   const importedMissingCount = attachmentCountsLoaded
-    ? entries.filter((e) => e.source_type === 'import' && isEligibleForExempt(e)).length
+    ? entries.filter((e) => underlagInEarlierSystem(e.source_type) && isEligibleForExempt(e)).length
     : 0
   const wholeScopeLoaded = entries.length >= count
 
@@ -949,6 +955,8 @@ export default function JournalEntryList({
     date_from: dateFrom || null,
     date_to: dateTo || null,
     search: search || null,
+    // The same set the list shows: imported verifikat only when asked for.
+    include_imported: showMissingOnly && includeImported,
   })
 
   const openBulk = async () => {
@@ -1031,6 +1039,7 @@ export default function JournalEntryList({
     (seriesFilter !== 'all' ? 1 : 0) +
     (dateFrom || dateTo ? 1 : 0) +
     (showMissingOnly ? 1 : 0) +
+    (showMissingOnly && includeImported ? 1 : 0) +
     // Hidden makulerade pairs count: the badge is the hint that rows are
     // hidden, which the list lacked when stornos vanished silently (#3149).
     (correctionView === 'hide' ? 1 : 0)
@@ -1144,6 +1153,7 @@ export default function JournalEntryList({
     setVisitScope(null)
     setSeriesFilter('all')
     setShowMissingOnly(false)
+    setIncludeImported(false)
     setCorrectionView((v) => (v === 'hide' ? 'collapse' : v))
     setDateFrom('')
     setDateTo('')
@@ -1362,6 +1372,26 @@ export default function JournalEntryList({
                   </Badge>
                 )}
               </div>
+
+              {/* Imported verifikat keep their underlag in the earlier
+                  system, so the missing filter leaves them out unless asked
+                  for (underlagInEarlierSystem). */}
+              {showMissingOnly && (
+                <div className="flex items-center gap-2 pl-1">
+                  <Switch
+                    id="missing-include-imported"
+                    checked={includeImported}
+                    onCheckedChange={(on) => {
+                      setIncludeImported(on)
+                      setMissingCount(null)
+                      setPage(0)
+                    }}
+                  />
+                  <Label htmlFor="missing-include-imported" className="text-sm cursor-pointer">
+                    {t('show_missing_include_imported')}
+                  </Label>
+                </div>
+              )}
 
               {/* Storno and Omförd rows. The old switch ("Visa storno- och
                   rättade poster") only folded correction groups, so with it
@@ -1848,24 +1878,29 @@ export default function JournalEntryList({
                                 <span title={t('no_doc_required_indicator_tooltip')}>
                                   <NoSymbolIcon className="h-3.5 w-3.5 text-muted-foreground" />
                                 </span>
+                              ) : underlagInEarlierSystem(entry.source_type) ? (
+                                // An imported verifikat's underlag is kept
+                                // where the earlier books were kept: its own
+                                // quiet status, never "Underlag saknas". The
+                                // line above the table counts them.
+                                <span title={t('imported_underlag_indicator_tooltip')}>
+                                  <ArchiveBoxIcon className="h-3.5 w-3.5 text-muted-foreground" />
+                                  <span className="sr-only">{t('imported_underlag_indicator_tooltip')}</span>
+                                </span>
                               ) : (
-                                // Imported rows are counted once in the line
-                                // above the table, not chipped row by row.
-                                entry.source_type !== 'import' && (
-                                  <>
-                                    <Badge variant="warning" className="hidden sm:inline-flex" title={t('missing_attachment_tooltip')}>
-                                      {t('missing_attachment_chip')}
-                                    </Badge>
-                                    {/* A phone (below sm) has no room for the chip
-                                        beside the description and the amount: the
-                                        amber glyph marks the row, the chip's words
-                                        stay for screen readers. */}
-                                    <span className="inline-flex sm:hidden" title={t('missing_attachment_tooltip')}>
-                                      <StatusGlyph tone="warning" />
-                                      <span className="sr-only">{t('missing_attachment_chip')}</span>
-                                    </span>
-                                  </>
-                                )
+                                <>
+                                  <Badge variant="warning" className="hidden sm:inline-flex" title={t('missing_attachment_tooltip')}>
+                                    {t('missing_attachment_chip')}
+                                  </Badge>
+                                  {/* A phone (below sm) has no room for the chip
+                                      beside the description and the amount: the
+                                      amber glyph marks the row, the chip's words
+                                      stay for screen readers. */}
+                                  <span className="inline-flex sm:hidden" title={t('missing_attachment_tooltip')}>
+                                    <StatusGlyph tone="warning" />
+                                    <span className="sr-only">{t('missing_attachment_chip')}</span>
+                                  </span>
+                                </>
                               )
                             )
                           )}

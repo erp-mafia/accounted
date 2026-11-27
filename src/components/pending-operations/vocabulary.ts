@@ -171,6 +171,7 @@ export const SINGLE_ACTION_WARNING_KEYS: Readonly<Record<string, string>> = {
   correct_entry_lines_inline: 'warning_correct_entry_lines_inline',
   redate_entry: 'warning_redate_entry',
   mark_no_document_required: 'warning_mark_no_document_required',
+  mark_no_document_required_by_filter: 'warning_mark_no_document_required_by_filter',
   book_vat_settlement: 'warning_book_vat_settlement',
   mark_not_momsredovisning: 'warning_mark_not_momsredovisning',
   withdraw_not_momsredovisning: 'warning_withdraw_not_momsredovisning',

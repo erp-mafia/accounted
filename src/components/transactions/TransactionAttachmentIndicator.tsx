@@ -20,6 +20,12 @@ interface Props {
   hasJeDoc?: boolean
   /** Booked, requires underlag, has none (computeJeUnderlagStatus === 'missing'). */
   missing?: boolean
+  /**
+   * Booked on an imported verifikat without an underlag here
+   * (computeJeUnderlagStatus === 'imported'): its underlag is kept in the
+   * earlier system, so it reads as that, never as missing.
+   */
+  earlierSystem?: boolean
   /** Opens the attach dialog from the negative state. Omit for viewers:
    *  the badge then renders non-interactive. */
   onAttach?: () => void
@@ -39,12 +45,15 @@ const hitAreaClass = 'shrink-0 p-1 -m-1'
  *   lists all attachments: handles multi-doc without a per-row fetch).
  * - Missing on a booked row: discreet outline badge that doubles as the
  *   attach affordance when onAttach is provided.
+ * - Booked on an imported verifikat without an underlag here: a quiet badge
+ *   saying the underlag is in the earlier system, not missing.
  */
 export function TransactionAttachmentIndicator({
   documentId,
   journalEntryId,
   hasJeDoc,
   missing,
+  earlierSystem,
   onAttach,
   className,
 }: Props) {
@@ -121,6 +130,16 @@ export function TransactionAttachmentIndicator({
           {t('attached_label')}
         </Badge>
       </Link>
+    )
+  }
+
+  if (earlierSystem) {
+    return (
+      <span className={cn('shrink-0', className)} title={t('earlier_system_title')}>
+        <Badge variant="outline" className={cn(badgeClass, 'text-muted-foreground')}>
+          {t('earlier_system_label')}
+        </Badge>
+      </span>
     )
   }
 

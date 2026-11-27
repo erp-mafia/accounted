@@ -2,6 +2,12 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import { NEEDS_DOC_SOURCE_TYPES } from '@/lib/worklist/types'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import {
+  MissingUnderlagQueryError,
+  listAllMissingUnderlagIds,
+  listMissingUnderlagPage,
+  type MissingUnderlagFilters,
+} from '@/lib/bookkeeping/missing-underlag'
 
 const CHUNK_SIZE = 500
 
@@ -207,5 +213,70 @@ export async function batchSetNoDocumentRequired(
     return { ok: true, data: { exempted, journal_entry_ids: ownedIds, skipped_ids: skipped } }
   } catch (err) {
     return { ok: false, code: 'NO_DOC_REQUIRED_FAILED', messageSv: getErrorMessage(err) }
+  }
+}
+
+/** The filters the by-filter mark takes: the verifikat list's "Markera alla utan underlag". */
+export interface NoDocRequiredFilters {
+  periodId?: string | null
+  /** Single uppercase verifikationsserie (A-Z). */
+  series?: string | null
+  dateFrom?: string | null
+  dateTo?: string | null
+  /** Also the imported verifikat, whose underlag is kept in the earlier system. */
+  includeImported?: boolean
+}
+
+export interface FilterNoDocRequiredResult {
+  exempted: number
+}
+
+/**
+ * Mark every verifikat in the missing-underlag set that matches the filters,
+ * across every page: the same set and the same write as the verifikat list's
+ * "Markera alla utan underlag" (POST /api/bookkeeping/no-doc-required/bulk-
+ * missing), for an agent. The set is list_verifikat_missing_underlag's, so
+ * imported verifikat, whose underlag is in the earlier system, are in it only
+ * when asked for. The dry run counts the set; the write resolves it again
+ * when it runs, so a verifikat booked in between is marked too.
+ */
+export async function filterSetNoDocumentRequired(
+  ctx: OperationContext,
+  filters: NoDocRequiredFilters,
+  reason: string | null,
+  options: { dryRun?: boolean } = {},
+): Promise<OperationOutcome<FilterNoDocRequiredResult>> {
+  const set: MissingUnderlagFilters = {
+    periodId: filters.periodId ?? null,
+    series: filters.series ?? null,
+    dateFrom: filters.dateFrom ?? null,
+    dateTo: filters.dateTo ?? null,
+    includeImported: filters.includeImported === true,
+  }
+  try {
+    if (options.dryRun) {
+      const { total } = await listMissingUnderlagPage(ctx.supabase, ctx.companyId, set, { limit: 1 })
+      return {
+        ok: true,
+        dryRun: true,
+        preview: {
+          would_exempt: total,
+          period_id: set.periodId,
+          series: set.series,
+          date_from: set.dateFrom,
+          date_to: set.dateTo,
+          include_imported: set.includeImported,
+          reason,
+          will: 'mark every posted verifikat missing underlag that matches the filters "Inget underlag krävs"; the verifikat themselves are not changed',
+        },
+      }
+    }
+    const ids = await listAllMissingUnderlagIds(ctx.supabase, ctx.companyId, set)
+    if (ids.length === 0) return { ok: true, data: { exempted: 0 } }
+    const exempted = await markEntriesNoDocRequired(ctx.supabase, ctx.companyId, ctx.userId, ids, reason)
+    return { ok: true, data: { exempted } }
+  } catch (err) {
+    const messageSv = err instanceof MissingUnderlagQueryError ? err.userMessage : getErrorMessage(err)
+    return { ok: false, code: 'NO_DOC_REQUIRED_FAILED', messageSv }
   }
 }

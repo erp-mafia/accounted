@@ -146,6 +146,7 @@ const RISK_TIERS = {
   commit_k3_transition: 'high',
   redate_entry: 'high',
   mark_no_document_required: 'medium',
+  mark_no_document_required_by_filter: 'medium',
   book_vat_settlement: 'high',
   // Momsdeklaration filing record: completes or reopens the period's moms
   // deadline and nothing else (no verifikat, nothing sent to Skatteverket).

@@ -68,6 +68,8 @@ describe('gnubok_list_transactions_without_documents', () => {
       p_since: '2026-01-01',
       p_limit: 20,
       p_offset: 0,
+      // An imported verifikat's underlag is in the earlier system.
+      p_include_imported: false,
     })
     expect(result.count).toBe(1)
     expect(result.total_count).toBe(1)

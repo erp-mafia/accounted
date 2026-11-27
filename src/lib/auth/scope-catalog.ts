@@ -483,6 +483,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_commit_k3_transition: 'bookkeeping:write',
   gnubok_redate_entry: 'bookkeeping:write',
   gnubok_mark_no_document_required: 'bookkeeping:write',
+  gnubok_mark_no_document_required_by_filter: 'bookkeeping:write',
   gnubok_get_rattelse_log: 'reports:read',
   gnubok_get_ink2_declaration: 'reports:read',
   gnubok_get_ink3_underlag: 'reports:read',

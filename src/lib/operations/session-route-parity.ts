@@ -244,7 +244,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/bookkeeping/journal-entries/:id/no-document-required': covered([`POST ${V}/journal-entries/:id/no-document-required`, 'gnubok_mark_no_document_required'], 'the tool takes journal_entry_ids: one verifikat is a batch of one'),
   'DELETE /api/bookkeeping/journal-entries/:id/no-document-required': covered([`DELETE ${V}/journal-entries/:id/no-document-required`]),
   'POST /api/bookkeeping/no-doc-required/batch': covered([`POST ${V}/journal-entries/no-document-required`, 'gnubok_mark_no_document_required']),
-  'POST /api/bookkeeping/no-doc-required/bulk-missing': covered([`POST ${V}/journal-entries/no-document-required`, 'gnubok_mark_no_document_required'], 'the same mark (markEntriesNoDocRequired) by journal_entry_ids, up to 500 a call, from gnubok_list_verifikat_without_documents; choosing by filter on the server is the dashboard only'),
+  'POST /api/bookkeeping/no-doc-required/bulk-missing': covered([`POST ${V}/journal-entries/no-document-required/by-filter`, 'gnubok_mark_no_document_required_by_filter'], 'the same set (list_verifikat_missing_underlag) and the same mark, by period, series and dates; the search text is the dashboard only'),
   'POST /api/bookkeeping/journal-entry-lines/:lineId/retag': covered([`POST ${V}/dimensions/retag`, 'gnubok_tag_journal_lines']),
   'POST /api/bookkeeping/voucher-gaps': covered([`POST ${V}/voucher-gap-explanations`, 'gnubok_explain_voucher_gap']),
   // Pågående arbeten (K3 kapitel 23), behind NEXT_PUBLIC_CONTRACT_REVENUE_ENABLED: dashboard first.

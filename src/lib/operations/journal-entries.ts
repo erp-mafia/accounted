@@ -39,6 +39,7 @@ import {
   NO_DOC_BATCH_MAX,
   batchSetNoDocumentRequired,
   clearNoDocumentRequired,
+  filterSetNoDocumentRequired,
   setNoDocumentRequired,
 } from '@/lib/bookkeeping/no-doc-required'
 import type { JournalEntry } from '@/types'
@@ -836,6 +837,83 @@ export const journalEntriesBatchNoDocumentRequired = defineOperation({
   },
   run: (ctx, { journal_entry_ids, reason }, { dryRun }) =>
     batchSetNoDocumentRequired(ctx, journal_entry_ids, reason ?? null, { dryRun }),
+})
+
+export const journalEntriesFilterNoDocumentRequired = defineOperation({
+  id: 'journal-entries.filter-no-document-required',
+  kind: 'write',
+  scope: 'bookkeeping:write',
+  risk: 'medium',
+  reversible: true,
+  docs: {
+    summary: 'Mark every verifikat missing underlag in a period, series or date range as "Inget underlag krävs", in one call.',
+    description: `${NO_DOC_BASIS} The set is the one the verifikat list shows under Visa saknade underlag, narrowed by period, series and dates and taken across every page: the list's Markera alla utan underlag for an agent, where the id batch takes at most ${NO_DOC_BATCH_MAX} ids. Imported verifikat keep their underlag in the earlier system, so they are not in the set unless include_imported. At least one of period_id, series, date_from or date_to. Idempotent. Dry-runnable: the dry run counts what would be marked.`,
+    useWhen:
+      'The user has confirmed that every verifikat missing underlag in a range has none by nature (bokslutsposter, periodiseringar, transfers between own accounts) and wants them out of the worklist without approving page after page of ids.',
+    doNotUseFor:
+      'Waiving receipts that are missing (find and attach them), or imported verifikat: their underlag is in the earlier system, so they are not missing and need no mark.',
+    pitfalls: [
+      'Dry-run first and tell the user the count (data.would_exempt) before staging it.',
+      'The write reads the set again when it runs: a verifikat booked into the range after the dry run is marked too.',
+      'Undo per verifikat with DELETE /journal-entries/{id}/no-document-required.',
+    ],
+    example: {
+      request: { period_id: '3f1a…', series: 'C', reason: 'Bokslutsposter, egen handling' },
+      response: { data: { exempted: 42 }, meta: META_EXAMPLE },
+    },
+  },
+  input: z
+    .object({
+      period_id: z.string().uuid().optional().describe('Räkenskapsår (fiscal period id) the verifikat belong to.'),
+      series: z
+        .string()
+        .regex(/^[A-Z]$/, 'One verifikationsserie letter, A-Z')
+        .optional()
+        .describe('One verifikationsserie, A-Z.'),
+      date_from: isoDateSchema.optional().describe('First entry date, YYYY-MM-DD.'),
+      date_to: isoDateSchema.optional().describe('Last entry date, YYYY-MM-DD.'),
+      include_imported: z
+        .boolean()
+        .optional()
+        .describe('Also imported verifikat whose underlag is in the earlier system. Default false: they are not missing.'),
+      reason: NO_DOC_REASON,
+    })
+    .refine((v) => !!(v.period_id || v.series || v.date_from || v.date_to), {
+      message: 'Send at least one of period_id, series, date_from or date_to.',
+    }),
+  output: z.object({ exempted: z.number().int() }),
+  errorCodes: ['NO_DOC_REQUIRED_FAILED', 'VALIDATION_ERROR'],
+  http: { method: 'POST', path: '/api/v1/companies/:companyId/journal-entries/no-document-required/by-filter' },
+  mcp: {
+    name: 'gnubok_mark_no_document_required_by_filter',
+    title: 'Mark Missing Underlag by Filter',
+    description:
+      'Stage "Inget underlag krävs" on every verifikat missing underlag in a period, series or date range, across all pages (dry-run counts them). Only what has no underlag by nature. Imported verifikat are not missing.',
+    // The id batch keeps the waiver words (guessed waiver names find it
+    // first); this one is found by range: all of them, a series, a year.
+    keywords: ['markera alla utan underlag', 'alla saknade underlag', 'saknade underlag per serie', 'saknade underlag per räkenskapsår', 'by filter', 'bulk no document required'],
+    stage: {
+      pendingType: 'mark_no_document_required_by_filter',
+      title: (input) => {
+        const scope = [
+          typeof input.series === 'string' ? `serie ${input.series}` : null,
+          typeof input.date_from === 'string' || typeof input.date_to === 'string'
+            ? `${typeof input.date_from === 'string' ? input.date_from : ''} till ${typeof input.date_to === 'string' ? input.date_to : ''}`.trim()
+            : null,
+        ].filter((part): part is string => !!part)
+        return scope.length > 0
+          ? `Inget underlag krävs för saknade underlag i ${scope.join(', ')}`
+          : 'Inget underlag krävs för saknade underlag i räkenskapsåret'
+      },
+    },
+  },
+  run: (ctx, { period_id, series, date_from, date_to, include_imported, reason }, { dryRun }) =>
+    filterSetNoDocumentRequired(
+      ctx,
+      { periodId: period_id, series, dateFrom: date_from, dateTo: date_to, includeImported: include_imported === true },
+      reason ?? null,
+      { dryRun },
+    ),
 })
 
 // ---------------------------------------------------------------------------

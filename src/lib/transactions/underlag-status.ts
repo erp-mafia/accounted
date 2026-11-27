@@ -1,17 +1,21 @@
 import { NEEDS_DOC_SOURCE_TYPES } from '@/lib/worklist/categories'
+import { underlagInEarlierSystem } from '@/lib/worklist/types'
 
 /**
  * Row-level underlag status for a booked transaction's journal entry.
  *
- * - 'has'    : the verifikation has at least one current-version document,
- *               or is referenced by a supplier invoice whose source document
- *               is retained, or a customer invoice points at it (BFL 5 kap
- *               7 §: hänvisning till underlag); callers merge all three kinds
- *               of ids into jeIdsWithDocs
- * - 'missing': the verifikation's source type requires underlag (BFL 5 kap
- *               7§), has none, and is not exempted via journal_entry_no_doc_required
- * - 'none'   : no statement either way (system-generated source types,
- *               exempted entries): render no badge
+ * - 'has'     : the verifikation has at least one current-version document,
+ *                or is referenced by a supplier invoice whose source document
+ *                is retained, or a customer invoice points at it (BFL 5 kap
+ *                7 §: hänvisning till underlag); callers merge all three kinds
+ *                of ids into jeIdsWithDocs
+ * - 'missing' : the verifikation's source type requires underlag (BFL 5 kap
+ *                7§), has none, and is not exempted via journal_entry_no_doc_required
+ * - 'imported': an imported verifikat without an underlag here: its underlag
+ *                is kept where the earlier books were kept
+ *                (underlagInEarlierSystem), so it is not missing
+ * - 'none'    : no statement either way (system-generated source types,
+ *                exempted entries): render no badge
  *
  * Mirrors countVerifikatMissingDocument in lib/worklist/categories.ts at row
  * granularity so the per-row "Underlag saknas" badge and the worklist count
@@ -20,7 +24,7 @@ import { NEEDS_DOC_SOURCE_TYPES } from '@/lib/worklist/categories'
  * worklist does): reversed/corrected entries must render no badge at all,
  * never 'missing'.
  */
-export type JeUnderlagStatus = 'has' | 'missing' | 'none'
+export type JeUnderlagStatus = 'has' | 'missing' | 'imported' | 'none'
 
 const NEEDS_DOC = new Set<string>(NEEDS_DOC_SOURCE_TYPES)
 
@@ -38,7 +42,7 @@ export function computeJeUnderlagStatus(
       NEEDS_DOC.has(entry.source_type) &&
       !exemptJeIds.has(entry.id)
     ) {
-      result[entry.id] = 'missing'
+      result[entry.id] = underlagInEarlierSystem(entry.source_type) ? 'imported' : 'missing'
     } else {
       result[entry.id] = 'none'
     }

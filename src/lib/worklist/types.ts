@@ -744,3 +744,29 @@ export const NEEDS_DOC_SOURCE_TYPES = [
   // books a verifikat with no underlag and must surface here (#1317).
   'inbox_item',
 ] as const
+
+/**
+ * The source type of a verifikat imported from the company's earlier books:
+ * an SIE file, or a migration from another program.
+ */
+export const IMPORTED_SOURCE_TYPE = 'import'
+
+/**
+ * Whether a verifikat's underlag is kept where the earlier books were kept
+ * (the earlier program, the byrå or paper), not in Accounted: an imported
+ * verifikat. BFL 5 kap 7 § asks a verifikation to say where the documents
+ * behind it are available ("samt var dessa finns tillgängliga"), and
+ * 7 kap 2 § that they stay available through the bevarandetid; neither asks
+ * that they move into the program the books moved to. So an imported
+ * verifikat without an underlag here is "Importerat, underlag i tidigare
+ * system", never "Underlag saknas": every missing-underlag list and count
+ * leaves it out unless asked for (include_imported), and no "Inget underlag
+ * krävs" is needed for it.
+ *
+ * Mirrored in SQL by p_include_imported in verifikat_without_documents,
+ * list_verifikat_missing_underlag and transactions_without_documents
+ * (migration 20261127194500).
+ */
+export function underlagInEarlierSystem(sourceType: string | null | undefined): boolean {
+  return sourceType === IMPORTED_SOURCE_TYPE
+}
