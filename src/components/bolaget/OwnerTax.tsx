@@ -28,7 +28,7 @@ import type { OwnerLoanView, OwnerLoansView, SpecialListRow } from '@/lib/bolage
 import type { Ku20Status } from '@/lib/bolaget/owner-tax/ku20'
 import type { BoardLoansNote } from '@/lib/bolaget/owner-tax/arl-note'
 import { todayIsoStockholm } from '@/lib/dates/iso'
-import { ownerTaxOpeningYear } from '@/lib/bolaget/filing-year'
+import { ownerTaxOpeningYear } from '@/lib/bolaget/capital/filing-year'
 
 type FormState = Record<string, string>
 type Preview = Record<string, unknown>

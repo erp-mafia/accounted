@@ -1,4 +1,4 @@
-import { supportedK10Years } from './owner-tax/k10-parameters'
+import { supportedK10Years } from '../owner-tax/k10-parameters'
 
 /**
  * The inkomstår whose owner filings are due: last year in January, while KU31

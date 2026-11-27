@@ -1,6 +1,6 @@
 import { isFiscalYear } from '@/lib/invariants/fiscal-year'
 import { todayIsoStockholm } from '@/lib/dates/iso'
-import { ownerTaxOpeningYear } from '@/lib/bolaget/filing-year'
+import { ownerTaxOpeningYear } from '@/lib/bolaget/capital/filing-year'
 
 /** An inkomstår from a path or query: four digits, 2000-2099. Null when malformed. */
 export function parseIncomeYear(raw: string | null | undefined): number | null {

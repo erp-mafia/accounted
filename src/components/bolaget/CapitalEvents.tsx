@@ -28,7 +28,7 @@ import type { CapitalView } from '@/lib/bolaget/capital/view'
 import type { Ku31Status } from '@/lib/bolaget/capital/ku31'
 import type { LedgerPayout } from '@/lib/bolaget/capital/dividends'
 import { todayIsoStockholm } from '@/lib/dates/iso'
-import { incomeYearToFile } from '@/lib/bolaget/filing-year'
+import { incomeYearToFile } from '@/lib/bolaget/capital/filing-year'
 import { ArrowDownTrayIcon, PlusIcon } from '@/components/icons'
 
 type FormState = Record<string, string>

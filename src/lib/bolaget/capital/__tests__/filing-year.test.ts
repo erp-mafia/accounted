@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('../owner-tax/k10-parameters', () => ({ supportedK10Years: vi.fn() }))
+vi.mock('../../owner-tax/k10-parameters', () => ({ supportedK10Years: vi.fn() }))
 
 import { incomeYearToFile, ownerTaxOpeningYear } from '../filing-year'
-import { supportedK10Years } from '../owner-tax/k10-parameters'
+import { supportedK10Years } from '../../owner-tax/k10-parameters'
 
 const supported = vi.mocked(supportedK10Years)
 
