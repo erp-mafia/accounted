@@ -1,4 +1,4 @@
-import { EXTENSION_REQUIRED_CAPABILITY, type CapabilityKey } from '@/lib/entitlements/keys'
+import type { CapabilityKey } from '@/lib/entitlements/keys'
 import type { ModuleId } from '@/lib/modules/manifest'
 import type { EntityType } from '@/types'
 
@@ -108,7 +108,6 @@ export const NAV_V2_TOP: NavV2Item[] = [
     module: 'inbox',
     labelKey: 'inkorg',
     requiresInkorgV2: true,
-    requiredCapability: EXTENSION_REQUIRED_CAPABILITY['general/invoice-inbox'],
   },
   { href: '/chat', module: 'agent', labelKey: 'assistant', requiresAssistantChat: true },
   // The wiki replaced "Vad din agent vet" under Assistent (decided 2026-10-29):
@@ -171,7 +170,6 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
         href: '/e/general/invoice-inbox',
         module: 'inbox',
         labelKey: 'invoice_inbox',
-        requiredCapability: EXTENSION_REQUIRED_CAPABILITY['general/invoice-inbox'],
         hiddenWithInkorgV2: true,
       },
       { href: '/expenses', module: 'expenses', labelKey: 'expenses', requiresExpenses: true },

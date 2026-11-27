@@ -55,8 +55,7 @@ import {
   SettingsSectionHeader,
 } from '@/components/settings/SettingsRows'
 import { copyInboxAddress, type AddressCopyState } from '@/components/extensions/general/inbox-address-copy'
-import { useCapability, useCompany } from '@/contexts/CompanyContext'
-import { CAPABILITY } from '@/lib/entitlements/keys'
+import { useCompany } from '@/contexts/CompanyContext'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { createClient } from '@/lib/supabase/client'
 import { fetchPaymentsAvailability } from '@/components/payments/payments-client'
@@ -256,14 +255,12 @@ export function ConnectionsSettingsContent() {
   const hasSkatteverket = ENABLED_EXTENSION_IDS.has('skatteverket') && !isSandbox
   const hasWhatsApp = ENABLED_EXTENSION_IDS.has('whatsapp-inbox') && !isSandbox
   const hasMail = ENABLED_EXTENSION_IDS.has('mail') && !isSandbox
-  // The inbox needs the AI capability (lib/entitlements/keys.ts): without it
-  // the address route refuses, so the row is left out without asking.
-  const hasInboxCapability = useCapability(CAPABILITY.ai)
-  const hasInvoiceInbox = ENABLED_EXTENSION_IDS.has('invoice-inbox') && !isSandbox && hasInboxCapability
-  // Kivra and Billo deliver into the inbox, so they follow its gate: a
-  // company that cannot open the inbox is not offered a mailbox it could not
-  // read. A row shows once the read says this deployment receives from the
-  // provider for this company (Accounted's credentials and the rollout).
+  // The inbox is open on every plan; only reading a document with AI needs the
+  // AI capability (lib/entitlements/keys.ts).
+  const hasInvoiceInbox = ENABLED_EXTENSION_IDS.has('invoice-inbox') && !isSandbox
+  // Kivra and Billo deliver into the inbox, so they follow its gate. A row
+  // shows once the read says this deployment receives from the provider for
+  // this company (Accounted's credentials and the rollout).
   const digitalMailboxes = useDigitalMailboxes(hasInvoiceInbox)
   const offersKivra = digitalMailboxes.state.status === 'ready' && digitalMailboxes.state.providers.kivra.available.receive
   const offersBillo = digitalMailboxes.state.status === 'ready' && digitalMailboxes.state.providers.billo.available.receive

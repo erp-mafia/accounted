@@ -54,6 +54,12 @@ export interface ResponseWarning {
     args?: Record<string, unknown>
     resource?: string
   }
+  /**
+   * Set when the warning is about one payment order the bank holds: the order
+   * a client can cancel (POST /payment-orders/{id}/cancel) and its invoice.
+   */
+  payment_order_id?: string
+  supplier_invoice_id?: string
 }
 
 export interface ResponseMeta {

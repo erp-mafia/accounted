@@ -23,7 +23,7 @@ import {
 import { createServiceClient } from '@/lib/supabase/server'
 import { applyProviderState } from './apply-state'
 import { buildPartyContext } from './party'
-import { SIGNING_FINISHED_BATCH_STATUSES, type PaymentOrderStatus } from './status'
+import { BANK_HELD_PAYMENT_ORDER_STATUSES, SIGNING_FINISHED_BATCH_STATUSES, type PaymentOrderStatus } from './status'
 import { logPaymentOrderEvents, type PaymentOrderRow } from './types'
 import { executionDateFor } from '@/lib/payments/bank-days'
 import { todayIsoStockholm } from '@/lib/dates/iso'
@@ -443,7 +443,7 @@ export async function cancelPaymentOrder(
       ? { ok: false, code: 'PAYMENT_CANCEL_CONFIRMATION_REQUIRED', details: { payment_order_id: order.id, outcome_unknown: true } }
       : { ok: false, code: 'PAYMENT_ORDER_CREATE_IN_PROGRESS', details: { payment_order_id: order.id } }
   }
-  if (!['submitted', 'awaiting_signature', 'awaiting_second_signer', 'accepted'].includes(order.status) || !order.provider_payment_id) {
+  if (!BANK_HELD_PAYMENT_ORDER_STATUSES.includes(order.status) || !order.provider_payment_id) {
     return { ok: false, code: 'PAYMENT_ORDERS_WRONG_STATUS', details: { status: order.status } }
   }
 

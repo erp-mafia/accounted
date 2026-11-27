@@ -21,8 +21,6 @@ export interface FirstThingInput {
   hasBankFeed: boolean
   hasImportedBooks: boolean
   hasTransactions: boolean
-  /** Whether the company holds the AI capability (the inbox row is listed only then). */
-  hasAi: boolean
   /** ISO timestamp or date the company was created. */
   companyCreatedAt: string | null
   /** Today's date, YYYY-MM-DD. */
@@ -107,11 +105,11 @@ export function pickFirstThing(input: FirstThingInput): FirstThing | null {
   if (!hasBankRows) kind = input.bankConnectOffered ? 'connect_bank' : 'import_bank_file'
   else if (count('book_transaction') > 0) kind = 'book_bank_rows'
   else if (count('verifikat_missing_document') > 0) kind = 'find_receipts'
-  else if (input.hasAi && count('inbox_document') > 0) kind = 'go_through_documents'
+  else if (count('inbox_document') > 0) kind = 'go_through_documents'
   if (!kind) return null
 
   const chosen = KIND_CATEGORY[kind]
-  const after = listAiTasks(input.counts, { hasAi: input.hasAi })
+  const after = listAiTasks(input.counts)
     .filter((task) => task.category !== chosen)
     .slice(0, FIRST_THING_MAX_AFTER)
 

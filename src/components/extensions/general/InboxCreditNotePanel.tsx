@@ -1,7 +1,7 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
-import { useTranslations } from 'next-intl'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { LoadError } from '@/components/ui/empty-state'
@@ -14,6 +14,7 @@ import { notifySessionExpired } from '@/lib/auth/session-timeout-shared'
 import { readsAsCredit } from '@/lib/documents/inbox-kind'
 import type { CreditTargetCandidate, CreditTargetResolution } from '@/lib/supplier-invoices/credit-target'
 import { formatCurrency, formatDate } from '@/lib/utils'
+import { readBankHeldPaymentSentences } from '@/components/payments/BankHeldPaymentNotes'
 
 /**
  * The Underlag rail for a supplier's credit note (issue #2980). A credit note
@@ -38,6 +39,8 @@ export function InboxCreditNotePanel({
   onFieldsUpdated: (data: Record<string, unknown>) => void
 }) {
   const t = useTranslations('inbox_workspace')
+  const locale = useLocale()
+  const tBankHeld = useTranslations('bank_held_payment')
   const { toast } = useToast()
   const { dialogProps, confirm } = useDestructiveConfirm()
   const [target, setTarget] = useState<CreditTargetResolution | null>(null)
@@ -46,6 +49,13 @@ export function InboxCreditNotePanel({
   const [attempt, setAttempt] = useState(0)
   const [picked, setPicked] = useState<string>('')
   const [busy, setBusy] = useState(false)
+  // The item the panel shows now: the panel stays mounted when the rail
+  // selects another item, and a credit's bank read must not open the confirm
+  // for the earlier item over the next one.
+  const shownItemIdRef = useRef(itemId)
+  useEffect(() => {
+    shownItemIdRef.current = itemId
+  }, [itemId])
   const readingKey = JSON.stringify(extracted?.totals ?? null) + JSON.stringify(extracted?.invoice ?? null)
 
   useEffect(() => {
@@ -76,13 +86,34 @@ export function InboxCreditNotePanel({
   const credit = useCallback(
     async (invoice: CreditTargetCandidate) => {
       const number = invoice.supplier_invoice_number ?? String(invoice.arrival_number ?? '')
+      // A payment the bank holds for the invoice (Betala via banken), said
+      // before the confirm: a signed one still goes out, so the credit is
+      // refused until it is cancelled; an unsigned one is cancelled at the bank.
+      // The read waits up to 2 s: the button shows it working, and a switch
+      // to another item meanwhile drops this credit.
+      let bankPaymentNotes: string[] = []
+      setBusy(true)
+      try {
+        bankPaymentNotes = await readBankHeldPaymentSentences(
+          [invoice.supplier_invoice_id],
+          'other',
+          locale,
+          tBankHeld('check_failed'),
+        )
+      } finally {
+        setBusy(false)
+      }
+      if (shownItemIdRef.current !== itemId) return
       await confirm(
         {
           title: t('credit_note_confirm_title', { number }),
-          description: t('credit_note_confirm_description', {
-            number,
-            date: creditDate ? formatDate(creditDate) : t('credit_note_date_today'),
-          }),
+          description: [
+            t('credit_note_confirm_description', {
+              number,
+              date: creditDate ? formatDate(creditDate) : t('credit_note_date_today'),
+            }),
+            ...bankPaymentNotes,
+          ].join('\n\n'),
           confirmLabel: t('credit_note_confirm_label'),
           variant: 'warning',
         },
@@ -113,7 +144,7 @@ export function InboxCreditNotePanel({
         },
       )
     },
-    [confirm, creditDate, itemId, onCredited, t, toast],
+    [confirm, creditDate, itemId, locale, onCredited, t, tBankHeld, toast],
   )
 
   const notACreditNote = async () => {

@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useAccounts } from '@/lib/reference-data/hooks'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -45,6 +45,7 @@ const PaymentFileDialog = dynamic(() => import('@/components/supplier-invoices/P
 const PayViaBankDialog = dynamic(() => import('@/components/payments/PayViaBankDialog'), { ssr: false })
 import { fetchPaymentsAvailability } from '@/components/payments/payments-client'
 import { SupplierPayeeAlertLine } from '@/components/payments/SupplierPayeeAlertLine'
+import { readBankHeldPaymentSentences } from '@/components/payments/BankHeldPaymentNotes'
 import { AccountChip } from '@/components/ui/account-chip'
 import { CategoryPopover } from '@/components/transactions/CategoryPopover'
 import TemplatePicker from '@/components/transactions/TemplatePicker'
@@ -215,6 +216,8 @@ export default function SupplierInvoiceDetailPage() {
   const company = useCompanyOptional()?.company ?? null
   const { toast } = useToast()
   const t = useTranslations('supplier_invoice_detail')
+  const locale = useLocale()
+  const tBankHeld = useTranslations('bank_held_payment')
   const tAttest = useTranslations('supplier_invoice_attest')
   const tCommon = useTranslations('common')
   // The list page's "Betald {date}" label, so the header reads like the row.
@@ -273,6 +276,14 @@ export default function SupplierInvoiceDetailPage() {
   // invoice A's row and payment-form defaults under invoice B's URL. Only the
   // newest request may write state.
   const fetchSeqRef = useRef(0)
+
+  // The invoice the page shows now. handleCredit reads the bank's payments
+  // before its confirm opens, and a pager step during that read must not open
+  // the confirm, which names no invoice, over a different one.
+  const shownInvoiceIdRef = useRef(String(params.id))
+  useEffect(() => {
+    shownInvoiceIdRef.current = String(params.id)
+  }, [params.id])
 
   // Resolves to the invoice it committed, or null when it committed none (an
   // error, or a newer fetch owns the page), so a caller can act on fresh data.
@@ -451,9 +462,29 @@ export default function SupplierInvoiceDetailPage() {
     // accounted#58: a deferring company's unbooked invoice is booked first,
     // on its own date, then reversed by the credit.
     const booksFirst = !!invoice && supplierCreditBooksOriginalFirst(companySettings, invoice)
+    // A payment the bank holds for the invoice (Betala via banken), said
+    // before the confirm: a signed one still goes out, so the credit is
+    // refused until it is cancelled; an unsigned one is cancelled at the bank.
+    // The read waits up to 2 s: the menu shows it working, and a step to
+    // another invoice meanwhile drops this credit instead of confirming it
+    // over that invoice.
+    const creditFor = String(params.id)
+    let bankPaymentNotes: string[] = []
+    setProcessingAction('credit')
+    try {
+      bankPaymentNotes = invoiceIdParam
+        ? await readBankHeldPaymentSentences([invoiceIdParam], 'other', locale, tBankHeld('check_failed'))
+        : []
+    } finally {
+      setProcessingAction(null)
+    }
+    if (shownInvoiceIdRef.current !== creditFor) return
     const ok = await confirmAction({
       title: t('credit_confirm_title'),
-      description: t(booksFirst ? 'credit_confirm_description_books_first' : 'credit_confirm_description'),
+      description: [
+        t(booksFirst ? 'credit_confirm_description_books_first' : 'credit_confirm_description'),
+        ...bankPaymentNotes,
+      ].join('\n\n'),
       confirmLabel: t('credit_confirm_label'),
       variant: 'warning',
     })

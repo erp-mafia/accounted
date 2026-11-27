@@ -32,6 +32,7 @@ import {
   POPOVER_SURFACE_CLASS,
 } from '@/components/ui/popover-surface'
 import { useToast } from '@/components/ui/use-toast'
+import { BankHeldPaymentNotes, useBankHeldPaymentWarnings } from '@/components/payments/BankHeldPaymentNotes'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatAmount, formatCurrency, formatDate, cn, isValidExchangeRate, chunk } from '@/lib/utils'
 import { useComboboxNavigation } from '@/lib/hooks/use-combobox-navigation'
@@ -677,6 +678,14 @@ export default function MatchAllocationDialog({
   const pickable = useMemo(
     () => candidates.filter((c) => !drafts[c.id]).sort((a, b) => a.dueDate.localeCompare(b.dueDate)),
     [candidates, drafts],
+  )
+  // A payment the bank holds for a picked supplier invoice (Betala via
+  // banken): this row may be that payment, or another debit while a signed
+  // one still goes out on its date. Said before the confirm, never a block;
+  // the confirm only waits for the read (bankPayments.pending).
+  const bankPayments = useBankHeldPaymentWarnings(
+    open ? pickedRows.filter((c) => c.kind === 'supplier_invoice').map((c) => c.id) : [],
+    'bank_row',
   )
 
   // The picker. The field shows while asked for and while nothing is picked;
@@ -1737,6 +1746,11 @@ export default function MatchAllocationDialog({
             )}
           </section>
 
+          {/* A payment the bank holds for a picked supplier invoice: the way
+              out (cancel it under Betalningar, or another row) before the
+              confirm. */}
+          <BankHeldPaymentNotes warnings={bankPayments.warnings} failed={bankPayments.failed} />
+
           {/* Where the split stands, as one line. Undershoot blocks too: the
               verifikat's bank line must equal the bank's actual receipt or
               reconciliation breaks (PR #607 round-1 review). */}
@@ -1851,7 +1865,7 @@ export default function MatchAllocationDialog({
             // Confirm requires sum == tx_abs exactly (within rounding).
             // Anything else lets the JE diverge from the bank line and
             // breaks reconciliation. PR #607 round-1 review fix.
-            disabled={linking || !balanced || overshoot || overLimit || explainingBlocks || !extraRowsValid}
+            disabled={linking || bankPayments.pending || !balanced || overshoot || overLimit || explainingBlocks || !extraRowsValid}
             loading={submitting}
           >
             {t('confirm')}

@@ -1,7 +1,5 @@
 import type { ReactNode } from 'react'
 import DashboardContent from '@/components/dashboard/DashboardContent'
-import { hasCapability } from '@/lib/entitlements/has-capability'
-import { CAPABILITY } from '@/lib/entitlements/keys'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import type { AiClient } from '@/lib/onboarding/ai-clients'
 import { hasBankFeed } from '@/lib/onboarding/checklist'
@@ -96,12 +94,11 @@ export async function HemFirstThingSection({
   const createdFrom = hemFirstThingCreatedFrom()
   if (createdFrom && !createdOnOrAfter(createdAt, createdFrom)) return hem
 
-  const [worklist, bankConnections, transactions, sieImports, hasAi] = await Promise.all([
+  const [worklist, bankConnections, transactions, sieImports] = await Promise.all([
     getWorklistCounts(supabase, companyId),
     readActiveBankConnections(companyId),
     countTransactions(companyId),
     countCompletedSieImports(companyId),
-    hasCapability(supabase, companyId, CAPABILITY.ai),
   ])
   // A failed read shows the usual Hem: guessing "nothing connected" would send a connected company to the bank step.
   if (bankConnections.error || transactions.error || sieImports.error) return hem
@@ -113,7 +110,6 @@ export async function HemFirstThingSection({
     hasBankFeed: hasBankFeed({ activeBankConnections: (bankConnections.data ?? []).length, transactionCount }),
     hasImportedBooks: (sieImports.count || 0) > 0,
     hasTransactions: transactionCount > 0,
-    hasAi,
     companyCreatedAt: createdAt,
     today,
     closed,

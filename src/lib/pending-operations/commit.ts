@@ -610,7 +610,15 @@ async function commitRegisteredOperation(
     }
   }
   if (outcome.dryRun) return { data: outcome.preview }
-  return { data: outcome.data as Record<string, unknown> }
+  // The warnings the write answers at approval (a payment the bank came to
+  // hold for the invoice since staging, say) are kept beside its data, as the
+  // executors of their own keep theirs. Data that is no object, or that
+  // carries warnings of its own, stays as it is.
+  const data = outcome.data as Record<string, unknown>
+  if (!outcome.warnings?.length || !data || typeof data !== 'object' || Array.isArray(data) || 'warnings' in data) {
+    return { data }
+  }
+  return { data: { ...data, warnings: outcome.warnings } }
 }
 
 /**

@@ -54,6 +54,10 @@ const ResponseWarningSchema = z.object({
       resource: z.string().optional(),
     })
     .optional(),
+  // Set when the warning is about one payment order the bank holds (see
+  // ResponseWarning). Published, so a strict client accepts the answer.
+  payment_order_id: z.string().optional(),
+  supplier_invoice_id: z.string().optional(),
 })
 
 /**

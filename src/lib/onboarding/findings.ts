@@ -6,6 +6,8 @@ import { roundOre } from '@/lib/money'
 import { filterOverdueInvoices } from '@/lib/invoices/overdue'
 import { filterOpenDeadlines } from '@/lib/deadlines/open'
 import { SKATTEKONTO_ACCOUNT_DEFAULT } from '@/lib/skatteverket/skattekonto-account'
+import { revenueAccountNeedsVatCode } from '@/lib/reports/vat-declaration'
+import type { VatAccountClassificationRow } from '@/lib/reports/vat-revenue-accounts'
 
 /**
  * Genomlysning: what the books act (issue #2438) can say about a company
@@ -42,6 +44,8 @@ export interface BooksFindings {
     lastEntryDate: string | null
     /** Posted verifikat still without underlag (the journal list's own predicate). */
     missingUnderlag: number
+    /** Class 3 accounts the momsdeklaration cannot read until they get a momskod (revenueAccountNeedsVatCode). */
+    revenueAccountsNeedingVatCode: string[]
   }
   bank: {
     connected: boolean
@@ -154,17 +158,27 @@ export async function loadBooksFindings(
     // Same predicate as the journal list and the worklist; p_limit only sizes
     // the page, total_count covers the full set.
     supabase.rpc('verifikat_without_documents', { p_company_id: companyId, p_limit: 1, p_offset: 0 }),
+    // The class 3 accounts without a momskod: the declaration's own rule then
+    // says which of them it cannot read (most it places by number or name).
+    supabase
+      .from('chart_of_accounts')
+      .select('account_number, account_name, account_class, default_vat_rate, default_vat_treatment')
+      .eq('company_id', companyId)
+      .eq('account_class', 3)
+      .is('default_vat_treatment', null)
+      .order('account_number', { ascending: true })
+      .limit(1000),
     loadAiConnection(supabase, userId),
   ])
   // A failed read stays an error: it must never surface as a zero balance.
-  for (const result of results.slice(0, 11)) {
+  for (const result of results.slice(0, 12)) {
     if ('error' in result && result.error) throw result.error
   }
   const [
     { count: entryCount }, { data: periodRows }, { count: overdueCount },
     { count: uncategorizedCount }, { data: bankRows }, { count: txCount },
     { data: skvRows }, { data: deadlineRows }, { data: lastEntryRows },
-    { data: summaryData }, { data: underlagData }, aiConnectionRead,
+    { data: summaryData }, { data: underlagData }, { data: revenueAccountRows }, aiConnectionRead,
   ] = results
 
   const periods = ((periodRows ?? []) as {
@@ -226,6 +240,9 @@ export async function loadBooksFindings(
       uncategorizedTransactions: uncategorizedCount ?? 0,
       lastEntryDate: ((lastEntryRows ?? []) as { entry_date: string }[])[0]?.entry_date ?? null,
       missingUnderlag,
+      revenueAccountsNeedingVatCode: ((revenueAccountRows ?? []) as VatAccountClassificationRow[])
+        .filter(revenueAccountNeedsVatCode)
+        .map((row) => row.account_number),
     },
     bank: {
       connected: !!bank,
