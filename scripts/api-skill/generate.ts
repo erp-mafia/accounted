@@ -106,11 +106,13 @@ const GROUPS: Array<{ file: string; title: string; members: string[]; blurb: str
   {
     file: 'invoices.md',
     title: 'Invoices (AR)',
-    members: ['invoices', 'collections', 'setoffs'],
+    members: ['invoices', 'recurring-invoice-schedules', 'collections', 'setoffs'],
     blurb:
       'Accounts receivable invoices: draft -> send -> paid/credited; the F-series number is ' +
       'assigned at send, not create. Supplier bills you receive are a different resource: see ' +
-      'suppliers.md. Customer and article registers: customers.md. Collections: overdue invoices ' +
+      'suppliers.md. Customer and article registers: customers.md. Recurring invoice schedules ' +
+      '(återkommande fakturor) create an invoice from the same lines every 1-12 months; ' +
+      '?stage=true proposes a schedule or a change for a person to approve. Collections: overdue invoices ' +
       'handed to the collections provider the company activated (the handover and escalations are ' +
       'staged for a person to approve in Accounted), the case on each invoice, and booking what the ' +
       'provider collected and paid out. Setting a customer invoice off against a supplier invoice ' +
