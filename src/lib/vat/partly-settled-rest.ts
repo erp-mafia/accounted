@@ -16,12 +16,13 @@ import { VAT_ACCOUNTS, VAT_SETTLEMENT_NET_ACCOUNTS } from '@/lib/reports/vat-dec
  *   src/lib/vat/voucher-vat-impact.ts, not importable from the client). The
  *   rest lines are 26xx, 2650/1650 and 3740 and never a skattekonto line, so
  *   only the net-account shape applies, with the same two account lists the
- *   SQL is given: a 2650/1650 line (VAT_SETTLEMENT_NET_ACCOUNTS) and a line on
- *   a fixed declaration account (VAT_ACCOUNTS). Output and input VAT that net
- *   to zero (an EU purchase on 2614/2645) have no 2650/1650 line, and posted
- *   alone they would move ruta 30 and ruta 48. A rest only on the company's
- *   own 26xx accounts routed to a ruta (vat_box) has no fixed declaration
- *   line, and posted alone it would count as business too.
+ *   SQL is given: a line on a fixed declaration account (VAT_ACCOUNTS)
+ *   standing against a 2650/1650 line (VAT_SETTLEMENT_NET_ACCOUNTS), one in
+ *   debit and the other in credit. Output and input VAT that net to zero (an
+ *   EU purchase on 2614/2645) have no 2650/1650 line, and posted alone they
+ *   would move ruta 30 and ruta 48. A rest only on the company's own 26xx
+ *   accounts routed to a ruta (vat_box) has no fixed declaration line, and
+ *   posted alone it would count as business too.
  *
  * When it is false, the way out is to reverse the momsredovisning and book
  * the period again.
@@ -29,10 +30,15 @@ import { VAT_ACCOUNTS, VAT_SETTLEMENT_NET_ACCOUNTS } from '@/lib/reports/vat-dec
 export function partlySettledRestBooksAlone(
   proposal: Pick<VatSettlementProposal, 'lines' | 'entry_date_reason'>,
 ): boolean {
-  const accounts = proposal.lines.map((line) => line.account_number)
+  // The side of a line as the SQL reads it: the sign of debit minus credit.
+  const stands = (accounts: readonly string[], side: 1 | -1) =>
+    proposal.lines.some((line) =>
+      accounts.includes(line.account_number) &&
+      Math.sign((Number(line.debit_amount) || 0) - (Number(line.credit_amount) || 0)) === side,
+    )
   return (
     proposal.entry_date_reason === null &&
-    accounts.some((account) => VAT_SETTLEMENT_NET_ACCOUNTS.includes(account)) &&
-    accounts.some((account) => VAT_ACCOUNTS.includes(account))
+    ((stands(VAT_ACCOUNTS, 1) && stands(VAT_SETTLEMENT_NET_ACCOUNTS, -1)) ||
+      (stands(VAT_ACCOUNTS, -1) && stands(VAT_SETTLEMENT_NET_ACCOUNTS, 1)))
   )
 }

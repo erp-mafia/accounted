@@ -7,7 +7,7 @@
  *
  * Which verifikat the declaration reads is decided in SQL, over posted
  * verifikat only (vat_declaration_special_entries, latest definition in
- * migration 20261023094030). A staged voucher is not in the ledger yet, so
+ * migration 20261127093512). A staged voucher is not in the ledger yet, so
  * the per-verifikat part of that decision is restated here over its lines.
  * Only that part: a manual voucher is never tagged vat_settlement, never a
  * kontantmetod cut-off reversal and never the posted bokslut, so what is left
@@ -16,10 +16,11 @@
  * to the SQL (VAT_ACCOUNTS, VAT_SETTLEMENT_NET_ACCOUNTS, and the SQL's own
  * skattekonto_shape_accounts), so a list can never differ; the predicate
  * cases are those the pg tests pin on the SQL
- * (tests/pg/vat-skattekonto-counter-entries.pg.test.ts and
- * tests/pg/vat-totals-shape-pass.pg.test.ts), repeated in this module's unit
- * test. A change to the shapes in SQL must change momsredovisningShapeOfLines
- * with it.
+ * (tests/pg/vat-skattekonto-counter-entries.pg.test.ts,
+ * tests/pg/vat-totals-shape-pass.pg.test.ts and
+ * tests/pg/vat-net-shape-opposite-sides.pg.test.ts), repeated in this
+ * module's unit test. A change to the shapes in SQL must change
+ * momsredovisningShapeOfLines with it.
  *
  * The rutor a counted voucher moves come from vatRutaContributions, the fold
  * rutorFromTotals files, over the voucher's own account totals: the same
@@ -57,7 +58,8 @@ export type VoucherMomsredovisningShape = Exclude<MomsredovisningDetection, 'tag
 
 /**
  * Why the declaration would leave the voucher out:
- *   - `net_account_shape`: a line on a declaration account AND one on 2650/1650;
+ *   - `net_account_shape`: a line on a declaration account against one on
+ *     2650/1650, debit against credit;
  *   - `tax_account_shape`: only 26xx, the skattekonto and 3740, with a 26xx
  *     declaration line and a skattekonto line;
  *   - `opening_balance`: an ingående balans dated on the VAT period's first
@@ -69,11 +71,25 @@ const DECLARATION_ACCOUNTS: ReadonlySet<string> = new Set(VAT_ACCOUNTS)
 const NET_ACCOUNTS: ReadonlySet<string> = new Set(VAT_SETTLEMENT_NET_ACCOUNTS)
 
 /**
- * The momsredovisning shape of a verifikat with these line accounts, or null
- * when it is an ordinary verifikat the rutor read. The shape_flags predicates
- * of vat_declaration_special_entries over one verifikat:
+ * The side a line stands on, as the SQL reads it: debit when debit exceeds
+ * credit, credit the other way round, none for a zero line.
+ */
+function sideOfLine(line: VoucherImpactLine): 'debit' | 'credit' | null {
+  const debit = Number(line.debit_amount) || 0
+  const credit = Number(line.credit_amount) || 0
+  return debit > credit ? 'debit' : debit < credit ? 'credit' : null
+}
+
+/**
+ * The momsredovisning shape of a verifikat with these lines, or null when it
+ * is an ordinary verifikat the rutor read. The shape_flags predicates of
+ * vat_declaration_special_entries over one verifikat:
  *
- *   net_shape: a line on a declaration account AND a line on 2650/1650.
+ *   net_shape: a line on a declaration account standing against a line on
+ *     2650/1650, one in debit and the other in credit. A momsredovisning
+ *     moves balances between those accounts; when all their lines stand on
+ *     the same side (a sale with a 2650 line next to it) nothing moved
+ *     between them and the rutor read the verifikat.
  *   tax_shape: a 26xx declaration line, a skattekonto line, no 2650/1650
  *     line, and nothing else but 26xx, the skattekonto and 3740.
  *
@@ -81,13 +97,19 @@ const NET_ACCOUNTS: ReadonlySet<string> = new Set(VAT_SETTLEMENT_NET_ACCOUNTS)
  * 2012 for an enskild firma. The shapes are disjoint on the 2650/1650 line.
  */
 export function momsredovisningShapeOfLines(
-  accounts: readonly string[],
+  lines: readonly VoucherImpactLine[],
   taxAccounts: readonly string[],
 ): VoucherMomsredovisningShape | null {
   const tax = new Set(taxAccounts)
+  const accounts = lines.map((line) => line.account_number)
   const netLine = accounts.some((a) => NET_ACCOUNTS.has(a))
   if (netLine) {
-    return accounts.some((a) => DECLARATION_ACCOUNTS.has(a)) ? 'net_account_shape' : null
+    const stands = (on: ReadonlySet<string>, side: 'debit' | 'credit') =>
+      lines.some((line) => on.has(line.account_number) && sideOfLine(line) === side)
+    const against =
+      (stands(DECLARATION_ACCOUNTS, 'debit') && stands(NET_ACCOUNTS, 'credit')) ||
+      (stands(DECLARATION_ACCOUNTS, 'credit') && stands(NET_ACCOUNTS, 'debit'))
+    return against ? 'net_account_shape' : null
   }
   const momsDeclarationLine = accounts.some((a) => DECLARATION_ACCOUNTS.has(a) && isMomsAccount(a))
   const taxLine = accounts.some((a) => tax.has(a))
@@ -238,7 +260,7 @@ export function voucherVatDeclarationImpact(input: {
     }
   }
 
-  const shape = momsredovisningShapeOfLines(lines.map((l) => l.account_number), input.taxAccounts)
+  const shape = momsredovisningShapeOfLines(lines, input.taxAccounts)
   if (shape) {
     return {
       ...base,
@@ -246,7 +268,7 @@ export function voucherVatDeclarationImpact(input: {
       excluded_as: shape,
       rutor_change: {},
       summary: shape === 'net_account_shape'
-        ? `Ingår inte i momsdeklarationen${inPeriod(vatPeriod)}: verifikatet har en rad på ett momsdeklarationskonto och en på 2650/1650 och räknas därför som momsredovisning. Ingen ruta ändras.`
+        ? `Ingår inte i momsdeklarationen${inPeriod(vatPeriod)}: verifikatet har en rad på ett momsdeklarationskonto mot en rad på 2650/1650 (debet mot kredit) och räknas därför som momsredovisning. Ingen ruta ändras.`
         : `Ingår inte i momsdeklarationen${inPeriod(vatPeriod)}: verifikatet flyttar bara moms mellan momskonton och skattekontot och räknas därför som momsredovisning. Ingen ruta ändras.`,
     }
   }

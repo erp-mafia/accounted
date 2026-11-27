@@ -124,7 +124,7 @@ interface VatExcludedSettlementEntry {
   source_type: string | null
   /**
    * `tagged`: source_type vat_settlement. `net_account_shape`: a declaration
-   * account and a 2650/1650 line. `tax_account_shape`: only 26xx, the
+   * account line against a 2650/1650 line. `tax_account_shape`: only 26xx, the
    * skattekonto 1630 and 3740. The shapes are decided in SQL
    * (get_vat_declaration_totals); see listExcludedSettlementEntries.
    */

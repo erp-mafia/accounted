@@ -223,7 +223,8 @@ export function isMomsAccount(account: string): boolean {
  * How a verifikat kept out of the rutor was recognised as a momsredovisning,
  * as the MCP VAT report labels it:
  *   - `tagged`: source_type 'vat_settlement';
- *   - `net_account_shape`: a declaration account AND a 2650/1650 line;
+ *   - `net_account_shape`: a declaration-account line against a 2650/1650
+ *     line, debit against credit;
  *   - `tax_account_shape`: a pure 26xx / skattekonto (/ 3740) verifikat.
  * The classification itself is get_vat_declaration_totals' (migration
  * 20260920182259); no TypeScript copy decides a posted verifikat. The one
@@ -306,13 +307,18 @@ interface VatTotalsRpcPayload {
  *
  *   - tagged: source_type 'vat_settlement' (the app's own settlement flow),
  *     filtered in the query;
- *   - net-account shape: an entry with at least one line on a declaration
- *     account (ACCOUNT_RUTA) and at least one on 2650/1650. This catches
- *     settlements booked before the tagged flow existed, manual vouchers,
- *     SIE-imported settlements, and storno reversals of a settlement
- *     (source_type 'storno', which would otherwise re-inflate the rutor after
- *     annullera). Deliberately broad: every arithmetic narrowing tried against
- *     production broke real settlements (#2805), so it stays as it is;
+ *   - net-account shape: an entry with a line on a declaration account
+ *     (ACCOUNT_RUTA) standing against a line on 2650/1650, one in debit and
+ *     the other in credit. This catches settlements booked before the tagged
+ *     flow existed, manual vouchers, SIE-imported settlements, and storno
+ *     reversals of a settlement (source_type 'storno', which would otherwise
+ *     re-inflate the rutor after annullera). Deliberately broad on amounts:
+ *     every arithmetic narrowing tried against production broke real
+ *     settlements, so none is compared. The sides are the one thing asked:
+ *     a momsredovisning moves balances between those accounts, so when all
+ *     their lines stand on the same side (a sale with a 2650 line next to
+ *     it, all in credit) nothing moved between them and the rutor read the
+ *     entry;
  *   - tax-account shape (#2805): an entry with a 26xx declaration account and
  *     a skattekonto line (1630), no 2650/1650 line,
  *     and NOTHING else but 26xx and 3740. VAT settled, refunded or reassessed
@@ -335,9 +341,10 @@ interface VatTotalsRpcPayload {
  * corrected IB nets to nothing instead of its storno passing for a
  * momsredovisning.
  *
- * The shapes cannot tell a settlement from a business verifikat that happens
- * to touch 2650 (a supplier invoice with input VAT booked against 2650, say).
- * No rule separates that tail; it needs an explicit per-entry override.
+ * The shapes cannot tell a settlement from a business verifikat with a
+ * declaration-account line against 2650 (a supplier invoice with input VAT
+ * booked against 2650, say). No rule separates that tail; it has the explicit
+ * per-entry override (vat_momsredovisning_marks).
  *
  * Periodiseringar on customer invoices (crm#1919): the totals of a revenue
  * account hold the sale an invoice deferred to 29xx or accrued on 17xx on
@@ -359,11 +366,11 @@ export async function fetchVatAccountTotals(
   //
   // The company's own ruta 05 accounts join p_accounts (they must be summed)
   // but deliberately NOT p_ruta_accounts. That second list is the settlement
-  // SHAPE detector: an entry with a line on it plus a line on 2650/1650 (or,
-  // for its 26xx members, a pure movement against the skattekonto) is
-  // classified a momsredovisning and dropped from the totals entirely. A plain
-  // sale booked 1930 / 3013 / 2650 (a company clearing moms straight off the
-  // revenue voucher) would then vanish from its own declaration. The fixed
+  // SHAPE detector: an entry with a line on it against a line on 2650/1650
+  // (or, for its 26xx members, a pure movement against the skattekonto) is
+  // classified a momsredovisning and dropped from the totals entirely. A
+  // voucher booked 3013 D / 2650 K (a company moving moms straight off its
+  // revenue account) would then vanish from its own declaration. The fixed
   // ACCOUNT_RUTA list is what defines settlement shape; user accounts widen
   // what is measured, never what counts as a momsredovisning.
   const { data, error } = await supabase.rpc('get_vat_declaration_totals', {
