@@ -600,6 +600,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/invoices/:id/refresh-exchange-rate': gap('P3'),
   'POST /api/invoices/:id/send-payment-confirmation': gap('P3', 'email a betalningsbekräftelse'),
   'POST /api/invoices/:id/resend': gap('P3', 'email an already emailed invoice again as a copy (crm#1339)'),
+  'POST /api/invoices/:id/uncredit': gap('P2', 'undo the credit of an invoice whose credit note never reached the customer (Ångra kreditering); dashboard first, the supplier side has v1 supplier-invoices/:id/uncredit and gnubok_uncredit_supplier_invoice'),
   'POST /api/invoices/self-billed': covered([`POST ${V}/invoices`], 'is_self_billed: true runs the same service (createSelfBilledSaleInvoice); gnubok_create_invoice has no such argument'),
   'POST /api/invoices/preview-pdf': uiOnly(PREVIEW),
   'POST /api/invoices/preview-email': uiOnly(PREVIEW),
@@ -1182,5 +1183,8 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * 159 -> 160 (2026-11-25): the switch of the nightly top-up from Fortnox
  * on a Fortnox connection (PUT .../arcim-migration/fortnox-topup), new and
  * dashboard-only, as the nightly syncs of the webshop integrations.
+ * 160 -> 161 (2026-11-27): Ångra kreditering of a customer invoice
+ * (POST /api/invoices/:id/uncredit), dashboard first; a v1 route and an MCP
+ * tool are a follow-up.
  */
-export const GAP_CEILING = 160
+export const GAP_CEILING = 161

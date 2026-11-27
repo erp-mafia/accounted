@@ -1547,6 +1547,16 @@ export const LinkInvoiceAttachmentsSchema = z.object({
   document_ids: z.array(uuid).min(1).max(10),
 })
 
+/**
+ * POST /api/invoices/[id]/uncredit: Ångra kreditering
+ * (lib/invoices/uncredit-invoice.ts). attest_not_delivered is the person's
+ * word that a credit note marked as sent never reached the customer.
+ */
+export const UncreditInvoiceSchema = z.object({
+  dry_run: z.boolean().optional(),
+  attest_not_delivered: z.boolean().optional(),
+})
+
 /** POST /api/invoices/preview-email: the preview draft plus this send's own texts. */
 export const InvoiceEmailPreviewSchema = InvoicePreviewSchema.extend(InvoiceEmailOverrideShape)
 

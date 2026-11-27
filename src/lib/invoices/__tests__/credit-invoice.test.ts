@@ -437,6 +437,23 @@ describe('creditInvoice', () => {
     expect(calls.some((c) => c.table === 'invoices' && c.method === 'insert')).toBe(false)
   })
 
+  it('refuses to credit again after an undo: the undone credit note keeps its number and is never reopened', async () => {
+    // Kontantmetoden, unpaid: the undone credit note has no verifikat, the
+    // shape a cancelled draft is reopened from.
+    const undone = draftOf(ORIGINAL, { status: 'cancelled', credit_undone_at: '2026-11-27T10:00:00Z' })
+    const { supabase, payloads } = createTableMockSupabase({
+      invoices: [{ data: ORIGINAL }, { data: undone }],
+      journal_entries: { data: null },
+      company_settings: { data: { ...SETTINGS, accounting_method: 'cash' } },
+    })
+
+    const result = await creditInvoice(ctx(supabase), ORIGINAL_ID, {})
+
+    expect(result).toMatchObject({ ok: false, code: 'INVOICE_CREDIT_UNDONE_BEFORE' })
+    expect(payloads('invoices', 'update')).toEqual([])
+    expect(payloads('invoices', 'insert')).toEqual([])
+  })
+
   it('reports a verifikat that posted before a later step failed with its ids (repair)', async () => {
     const { supabase } = setup(ORIGINAL, {
       invoices: [

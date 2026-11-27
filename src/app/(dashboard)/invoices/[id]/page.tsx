@@ -76,6 +76,7 @@ import { failureDescription } from '@/lib/browser/action-failure'
 import {
   ArrowDownTrayIcon,
   ArrowTopRightOnSquareIcon,
+  ArrowUturnLeftIcon,
   BanknotesIcon,
   BellAlertIcon,
   CalendarDaysIcon,
@@ -109,6 +110,7 @@ import { InvoiceAttachmentsSection } from '@/components/invoices/InvoiceAttachme
 import { InvoiceUnderlagSection } from '@/components/invoices/InvoiceUnderlagSection'
 import { offersInvoiceAttachments } from '@/lib/invoices/invoice-attachment-limits'
 import QuotePartDialog from '@/components/invoices/QuotePartDialog'
+import UncreditInvoiceDialog from '@/components/invoices/UncreditInvoiceDialog'
 import { quoteInvoicingProgress } from '@/lib/invoices/quote-partial-invoice'
 import { VatTreatmentNotice } from '@/components/invoices/VatTreatmentNotice'
 import {
@@ -358,6 +360,10 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     documents: Array<{ id: string; file_name: string }> | null
   } | null>(null)
   const [creditNote, setCreditNote] = useState<Invoice | null>(null)
+  // The credit note whose credit was undone (Ångra kreditering): kept with
+  // its number, so the invoice links it and is not credited again here.
+  const [undoneCreditNote, setUndoneCreditNote] = useState<Invoice | null>(null)
+  const [showUncreditDialog, setShowUncreditDialog] = useState(false)
   const [originalInvoice, setOriginalInvoice] = useState<Invoice | null>(null)
   const [convertedFromInvoice, setConvertedFromInvoice] = useState<Invoice | null>(null)
   // Offert: the invoice created from this quote (converted_from_id points
@@ -812,10 +818,9 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         ['sent', 'paid', 'overdue', 'credited'].includes(data.status)
           ? supabase
               .from('invoices')
-              .select('id, invoice_number, status')
+              .select('id, invoice_number, status, credit_undone_at')
               .eq('credited_invoice_id', id)
-              .neq('status', 'cancelled')
-              .maybeSingle()
+              .or('status.neq.cancelled,credit_undone_at.not.is.null')
           : Promise.resolve(null),
         data.credited_invoice_id
           ? supabase
@@ -857,7 +862,9 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         // to the one the pager has since navigated to.
         if (seq !== fetchSeqRef.current) return
         setDeductionPersonnummerMasked(personnummerMasked)
-        setCreditNote(creditNoteRes?.data ? (creditNoteRes.data as Invoice) : null)
+        const creditNotes = (creditNoteRes?.data ?? []) as Invoice[]
+        setCreditNote(creditNotes.find((c) => c.status !== 'cancelled') ?? null)
+        setUndoneCreditNote(creditNotes.find((c) => !!c.credit_undone_at) ?? null)
         if (originalRes?.data) {
           setOriginalInvoice(originalRes.data as Invoice)
         }
@@ -2118,7 +2125,11 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     // A credit note, linked or imported without its original, is never
     // credited (the doors refuse it by the same rule).
     !isCreditNoteDocument(invoice) &&
-    !creditNote
+    !creditNote &&
+    !undoneCreditNote
+  // Ångra kreditering: the original of a credit note this app issued. The
+  // server decides whether it may be undone (lib/invoices/uncredit-invoice.ts).
+  const canUncredit = invoice.status === 'credited' && !!creditNote && canWrite
   // Download/prepare need the F-number (the XML carries it); sending a draft
   // assigns the number server-side, so the menu shows once a provider is on.
   const showPeppolActions = !isSelfBilled && isRealInvoice && !isCreditNote
@@ -2211,6 +2222,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     showManualSendAlternative ||
     canResend ||
     (canCreateCreditNote && canWrite) ||
+    canUncredit ||
     (canBookAfterwards && canWrite) ||
     showPeppolActions ||
     mailboxActions.length > 0 ||
@@ -2581,6 +2593,17 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                           <DocumentTextIcon className="h-4 w-4" />
                           {t('create_credit_note')}
                         </Link>
+                      </DropdownMenuItem>
+                    )}
+                    {canUncredit && (
+                      <DropdownMenuItem onSelect={() => setShowUncreditDialog(true)} className="items-start">
+                        <ArrowUturnLeftIcon className="mt-0.5 h-4 w-4" />
+                        <span className="min-w-0">
+                          <span className="block">{t('uncredit_menu_item')}</span>
+                          <span className="block text-xs leading-snug text-muted-foreground">
+                            {t('uncredit_menu_hint')}
+                          </span>
+                        </span>
                       </DropdownMenuItem>
                     )}
                     {correction && (
@@ -3270,6 +3293,14 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                   {creditNote.status === 'draft' && creditNote.invoice_number && (
                     <span className="text-muted-foreground">{' · '}{statusLabel('draft')}</span>
                   )}
+                </DefRow>
+              )}
+              {!creditNote && undoneCreditNote && (
+                <DefRow label={t('def_credit_note')}>
+                  <Link href={`/invoices/${undoneCreditNote.id}`} className="hover:underline">
+                    {undoneCreditNote.invoice_number ?? ''}
+                  </Link>
+                  <span className="text-muted-foreground">{' · '}{tInvoices('status_credit_undone')}</span>
                 </DefRow>
               )}
               {invoice.credited_invoice_id && originalInvoice && (
@@ -4100,6 +4131,16 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           })}
           confirmLabel={t('resend_confirm_action')}
           onConfirm={resendInvoice}
+        />
+      )}
+
+      {canUncredit && (
+        <UncreditInvoiceDialog
+          invoice={{ id: invoice.id, invoice_number: invoice.invoice_number ?? null }}
+          copyHref={newEditorHref({ copyFromId: invoice.id })}
+          open={showUncreditDialog}
+          onOpenChange={setShowUncreditDialog}
+          onUncredited={fetchInvoice}
         />
       )}
 
