@@ -42,6 +42,9 @@ import {
 import { addressHasState } from '@/lib/invoices/postal-address'
 import type { CreateCustomerInput } from '@/types'
 import { CONSUMER_INVOICE_MAX_DAYS } from '@/lib/invoices/consumer-credit'
+import { useSendOrderWays } from '@/components/invoices/send-order/use-send-order'
+import { DIGITAL_MAILBOX_PROVIDER_NAMES } from '@/lib/digital-mailboxes/sending-status'
+import { hasOrderToChoose, parseSendWay, type SendOrderWay } from '@/lib/invoices/send-order'
 
 /**
  * What the register may fill on a Swedish company's org number. No VAT
@@ -50,6 +53,9 @@ import { CONSUMER_INVOICE_MAX_DAYS } from '@/lib/invoices/consumer-credit'
  * uppgifter" on the customer page, with provenance).
  */
 const REGISTRY_FIELDS: readonly RegistryFormField[] = ['name', 'email', 'phone', 'address_line1', 'address_line2', 'postal_code', 'city']
+
+/** Skickas som: the select's value for "follow the company's order", stored as null. */
+const FOLLOW_COMPANY_ORDER = 'company'
 
 interface CustomerFormProps {
   onSubmit: (data: CreateCustomerInput) => Promise<void>
@@ -68,7 +74,11 @@ export default function CustomerForm({
   const { canWrite } = useCanWrite()
   const { toast } = useToast()
   const t = useTranslations('form_customer')
+  const tWays = useTranslations('invoice_send_order')
   const locale = useLocale() === 'en' ? 'en' : 'sv'
+  // Skickas som lists the ways this company can use, the same answer the
+  // invoice editor and the send order list read.
+  const sendWays = useSendOrderWays()
   const countryOptions = useMemo(() => getCountryOptions(locale), [locale])
   const [isValidatingVat, setIsValidatingVat] = useState(false)
   const [vatValidationResult, setVatValidationResult] = useState<{
@@ -117,6 +127,7 @@ export default function CustomerForm({
       .max(365, t('payment_terms_invalid')),
     invoice_reference: z.string().max(200, t('invoice_reference_too_long')).optional(),
     invoice_marking: z.string().max(200, t('invoice_marking_too_long')).optional(),
+    invoice_send_way: z.string().optional(),
     notes: z.string().optional(),
   }).superRefine((customer, ctx) => {
     // Konsumentkreditlagen (2026:1011): an invoice to a private person is
@@ -214,6 +225,7 @@ export default function CustomerForm({
       default_payment_terms: initialData?.default_payment_terms ?? 30,
       invoice_reference: initialData?.invoice_reference ?? '',
       invoice_marking: initialData?.invoice_marking ?? '',
+      invoice_send_way: initialData?.invoice_send_way ?? FOLLOW_COMPANY_ORDER,
       notes: initialData?.notes || '',
     },
   })
@@ -264,6 +276,15 @@ export default function CustomerForm({
   // fresh personnummer replaces it); say so, because the placeholder on its own
   // reads like a rendering fault.
   const personalNumberUnreadable = watch('personal_number') === UNDECRYPTABLE_PERSONAL_NUMBER_MASK
+  // Skickas som: shown when the company has ways to choose between, or the
+  // card already holds one. A stored way the company can no longer use stays
+  // listed, so the field never looks unset while it holds something.
+  const savedSendWay = parseSendWay(initialData?.invoice_send_way)
+  const sendWayOptions: SendOrderWay[] = [...(sendWays ?? [])]
+  if (savedSendWay && !sendWayOptions.includes(savedSendWay)) sendWayOptions.push(savedSendWay)
+  const showSendWay = savedSendWay !== null || (sendWays !== null && hasOrderToChoose(sendWays))
+  const sendWayName = (way: SendOrderWay) =>
+    way === 'peppol' ? tWays('way_peppol') : way === 'email' ? tWays('way_email') : DIGITAL_MAILBOX_PROVIDER_NAMES[way]
 
   const handleValidateVat = async () => {
     if (!vatNumber) return
@@ -346,6 +367,8 @@ export default function CustomerForm({
       // Blank is none; on an edit, null clears a stored value.
       invoice_reference: data.invoice_reference?.trim() || null,
       invoice_marking: data.invoice_marking?.trim() || null,
+      // Follow the company's order is null; on an edit, null clears a stored way.
+      invoice_send_way: parseSendWay(data.invoice_send_way),
       // Asked for only in a country that has states; a value left over from
       // one is cleared, like the org number below. Blank is none.
       address_state: addressHasState(data.country) ? data.address_state?.trim() ?? '' : '',
@@ -718,6 +741,31 @@ export default function CustomerForm({
         />
         <p className="text-xs text-muted-foreground">{t('language_hint')}</p>
       </div>
+
+      {/* Skickas som: the way the invoice editor picks first for this customer */}
+      {showSendWay && (
+        <div className="space-y-2">
+          <Label>{t('send_way_label')}</Label>
+          <Controller
+            name="invoice_send_way"
+            control={control}
+            render={({ field }) => (
+              <Select value={field.value || FOLLOW_COMPANY_ORDER} onValueChange={(v) => { if (v) field.onChange(v) }}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={FOLLOW_COMPANY_ORDER}>{t('send_way_company')}</SelectItem>
+                  {sendWayOptions.map((way) => (
+                    <SelectItem key={way} value={way}>{sendWayName(way)}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          />
+          <p className="text-xs text-muted-foreground">{t('send_way_hint')}</p>
+        </div>
+      )}
 
       {/* Notes */}
       <div className="space-y-2">

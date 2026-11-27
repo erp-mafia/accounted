@@ -176,7 +176,7 @@ import {
   type PeppolSending,
 } from '@/lib/invoices/editor/channel'
 import { fetchPeppolSending } from '@/lib/invoices/editor/peppol-sending'
-import { parseSendOrder } from '@/lib/invoices/send-order'
+import { sendOrderForCustomer } from '@/lib/invoices/send-order'
 import { countTextRowsLeftOutOfPeppol } from '@/lib/invoices/peppol-lines'
 import { DIGITAL_MAILBOX_PROVIDER_NAMES, fetchActiveSendingProviders } from '@/lib/digital-mailboxes/sending-status'
 import {
@@ -3217,8 +3217,13 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     }),
   }
   const channelOptions = resolveChannelOptions(channelContext)
-  // The company's saved send order picks the default channel; none saved = today's default.
-  const channel = resolveEffectiveChannel(channelChoice, channelContext, parseSendOrder(companySettings?.invoice_send_order))
+  // The customer's own way (Skickas som), then the company's saved send order,
+  // picks the default channel; neither set = today's default.
+  const channel = resolveEffectiveChannel(
+    channelChoice,
+    channelContext,
+    sendOrderForCustomer(selectedCustomer?.invoice_send_way, companySettings?.invoice_send_order),
+  )
   // The Mejl tab is off, with the reason, whenever this send emails nothing.
   const emailTabBlock = emailPreviewBlock(channel, channelOptions)
   const emailDisabledReason =

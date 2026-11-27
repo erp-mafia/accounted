@@ -1624,6 +1624,17 @@ const CustomerInvoiceMarkingSchema = z
  */
 const CustomerAddressStateSchema = z.string().trim().max(100).optional()
 
+/**
+ * Skickas som: one of the ways of the company's send order, tried first for
+ * this customer (lib/invoices/send-order.ts sendOrderForCustomer). Null
+ * follows the company's order; on update it clears a stored way.
+ */
+const CustomerInvoiceSendWaySchema = z
+  .enum(SEND_ORDER_WAYS)
+  .nullable()
+  .optional()
+  .describe("The way this customer's invoices go out first: peppol, kivra, billo or email. The invoice editor picks it when the invoice can go that way, else the company's invoice_send_order decides. Null follows the company's order.")
+
 export const CreateCustomerSchema = z.object({
   name: z.string().min(1, 'Customer name is required'),
   customer_type: CustomerTypeSchema,
@@ -1660,6 +1671,7 @@ export const CreateCustomerSchema = z.object({
   default_payment_terms: z.number().int().min(0).max(365).optional(),
   invoice_reference: CustomerInvoiceReferenceSchema,
   invoice_marking: CustomerInvoiceMarkingSchema,
+  invoice_send_way: CustomerInvoiceSendWaySchema,
   notes: z.string().optional(),
 }).superRefine((customer, ctx) => {
   if (customer.personal_number && customer.customer_type !== 'individual') {
@@ -1814,6 +1826,7 @@ export const UpdateCustomerSchema = z.object({
   default_payment_terms: z.number().int().min(0).max(365).optional(),
   invoice_reference: CustomerInvoiceReferenceSchema,
   invoice_marking: CustomerInvoiceMarkingSchema,
+  invoice_send_way: CustomerInvoiceSendWaySchema,
   notes: z.string().optional(),
 }).superRefine((customer, ctx) => {
   if (

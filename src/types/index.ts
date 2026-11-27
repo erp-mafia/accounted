@@ -1246,6 +1246,15 @@ export interface Customer {
    */
   invoice_marking: string | null
 
+  /**
+   * Skickas som: the way this customer's invoices go out first (peppol,
+   * kivra, billo, email), tried before company_settings.invoice_send_order
+   * (lib/invoices/send-order.ts sendOrderForCustomer). Null = the company's
+   * order. Optional in TS: a row read before the column's migration has it
+   * absent.
+   */
+  invoice_send_way?: string | null
+
   // Notes
   notes: string | null
 
@@ -2243,6 +2252,8 @@ export interface CreateCustomerInput {
   default_payment_terms?: number
   invoice_reference?: string | null
   invoice_marking?: string | null
+  /** Skickas som; null follows the company's send order. */
+  invoice_send_way?: string | null
   notes?: string
 }
 
