@@ -9713,6 +9713,8 @@
     "toast_save_draft_failed": "Kunde inte spara utkast",
     "toast_created_missing_docs_title": "Verifikation skapad, men underlag saknas",
     "toast_created_missing_docs_description": "Verifikation {voucher} skapades, men {count} underlag kunde inte bifogas: {files}. Öppna verifikatet för att bifoga på nytt.",
+    "toast_created_no_doc_mark_failed_title": "Verifikation skapad, men inte markerad",
+    "toast_created_no_doc_mark_failed_description": "Verifikation {voucher} skapades, men \"Inget underlag krävs\" kunde inte sparas. Markera det i verifikationslistan.",
     "toast_draft_missing_docs_title": "Utkast sparat, men underlag saknas",
     "toast_draft_missing_docs_description": "Utkastet sparades, men {count} underlag kunde inte bifogas: {files}. Öppna utkastet för att bifoga på nytt.",
     "toast_open_entry": "Öppna verifikatet",

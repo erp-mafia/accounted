@@ -9713,6 +9713,8 @@
     "toast_save_draft_failed": "Could not save draft",
     "toast_created_missing_docs_title": "Journal entry created, but documents are missing",
     "toast_created_missing_docs_description": "Journal entry {voucher} was created, but {count} document(s) could not be attached: {files}. Open the entry to attach them again.",
+    "toast_created_no_doc_mark_failed_title": "Journal entry created, but not marked",
+    "toast_created_no_doc_mark_failed_description": "Journal entry {voucher} was created, but \"No supporting document required\" could not be saved. Mark it in the journal entry list.",
     "toast_draft_missing_docs_title": "Draft saved, but documents are missing",
     "toast_draft_missing_docs_description": "The draft was saved, but {count} document(s) could not be attached: {files}. Open the draft to attach them again.",
     "toast_open_entry": "Open the entry",

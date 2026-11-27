@@ -1,7 +1,7 @@
 'use client'
 
 import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useState, useEffect, useCallback, useId, useMemo, useRef } from 'react'
 import Link from 'next/link'
 import { useTranslations, useLocale } from 'next-intl'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
+import { Switch } from '@/components/ui/switch'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Dialog, DialogConsequence, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
@@ -81,6 +82,7 @@ import type { UploadedFile } from '@/components/bookkeeping/DocumentUploadZone'
 import { CURRENCIES, type CreateJournalEntryLineInput, type FiscalPeriod, type JournalEntrySourceType, type Currency, type BookingTemplateLibrary, type BookingTemplateCategory } from '@/types'
 import type { BookedDuplicateCandidate } from '@/lib/transactions/booking-duplicate-detection'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { NEEDS_DOC_SOURCE_TYPES } from '@/lib/worklist/types'
 
 const CURRENCY_OPTIONS: { value: Currency; label: string }[] = CURRENCIES.map((c) => ({ value: c, label: c }))
 
@@ -194,6 +196,9 @@ function formContentKey(description: string, notes: string, lines: FormLine[]): 
 }
 const BLANK_FORM_CONTENT = formContentKey('', '', [])
 
+/** Source types whose verifikat show "Underlag saknas" until one is attached or waived. */
+const NEEDS_DOC = new Set<string>(NEEDS_DOC_SOURCE_TYPES)
+
 export default function JournalEntryForm({
   onCreated,
   onEntryCreated,
@@ -230,6 +235,9 @@ export default function JournalEntryForm({
   // expects (matches BookingTemplatesPanel); the form itself already pulls its
   // copy from this namespace.
   const tTpl = useTranslations('settings_booking_templates')
+  // The words of the verifikat list's own "Inget underlag krävs" switch
+  // (NoDocRequiredToggle), so both places say the same thing.
+  const tList = useTranslations('journal_list')
   const locale = useLocale()
   // Session-cached reference data (lib/reference-data): seeded by the
   // dashboard layout, so the period select, the account picker and the
@@ -304,11 +312,28 @@ export default function JournalEntryForm({
   const [isSavingDraft, setIsSavingDraft] = useState(false)
   const saveAsDraftRef = useRef(false)
   const [showNoDocWarning, setShowNoDocWarning] = useState(false)
+  // "Inget underlag krävs" in the no-underlag step: off until the person
+  // turns it on, so a verifikat that needs a receipt never leaves the
+  // missing-underlag list by default. Sent with the posting only.
+  const [noDocRequired, setNoDocRequired] = useState(false)
+  const [noDocReason, setNoDocReason] = useState('')
+  const noDocFieldId = useId()
   // The what's-missing lines render only after a submit attempt (error-on-
   // submit), never as standing chrome on an empty form. The buttons stay
   // enabled so the attempt can happen; the handlers gate on validity.
   const [showValidationHints, setShowValidationHints] = useState(false)
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([])
+  // "Inget underlag krävs" is offered where this form creates the verifikat
+  // through the manual journal-entry door (not a draft edit, a bank row or
+  // another door that answers its own way), for a source type that needs
+  // underlag, while none is attached.
+  const offerNoDocChoice =
+    !embedded &&
+    !editEntryId &&
+    !submitUrl &&
+    NEEDS_DOC.has(effectiveSourceType) &&
+    !uploadedFiles.some((f) => f.status === 'uploaded')
+  const sendNoDocRequired = offerNoDocChoice && noDocRequired
   const { accounts, isLoading: accountsLoading, error: accountsError } = useAccounts()
   // Chart row per account number: what a line's momskod may be follows the
   // account's own momskod (crm#1096). Until the chart is known no line takes
@@ -1004,6 +1029,8 @@ export default function JournalEntryForm({
     setEntryCurrency('SEK')
     setExchangeRate('')
     setForeignAmount('')
+    setNoDocRequired(false)
+    setNoDocReason('')
     if (!embedded && !editEntryId) {
       const base = sourceType ?? 'manual'
       if (base !== effectiveSourceType) {
@@ -1242,6 +1269,11 @@ export default function JournalEntryForm({
         // Set only when resending past the booking-time voucher warnings
         // (handleConfirmWarnings). Same strip-safety as the force fields.
         ...(acknowledgedWarningsRef.current ?? {}),
+        // "Inget underlag krävs" from the no-underlag step: the route marks the
+        // verifikat it posts. Never with a draft.
+        ...(sendNoDocRequired && !saveAsDraftRef.current
+          ? { no_document_required: { reason: noDocReason.trim() || null } }
+          : {}),
         // Fields only the caller's endpoint knows about. Same safety as above:
         // a schema that does not declare a key strips it, so this cannot leak
         // into the manual journal-entry route.
@@ -1250,7 +1282,7 @@ export default function JournalEntryForm({
     })
     // Each door answers its own shape (lib/bookkeeping/booking-answer.ts).
     return bookedEntryOf(await throwOnStructuredError(res))
-  }, [bookedLines, rate, entryCurrency, computedForeignAmount, t, submitUrl, editEntryId, selectedPeriod, entryDate, description, effectiveSourceType, sourceId, voucherSeries, seriesResolved, notes, extraBody])
+  }, [bookedLines, rate, entryCurrency, computedForeignAmount, t, submitUrl, editEntryId, selectedPeriod, entryDate, description, effectiveSourceType, sourceId, voucherSeries, seriesResolved, notes, sendNoDocRequired, noDocReason, extraBody])
 
   const { runSubmit, dialog: activationDialog, confirm: confirmActivation, cancel: cancelActivation } =
     useSubmitWithAccountActivation(postJournalEntry)
@@ -1321,6 +1353,14 @@ export default function JournalEntryForm({
             </ToastAction>
           ) : undefined,
         })
+      } else if (booked.no_document_required === false) {
+        // Posted, but "Inget underlag krävs" did not stick: the verifikat
+        // shows as missing underlag until it is marked in the list.
+        toast({
+          title: t('toast_created_no_doc_mark_failed_title'),
+          description: t('toast_created_no_doc_mark_failed_description', { voucher }),
+          variant: 'destructive',
+        })
       } else {
         toast({
           title: t('toast_created_title'),
@@ -1337,6 +1377,8 @@ export default function JournalEntryForm({
       setEntryCurrency('SEK')
       setExchangeRate('')
       setForeignAmount('')
+      setNoDocRequired(false)
+      setNoDocReason('')
       onCreated?.()
       if (journalEntryId) {
         onEntryCreated?.(journalEntryId, booked)
@@ -1457,6 +1499,8 @@ export default function JournalEntryForm({
       setEntryCurrency('SEK')
       setExchangeRate('')
       setForeignAmount('')
+      setNoDocRequired(false)
+      setNoDocReason('')
       onCreated?.()
       if (journalEntryId) {
         onEntryCreated?.(journalEntryId, booked)
@@ -1522,6 +1566,41 @@ export default function JournalEntryForm({
       </DialogConsequence>
     ) : null
 
+  // The no-underlag step's "Inget underlag krävs": off by default, with the
+  // same optional reason (max 200 characters) as the list's switch. On, the
+  // posting marks the verifikat, so it never shows as "Underlag saknas".
+  const noDocChoice = offerNoDocChoice ? (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
+        <Switch
+          id={`${noDocFieldId}-switch`}
+          checked={noDocRequired}
+          onCheckedChange={setNoDocRequired}
+          disabled={isSubmitting}
+        />
+        <Label htmlFor={`${noDocFieldId}-switch`} className="cursor-pointer text-sm">
+          {tList('no_doc_required_toggle')}
+        </Label>
+      </div>
+      {noDocRequired && (
+        <div>
+          <Label htmlFor={`${noDocFieldId}-reason`} className="text-xs text-muted-foreground">
+            {tList('no_doc_required_reason_add')}
+          </Label>
+          <Input
+            id={`${noDocFieldId}-reason`}
+            value={noDocReason}
+            onChange={(e) => setNoDocReason(e.target.value)}
+            placeholder={tList('no_doc_required_reason_placeholder')}
+            maxLength={200}
+            className="mt-1 h-8 max-w-sm"
+            disabled={isSubmitting}
+          />
+        </div>
+      )}
+    </div>
+  ) : null
+
   // Inline review for the modal (bare): swap the form body to a read-only
   // summary instead of stacking a second dialog over the form dialog. The
   // no-underlag caveat folds in here so there's a single confirm step.
@@ -1574,6 +1653,8 @@ export default function JournalEntryForm({
         showBalanceBadge
         hideDate={false}
       />
+
+      {noDocChoice}
 
       <div className="flex flex-wrap items-center justify-end gap-2 border-t-hairline pt-3">
         {createsLine}
@@ -2214,8 +2295,11 @@ export default function JournalEntryForm({
         warningText={t('no_doc_dialog_warning')}
         confirmLabel={t('no_doc_confirm')}
       >
-        <div className="text-sm text-muted-foreground">
-          {t('no_doc_body')}
+        <div className="space-y-5">
+          <div className="text-sm text-muted-foreground">
+            {t('no_doc_body')}
+          </div>
+          {noDocChoice}
         </div>
       </ConfirmationDialog>
 

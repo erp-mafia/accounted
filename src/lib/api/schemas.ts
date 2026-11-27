@@ -2552,6 +2552,15 @@ export const CreateDashboardJournalEntrySchema = CreateJournalEntrySchema.extend
   // (lib/reports/vat-settlement-booking.ts, accounted#58). Lazy because the
   // period shape is declared further down this module.
   vat_settlement_period: z.lazy(() => VatSettlementPeriodSchema).optional(),
+  // "Inget underlag krävs" chosen in the form's no-underlag step: the route
+  // marks the posted verifikat through setNoDocumentRequired, the function
+  // POST /journal-entries/[id]/no-document-required runs, with the same
+  // optional reason (max 200 characters). Ignored with ?as_draft: only a
+  // posting is marked.
+  no_document_required: z
+    .object({ reason: z.string().trim().max(200).nullable().optional() })
+    .strict()
+    .optional(),
 })
 
 /** Body of the dashboard's draft commit: only the confirmed warnings. */
