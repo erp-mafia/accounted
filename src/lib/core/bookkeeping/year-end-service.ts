@@ -24,6 +24,7 @@ import {
   createNextPeriod,
   fiscalYearInTheWay,
   findNextPeriod,
+  resolvePreviousFiscalPeriod,
 } from './period-service'
 import { resolvePeriodLockForDate } from './period-status'
 import { unfinishedSieImportMessage } from './sie-import-hold'
@@ -603,6 +604,40 @@ export async function validateYearEndReadiness(
       code: 'CONTINUITY_MISMATCH',
       message: 'IB/UB-kontinuiteten stämmer inte för perioden: åtgärda avvikelserna innan bokslut',
     })
+  }
+
+  // Check: the year before no longer takes verifikat. This year's opening
+  // balances are that year's closing balances, and nothing carries a verifikat
+  // posted there after this close into them. A warning, never a blocker.
+  // "Takes verifikat" is the write verdict for that year's last day
+  // (period-status.ts): a closed year, a locked year and a company lock date
+  // on or after that day all refuse it. The previous year is the adjacent one
+  // only (resolvePreviousFiscalPeriod); a first year, or one after a gap, has
+  // none. The year is named by its dates, not its name (see the note on the
+  // next-period check below). A check that could not be made says so.
+  const previousYearCheckFailed =
+    'Kontrollen av om föregående räkenskapsår är stängt eller låst kunde inte genomföras: kontrollera det manuellt innan bokslut'
+  try {
+    const previous = await resolvePreviousFiscalPeriod<{ id: string; period_start: string; period_end: string }>(
+      supabase,
+      companyId,
+      period,
+      'id, period_start, period_end',
+    )
+    if (previous) {
+      const { status } = await resolvePeriodLockForDate(supabase, companyId, previous.period_end)
+      if (status.lookup_failed) {
+        warnings.push(previousYearCheckFailed)
+      } else if (status.status === 'open') {
+        warnings.push(
+          `Föregående räkenskapsår (${previous.period_start} till ${previous.period_end}) är varken stängt eller låst: verifikat som bokförs där ändrar det här årets ingående balanser efter bokslutet. ` +
+            'Stäng eller lås det året först, eller klarmarkera det om bokslutet gjordes i ett tidigare program.'
+        )
+      }
+    }
+  } catch (err) {
+    log.error('year-end readiness: previous fiscal year check failed', err as Error, { companyId, fiscalPeriodId })
+    warnings.push(previousYearCheckFailed)
   }
 
   // Check: next period state. A pre-existing next period (from SIE import,
