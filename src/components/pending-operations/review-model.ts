@@ -356,13 +356,22 @@ export function postedVerifikat(previewData: unknown): Data[][] {
 // payment, the sum of a batch.
 const HEADLINE_KEYS = ['total', 'amount', 'transaction_amount', 'payment_amount', 'total_amount', 'tx_sum'] as const
 
+// Proposals that move no money and whose preview's `total` is a count: a
+// pairing of documents with verifikat states how many files it links, which
+// read as kronor would be a headline of "2 kr" for two files.
+const NO_AMOUNT_TYPES: ReadonlySet<string> = new Set(['link_documents_to_vouchers'])
+
 /**
  * The headline number of a proposal: the amount its preview states, else the
  * debit total of the verifikat it posts (always SEK). Null when it names no
- * amount (a new customer). `currency` is null when the preview names some
- * other field's currency only: the figure then shows without a unit.
+ * amount (a new customer, a pairing of documents). `currency` is null when the
+ * preview names some other field's currency only: the figure then shows
+ * without a unit.
  */
-export function headlineAmount(op: Pick<PendingOperation, 'preview_data'>): { value: number; currency: string | null } | null {
+export function headlineAmount(
+  op: Pick<PendingOperation, 'preview_data'> & Partial<Pick<PendingOperation, 'operation_type'>>,
+): { value: number; currency: string | null } | null {
+  if (op.operation_type && NO_AMOUNT_TYPES.has(op.operation_type)) return null
   const data = record(op.preview_data)
   for (const key of HEADLINE_KEYS) {
     const value = finite(data[key])

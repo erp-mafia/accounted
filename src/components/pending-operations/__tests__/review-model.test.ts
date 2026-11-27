@@ -150,6 +150,21 @@ describe('headlineAmount', () => {
   it('is null when the proposal names no amount', () => {
     expect(headlineAmount(op({ operation_type: 'create_customer', preview_data: { name: 'A' } }))).toBeNull()
   })
+
+  it('is null for a pairing of documents with verifikat: its total counts files, not kronor', () => {
+    const preview = {
+      total: 2,
+      matched_count: 2,
+      copy_count: 2,
+      missed_count: 0,
+      period_locked_count: 0,
+      results: [
+        { document_id: DOC, voucher_series: 'A', voucher_number: 38, status: 'matched_copy' },
+        { document_id: DOC, voucher_series: 'A', voucher_number: 38, status: 'matched_copy' },
+      ],
+    }
+    expect(headlineAmount(op({ operation_type: 'link_documents_to_vouchers', preview_data: preview }))).toBeNull()
+  })
 })
 
 describe('underlagOf', () => {
