@@ -413,6 +413,7 @@ export function renderNotes(
     const isSecurities = /ställda säkerheter/i.test(note.title)
     const isContingencies = /eventualförpliktelser/i.test(note.title)
     const isParentCompany = /koncernförhållanden/i.test(note.title)
+    const isManagementLoans = /^lån till ledande befattningshavare$/i.test(note.title.trim())
     const isAktiekapital = /^aktiekapital$/i.test(note.title.trim())
     const aktiekapitalNot = input.disclosures.aktiekapitalNot ?? null
     if (note.fixedAssets && note.fixedAssets.length > 0) {
@@ -529,6 +530,12 @@ export function renderNotes(
     } else if (isParentCompany && input.disclosures.parentCompany && has('NotUpplysningModerforetag')) {
       parts.push(
         writer.textPlain('NotUpplysningModerforetag', 'period0', input.disclosures.parentCompany),
+      )
+    } else if (isManagementLoans && has('NotLanSakerheterAtagandenFormanLedandeBefattningshavare')) {
+      // ÅRL 5 kap. 18 §: the note is the company's own text, one fact
+      // that keeps its paragraphs.
+      parts.push(
+        writer.textHtml('NotLanSakerheterAtagandenFormanLedandeBefattningshavare', 'period0', paragraphs(note.body)),
       )
     } else {
       parts.push(...paragraphList(note.body))

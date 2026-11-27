@@ -237,6 +237,19 @@ describe('generateK3IxbrlDocument', () => {
     expect(warnings).toEqual([])
   })
 
+  it('tags the note on lån till ledande befattningshavare (ÅRL 5 kap. 18 §) as one fact with its paragraphs', () => {
+    const input = makeK3Input()
+    input.noter = [
+      ...input.noter,
+      { number: input.noter.length + 1, title: 'Lån till ledande befattningshavare', body: 'Lån om 5 000 kr.\n\nUtan ränta.' },
+    ]
+    const document = generateK3IxbrlDocument(input).xhtml
+    expect(XMLValidator.validate(document)).toBe(true)
+    expect(document).toMatch(
+      /contextRef="period0" name="se-gen-base:NotLanSakerheterAtagandenFormanLedandeBefattningshavare"[^>]*><p>Lån om 5 000 kr\.<\/p>\s*<p>Utan ränta\.<\/p><\/ix:nonNumeric>/,
+    )
+  })
+
   it('refuses a K2 entry point and an input without its K3 part', () => {
     expect(() => generateK3IxbrlDocument(makeInput())).toThrow(/not a K3 entry point/)
     const input = makeK3Input()

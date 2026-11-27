@@ -69,7 +69,13 @@ import { k2EquityPosts, loadEquityEntries, loadEquitySpecification } from './equ
 import { K3_SPLITS, k3BrPostForAccount, k3EquityPosts, toK3Presentation } from './k3-presentation'
 import { inYearOpeningWarnings, moveInYearOpenings, type InYearOpeningOutcome } from './in-year-opening'
 import { USER_CLASSIFIABLE_KINDS, type EquityMovementKind } from './equity-kinds'
-import { collectDisclosureFacts, normalizeDisclosureAnswers, type DisclosureAnswers, type DisclosureFacts } from './disclosures'
+import {
+  collectDisclosureFacts,
+  DISCLOSURE_REQUIREMENTS,
+  normalizeDisclosureAnswers,
+  type DisclosureAnswers,
+  type DisclosureFacts,
+} from './disclosures'
 import {
   buildFinancialFixedAssetsNote,
   buildTangibleImpairmentNote,
@@ -1433,6 +1439,14 @@ async function buildK2Noter(
     body: disclosed.contingent_liabilities || 'Inga.',
   })
 
+  // Lån till ledande befattningshavare (ÅRL 5 kap. 18 §), which 5 kap. 1 §
+  // puts on a mindre företag too. The statement is stored under the
+  // disclosure matrix's id, the answer the K3 document reads, so a K2 year
+  // states it the same way. Not stated, or stated not to apply: no note.
+  const managementLoans = managementLoansNote(narrative)
+  if (managementLoans.note) notes.push({ number: notes.length + 1, ...managementLoans.note })
+  if (managementLoans.error) errors.push(managementLoans.error)
+
   // Koncernförhållanden (BFNAR 2016:10 kap. 19). Emitted only when a parent
   // company is configured or registered: companies without one skip it.
   const parentName = disclosed.parent_company_name
@@ -1450,6 +1464,32 @@ async function buildK2Noter(
   }
 
   return { notes, warnings, errors, shareCapital }
+}
+
+const MANAGEMENT_LOANS_REQUIREMENT = 'not.lan_ledande'
+
+/**
+ * The K2 note on lån till ledande befattningshavare from the year's stated
+ * answer. The title is the disclosure matrix's, so K2 and K3 print the same
+ * heading; the body is the text the company stated. A year that says it
+ * applies but states no text cannot be filed without the note, so it is an
+ * error, as the K3 matrix makes it.
+ */
+function managementLoansNote(
+  narrative: { disclosure_answers?: unknown } | null | undefined,
+): { note: { title: string; body: string } | null; error: string | null } {
+  const answer = normalizeDisclosureAnswers(narrative?.disclosure_answers)[MANAGEMENT_LOANS_REQUIREMENT]
+  if (answer?.applies !== true) return { note: null, error: null }
+  const requirement = DISCLOSURE_REQUIREMENTS.find((r) => r.id === MANAGEMENT_LOANS_REQUIREMENT)
+  if (!requirement) throw new Error(`Unknown disclosure requirement ${MANAGEMENT_LOANS_REQUIREMENT}`)
+  const body = answer.text?.trim()
+  if (!body) {
+    return {
+      note: null,
+      error: `${requirement.title}: noten saknar text. ${requirement.textLabel ?? ''} (ÅRL 5 kap. 18 §)`.replace(/ {2,}/g, ' '),
+    }
+  }
+  return { note: { title: requirement.title, body }, error: null }
 }
 
 interface LatentTaxMovement {
