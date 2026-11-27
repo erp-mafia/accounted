@@ -206,12 +206,28 @@ export async function buildSimCompany(plan: SimPlan, key: AnswerKey, options: Bu
     const committed = await doors.approve('gnubok_create_transactions', stagedRows.operations[0].operation_id)
     return committed.transaction_id
   }
-  const voucher = (date: string, description: string, lines: Array<Record<string, unknown>>) =>
-    doors.write('gnubok_create_voucher', { entry_date: date, description, lines })
+  const voucher = (
+    date: string,
+    description: string,
+    lines: Array<Record<string, unknown>>,
+    acknowledged: string[] = [],
+  ) =>
+    doors.write('gnubok_create_voucher', {
+      entry_date: date,
+      description,
+      lines,
+      ...(acknowledged.length > 0 ? { acknowledged_warnings: acknowledged } : {}),
+    })
   /** Every krona on 1930 has its bank row, so the bank and the ledger can be compared to the öre. */
-  const bankVoucher = async (date: string, description: string, amount: number, otherLines: Array<Record<string, unknown>>) => {
+  const bankVoucher = async (
+    date: string,
+    description: string,
+    amount: number,
+    otherLines: Array<Record<string, unknown>>,
+    acknowledged: string[] = [],
+  ) => {
     const bankLine = amount > 0 ? { debit_amount: amount } : { credit_amount: -amount }
-    const posted = await voucher(date, description, [...otherLines, { account_number: '1930', ...bankLine }])
+    const posted = await voucher(date, description, [...otherLines, { account_number: '1930', ...bankLine }], acknowledged)
     await linkBankRow(date, amount, description, posted.journal_entry_id)
     return posted
   }
@@ -310,9 +326,15 @@ export async function buildSimCompany(plan: SimPlan, key: AnswerKey, options: Bu
       }
       case 'purchase_payment': {
         const invoice = supplierInvoices.get(event.purchaseId)!
-        const posted = await bankVoucher(event.date, `Betalning leverantörsfaktura ${event.purchaseId}`, -invoice.gross, [
-          { account_number: '2440', debit_amount: invoice.gross },
-        ])
+        // The verifikat settles the open invoice it is linked to just below,
+        // which the person confirms when asked (OPEN_INVOICE_COVERS_POSTING).
+        const posted = await bankVoucher(
+          event.date,
+          `Betalning leverantörsfaktura ${event.purchaseId}`,
+          -invoice.gross,
+          [{ account_number: '2440', debit_amount: invoice.gross }],
+          ['OPEN_INVOICE_COVERS_POSTING'],
+        )
         await doors.write('gnubok_link_supplier_invoice_to_voucher', {
           supplier_invoice_id: invoice.id,
           journal_entry_id: posted.journal_entry_id,

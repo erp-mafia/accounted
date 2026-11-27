@@ -8,16 +8,16 @@
   ],
   "pages": {
     "/": {
-      "jsBrotliKb": 620,
-      "measuredKb": 599
+      "jsBrotliKb": 640,
+      "measuredKb": 621
     },
     "/transactions": {
       "jsBrotliKb": 735,
       "measuredKb": 711
     },
     "/bookkeeping": {
-      "jsBrotliKb": 640,
-      "measuredKb": 618
+      "jsBrotliKb": 665,
+      "measuredKb": 641
     },
     "/pending": {
       "jsBrotliKb": 645,
