@@ -161,6 +161,16 @@ describe('Mynt: the CSV of a Bokföring & Export report', () => {
     expect(rowsOf(content)).toEqual([['2026-10-08', 'Avgift Test', -10, 'SEK']])
   })
 
+  it('writes a foreign amount over a thousand with a plain space', () => {
+    const content = [HEADER.join(','), csvRow({ date: '2026-10-05', amount: '-13450.20', original: '-1234.50', originalCurrency: 'USD', description: 'Konferens Test' })].join('\n')
+    expect(rowsOf(content)).toEqual([['2026-10-05', 'Konferens Test - 1 234,50 USD', -13450.2, 'SEK']])
+  })
+
+  it('numbers a row it cannot read as the file does, below a title row', () => {
+    const content = ['Mynt rapport oktober 2026', HEADER.join(','), csvRow({ date: 'igår', amount: '-10.00', description: 'Test' })].join('\n')
+    expect(parseBankFile(content, 'rapport.csv').issues).toEqual([{ row: 3, message: 'Ogiltigt datum: igår', severity: 'warning' }])
+  })
+
   it('keeps the account currency of a euro account', () => {
     const content = [HEADER.join(','), csvRow({ date: '2026-10-02', amount: '-12.50', currency: 'EUR', description: 'Café Test Paris' })].join('\n')
     expect(rowsOf(content)).toEqual([['2026-10-02', 'Café Test Paris', -12.5, 'EUR']])

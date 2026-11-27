@@ -24,11 +24,12 @@
  *                 wizard's card sign check still decides per file.
  *   description   Description (the merchant), then Comment, then Original
  *                 amount and Original currency when the purchase was made in
- *                 another currency
+ *                 another currency. A row with no Description (a top-up) is
+ *                 named by its Category instead.
  *   counterparty  Description
- * Not read: the VAT, Account and Category coding (a row is booked in
- * Accounted with its receipt), Filename (receipts arrive through the inbox),
- * Settlement status, Person, Team and the card columns.
+ * Not read: the VAT and Account coding (a row is booked in Accounted with its
+ * receipt), Filename (receipts arrive through the inbox), Settlement status,
+ * Person, Team and the card columns.
  *
  * Notes:
  * - Quoted fields may hold the delimiter or a line break (a Comment), so the
@@ -181,8 +182,8 @@ export const myntFormat: BankFileFormat = {
     let skippedRows = 0
 
     dataRows.forEach((row, index) => {
-      // The header is row 1; data rows are numbered after it.
-      const rowNumber = index + 2
+      // Numbered as the file's lines: any title rows, the header, then the data.
+      const rowNumber = header.lineIndex + index + 2
       const dateCell = at(row, columns.date) || at(row, columns.settlementDate)
       const date = myntDate(dateCell)
       const amountCell = at(row, columns.amount)
@@ -218,7 +219,8 @@ export const myntFormat: BankFileFormat = {
       const originalCurrency = at(row, columns.originalCurrency).toUpperCase()
       const originalAmount = parseSwedishAmount(at(row, columns.originalAmount), decimalMark)
       if (CURRENCY.test(originalCurrency) && originalCurrency !== currency && originalAmount) {
-        parts.push(`${formatAmount(Math.abs(originalAmount))} ${originalCurrency}`)
+        // formatAmount groups thousands with a no-break space: plain text here.
+        parts.push(`${toSingleLine(formatAmount(Math.abs(originalAmount)))} ${originalCurrency}`)
       }
 
       transactions.push({
