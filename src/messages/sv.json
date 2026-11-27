@@ -10151,6 +10151,7 @@
     "ext_arcim_review_reason_source_id_missing": "Posten saknar id hos {provider} och kan inte importeras säkert.",
     "ext_arcim_review_reason_changed": "Fakturan importerades tidigare med ett annat belopp eller en annan valuta än den har hos {provider} nu. Den har inte ändrats.",
     "ext_arcim_review_reason_rows_mismatch": "Fakturaraderna hos {provider} går inte ihop med fakturans belopp, så fakturan importerades inte.",
+    "ext_arcim_review_reason_currency_total_missing": "Fakturan är i utländsk valuta och {provider} anger inte totalbeloppet i den valutan, så fakturan importerades inte.",
     "ext_arcim_review_reason_lines_missing": "Fakturaraderna saknas eller saknar konto hos {provider}.",
     "ext_arcim_review_reason_too_large": "Fakturan är för stor för automatisk import (fler än 2 000 rader). Lägg in den för hand.",
     "ext_arcim_review_reason_temporary": "Uppgifterna kunde inte hämtas från {provider} just nu. Försök igen om en stund.",

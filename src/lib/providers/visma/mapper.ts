@@ -45,29 +45,32 @@ const VISMA_INVOICE_VAT_KEYS = ['TotalVatAmount'] as const;
  * (`AmountNoVat`) are priced in. The DTO reports every amount in
  * `currencyCode` and the importer converts to SEK at the document's own rate,
  * so a foreign invoice read from the base family stored its SEK figures as
- * euros and was converted a second time. A foreign invoice that carries the
- * twins is read from them alone, so total, VAT and open balance share one
- * currency; a missing twin stays unknown rather than borrowing a base figure,
- * except a base balance of 0, which is 0 in any currency. A SEK invoice, whose
+ * euros and was converted a second time. A foreign invoice is read from the
+ * twins alone, so total, VAT and open balance share one currency; a missing
+ * twin stays unknown rather than borrowing a base figure, except a base
+ * balance of 0, which is 0 in any currency. Without
+ * `TotalAmountInvoiceCurrency` the invoice has no total in its own currency:
+ * `total` is undefined, no VAT or net is derived from it, and the importer
+ * refuses the invoice (SalesInvoiceDto.totalUnresolved). A SEK invoice, whose
  * base currency is its invoice currency, keeps the base family as before.
  */
 function salesInvoiceAmounts(raw: Record<string, unknown>, currency: string): {
-  total: number;
+  total: number | undefined;
   vat: number | undefined;
   remaining: number | null;
 } {
-  const total = raw['TotalAmountInvoiceCurrency'];
-  if (isLedgerCurrency(currency.toUpperCase()) || typeof total !== 'number') {
+  if (isLedgerCurrency(currency.toUpperCase())) {
     return {
       total: raw['TotalAmount'] as number ?? 0,
       vat: readNumber(raw, VISMA_INVOICE_VAT_KEYS),
       remaining: readRemaining(raw),
     };
   }
+  const total = readNumber(raw, ['TotalAmountInvoiceCurrency']);
   const remaining = raw['RemainingAmountInvoiceCurrency'];
   return {
     total,
-    vat: readNumber(raw, ['TotalVatAmountInvoiceCurrency']),
+    vat: total === undefined ? undefined : readNumber(raw, ['TotalVatAmountInvoiceCurrency']),
     remaining: typeof remaining === 'number' ? remaining
       : raw['RemainingAmount'] === 0 ? 0
       : null,
@@ -230,7 +233,11 @@ function emailAddresses(value: unknown): string[] | undefined {
 
 export function mapVismaToSalesInvoice(raw: Record<string, unknown>): SalesInvoiceDto {
   const currency = (raw['CurrencyCode'] as string) ?? 'SEK';
-  const { total, vat: statedVat, remaining } = salesInvoiceAmounts(raw, currency);
+  const { total: statedTotal, vat: statedVat, remaining } = salesInvoiceAmounts(raw, currency);
+  // No total in the invoice's own currency: reported as 0 and flagged, never
+  // as the base-currency total.
+  const totalUnresolved = statedTotal === undefined;
+  const total = statedTotal ?? 0;
   const ps = raw['PaymentStatus'] as number | undefined;
   const paid = ps != null
     ? ps === CUSTOMER_PS_PAID
@@ -308,6 +315,7 @@ export function mapVismaToSalesInvoice(raw: Record<string, unknown>): SalesInvoi
     lines,
     taxTotal: vat.vat !== undefined ? { taxAmount: amount(vat.vat, currency) } : undefined,
     legalMonetaryTotal,
+    ...(totalUnresolved ? { totalUnresolved } : {}),
     paymentStatus,
     householdDeduction: isCredit ? undefined : vismaHouseholdDeduction(raw),
     // eAccounting names the booking voucher on the invoice itself

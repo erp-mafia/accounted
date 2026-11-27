@@ -37,6 +37,19 @@ describe('mapVismaToSalesInvoice: invoice currency', () => {
     expect(dto.legalMonetaryTotal.payableAmount).toEqual({ value: 10000, currencyCode: 'EUR' });
     expect(dto.legalMonetaryTotal.lineExtensionAmount).toEqual({ value: 8000, currencyCode: 'EUR' });
     expect(dto.taxTotal?.taxAmount).toEqual({ value: 2000, currencyCode: 'EUR' });
+    expect(dto.totalUnresolved).toBeUndefined();
+  });
+
+  it('leaves the total of a foreign invoice without TotalAmountInvoiceCurrency unresolved, never taking the base total', () => {
+    const { TotalAmountInvoiceCurrency: _omitted, ...withoutTotal } = euroInvoice;
+    const dto = mapVismaToSalesInvoice(withoutTotal);
+
+    // The importer refuses it on this flag; nothing below is the invoice's.
+    expect(dto.totalUnresolved).toBe(true);
+    expect(dto.legalMonetaryTotal.payableAmount).toEqual({ value: 0, currencyCode: 'EUR' });
+    // Not derived from the 0 either, though TotalVatAmountInvoiceCurrency is stated.
+    expect(dto.legalMonetaryTotal.lineExtensionAmount).toBeUndefined();
+    expect(dto.taxTotal).toBeUndefined();
   });
 
   it('agrees with its own rows', () => {
@@ -134,6 +147,7 @@ describe('mapVismaToSalesInvoice: invoice currency', () => {
       expect(dto.legalMonetaryTotal.lineExtensionAmount?.value).toBe(1000);
       expect(dto.taxTotal?.taxAmount.value).toBe(250);
       expect(dto.paymentStatus?.balance.value).toBe(1250);
+      expect(dto.totalUnresolved).toBeUndefined();
     }
   });
 });

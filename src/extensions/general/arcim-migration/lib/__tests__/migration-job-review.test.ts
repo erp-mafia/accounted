@@ -3,6 +3,7 @@ import type { ExtensionContext } from '@/lib/extensions/types'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { sealMigrationPayload } from '@/lib/providers/migration-payload'
 import { mapBokioToSupplierInvoice } from '@/lib/providers/bokio/mapper'
+import { mapVismaToSalesInvoice } from '@/lib/providers/visma/mapper'
 const { after, serviceRpc, worker } = vi.hoisted(() => ({ after: vi.fn(), serviceRpc: vi.fn(), worker: vi.fn() }))
 vi.mock('next/server', async importOriginal => ({ ...await importOriginal<typeof import('next/server')>(), after }))
 vi.mock('@/lib/auth/api-keys', () => ({ createServiceClientNoCookies: () => ({ rpc: serviceRpc }) }))
@@ -130,6 +131,19 @@ describe('the review a finished import stops for', () => {
         label: { number: '1003', date: '2026-03-02', amount: 11200, currency: 'SEK', party: null } }),
     ])
     expect(status?.review).toEqual({ total: 2, acceptable: true, unchanged: false, truncated: false, staleOutsideYears: 0 })
+  })
+  it('names a foreign invoice refused for its missing total without the 0 it was reported with', async () => {
+    const { ctx, enqueue } = context()
+    const refused = mapVismaToSalesInvoice({ Id: 'eur-1', InvoiceNumber: 2001, InvoiceDate: '2026-03-10', CurrencyCode: 'EUR',
+      TotalAmount: 112000, TotalVatAmount: 22400, RemainingAmount: 0, PaymentStatus: 0, InvoiceCustomerName: 'Kund AB' })
+    enqueue({ data: job({ provider: 'visma' }) })
+    enqueue(counts(1))
+    enqueue({ data: [{ id: 'a', resource: 'salesInvoices', source_id: 'eur-1', error_code: 'MIGRATION_CURRENCY_TOTAL_MISSING',
+      error_phase: 'import', target_id: null, receipt: {} }] })
+    enqueue({ data: [{ id: 'a', payload: sealMigrationPayload(refused).payload }] })
+    const status = await readMigrationStatus(ctx, jobId)
+    expect(status?.issues).toEqual([expect.objectContaining({ id: 'a', imported: false, error_code: 'MIGRATION_CURRENCY_TOTAL_MISSING',
+      label: { number: '2001', date: '2026-03-10', amount: null, currency: 'EUR', party: 'Kund AB' } })])
   })
   // The counts here carry no outside_years_stale, as before migration
   // 20261118221500: read as none.

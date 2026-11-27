@@ -123,6 +123,13 @@ export function planInvoiceLineCompletion(row: CandidateRow, dto: SalesInvoiceDt
     return { reason: 'noLinesAtProvider' }
   }
 
+  // No total in the invoice's own currency agrees with no stored total, not
+  // even through the placeholder 0 it is reported with; the import refuses
+  // such an invoice too (SalesInvoiceDto.totalUnresolved).
+  if (dto.totalUnresolved) {
+    return { reason: 'totalMismatch' }
+  }
+
   // The same mapper the migration used, so a row written here is
   // indistinguishable from one written by a fully hydrated import. No FX
   // index: the SEK twins are derived from the rate the row already carries.

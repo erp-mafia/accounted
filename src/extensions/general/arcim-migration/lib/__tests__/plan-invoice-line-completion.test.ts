@@ -150,6 +150,14 @@ describe('planInvoiceLineCompletion', () => {
       .toEqual({ reason: 'totalMismatch' })
   })
 
+  it('leaves an invoice untouched when the provider states no total in the invoice currency', () => {
+    // Its placeholder 0 would otherwise agree with a stored 0 and land rows under it.
+    const dto = providerInvoice({ currencyCode: 'EUR', totalUnresolved: true, taxTotal: undefined,
+      legalMonetaryTotal: { payableAmount: amount(0, 'EUR'), taxInclusiveAmount: amount(0, 'EUR') } })
+    expect(planInvoiceLineCompletion(storedRow({ total: 0, subtotal: 0, currency: 'EUR', exchange_rate: 11.2 }), dto, 'co-1'))
+      .toEqual({ reason: 'totalMismatch' })
+  })
+
   it('leaves an invoice untouched when the detail form carries no rows', () => {
     expect(planInvoiceLineCompletion(storedRow(), providerInvoice({ lines: [] }), 'co-1'))
       .toEqual({ reason: 'noLinesAtProvider' })

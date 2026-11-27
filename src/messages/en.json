@@ -10151,6 +10151,7 @@
     "ext_arcim_review_reason_source_id_missing": "The record has no id in {provider} and cannot be imported safely.",
     "ext_arcim_review_reason_changed": "The invoice was imported earlier with a different amount or currency than it has in {provider} now. It was not changed.",
     "ext_arcim_review_reason_rows_mismatch": "The invoice rows in {provider} do not add up to the invoice amount, so the invoice was not imported.",
+    "ext_arcim_review_reason_currency_total_missing": "The invoice is in a foreign currency and {provider} does not state its total in that currency, so the invoice was not imported.",
     "ext_arcim_review_reason_lines_missing": "The invoice rows are missing or lack an account in {provider}.",
     "ext_arcim_review_reason_too_large": "The invoice is too large for automatic import (more than 2,000 rows). Enter it by hand.",
     "ext_arcim_review_reason_temporary": "The details could not be fetched from {provider} right now. Try again in a while.",
