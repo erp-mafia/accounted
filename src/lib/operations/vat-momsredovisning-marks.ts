@@ -1,7 +1,7 @@
 /**
  * "Rättelse, inte momsredovisning" for agents (crm#1849). The momsdeklaration
- * takes a verifikat shaped like a momsredovisning (a declaration account and
- * a 2650/1650 line) for the period's momsredovisning: the rutor leave it out
+ * takes a verifikat shaped like a momsredovisning (a declaration-account line
+ * against a 2650/1650 line) for the period's momsredovisning: the rutor leave it out
  * and the period counts as settled. A correction can have that shape. The Moms
  * page lets a person mark such a verifikat as a correction; these operations
  * let an agent propose the same mark, or its withdrawal. The approval runs
@@ -70,7 +70,7 @@ export const vatMomsredovisningMarksMark = defineOperation({
   docs: {
     summary: 'Mark a verifikat the momsdeklaration takes for a momsredovisning as a correction, so the rutor read it.',
     description:
-      'The momsdeklaration leaves out a verifikat shaped like a momsredovisning (a line on a declaration account and one on 2650/1650, or a pure movement between VAT accounts and the skattekonto) and counts it as a momsredovisning of the period. A correction can have that shape, e.g. output VAT moved to 1650 next to a sales correction. Marked, the verifikat and its storno are read like any other verifikat and no longer count as a momsredovisning; when it was the period\'s only one, the period\'s momsredovisning can then be booked. Nothing in the books changes and nothing is sent to Skatteverket. Withdrawable while the period is open and its VAT return not filed.',
+      'The momsdeklaration leaves out a verifikat shaped like a momsredovisning (a line on a declaration account against one on 2650/1650, debit against credit, or a pure movement between VAT accounts and the skattekonto) and counts it as a momsredovisning of the period. A correction can have that shape, e.g. output VAT moved to 1650 next to a sales correction. Marked, the verifikat and its storno are read like any other verifikat and no longer count as a momsredovisning; when it was the period\'s only one, the period\'s momsredovisning can then be booked. Nothing in the books changes and nothing is sent to Skatteverket. Withdrawable while the period is open and its VAT return not filed.',
     useWhen:
       'gnubok_get_vat_settlement_proposal lists a verifikat in existing_entries, or booking answers VAT_SETTLEMENT_ALREADY_BOOKED, for a verifikat the user confirms is a correction, not the period\'s momsredovisning.',
     doNotUseFor:
