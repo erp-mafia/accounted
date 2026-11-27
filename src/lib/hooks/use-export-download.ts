@@ -18,8 +18,42 @@ import { useCallback, useRef, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { useToast } from '@/components/ui/use-toast'
 import { downloadFile, RENDERED_DOWNLOAD_TIMEOUT_MS } from '@/lib/browser/download-file'
-import { failureDescription } from '@/lib/browser/action-failure'
-import type { ErrorLocale } from '@/lib/errors/get-error-message'
+import { failureDescription, type ActionFailureCopy } from '@/lib/browser/action-failure'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
+
+export interface SaveExportOptions {
+  locale: ErrorLocale
+  /** The sentences for a timeout and for no connection; a refusal keeps the route's own message. */
+  copy: ActionFailureCopy
+  /** Seam for tests; defaults to downloadFile. */
+  download?: typeof downloadFile
+}
+
+/**
+ * Fetch one export and save it. Answers null when the file was saved, or the
+ * one sentence that says why nothing was: the route's own message for a
+ * refusal, the caller's copy for a timeout or no connection, and a general
+ * sentence when the browser itself threw while saving. Never rejects, so the
+ * click that awaits it always ends with a file or a toast.
+ */
+export async function saveExport(
+  url: string,
+  fallbackFilename: string,
+  { locale, copy, download = downloadFile }: SaveExportOptions,
+): Promise<string | null> {
+  try {
+    const result = await download({
+      url,
+      filename: fallbackFilename,
+      preferServerFilename: true,
+      locale,
+      timeoutMs: RENDERED_DOWNLOAD_TIMEOUT_MS,
+    })
+    return result.ok ? null : failureDescription(result, copy)
+  } catch (err) {
+    return getErrorMessage(err, { locale })
+  }
+}
 
 export function useExportDownload(): {
   /** A file is on its way: show the trigger as busy. */
@@ -40,22 +74,12 @@ export function useExportDownload(): {
       inFlight.current = true
       setPending(true)
       try {
-        const result = await downloadFile({
-          url,
-          filename: fallbackFilename,
-          preferServerFilename: true,
+        const failure = await saveExport(url, fallbackFilename, {
           locale,
-          timeoutMs: RENDERED_DOWNLOAD_TIMEOUT_MS,
+          copy: { timeout: t('export_timeout'), network: t('export_network') },
         })
-        if (!result.ok) {
-          toast({
-            title: t('export_failed_title'),
-            description: failureDescription(result, {
-              timeout: t('export_timeout'),
-              network: t('export_network'),
-            }),
-            variant: 'destructive',
-          })
+        if (failure !== null) {
+          toast({ title: t('export_failed_title'), description: failure, variant: 'destructive' })
         }
       } finally {
         inFlight.current = false
