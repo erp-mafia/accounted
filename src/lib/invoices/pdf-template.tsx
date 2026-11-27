@@ -244,7 +244,7 @@ function renderPaymentArea(area: PdfPaymentArea, styles: PdfStyles, lang: PdfLan
  */
 export type InvoicePdfInvoice = Invoice & { deduction_personnummer_masked?: string | null }
 
-interface InvoicePDFProps {
+export interface InvoicePDFProps {
   invoice: InvoicePdfInvoice
   customer: Customer
   items: InvoiceItem[]
@@ -263,6 +263,29 @@ interface InvoicePDFProps {
    * or a vector path (bank app), with its caption. null/omitted prints none.
    */
   paymentQr?: InvoicePdfPaymentQr | null
+  /**
+   * Draw the payment area on this page, the one the summary ends on, and
+   * start a long fine print on the page after it instead of above it. Set by
+   * the render entry point when a first render showed the fine print pushing
+   * the payment area off that page. Ignored without a long fine print.
+   */
+  paymentAreaPage?: number
+  /** Filled in while react-pdf lays the document out: where the summary and the payment area landed. */
+  placement?: InvoicePdfPlacement
+}
+
+/**
+ * Where a rendered invoice put its summary and its payment area, as react-pdf
+ * laid it out: each page is recorded by a `render` callback on the page it is
+ * drawn on, in the final pass, when the page count is known.
+ */
+export interface InvoicePdfPlacement {
+  /** A long fine print and a payment area: a second render may move the fine print after the payment area. */
+  finePrintCanFollow?: boolean
+  /** The page the summary (Delsumma to Att betala) is on. */
+  summaryPage?: number
+  /** The page the payment area's reservation is on: where the payment area is drawn. */
+  paymentAreaPage?: number
 }
 
 /**
@@ -272,7 +295,7 @@ interface InvoicePDFProps {
  * breaks depend only on the rows and the note, never on the status, the
  * payment settings or the QR code.
  */
-export function InvoicePDF({ invoice, customer, items, company, originalInvoiceNumber, isPreview, language, branding, paymentQr }: InvoicePDFProps) {
+export function InvoicePDF({ invoice, customer, items, company, originalInvoiceNumber, isPreview, language, branding, paymentQr, paymentAreaPage, placement }: InvoicePDFProps) {
   const lang: PdfLang = language ?? customer.language ?? 'sv'
   const L = LABELS[lang]
   // Build the stylesheet per-render so each invoice picks up its company's
@@ -448,6 +471,28 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
     ? []
     : [lateFee, creditTerms].filter((t): t is string => t !== null)
   const finePrintTravelsWhole = fitsOnOnePage(finePrint.join('\n'), FULL_WIDTH_BOX_PT, FINE_PRINT_KEEP_TOGETHER_LINES)
+  // A long fine print may follow the payment area instead: the payment area
+  // then stays on the page the summary ends on, and the fine print starts on
+  // the next page. renderInvoiceDocument asks for it only when the fine print
+  // pushed the payment area off that page.
+  const finePrintCanFollow = hasPaymentArea && finePrint.length > 0 && !finePrintTravelsWhole
+  const finePrintFollows = finePrintCanFollow && paymentAreaPage !== undefined
+  // A zero-height mark that records, for renderInvoiceDocument, the page it is
+  // drawn on and whether the fine print may follow the payment area. Only the
+  // final layout pass knows the page count, and only its page numbers are kept.
+  const pageMark = (key: 'summaryPage' | 'paymentAreaPage') =>
+    placement ? (
+      <View
+        render={(context) => {
+          const { pageNumber, totalPages } = context as PdfPageContext
+          if (totalPages !== undefined) {
+            placement[key] = pageNumber
+            placement.finePrintCanFollow = finePrintCanFollow
+          }
+          return null
+        }}
+      />
+    ) : null
   const finePrintBlock = finePrint.length > 0 ? (
     <View style={styles.finePrint}>
       {finePrint.map((text, index) => (
@@ -840,11 +885,15 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
             may move to the next page on their own (a long fine print is its
             own unit and may break, crm#1787); the page the spacer lands
             on is the last one, where the payment area, which states the
-            amount again, is drawn over it. A ROT/RUT breakdown too long to
-            keep whole comes first instead and may split. */}
+            amount again, is drawn over it. A long fine print may instead
+            come after the spacer, from the next page on, so the payment area
+            stays on the summary's page (paymentAreaPage). A ROT/RUT
+            breakdown too long to keep whole comes first instead and may
+            split. */}
         <View style={styles.totalsBlock}>
           {!deductionFits && deductionBox}
           <View style={deductionFits ? undefined : styles.totalsAfterDeduction} wrap={false}>
+            {pageMark('summaryPage')}
             {!isDeliveryNote && (
               <View style={styles.totals} wrap={false}>
                 <View style={styles.totalRow}>
@@ -956,28 +1005,37 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
           {/* A long fine print follows the summary as ordinary text and may
               break across pages, so it never drags a unit kept whole to a
               fresh page and leaves the page above mostly empty (crm#1787). */}
-          {!finePrintTravelsWhole && finePrintBlock}
+          {!finePrintTravelsWhole && !finePrintFollows && finePrintBlock}
 
-          {/* The payment area's reservation, one unit so the last page always
-              has room for the payment area. A short fine print travels with
-              it, so it is never stranded without it. */}
+          {/* The payment area's reservation, one unit so the page it is drawn
+              on always has room for it. A short fine print travels with it,
+              so it is never stranded without it. */}
           {hasPaymentArea && (
             <View wrap={false}>
+              {pageMark('paymentAreaPage')}
               {finePrintTravelsWhole && finePrintBlock}
               <View style={{ height: PAYMENT_AREA_HEIGHT_PT + PAYMENT_AREA_GAP_PT }} />
             </View>
           )}
+
+          {/* Or the long fine print starts on the page after the payment
+              area, which stays on the page the summary ends on. */}
+          {finePrintFollows && <View break>{finePrintBlock}</View>}
         </View>
 
         {/* Zone E: the payment area, drawn over the spacer at the bottom of
-            the last page. Fixed height for every status (R8). */}
+            the last page, or of the summary's page when the long fine print
+            follows it. Fixed height for every status (R8). */}
         {paymentArea && (
           <View
             fixed
             style={styles.paymentAreaFrame}
             render={(context) => {
               const { pageNumber, totalPages } = context as PdfPageContext
-              return pageNumber === totalPages ? renderPaymentArea(paymentArea, styles, lang) : null
+              const drawnHere = finePrintFollows
+                ? totalPages !== undefined && pageNumber === paymentAreaPage
+                : pageNumber === totalPages
+              return drawnHere ? renderPaymentArea(paymentArea, styles, lang) : null
             }}
           />
         )}

@@ -13,9 +13,11 @@
  *      that same company (so the code pays to the account the page prints);
  *   3. the QR image: a PNG data URL for Swish and the payment link, a vector
  *      path for the bank-app code, each with a quiet zone of 4 modules;
- *   4. renderToBuffer(InvoicePDF(...)).
+ *   4. renderToBuffer(InvoicePDF(...)), and once more when a long fine
+ *      print pushed the payment area off the page the summary ends on (see
+ *      renderInvoiceDocument).
  */
-import type { InvoicePdfInvoice } from '@/lib/invoices/pdf-template'
+import type { InvoicePDFProps, InvoicePdfInvoice, InvoicePdfPlacement } from '@/lib/invoices/pdf-template'
 import {
   resolveInvoicePaymentQr,
   type InvoicePdfPaymentQr,
@@ -96,16 +98,40 @@ export async function buildInvoicePaymentQrImage(
   }
 }
 
+/**
+ * Render the invoice PDF so the payment area stays on the page the summary
+ * ends on. A long fine print, such as the statutory information an
+ * electricity invoice must carry, follows the summary and the payment area
+ * comes after it; when the two do not both fit on that page, the payment area
+ * landed on the next one. Then it is rendered once more with the payment area
+ * on the summary's page and the fine print starting on the page after. That
+ * render is kept only when its payment area really is on the summary's page
+ * (the summary ended too low to leave room for it otherwise).
+ */
+export async function renderInvoiceDocument(
+  props: Omit<InvoicePDFProps, 'paymentAreaPage' | 'placement'>,
+): Promise<{ buffer: Buffer; paymentAreaPage?: number }> {
+  const [{ renderToBuffer }, { InvoicePDF }] = await Promise.all([
+    import('@react-pdf/renderer'),
+    import('@/lib/invoices/pdf-template'),
+  ])
+  const first: InvoicePdfPlacement = {}
+  const buffer = await renderToBuffer(InvoicePDF({ ...props, placement: first }))
+  const { summaryPage, paymentAreaPage } = first
+  if (!first.finePrintCanFollow || summaryPage === undefined || paymentAreaPage === undefined || paymentAreaPage <= summaryPage) {
+    return { buffer }
+  }
+  const second: InvoicePdfPlacement = {}
+  const moved = await renderToBuffer(InvoicePDF({ ...props, paymentAreaPage: summaryPage, placement: second }))
+  return second.paymentAreaPage === summaryPage ? { buffer: moved, paymentAreaPage: summaryPage } : { buffer }
+}
+
 export async function renderInvoicePdfBuffer(input: RenderInvoicePdfInput): Promise<RenderedInvoicePdf> {
   const { invoice, customer } = input
   // react-pdf, the template and its fonts load here, when an invoice PDF is
   // rendered, not with every route that reaches this module (pending
   // operations, the MCP server).
-  const [{ renderToBuffer }, { InvoicePDF }, { prepareInvoicePdfRender }] = await Promise.all([
-    import('@react-pdf/renderer'),
-    import('@/lib/invoices/pdf-template'),
-    import('@/lib/invoices/pdf-render-helpers'),
-  ])
+  const { prepareInvoicePdfRender } = await import('@/lib/invoices/pdf-render-helpers')
   const { branding, company } = await prepareInvoicePdfRender(input.company, invoice.currency, {
     paymentAccountRequired: input.paymentAccountRequired ?? invoiceRequiresPaymentAccount(invoice),
     payee: input.payee !== undefined ? input.payee : (invoice.payment_details ?? null),
@@ -113,18 +139,16 @@ export async function renderInvoicePdfBuffer(input: RenderInvoicePdfInput): Prom
   // The template's own language rule, so the code's reference matches the page.
   const lang = input.language ?? customer?.language ?? 'sv'
   const paymentQr = resolveInvoicePaymentQr({ invoice, company, customer, lang })
-  const buffer = await renderToBuffer(
-    InvoicePDF({
-      invoice,
-      customer,
-      items: input.items,
-      company,
-      originalInvoiceNumber: input.originalInvoiceNumber,
-      isPreview: input.isPreview,
-      language: input.language,
-      branding,
-      paymentQr: await buildInvoicePaymentQrImage(paymentQr),
-    }),
-  )
+  const { buffer } = await renderInvoiceDocument({
+    invoice,
+    customer,
+    items: input.items,
+    company,
+    originalInvoiceNumber: input.originalInvoiceNumber,
+    isPreview: input.isPreview,
+    language: input.language,
+    branding,
+    paymentQr: await buildInvoicePaymentQrImage(paymentQr),
+  })
   return { buffer, paymentQr, pageCount: countPdfPages(buffer) }
 }
