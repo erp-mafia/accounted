@@ -1023,14 +1023,14 @@ Example response `200`:
 **Import a bank-file (CSV / Excel / XML / CAMT053).**
 `scope:transactions:write · risk:medium · idempotent`
 
-Accepts a bank statement file (CSV in UTF-8 / UTF-16 / Windows-1252, an Excel workbook .xls / .xlsx, or camt.053 XML; up to 10 MB) as multipart/form-data. Auto-detects the bank format (SEB, Swedbank, Handelsbanken, Nordea, Nordea Business, Lansforsakringar, Lunar, ICA Banken, Skandia, Wise transaction history, Wise balance statement, CAMT053, generic CSV) or honors a `format` override. Parses transactions, ingests them into the `transactions` table (NOT into journal entries: see BFL note in pitfalls), and emits `transaction.synced` events. Returns operation_id for polling.
+Accepts a bank statement file (CSV in UTF-8 / UTF-16 / Windows-1252, an Excel workbook .xls / .xlsx, or camt.053 XML; up to 10 MB) as multipart/form-data. Auto-detects the bank format (SEB, Swedbank, Handelsbanken, Nordea, Nordea Business, Lansforsakringar, Lunar, ICA Banken, Skandia, Wise transaction history, Wise balance statement, the Mynt card export, CAMT053, generic CSV) or honors a `format` override. Parses transactions, ingests them into the `transactions` table (NOT into journal entries: see BFL note in pitfalls), and emits `transaction.synced` events. Returns operation_id for polling.
 
 **Use when:** Importing a bank statement export for a period. Common with PSD2 bank connections that don't auto-sync, or for legacy bank accounts.
 **Do not use for:** SIE bookkeeping import (use /imports/sie). Auto-bank sync (use the enable-banking extension). Single-transaction creation (use POST /transactions/ingest with a 1-element array).
 
 **Pitfalls:**
 - File size cap: 10 MB. Larger files require splitting client-side.
-- `format` query parameter is optional; auto-detection works for all supported banks. Pass `format` only to force a specific format. Accepted values: seb, swedbank, handelsbanken, nordea, nordea_business, lansforsakringar, ica_banken, skandia, lunar, northmill, wise, wise_statement, generic_csv, camt053.
+- `format` query parameter is optional; auto-detection works for all supported banks. Pass `format` only to force a specific format. Accepted values: seb, swedbank, handelsbanken, nordea, nordea_business, lansforsakringar, ica_banken, skandia, lunar, northmill, wise, wise_statement, mynt, generic_csv, camt053.
 - Wise transaction-history rows with refunded or unknown statuses, unknown directions, or different source and target currencies are rejected instead of guessed. Import the matching per-currency Wise balance statements.
 - Duplicate detection is by external_id (composed from format + date + description + amount + row index, or the camt.053 entry reference / Wise transfer id where the file carries one); a re-import of the same file typically deduplicates rather than creating doubles.
 - Rows bind to the cash account the file names when the company already has it. A file covering a period a completed SIE import booked is matched against the imported vouchers and never auto-categorized.
@@ -1042,7 +1042,7 @@ Accepts a bank statement file (CSV in UTF-8 / UTF-16 / Windows-1252, an Excel wo
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
-| `format` | query | `"nordea" \| "nordea_business" \| "seb" \| "swedbank" \| "handelsbanken" \| "lansforsakringar" \| "ica_banken" \| "skandia" \| "lunar" \| "northmill" \| "wise" \| "wise_statement" \| "generic_csv" \| "camt053"` | no | Force this bank file format instead of auto-detection. Omit to auto-detect. |
+| `format` | query | `"nordea" \| "nordea_business" \| "seb" \| "swedbank" \| "handelsbanken" \| "lansforsakringar" \| "ica_banken" \| "skandia" \| "lunar" \| "northmill" \| "wise" \| "wise_statement" \| "mynt" \| "generic_csv" \| "camt053"` | no | Force this bank file format instead of auto-detection. Omit to auto-detect. |
 
 Response `200`:
 ```ts

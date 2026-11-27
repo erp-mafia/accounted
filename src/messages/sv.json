@@ -13982,6 +13982,7 @@
     "bank_export_lunar": "Logga in → Konto → Transaktioner → Exportera (CSV)",
     "bank_export_northmill": "Logga in → Konto → Kontoutdrag → Ladda ner (CSV)",
     "bank_export_lansforsakringar": "Transaktionerna som CSV, eller kontoutdragen som Excel-filer (.xls), en fil per månad.",
+    "bank_export_mynt": "Logga in → Bokföring & Export → Redo för Export → lägg utläggen i en rapport → ladda ner rapporten (CSV eller Excel)",
     "csv_data_title": "CSV eller Excel",
     "csv_data_description": "Ingående balanser, kunder, leverantörer och artiklar",
     "csv_chip_opening_balances": "Ingående balanser",
