@@ -30,9 +30,19 @@ const COMPANY = 'company-1'
 
 type Rows = Record<string, Record<string, unknown>[]>
 
+/** Each invoice carries its document as PostgREST embeds it (supplier_invoices_document_id_fkey). */
+function withDocumentEmbed(tables: Rows): Rows {
+  const documents = tables.document_attachments ?? []
+  const invoices = (tables.supplier_invoices ?? []).map((invoice) => ({
+    ...invoice,
+    document: documents.find((d) => d.id === invoice.document_id) ?? null,
+  }))
+  return tables.supplier_invoices ? { ...tables, supplier_invoices: invoices } : tables
+}
+
 function db(tables: Rows) {
   const writes: { table: string; method: string; row: unknown }[] = []
-  const mock = createRowsMockSupabase(tables, writes)
+  const mock = createRowsMockSupabase(withDocumentEmbed(tables), writes)
   return { supabase: mock.supabase as unknown as SupabaseClient, writes, mock }
 }
 
@@ -244,6 +254,15 @@ describe('registeredAgainAs', () => {
       ],
     })
     expect(await registeredAgainAs(supabase, COMPANY, { id: 'si-1', document_id: 'doc-1' })).toBeNull()
+  })
+
+  it('finds the live invoice however many byte-identical documents the company holds', async () => {
+    const many = Array.from({ length: 120 }, (_, i) => ({ id: `doc-${i}`, company_id: COMPANY, sha256_hash: 'abc' }))
+    const { supabase } = db({
+      document_attachments: [...docs, ...many],
+      supplier_invoices: [creditedOriginal(), creditedOriginal({ id: 'si-late', status: 'registered', document_id: 'doc-119' })],
+    })
+    expect(await registeredAgainAs(supabase, COMPANY, { id: 'si-1', document_id: 'doc-1' })).toBe('si-late')
   })
 
   it('an invoice without an underlag names nothing and reads nothing', async () => {

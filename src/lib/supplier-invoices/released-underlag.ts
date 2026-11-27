@@ -44,6 +44,17 @@ import {
 import { archiveDocumentCopy, linkDocumentCopyToVoucher } from '@/lib/documents/link-document'
 import { linkBasisColumns } from '@/lib/links/stamp'
 
+/**
+ * The registration stood but its copy of the released underlag could not be
+ * made (the original could not be read, or failed its check): the invoice
+ * keeps the original, and its verifikat waits for its underlag.
+ */
+export const RELEASED_UNDERLAG_COPY_FAILED_WARNING = {
+  code: 'DOCUMENT_LINK_FAILED',
+  message_sv: 'Fakturan registrerades, men underlaget kunde inte kopplas till verifikationen.',
+  message_en: 'The invoice was registered, but the document could not be linked to the voucher.',
+} as const
+
 /** The statuses of an original invoice that no longer books its purchase. */
 const UNDERLAG_RELEASING_STATUSES: ReadonlySet<string> = new Set(['credited', 'reversed'])
 
@@ -170,7 +181,9 @@ export async function documentForRegistration(
     .eq('id', documentId)
     .eq('company_id', companyId)
     .maybeSingle()
-  if (documentError || !document) return { ok: false, reason: 'document_unavailable' }
+  // A malformed id finds nothing; any other failure is the database's, never an unavailable document.
+  if (documentError && documentError.code !== '22P02') throw dbError(documentError, 'released underlag: document lookup failed')
+  if (!document) return { ok: false, reason: 'document_unavailable' }
   const hold = documentHoldOf({ document_hold: document as NonNullable<DocumentHoldRow['document_hold']> })
   let copy = false
   if (hold.journal_entry_id) {
@@ -206,16 +219,21 @@ export async function documentForRegistration(
 export async function registeredAgainAs(
   supabase: SupabaseClient,
   companyId: string,
-  invoice: { id: string; document_id: string | null },
+  invoice: { id: string; document_id?: string | null },
 ): Promise<string | null> {
   if (!invoice.document_id) return null
   return liveRegistrationOf(supabase, companyId, invoice.document_id, invoice.id)
 }
 
+/** The statuses of a live original as a PostgREST list, for a filter on the table. */
+const RELEASING_STATUS_LIST = `(${[...UNDERLAG_RELEASING_STATUSES].join(',')})`
+
 /**
  * The invoice, other than `except`, that holds an underlag now: an original
  * that is not credited or reversed and names the document, or a copy of it
- * (the same bytes, which is what a copy is). Throws on a failed read.
+ * (the same bytes, which is what a copy is). One read on the invoices with
+ * their document's hash, so however many copies exist none is missed.
+ * Throws on a failed read.
  */
 async function liveRegistrationOf(
   supabase: SupabaseClient,
@@ -231,28 +249,18 @@ async function liveRegistrationOf(
     .maybeSingle()
   if (sourceError) throw dbError(sourceError, 'released underlag: document lookup failed')
   const hash = (source as { sha256_hash?: string | null } | null)?.sha256_hash ?? null
-  let documentIds = [documentId]
-  if (hash) {
-    const { data: copies, error: copiesError } = await supabase
-      .from('document_attachments')
-      .select('id')
-      .eq('company_id', companyId)
-      .eq('sha256_hash', hash)
-      .limit(50)
-    if (copiesError) throw dbError(copiesError, 'released underlag: copy lookup failed')
-    documentIds = [...new Set([documentId, ...((copies ?? []) as Array<{ id: string }>).map((row) => row.id)])]
-  }
 
   let query = supabase
     .from('supplier_invoices')
-    .select('id, status, is_credit_note')
+    .select('id, status, is_credit_note, document:document_attachments!supplier_invoices_document_id_fkey!inner(sha256_hash)')
     .eq('company_id', companyId)
     .eq('is_credit_note', false)
-    .in('document_id', documentIds)
+    .not('status', 'in', RELEASING_STATUS_LIST)
+  query = hash ? query.eq('document.sha256_hash', hash) : query.eq('document_id', documentId)
   if (except) query = query.neq('id', except)
-  const { data: users, error: usersError } = await query
-  if (usersError) throw dbError(usersError, 'released underlag: registration lookup failed')
-  return ((users ?? []) as InvoiceStateRow[]).find((row) => !releasesItsUnderlag(row))?.id ?? null
+  const { data: live, error: liveError } = await query.limit(1)
+  if (liveError) throw dbError(liveError, 'released underlag: registration lookup failed')
+  return ((live ?? []) as InvoiceStateRow[]).find((row) => !releasesItsUnderlag(row))?.id ?? null
 }
 
 /**

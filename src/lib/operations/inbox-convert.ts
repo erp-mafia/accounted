@@ -107,7 +107,11 @@ import { checkAccountingMethod } from '@/lib/company/accounting-method'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { bookingStateOfItem } from '@/lib/documents/inbox-item-claim'
 import { INBOX_ITEM_DOCUMENT_HOLD, type DocumentHoldRow } from '@/lib/documents/inbox-item-state'
-import { copyReleasedUnderlag, releasedForRegistration } from '@/lib/supplier-invoices/released-underlag'
+import {
+  RELEASED_UNDERLAG_COPY_FAILED_WARNING,
+  copyReleasedUnderlag,
+  releasedForRegistration,
+} from '@/lib/supplier-invoices/released-underlag'
 import {
   exceedsSupplierInvoiceTotalsTolerance,
   supplierInvoiceLinesInclVat,
@@ -715,6 +719,9 @@ export async function convertInboxItemToSupplierInvoice(
   let registrationJournalEntryId: string | null = null
   // A periodisering month that could not be posted after the registration.
   let releaseFailed = false
+  // The released underlag got no copy: the invoice keeps the original, and
+  // the person is told (the verifikat is posted and stands).
+  let copyFailed = false
 
   // #967: deferred companies register WITHOUT booking; ekonomi books later.
   // Kontantmetoden books at payment, except an EU goods acquisition (ML
@@ -757,6 +764,9 @@ export async function convertInboxItemToSupplierInvoice(
               await linkToJournalEntry(supabase, companyId, item.document_id, journalEntry.id, linkBasisColumns('user_created'))
             }
           } catch (linkError) {
+            // Told to the person only for the copy: a plain link that fails
+            // has always been logged and anchored later by the nightly sweep.
+            if (release.copy_from_document_id) copyFailed = true
             log.warn('inbox convert: document not linked to the registration verifikat', {
               documentId: item.document_id,
               journalEntryId: journalEntry.id,
@@ -821,6 +831,7 @@ export async function convertInboxItemToSupplierInvoice(
         journalEntryId: null,
       })
     } catch (copyError) {
+      copyFailed = true
       log.warn('inbox convert: no copy of the released underlag for the invoice', {
         documentId: release.copy_from_document_id,
         supplierInvoiceId: invoice.id,
@@ -904,11 +915,12 @@ export async function convertInboxItemToSupplierInvoice(
       registration_journal_entry_id: registrationJournalEntryId,
       inbox_item_id: inboxItemId,
     },
-    ...(payeeAssessment.alert || releaseFailed
+    ...(payeeAssessment.alert || releaseFailed || copyFailed
       ? {
           warnings: [
             ...(payeeAssessment.alert ? [payeeAlertWarning(payeeAssessment.alert)] : []),
             ...(releaseFailed ? [{ ...ACCRUAL_RELEASE_FAILED_WARNING }] : []),
+            ...(copyFailed ? [{ ...RELEASED_UNDERLAG_COPY_FAILED_WARNING }] : []),
           ],
         }
       : {}),

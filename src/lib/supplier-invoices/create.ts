@@ -70,7 +70,11 @@ import {
 } from '@/lib/bookkeeping/supplier-invoice-registration-lines'
 import type { ChartVatTreatments } from '@/lib/bookkeeping/vat-entries'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
-import { copyReleasedUnderlag, documentForRegistration } from '@/lib/supplier-invoices/released-underlag'
+import {
+  RELEASED_UNDERLAG_COPY_FAILED_WARNING,
+  copyReleasedUnderlag,
+  documentForRegistration,
+} from '@/lib/supplier-invoices/released-underlag'
 import { parseEntityType } from '@/lib/company/entity-type'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import type { SiCreateInvalidInputReason } from '@/lib/errors/structured-errors'
@@ -1222,11 +1226,7 @@ export async function createSupplierInvoice(
         journalEntryId: primaryJournalEntryId,
         error: err instanceof Error ? err.message : String(err),
       })
-      warnings.push({
-        code: 'DOCUMENT_LINK_FAILED',
-        message_sv: 'Fakturan registrerades, men underlaget kunde inte kopplas till verifikationen.',
-        message_en: 'The invoice was registered, but the document could not be linked to the voucher.',
-      })
+      warnings.push({ ...RELEASED_UNDERLAG_COPY_FAILED_WARNING })
     }
   } else if (documentId && primaryJournalEntryId && !paidPrivately) {
     try {

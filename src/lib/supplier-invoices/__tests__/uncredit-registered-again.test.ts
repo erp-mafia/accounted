@@ -45,7 +45,12 @@ function tables(registeredAgain: { status: string } | null) {
 
 function uncredit(rows: ReturnType<typeof tables>, dryRun = false) {
   const writes: { table: string; method: string; row: unknown }[] = []
-  const mock = createRowsMockSupabase(rows, writes)
+  // Each invoice carries its document as PostgREST embeds it.
+  const invoices = rows.supplier_invoices.map((invoice) => ({
+    ...invoice,
+    document: rows.document_attachments.find((d) => d.id === (invoice as { document_id?: string | null }).document_id) ?? null,
+  }))
+  const mock = createRowsMockSupabase({ ...rows, supplier_invoices: invoices }, writes)
   const outcome = uncreditSupplierInvoice(
     { supabase: mock.supabase as never, companyId: 'company-1', userId: 'user-1', log },
     'inv-1',

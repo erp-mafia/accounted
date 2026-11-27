@@ -128,6 +128,15 @@ describe('an inbox item whose supplier invoice was credited', () => {
     expect(db.payloads('invoice_inbox_items', 'update')).toEqual([{ created_supplier_invoice_id: 'si-new' }])
   })
 
+  it('a copy that cannot be made leaves the registration standing, and says so', async () => {
+    vi.mocked(linkDocumentCopyToVoucher).mockRejectedValueOnce(new Error('document copy: the source file failed its integrity check'))
+    setUp()
+    const outcome = await convert()
+    expect(outcome).toMatchObject({ ok: true, warnings: [expect.objectContaining({ code: 'DOCUMENT_LINK_FAILED' })] })
+    expect(db.payloads('supplier_invoices', 'update')).not.toContainEqual({ document_id: expect.any(String) })
+    expect(db.payloads('invoice_inbox_items', 'update')).toEqual([{ created_supplier_invoice_id: 'si-new' }])
+  })
+
   it('a company that books later gets a copy on no verifikat yet, for the booking to anchor', async () => {
     setUp({ settings: { accounting_method: 'accrual', vat_registered: true, defer_invoice_booking: true } })
     const outcome = await convert()
