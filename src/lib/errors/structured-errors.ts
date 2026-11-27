@@ -11856,6 +11856,153 @@ const POS_SALES: Record<string, StructuredErrorEntry> = {
   },
 }
 
+// ─────────────────────────────────────────────────────────────────
+// Spend (company card and spend platforms): lib/spend
+// ─────────────────────────────────────────────────────────────────
+
+const SPEND: Record<string, StructuredErrorEntry> = {
+  SPEND_READ_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Utgifterna kunde inte läsas. Försök igen.',
+    message_en: 'The expenses could not be read. Try again.',
+    retryable: true,
+  },
+  SPEND_CONNECTION_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Kopplingen till utgiftsplattformen hittades inte.',
+    message_en: 'The spend platform connection was not found.',
+  },
+  SPEND_ALREADY_CONNECTED: {
+    httpStatus: 409,
+    message_sv: 'Utgiftsplattformen är redan kopplad till företaget.',
+    message_en: 'The spend platform is already connected to the company.',
+  },
+  SPEND_SANDBOX_BLOCKED: {
+    httpStatus: 403,
+    message_sv: 'Utgiftsplattformar kan inte kopplas i testföretaget.',
+    message_en: 'Spend platforms cannot be connected in the sandbox company.',
+  },
+  SPEND_ORG_NUMBER_MISSING: {
+    httpStatus: 400,
+    message_sv: 'Företaget saknar organisationsnummer. Lägg till det under Inställningar innan du kopplar plattformen.',
+    message_en: 'The company has no organisation number. Add it under Settings before connecting the platform.',
+  },
+  SPEND_PROVIDER_UNKNOWN: {
+    httpStatus: 400,
+    message_sv: 'Utgiftsplattformen finns inte bland dem som går att koppla.',
+    message_en: 'The spend platform is not among those that can be connected.',
+  },
+  SPEND_MODE_UNSUPPORTED: {
+    httpStatus: 400,
+    message_sv: 'Utgiftsplattformen går inte att koppla på det sättet.',
+    message_en: 'The spend platform cannot be connected that way.',
+  },
+  SPEND_CONNECT_UNCONFIGURED: {
+    httpStatus: 503,
+    message_sv: 'Kopplingar till utgiftsplattformar är inte tillgängliga på den här installationen (Accounted Connect saknas).',
+    message_en: 'Spend platform connections are not available on this installation (Accounted Connect is not configured).',
+  },
+  SPEND_CONNECT_FAILED: {
+    httpStatus: 502,
+    message_sv: 'Utgiftsplattformen kunde inte nås via Accounted Connect. Försök igen om en stund.',
+    message_en: 'The spend platform could not be reached through Accounted Connect. Try again shortly.',
+    retryable: true,
+  },
+  SPEND_CONNECT_EXPIRED: {
+    httpStatus: 410,
+    message_sv: 'Anslutningen tog för lång tid eller har redan använts. Starta den på nytt.',
+    message_en: 'The connection took too long or was already used. Start it again.',
+  },
+  SPEND_CONNECT_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Svaret från anslutningen gick inte att läsa. Starta den på nytt.',
+    message_en: 'The connection response could not be read. Start it again.',
+  },
+  SPEND_CONNECT_WRONG_USER: {
+    httpStatus: 403,
+    message_sv: 'Anslutningen startades från ett annat användarkonto än det du är inloggad med. Logga in med det kontot eller starta anslutningen på nytt.',
+    message_en: 'The connection was started from a different user account than the one you are signed in with. Sign in with that account or start again.',
+  },
+  SPEND_COMPANY_MISMATCH: {
+    httpStatus: 409,
+    message_sv: 'Företaget hos utgiftsplattformen har ett annat organisationsnummer än det här företaget. Koppla det företag som hör hit.',
+    message_en: 'The company at the spend platform has another organisation number than this company. Connect the company that belongs here.',
+  },
+  SPEND_DISCONNECT_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Kopplingen kunde inte avslutas. Försök igen.',
+    message_en: 'The connection could not be ended. Try again.',
+    retryable: true,
+  },
+  SPEND_SETTINGS_ACCOUNT_UNKNOWN: {
+    httpStatus: 400,
+    message_sv: 'Ett eller flera konton finns varken i kontoplanen eller i BAS, eller är avstängda. Välj ett konto som finns.',
+    message_en: 'One or more accounts are neither in the chart of accounts nor in BAS, or are deactivated. Choose an existing account.',
+  },
+  SPEND_SETTINGS_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Kontoinställningarna kunde inte sparas. Försök igen.',
+    message_en: 'The account settings could not be saved. Try again.',
+    retryable: true,
+  },
+  SPEND_ITEM_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Utgiften hittades inte.',
+    message_en: 'The expense was not found.',
+  },
+  SPEND_ITEM_ALREADY_BOOKED: {
+    httpStatus: 409,
+    message_sv: 'Utgiften är redan bokförd.',
+    message_en: 'The expense is already booked.',
+  },
+  SPEND_ITEM_NOT_BOOKABLE: {
+    httpStatus: 409,
+    message_sv: 'Utgiften bokförs inte härifrån: den skickades tillbaka till plattformen, eller bokförs från bankraden.',
+    message_en: 'The expense is not booked from here: it was sent back to the platform, or is booked from the bank row.',
+  },
+  SPEND_ITEM_NOT_RECEIVED: {
+    httpStatus: 409,
+    message_sv: 'Utgiften tas fortfarande emot (kvittot hämtas). Försök igen om en stund.',
+    message_en: 'The expense is still arriving (its receipt is being fetched). Try again shortly.',
+    retryable: true,
+  },
+  SPEND_ITEM_NOT_READY: {
+    httpStatus: 409,
+    message_sv: 'Utgiften är inte klar att bokföras i en sats: granska den och bokför den för sig.',
+    message_en: 'The expense is not ready to book in a batch: review it and book it on its own.',
+  },
+  SPEND_ITEM_CHANGED: {
+    httpStatus: 409,
+    message_sv: 'Utgiften har ändrats sedan du granskade den. Granska den nya versionen och bokför igen.',
+    message_en: 'The expense changed since you reviewed it. Review the new version and book again.',
+  },
+  SPEND_ITEM_NEEDS_REVIEW: {
+    httpStatus: 409,
+    message_sv: 'Utgiften behöver granskas innan den bokförs. Läs skälen och bekräfta.',
+    message_en: 'The expense needs a review before it is booked. Read the reasons and confirm.',
+  },
+  SPEND_DEBIT_ACCOUNT_REQUIRED: {
+    httpStatus: 400,
+    message_sv: 'Välj vilket konto köpet ska bokföras mot (en fordran, ett eget uttag eller kassa).',
+    message_en: 'Choose the account the purchase books against (a receivable, an owner withdrawal or cash).',
+  },
+  SPEND_DEBIT_ACCOUNT_UNKNOWN: {
+    httpStatus: 400,
+    message_sv: 'Kontot finns varken i kontoplanen eller i BAS, eller är avstängt. Välj ett konto som finns.',
+    message_en: 'The account is neither in the chart of accounts nor in BAS, or is deactivated. Choose an existing account.',
+  },
+  SPEND_ITEM_NO_FISCAL_PERIOD: {
+    httpStatus: 409,
+    message_sv: 'Det finns inget räkenskapsår för utgiftens datum. Lägg upp räkenskapsåret och bokför igen.',
+    message_en: 'There is no fiscal year for the expense date. Add the fiscal year and book again.',
+  },
+  SPEND_ITEM_BOOKING_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Utgiften kunde inte bokföras. Inget verifikat skapades.',
+    message_en: 'The expense could not be booked. No journal entry was created.',
+  },
+}
+
 const RECONCILIATION_SIGNOFF: Record<string, StructuredErrorEntry> = {
   INVALID_DATE: {
     httpStatus: 400,
@@ -14557,6 +14704,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...COMPANY_SETTINGS,
   ...WEBSHOP_ORDERS,
   ...POS_SALES,
+  ...SPEND,
   ...RECONCILIATION_SIGNOFF,
   ...RECONCILIATION_LINK,
   ...NODE_SYSTEM,

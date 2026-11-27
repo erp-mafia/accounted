@@ -35,6 +35,7 @@ export function gateContext(overrides: Partial<NavGateContext> = {}): NavGateCon
     hasMileage: true,
     hasExpenseClaims: true,
     hasPosSales: true,
+    hasSpend: true,
     arkivEnabled: true,
     signingEnabled: true,
     commitmentsEnabled: true,

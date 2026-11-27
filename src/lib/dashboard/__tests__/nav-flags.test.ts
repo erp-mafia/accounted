@@ -23,18 +23,19 @@ function makeSupabase(
 }
 
 describe('getDashboardNavFlags', () => {
-  it('reads both flags from the RPC row and only probes expense_claims and pos_connections beside it', async () => {
+  it('reads both flags from the RPC row and only probes expense_claims, pos_connections and spend_connections beside it', async () => {
     const { supabase, from, rpc } = makeSupabase({ data: [{ has_webshop: true, has_mileage_trips: false }] })
     expect(await getDashboardNavFlags(supabase, 'c1')).toEqual({
       hasWebshop: true,
       hasMileageTrips: false,
       hasExpenseClaims: false,
       hasPosSales: false,
+      hasSpend: false,
     })
     expect(rpc).toHaveBeenCalledWith('get_dashboard_nav_flags', { p_company_id: 'c1' })
-    // The Utlägg and Kassarapporter rows are gated on existing rows (not part
-    // of the RPC): limit-1 probes in the same wave, never the webshop/mileage tables.
-    expect(from.mock.calls.map((c) => c[0])).toEqual(['expense_claims', 'pos_connections'])
+    // The Utlägg, Kassarapporter and Kortköp rows are gated on existing rows (not
+    // part of the RPC): limit-1 probes in the same wave, never the webshop/mileage tables.
+    expect(from.mock.calls.map((c) => c[0])).toEqual(['expense_claims', 'pos_connections', 'spend_connections'])
   })
 
   it('accepts a single-object payload and treats null flags as false', async () => {
@@ -44,6 +45,7 @@ describe('getDashboardNavFlags', () => {
       hasMileageTrips: true,
       hasExpenseClaims: false,
       hasPosSales: false,
+      hasSpend: false,
     })
   })
 
@@ -57,6 +59,7 @@ describe('getDashboardNavFlags', () => {
       hasMileageTrips: false,
       hasExpenseClaims: true,
       hasPosSales: false,
+      hasSpend: false,
     })
   })
 
@@ -67,12 +70,14 @@ describe('getDashboardNavFlags', () => {
       hasMileageTrips: false,
       hasExpenseClaims: false,
       hasPosSales: false,
+      hasSpend: false,
     })
     expect(from.mock.calls.map((c) => c[0]).sort()).toEqual([
       'expense_claims',
       'mileage_trips',
       'pos_connections',
       'shopify_connections',
+      'spend_connections',
       'webshop_orders',
       'woocommerce_connections',
       'zettle_connections',
@@ -86,8 +91,9 @@ describe('getDashboardNavFlags', () => {
       hasMileageTrips: false,
       hasExpenseClaims: false,
       hasPosSales: false,
+      hasSpend: false,
     })
-    expect(from.mock.calls.map((c) => c[0])).toEqual(['expense_claims', 'pos_connections'])
+    expect(from.mock.calls.map((c) => c[0])).toEqual(['expense_claims', 'pos_connections', 'spend_connections'])
   })
 
   it('shows the Kassarapporter row once a POS connection exists', async () => {
@@ -100,6 +106,21 @@ describe('getDashboardNavFlags', () => {
       hasMileageTrips: false,
       hasExpenseClaims: false,
       hasPosSales: true,
+      hasSpend: false,
+    })
+  })
+
+  it('shows the Kortköp row once a spend connection exists', async () => {
+    const { supabase } = makeSupabase(
+      { data: [{ has_webshop: false, has_mileage_trips: false }] },
+      { spend_connections: [{ id: 'sc1' }] },
+    )
+    expect(await getDashboardNavFlags(supabase, 'c1')).toEqual({
+      hasWebshop: false,
+      hasMileageTrips: false,
+      hasExpenseClaims: false,
+      hasPosSales: false,
+      hasSpend: true,
     })
   })
 })

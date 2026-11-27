@@ -246,7 +246,7 @@
     ]
   },
   "basAccountLiteral": {
-    "count": 1441,
+    "count": 1450,
     "files": {
       "app/(dashboard)/bookkeeping/year-end/periodisering/page.tsx": 11,
       "app/(dashboard)/expenses/page.tsx": 8,
@@ -430,6 +430,7 @@
       "lib/operations/opening-balances.ts": 10,
       "lib/operations/payment-orders.ts": 1,
       "lib/operations/pos-sales.ts": 17,
+      "lib/operations/spend.ts": 7,
       "lib/operations/salary-run-lifecycle.ts": 2,
       "lib/operations/salary-run-structure.ts": 4,
       "lib/operations/supplier-invoice-actions.ts": 3,
@@ -439,6 +440,7 @@
       "lib/parties/register.ts": 2,
       "lib/pending-operations/commit.ts": 1,
       "lib/pos-sales/settings.ts": 11,
+      "lib/spend/settings.ts": 2,
       "lib/providers/bokio/supplier-evidence.ts": 6,
       "lib/reconciliation/manual-reconciliation.ts": 8,
       "lib/reconciliation/residual.ts": 4,
@@ -681,7 +683,7 @@
     "files": {}
   },
   "swedishUiLiteral": {
-    "count": 2355,
+    "count": 2356,
     "files": {
       "app/(auth)/account/set-password/page.tsx": 12,
       "app/(auth)/auth/email-change/page.tsx": 8,
@@ -820,7 +822,7 @@
       "components/settings/CompanyProfileSection.tsx": 9,
       "components/settings/CompanyProfileView.tsx": 12,
       "components/settings/SkatteverketConnectPanel.tsx": 3,
-      "components/settings/VoucherSeriesPerSourceTypeForm.tsx": 11,
+      "components/settings/VoucherSeriesPerSourceTypeForm.tsx": 12,
       "components/suppliers/SupplierInvoiceReviewContent.tsx": 1,
       "components/transactions/BankTransactionPicker.tsx": 6,
       "components/transactions/MatchVoucherDialog.tsx": 19,
@@ -839,7 +841,7 @@
     }
   },
   "duplicateBlocks": {
-    "count": 4766,
+    "count": 4873,
     "window": 10,
     "pairs": {
       "app/(auth)/login/login-client.tsx <-> app/(auth)/mfa/verify/page.tsx": 10,
@@ -1129,7 +1131,12 @@
       "lib/supplier-invoices/create.ts <-> types/index.ts": 11,
       "lib/suppliers/supplier-record.ts <-> lib/suppliers/update-supplier.ts": 16,
       "lib/tax/expense-warnings.ts <-> lib/transactions/category-suggestions.ts": 10,
-      "lib/webshop-orders/types.ts <-> types/index.ts": 10
+      "lib/webshop-orders/types.ts <-> types/index.ts": 10,
+      "app/(dashboard)/kassa/page.tsx <-> app/(dashboard)/kortkop/page.tsx": 21,
+      "components/settings/sections/PosSalesSettingsContent.tsx <-> components/settings/sections/SpendSettingsContent.tsx": 36,
+      "lib/pos-sales/book-day.ts <-> lib/spend/book-item.ts": 10,
+      "lib/pos-sales/connect-client.ts <-> lib/spend/connect-client.ts": 27,
+      "lib/pos-sales/sync.ts <-> lib/spend/sync.ts": 13
     }
   },
   "errorMasking": {

@@ -31,6 +31,7 @@ export const SCHEDULED_JOBS: readonly ScheduledJob[] = [
   { path: '/api/extensions/shopify/orders/cron', schedule: '15 3 * * *', maxDurationSeconds: 300 },
   { path: '/api/extensions/zettle/orders/cron', schedule: '30 3 * * *', maxDurationSeconds: 300 },
   { path: '/api/pos-sales/cron', schedule: '25 * * * *', maxDurationSeconds: 300 },
+  { path: '/api/spend/cron', schedule: '*/5 * * * *', maxDurationSeconds: 300 },
   { path: '/api/documents/verify/cron', schedule: '0 3 * * *', maxDurationSeconds: 300 },
   { path: '/api/documents/reanchor/cron', schedule: '30 3 * * *', maxDurationSeconds: 120 },
   { path: '/api/sandbox/cleanup/cron', schedule: '0 4 * * *', maxDurationSeconds: 300 },

@@ -739,6 +739,10 @@ export const NEEDS_DOC_SOURCE_TYPES = [
   // (lib/pos-sales/book-day.ts); a verifikat whose report did not attach
   // must surface here.
   'pos_daily_sales',
+  // A company card expense rests on the receipt files the provider sent
+  // (lib/spend/book-item.ts); a verifikat booked without one, or whose
+  // receipt did not attach, must surface here.
+  'spend_item',
   // An inbox item booked directly (book-direct) rests on the item's archived
   // document; an item without one (error row, upload that never completed)
   // books a verifikat with no underlag and must surface here (#1317).

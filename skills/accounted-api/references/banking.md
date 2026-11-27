@@ -2,7 +2,7 @@
 
 # Banking endpoints
 
-Bank transactions (ingest, categorize, match against invoices), cash accounts with the bank-reported balance, PSD2 connection health (sync freshness, consent expiry), the Open Payments bank feed (reachable banks, connections, the switch from Enable Banking, the signatory link), bank reconciliation runs, file imports (SIE, bank statements), the point-of-sale business days a connected POS system delivers, booked as daily takings vouchers, and the webshop orders the Shopify, WooCommerce and Zettle syncs deliver, booked one by one with your own lines.
+Bank transactions (ingest, categorize, match against invoices), cash accounts with the bank-reported balance, PSD2 connection health (sync freshness, consent expiry), the Open Payments bank feed (reachable banks, connections, the switch from Enable Banking, the signatory link), bank reconciliation runs, file imports (SIE, bank statements), the point-of-sale business days a connected POS system delivers, booked as daily takings vouchers, the webshop orders the Shopify, WooCommerce and Zettle syncs deliver, booked one by one with your own lines, and the card expenses a connected spend platform delivers with their receipts, booked one verifikat each.
 
 Conventions (auth, envelope, pagination, dry-run, idempotency, standard errors)
 are in SKILL.md and are not repeated per endpoint.
@@ -3541,6 +3541,623 @@ Example response `200`:
     "settled_gl_entry_count": 0,
     "settled_gl_line_total": 0,
     "unexplained_difference": 0
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/spend/connections`
+
+**The company card and spend platforms the company has connected, with their health and accounts.**
+`scope:transactions:read · risk:low · idempotent`
+
+Lists the company's spend connections (company card and spend platforms such as Pleo, through Accounted Connect): the provider and the provider company, the status (active or disconnected), the health of the delivery (ok, degraded, action_required with the error code), and the accounts expenses book to (settings: wallet_account, the 19xx account of the card balance, null to take the provider's own mapping; out_of_pocket_account, what an utlägg is owed on). available is false when this installation has no connector key, so no platform can be connected. Read-only.
+
+**Use when:** Before reading or booking card expenses, to see which platforms deliver and whether the delivery works.
+**Do not use for:** The expenses themselves (GET /spend/items) or connecting a platform (a person does that in Inställningar, through the provider's consent page).
+
+**Pitfalls:**
+- health action_required means delivery stopped until a person acts: health_code says why (CONNECTOR_SPEND_RECONNECT_REQUIRED: the grant at the provider is gone, connect again).
+- Disconnected connections stay listed: their expenses are still the underlag of booked verifikat.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    available: boolean,
+    connections: { connection_id: string, provider: string, provider_name: string, mode: "oauth" | "api_key", provider_company_name: string | null, status: "connecting" | "active" | "disconnected", health: "ok" | "degraded" | "action_required", health_code: string | null, last_success_at: string | null, next_run_at: string, settings: { wallet_account: string | null, out_of_pocket_account: string }, created_at: string, ended_at: string | null }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string }, payment_order_id?: string, supplier_invoice_id?: string }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "available": true,
+    "connections": [
+      {
+        "connection_id": "0b3a…",
+        "provider": "pleo",
+        "provider_name": "Pleo",
+        "mode": "oauth",
+        "provider_company_name": "Exempel AB",
+        "status": "active",
+        "health": "ok",
+        "health_code": null,
+        "last_success_at": "2026-10-14T12:05:02Z",
+        "next_run_at": "2026-10-14T12:10:00Z",
+        "settings": {
+          "wallet_account": "1941",
+          "out_of_pocket_account": "2820"
+        },
+        "created_at": "2026-10-01T09:00:00Z",
+        "ended_at": null
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/spend/connections/{connectionId}/disconnect`
+
+**Stop receiving a spend platform's expenses.**
+`scope:companies:write · risk:medium · idempotent · dry-run · reversible`
+
+Ends a spend connection: no more expenses are received and the connection is released at Accounted Connect. Expenses already received stay, booked or not, with their receipts and the provider's archived answer; the platform can be connected again later. Idempotent. Dry-runnable.
+
+**Use when:** The company stopped using the platform.
+**Do not use for:** Skipping a single expense (just do not book it) or correcting a booked one (storno).
+
+**Pitfalls:**
+- Expenses exported at the provider while disconnected never arrive: export them again after connecting.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `connectionId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Response `200`:
+```ts
+{
+  data: { connection_id: string, status: "disconnected" },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string }, payment_order_id?: string, supplier_invoice_id?: string }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "connection_id": "0b3a…",
+    "status": "disconnected"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `PATCH /api/v1/companies/{companyId}/spend/connections/{connectionId}/settings`
+
+**Change the accounts a spend platform's expenses book to.**
+`scope:companies:write · risk:medium · idempotent · dry-run · reversible`
+
+Updates where a connection's expenses book their counter side: wallet_account, the 19xx account the card balance sits on (null takes the provider's own contra account mapping per expense), and out_of_pocket_account, the liability an utlägg is owed on until the person is paid back (2820 by default; an owner's utlägg is 2893 in an AB, 2018 in an EF). Send only what changes. Every unbooked received expense is re-evaluated, so one that waited on an account may become ready. Booked expenses never change. Dry-runnable.
+
+**Use when:** An expense waits with wallet_account_differs, or the company keeps the card balance on another 19xx account.
+**Do not use for:** The accounts expenses are coded on: those come from the provider (the category the person picked there).
+
+**Pitfalls:**
+- wallet_account must be a 19xx account (kassa och bank); anything else is refused by validation.
+- An account neither in the chart nor standard BAS answers SPEND_SETTINGS_ACCOUNT_UNKNOWN.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `connectionId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{ settings: { wallet_account?: string | null, out_of_pocket_account?: string } }
+```
+
+Example request:
+```json
+{
+  "settings": {
+    "wallet_account": "1941"
+  }
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    connection_id: string,
+    settings: { wallet_account: string | null, out_of_pocket_account: string },
+    reevaluated_items: number
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string }, payment_order_id?: string, supplier_invoice_id?: string }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "connection_id": "0b3a…",
+    "reevaluated_items": 4
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/spend/fetch`
+
+**Receive waiting spend expenses now instead of waiting for the next run.**
+`scope:transactions:write · risk:low · idempotent · dry-run`
+
+Runs the delivery for the company's active spend connections (or one): the coding vocabulary goes to the provider when it changed, waiting expenses are received with their receipts, checked, and answered to the provider (received, or rejected with the reason). The regular run is every five minutes. A booked expense is never rewritten: a different answer only marks it changed_after_booking. Nothing is booked. Dry-runnable.
+
+**Use when:** A person just exported expenses at the provider and wants them now.
+**Do not use for:** Booking (POST /spend/items/{itemId}/book).
+
+**Pitfalls:**
+- A connection in action_required answers with the per-connection result status failed and its errorCode; fix the connection first.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{ connection_id?: string }
+```
+
+Example request:
+```json
+{}
+```
+
+Response `200`:
+```ts
+{
+  data: { results: (Record<string, unknown>)[] },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string }, payment_order_id?: string, supplier_invoice_id?: string }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "results": [
+      {
+        "connectionId": "0b3a…",
+        "status": "synced",
+        "received": 12,
+        "rejected": 1,
+        "deferred": 0,
+        "changedAfterBooking": 0,
+        "masterData": "unchanged"
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/spend/items`
+
+**The expenses received from the company's card and spend platforms, newest first.**
+`scope:transactions:read · risk:low · idempotent`
+
+One row per expense a person approved and exported at the provider: kind (card_purchase, refund, out_of_pocket, ...), date, amount (signed: negative is money back), merchant, the person, how many receipts arrived, and the status: ready to book, review (with the reasons a person must look at first), rejected (sent back to the provider with the reason), no_entry (a transfer the bank row books), booked (with the verifikat). Filter by date range, status or connection. Read-only.
+
+**Use when:** To find the expenses to book, or to check what a platform delivered.
+**Do not use for:** The coding, the receipts and the verifikat an expense books as (GET /spend/items/{itemId}).
+
+**Pitfalls:**
+- rejected rows are back at the provider: the person fixes the coding there and exports again, which updates the row.
+- changed_after_booking true: the provider now sends something else than what was booked; compare and correct with storno if needed.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `from` | query | `string` | no | First expense date, inclusive. |
+| `to` | query | `string` | no | Last expense date, inclusive. |
+| `status` | query | `"ready" \| "review" \| "rejected" \| "no_entry" \| "booked"` | no |  |
+| `connection_id` | query | `string` | no |  |
+| `limit` | query | `number` | no |  |
+| `offset` | query | `number` | no |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    items: { item_id: string, connection_id: string, provider: string, external_id: string, kind: "card_purchase" | "card_invoice" | "fee" | "refund" | "chargeback" | "cashback" | "out_of_pocket" | "mileage" | "per_diem" | "reimbursement" | "external_reimbursement" | "wallet_topup" | "wallet_unload" | "atm_withdrawal" | "personal_spend" | "invoice" | "invoice_payment" | "balance_adjustment" | "other", expense_date: string, currency: string, amount: number, merchant_name: string | null, person_name: string | null, status: "ready" | "review" | "rejected" | "no_entry" | "booked", reasons: { code: string, params: Record<string, {...}>, message?: string }[], receipts: number, raw_sha256: string, received_at: string, changed_after_booking: boolean, journal_entry_id: string | null, booked_at: string | null }[],
+    total: number
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string }, payment_order_id?: string, supplier_invoice_id?: string }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "items": [
+      {
+        "item_id": "7c1e…",
+        "connection_id": "0b3a…",
+        "provider": "pleo",
+        "external_id": "59540ed2-0d68-4e36-9e31-58223975d9e9",
+        "kind": "card_purchase",
+        "expense_date": "2026-10-14",
+        "currency": "SEK",
+        "amount": 625,
+        "merchant_name": "Papper & Penna AB",
+        "person_name": "Anna Exempel",
+        "status": "ready",
+        "reasons": [],
+        "receipts": 1,
+        "raw_sha256": "3f9a…",
+        "received_at": "2026-10-14T12:05:00Z",
+        "changed_after_booking": false,
+        "journal_entry_id": null,
+        "booked_at": null
+      }
+    ],
+    "total": 1
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/spend/items/{itemId}`
+
+**One spend expense: its coding, receipts and the verifikat it books as.**
+`scope:transactions:read · risk:low · idempotent`
+
+Everything GET /spend/items returns plus the expense model (lines with account, VAT code and dimensions, the merchant and its country, the person, attendees, the provider's reference and link) and the verifikat it books as with the current settings (proposal.lines). reasons lists what a person must look at before booking (a receipt missing for the VAT, representation, a payroll-related kind, a private purchase that needs a debit account). Read-only.
+
+**Use when:** Before booking an expense, to review it and its verifikat.
+**Do not use for:** Downloading the receipts (they are documents, attached to the verifikat at booking).
+
+**Pitfalls:**
+- proposal.lines is empty for a private purchase or a cash withdrawal until a debit account is chosen, and for rejected and no_entry expenses.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `itemId` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    item_id: string,
+    connection_id: string,
+    provider: string,
+    external_id: string,
+    kind: "card_purchase" | "card_invoice" | "fee" | "refund" | "chargeback" | "cashback" | "out_of_pocket" | "mileage" | "per_diem" | "reimbursement" | "external_reimbursement" | "wallet_topup" | "wallet_unload" | "atm_withdrawal" | "personal_spend" | "invoice" | "invoice_payment" | "balance_adjustment" | "other",
+    expense_date: string,
+    currency: string,
+    amount: number,
+    merchant_name: string | null,
+    person_name: string | null,
+    status: "ready" | "review" | "rejected" | "no_entry" | "booked",
+    reasons: { code: string, params: Record<string, string | number>, message?: string }[],
+    receipts: number,
+    raw_sha256: string,
+    received_at: string,
+    changed_after_booking: boolean,
+    journal_entry_id: string | null,
+    booked_at: string | null,
+    description: string,
+    provider_name: string,
+    proposal: { lines: { account_number: string, debit_amount: number, credit_amount: number, line_description?: string }[] },
+    expense: Record<string, unknown>
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string }, payment_order_id?: string, supplier_invoice_id?: string }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "item_id": "7c1e…",
+    "connection_id": "0b3a…",
+    "provider": "pleo",
+    "external_id": "59540ed2-0d68-4e36-9e31-58223975d9e9",
+    "kind": "card_purchase",
+    "expense_date": "2026-10-14",
+    "currency": "SEK",
+    "amount": 625,
+    "merchant_name": "Papper & Penna AB",
+    "person_name": "Anna Exempel",
+    "status": "ready",
+    "reasons": [],
+    "receipts": 1,
+    "raw_sha256": "3f9a…",
+    "received_at": "2026-10-14T12:05:00Z",
+    "changed_after_booking": false,
+    "journal_entry_id": null,
+    "booked_at": null,
+    "description": "Kortköp Papper & Penna AB (Anna Exempel): Pärmar, Pleo",
+    "provider_name": "Pleo",
+    "proposal": {
+      "lines": [
+        {
+          "account_number": "6110",
+          "debit_amount": 500,
+          "credit_amount": 0,
+          "line_description": "Kontorsmaterial"
+        },
+        {
+          "account_number": "2641",
+          "debit_amount": 125,
+          "credit_amount": 0,
+          "line_description": "Ingående moms 25 %"
+        },
+        {
+          "account_number": "1941",
+          "debit_amount": 0,
+          "credit_amount": 625,
+          "line_description": "Betalt med företagskort"
+        }
+      ]
+    },
+    "expense": {}
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/spend/items/{itemId}/book`
+
+**Book one spend expense as its verifikat, with its receipts as underlag.**
+`scope:bookkeeping:write · risk:high · idempotent · dry-run`
+
+Posts the expense as one verifikat (source_type spend_item, dated the expense date) through the bookkeeping engine: each line's account debited with the net, Swedish input VAT on 2641 from the receipt, reverse charge on 2645 and 2614 with the basis pair for reverse codes, and the counter side the kind names (the wallet account for card spend, the utlägg account for an utlägg). The lines are the server's, from the stored expense and the connection's settings, never the caller's. The receipts that arrived with it are linked as underlag. Refused when the expense is booked, rejected, no_entry, changed since expected_raw_sha256, flagged for review without acknowledge_review, or the date is locked. Dry-runnable.
+
+**Use when:** An expense is ready, or in review and a person has read its reasons.
+**Do not use for:** Wallet top-ups or reimbursements paid outside the platform (no_entry: book them from the bank row) or a corrected expense (storno, then book again).
+
+**Pitfalls:**
+- Pass expected_raw_sha256 from the expense you reviewed: a newer export answers 409 SPEND_ITEM_CHANGED instead of booking different figures.
+- Without a receipt no input VAT is booked: the gross goes to cost (ML 13 kap 31 §).
+- A private purchase or a cash withdrawal needs debit_account: the receivable (1685 from an owner in an AB), the eget uttag (2013 in an EF), or what the company decides.
+- A posted verifikat is permanent: undo it with storno (POST /journal-entries/{id}/reverse), never by editing.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `itemId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{ expected_raw_sha256?: string, acknowledge_review?: boolean, debit_account?: string }
+```
+
+Example request:
+```json
+{
+  "expected_raw_sha256": "3f9a…"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    journal_entry_id: string,
+    voucher_series: string | null,
+    voucher_number: number | null,
+    entry_date: string,
+    amount: number,
+    linked_documents: number
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string }, payment_order_id?: string, supplier_invoice_id?: string }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "journal_entry_id": "9a0b…",
+    "voucher_series": "A",
+    "voucher_number": 42,
+    "entry_date": "2026-10-14",
+    "amount": 625,
+    "linked_documents": 1
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/spend/items/book`
+
+**Book several ready spend expenses, each as its own verifikat.**
+`scope:bookkeeping:write · risk:high · idempotent · dry-run`
+
+Books up to 50 expenses whose status is ready, each as its own verifikat exactly as POST /spend/items/{itemId}/book would (never one verifikat for several expenses: each card purchase is its own affärshändelse with its own receipt). Expenses in review, rejected, no_entry or already booked are reported in failed with their code and never booked here. Each booking stands on its own: one that fails leaves the others booked. Dry-runnable: the preview carries every verifikat's total.
+
+**Use when:** Booking a month of clean card expenses in one approval.
+**Do not use for:** Expenses that need a person's look (book those one by one with acknowledge_review).
+
+**Pitfalls:**
+- A ready expense that changed between the preview and the approval books as it is now: review the newest export when in doubt.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{ item_ids: string[] }
+```
+
+Example request:
+```json
+{
+  "item_ids": [
+    "7c1e…",
+    "8d2f…"
+  ]
+}
+```
+
+Response `200`:
+```ts
+{
+  data: { booked: (Record<string, unknown>)[], failed: { item_id: string, code: string }[] },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string }, payment_order_id?: string, supplier_invoice_id?: string }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "booked": [
+      {
+        "item_id": "7c1e…",
+        "journal_entry_id": "9a0b…",
+        "voucher_series": "A",
+        "voucher_number": 42,
+        "entry_date": "2026-10-14",
+        "amount": 625,
+        "linked_documents": 1
+      }
+    ],
+    "failed": [
+      {
+        "item_id": "8d2f…",
+        "code": "SPEND_ITEM_NOT_READY"
+      }
+    ]
   },
   "meta": {
     "request_id": "req_…",

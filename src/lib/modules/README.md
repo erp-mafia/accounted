@@ -35,7 +35,7 @@ reader shows has changed for it.
 Suggestions design (2026-10-16): Bokföring (always on: ledger, transactions,
 vat, year-end, skatteverket, deadlines, import, parties), Bank (bank-feed),
 Kundfakturor (invoicing, collections), Leverantörsfakturor och betalningar
-(supplier-invoices, payments), Kvitton och underlag (inbox), Utlägg
+(supplier-invoices, payments), Kvitton och underlag (inbox, spend), Utlägg
 (expenses), Lön (payroll), Inventarier (assets) and Kassa och webbshop (pos,
 webshop). `platform`, `agent` and `byra` belong to no package. Every module
 is in exactly one package or in `NON_PACKAGE_MODULES`

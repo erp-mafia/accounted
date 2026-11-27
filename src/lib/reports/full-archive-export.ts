@@ -1276,6 +1276,10 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   // A point-of-sale day is the basis of its daily takings voucher: the day
   // model and the provider's answer verbatim (BFL 7 kap) belong in the archive.
   { name: 'pos_sales_days', file: 'pos_sales_days.json', orderBy: 'business_date' },
+  // A card expense is the basis of its verifikat: the expense model and the
+  // provider's answer verbatim (BFL 7 kap) belong in the archive, beside the
+  // receipts (documents).
+  { name: 'spend_items', file: 'spend_items.json', orderBy: 'expense_date' },
   // Kundorder: non-ledger sales documents. Not räkenskapsinformation on
   // their own, but the provenance of invoices created from them
   // (invoices.sales_order_id / invoice_items.sales_order_item_id) points
@@ -1737,6 +1741,7 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   shopify_connections: 'Shopify connection state (encrypted API secrets)',
   zettle_connections: 'Zettle connection state (encrypted OAuth refresh token)',
   pos_connections: 'POS connection state (venue, fetch schedule, account mapping); the days and their vouchers are dumped',
+  spend_connections: 'Spend platform connection state (provider company, delivery schedule, wallet and utlägg accounts); the expenses and their vouchers are dumped',
 }
 
 /** Max parent ids per `IN (...)` chunk: keeps the PostgREST URL well under limits. */

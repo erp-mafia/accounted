@@ -30,6 +30,7 @@ function shell(companyId: string, agentConnection = true): NavGateContext {
     hasMileage: false,
     hasExpenseClaims: false,
     hasPosSales: false,
+    hasSpend: false,
     ...navRollouts(companyId),
     arkivBrainEnabled: true,
     agentsEnabled: true,

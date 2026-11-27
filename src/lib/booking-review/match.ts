@@ -98,6 +98,10 @@ export const BOOKING_REVIEW_SOURCES: Readonly<Record<JournalEntrySourceType, Boo
   stripe_payout: null,
   webshop_order: null,
   pos_daily_sales: null,
+  // A card expense from a spend platform: approved and coded at the provider,
+  // booked by a person from Kortköp with its receipts. No bank row books it
+  // and no Inkorg reading names its seller.
+  spend_item: null,
   // An utlägg is judged on its cost lines and gross. Its seller comes from the
   // Inkorg reading when there is one; the claimant is never a counterparty.
   expense_claim: 'inbox_item',

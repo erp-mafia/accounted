@@ -78,7 +78,7 @@ const DEFINITIONS: readonly PackageDefinition[] = [
     name: 'Receipts and documents',
     nameSv: 'Kvitton och underlag',
     switchable: true,
-    modules: ['inbox'],
+    modules: ['inbox', 'spend'],
   },
   { id: 'expenses', name: 'Expenses', nameSv: 'Utlägg', switchable: true, modules: ['expenses'] },
   { id: 'payroll', name: 'Payroll', nameSv: 'Lön', switchable: true, modules: ['payroll'] },

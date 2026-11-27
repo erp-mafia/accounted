@@ -17,6 +17,12 @@ export interface DashboardNavFlags {
    * row: days fetched from a since-disconnected venue stay reachable.
    */
   hasPosSales: boolean
+  /**
+   * A spend connection, live or ended (lib/spend). Gates the Kortköp row:
+   * expenses received from a since-disconnected platform stay reachable. A
+   * connection still at the provider's consent page does not count.
+   */
+  hasSpend: boolean
 }
 
 const FALLBACK_CODES = new Set(['PGRST202', '42883', '42501'])
@@ -39,10 +45,11 @@ export async function getDashboardNavFlags(
   // The expense probe runs beside the RPC rather than inside it: extending
   // get_dashboard_nav_flags would need a migration for one limit-1 read, and
   // the two waves overlap so the layout pays no extra round trip.
-  const [rpc, expenseClaims, posSales] = await Promise.all([
+  const [rpc, expenseClaims, posSales, spend] = await Promise.all([
     supabase.rpc('get_dashboard_nav_flags', { p_company_id: companyId }),
     probeExpenseClaims(supabase, companyId),
     probePosConnections(supabase, companyId),
+    probeSpendConnections(supabase, companyId),
   ])
   if (!rpc.error) {
     const row = (Array.isArray(rpc.data) ? rpc.data[0] : rpc.data) as
@@ -54,12 +61,13 @@ export async function getDashboardNavFlags(
       hasMileageTrips: row?.has_mileage_trips === true,
       hasExpenseClaims: expenseClaims,
       hasPosSales: posSales,
+      hasSpend: spend,
     }
   }
   if (!FALLBACK_CODES.has(rpc.error.code ?? '')) {
-    return { hasWebshop: false, hasMileageTrips: false, hasExpenseClaims: expenseClaims, hasPosSales: posSales }
+    return { hasWebshop: false, hasMileageTrips: false, hasExpenseClaims: expenseClaims, hasPosSales: posSales, hasSpend: spend }
   }
-  return { ...(await getDashboardNavFlagsViaProbes(supabase, companyId)), hasExpenseClaims: expenseClaims, hasPosSales: posSales }
+  return { ...(await getDashboardNavFlagsViaProbes(supabase, companyId)), hasExpenseClaims: expenseClaims, hasPosSales: posSales, hasSpend: spend }
 }
 
 async function probePosConnections(supabase: SupabaseClient, companyId: string): Promise<boolean> {
@@ -67,6 +75,17 @@ async function probePosConnections(supabase: SupabaseClient, companyId: string):
     .from('pos_connections')
     .select('id')
     .eq('company_id', companyId)
+    .limit(1)
+  // A failed probe (or a database without the table yet) hides the row; the page works regardless.
+  return !error && (data?.length ?? 0) > 0
+}
+
+async function probeSpendConnections(supabase: SupabaseClient, companyId: string): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('spend_connections')
+    .select('id')
+    .eq('company_id', companyId)
+    .neq('status', 'connecting')
     .limit(1)
   // A failed probe (or a database without the table yet) hides the row; the page works regardless.
   return !error && (data?.length ?? 0) > 0
@@ -86,7 +105,7 @@ async function probeExpenseClaims(supabase: SupabaseClient, companyId: string): 
 export async function getDashboardNavFlagsViaProbes(
   supabase: SupabaseClient,
   companyId: string,
-): Promise<Omit<DashboardNavFlags, 'hasExpenseClaims' | 'hasPosSales'>> {
+): Promise<Omit<DashboardNavFlags, 'hasExpenseClaims' | 'hasPosSales' | 'hasSpend'>> {
   const [woo, shopify, zettle, orders, trips] = await Promise.all([
     supabase.from('woocommerce_connections').select('id').eq('company_id', companyId).eq('status', 'active').limit(1),
     supabase.from('shopify_connections').select('id').eq('company_id', companyId).eq('status', 'active').limit(1),

@@ -27,6 +27,8 @@ export interface NavGateFlags {
   requiresWebshop?: boolean
   /** Kassarapporter: a POS connection exists, live or ended (computed by the layout). */
   requiresPosSales?: boolean
+  /** Kortköp: a spend connection exists, live or ended (computed by the layout). */
+  requiresSpend?: boolean
   requiresMileage?: boolean
   requiresExpenses?: boolean
   // Arkiv: shown only for companies in the ARKIV_COMPANY_IDS rollout (computed by the layout).
@@ -172,6 +174,8 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
         labelKey: 'invoice_inbox',
         hiddenWithInkorgV2: true,
       },
+      // Kortköp: card and spend platform expenses (Pleo and the like via Accounted Connect), shown once a platform is connected.
+      { href: '/kortkop', module: 'spend', labelKey: 'spend_items', requiresSpend: true, betaBadge: true },
       { href: '/expenses', module: 'expenses', labelKey: 'expenses', requiresExpenses: true },
       { href: '/mileage', module: 'expenses', labelKey: 'mileage', requiresMileage: true },
       // Betalningar took over Betalfiler (connections plan, milestone 1): bank

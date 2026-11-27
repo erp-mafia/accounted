@@ -318,7 +318,14 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
 // on record whole or not at all before any mail goes out. Every other select,
 // payload and filter of the attest mail is a literal; the lease is a plain
 // lt() against a '-infinity' default, not an .or().
-const UNRESOLVED_CEILING = 451
+// 457 (2026-11-27): +6 for the spend family's shared column lists
+// (lib/spend/types.ts): SPEND_CONNECTION_COLUMNS is the member-readable set
+// the column grants allow (select * is refused, the handle and the OAuth
+// state are withheld), SPEND_CONNECTION_SERVER_COLUMNS adds the server-only
+// ones, and SPEND_ITEM_SUMMARY_COLUMNS is the list row every expense read
+// returns. One definition keeps a read from naming a withheld column; the
+// writes are object literals and stay checked.
+const UNRESOLVED_CEILING = 457
 
 /**
  * Floor on statically resolved column references. Guards the guard: if a change

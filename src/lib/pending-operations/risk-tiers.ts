@@ -76,6 +76,13 @@ const RISK_TIERS = {
   // Webshop orders: booking posts the order's verifikat with the caller's lines.
   book_webshop_order: 'high',
   book_webshop_day: 'high',
+  // Spend (company card and spend platforms): booking posts the expense's
+  // verifikat; the settings decide the counter accounts of future bookings;
+  // disconnecting only stops the delivery.
+  book_spend_item: 'high',
+  book_spend_items: 'high',
+  update_spend_settings: 'medium',
+  disconnect_spend_connection: 'medium',
   // Collections: a customer's claim goes to, or a decision is sent to, the
   // company's collections provider, which writes to the customer. External
   // and not undone by a later call. Handing over and escalating are also

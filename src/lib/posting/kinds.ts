@@ -55,6 +55,7 @@ export const BUSINESS_EVENT_KINDS = [
   'asset.impaired',
   'asset.impairment_reversed',
   'ledger.k3_transition',
+  'purchase.spend_expense',
 ] as const
 
 export type BusinessEventKind = (typeof BUSINESS_EVENT_KINDS)[number]
@@ -131,6 +132,7 @@ export const KIND_BY_SOURCE_TYPE: Readonly<Record<JournalEntrySourceType, Busine
   // Kvittning: a customer invoice and a supplier invoice of the same
   // counterparty settled against each other (lib/invoices/counterparty-setoff).
   counterparty_setoff: 'counterparty.set_off',
+  spend_item: 'purchase.spend_expense',
 })
 
 export function isBusinessEventKind(value: unknown): value is BusinessEventKind {

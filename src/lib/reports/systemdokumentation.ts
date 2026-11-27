@@ -212,6 +212,7 @@ export const SOURCE_TYPE_LABELS_SV: Readonly<Record<JournalEntrySourceType, stri
   accrual: 'Periodisering',
   webshop_order: 'Webbutiksorder',
   pos_daily_sales: 'Dagskassa från kassasystem',
+  spend_item: 'Kortköp eller utlägg från utgiftsplattform',
   stripe_payout: 'Stripe-utbetalning',
   collection_settlement: 'Utbetalning från inkassobolaget',
   expense_claim: 'Utlägg',

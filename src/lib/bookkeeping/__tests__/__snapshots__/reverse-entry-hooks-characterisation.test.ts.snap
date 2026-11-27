@@ -572,6 +572,23 @@ exports[`reverseEntry: reversal hooks per source type (characterisation) > salar
 }
 `;
 
+exports[`reverseEntry: reversal hooks per source type (characterisation) > spend_item 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
 exports[`reverseEntry: reversal hooks per source type (characterisation) > storno 1`] = `
 {
   "error": "CannotReverseStornoError: Cannot reverse a storno entry",

@@ -89,6 +89,7 @@ export const SESSION_SEGMENT_PACKAGES: Readonly<Record<string, SwitchablePackage
   // connection (Kvitton och underlag); activating the company as a sender
   // only enables a delivery channel of documents that already exist.
   'digital-mailboxes': 'receipts-and-documents',
+  spend: 'receipts-and-documents',
   // Outside the switchable packages: Bokföring's own surface, the platform,
   // the agent, the byrå tools and the machine endpoints.
   account: null,
@@ -472,6 +473,8 @@ const RECEIPTS_AND_DOCUMENTS: PackageDoors = {
     'POST /api/extensions/ext/mail/oauth/start',
     // A supplier portal is a new way in for underlag, as a connected mailbox is.
     'POST /api/inkorg/portals',
+    'POST /api/spend/connections',
+    'POST /api/spend/connections/key',
   ],
   continue: [
     'DELETE /api/digital-mailboxes/:provider/receive',
@@ -514,6 +517,11 @@ const RECEIPTS_AND_DOCUMENTS: PackageDoors = {
     'POST /api/extensions/ext/whatsapp-inbox/link/unmute',
     'POST /api/receipt-hunt/run',
     'POST /api/v1/companies/:companyId/inbox-items',
+    'POST /api/spend/connections/:id/disconnect',
+    'PATCH /api/spend/connections/:id/settings',
+    'POST /api/spend/fetch',
+    'POST /api/spend/items/:id/book',
+    'POST /api/spend/items/book',
     'POST /api/v1/companies/:companyId/inbox-items/:id/stamp',
     'op:inbox-items.delete',
     'op:inbox-items.match-supplier',
@@ -523,6 +531,11 @@ const RECEIPTS_AND_DOCUMENTS: PackageDoors = {
     'op:inbox-items.set-purchase-category',
     'op:inbox-items.unmatch-transaction',
     'op:inbox-items.update-extracted-data',
+    'op:spend.disconnect',
+    'op:spend.fetch',
+    'op:spend.item-book',
+    'op:spend.items-book',
+    'op:spend.update-settings',
     'mcp:gnubok_bulk_book_inbox_items',
     'mcp:gnubok_complete_document_upload',
     'mcp:gnubok_create_document_upload',

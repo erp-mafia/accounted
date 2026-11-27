@@ -95,6 +95,8 @@ const PRICEABLE_OPERATIONS: Readonly<Record<string, readonly string[]>> = {
   // SEK for most), read so they are not left unpriced.
   approve_supplier_invoice: ['total_sek', 'total'],
   book_webshop_day: ['journal_entry.total_debit'],
+  book_spend_item: ['journal_entry.total_debit'],
+  book_spend_items: ['total_debit'],
 }
 
 /**

@@ -112,6 +112,9 @@ export const SE_PACK_TERRITORY = [
   // base and revenue debited in a purchase, by BAS class range (the
   // 2026-10-26 forensic sweep).
   'lib/bookkeeping/voucher-plausibility.ts',
+  // The VAT codes a spend platform carries back: Swedish rates, reverse
+  // charge on 2645/2614, representation accounts, the förenklad faktura limit.
+  'lib/spend/vat-codes.ts',
 ]
 
 /**

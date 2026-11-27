@@ -71,6 +71,10 @@
       "schedule": "25 * * * *"
     },
     {
+      "path": "/api/spend/cron",
+      "schedule": "*/5 * * * *"
+    },
+    {
       "path": "/api/documents/verify/cron",
       "schedule": "0 3 * * *"
     },

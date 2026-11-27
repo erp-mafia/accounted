@@ -362,6 +362,43 @@ describe('company migration reset RPCs (pg)', () => {
       count: 1,
     })
 
+    // A live spend connection (20261127161600) folds into the same blocker; an
+    // ended one and an abandoned consent attempt do not count, one still
+    // within the consent window does.
+    const stateHash = "md5(random()::text) || md5(random()::text)"
+    const cards = await seedCompany()
+    await getPool().query(
+      `INSERT INTO public.spend_connections (company_id, provider, provider_name, mode, connection_handle, status)
+       VALUES ($1, 'pleo', 'Pleo', 'oauth', 'spend_' || repeat('h', 40), 'active')`,
+      [cards.companyId],
+    )
+    await getPool().query(
+      `INSERT INTO public.spend_connections (company_id, provider, provider_name, mode, status, ended_at)
+       VALUES ($1, 'pleo', 'Pleo', 'oauth', 'disconnected', now())`,
+      [cards.companyId],
+    )
+    await getPool().query(
+      `INSERT INTO public.spend_connections
+         (company_id, provider, provider_name, mode, status, pending_state_sha256, pending_expires_at)
+       VALUES ($1, 'other-cards', 'Other', 'oauth', 'connecting', ${stateHash}, now() - interval '1 hour')`,
+      [cards.companyId],
+    )
+    expect((await preview(cards.userId, cards.companyId)).eligibility?.blockers).toContainEqual({
+      code: 'active_integrations_or_schedules',
+      count: 1,
+    })
+    const consenting = await seedCompany()
+    await getPool().query(
+      `INSERT INTO public.spend_connections
+         (company_id, provider, provider_name, mode, status, pending_state_sha256, pending_expires_at)
+       VALUES ($1, 'pleo', 'Pleo', 'oauth', 'connecting', ${stateHash}, now() + interval '10 minutes')`,
+      [consenting.companyId],
+    )
+    expect((await preview(consenting.userId, consenting.companyId)).eligibility?.blockers).toContainEqual({
+      code: 'active_integrations_or_schedules',
+      count: 1,
+    })
+
     const busy = await seedCompany()
     await getPool().query(
       `INSERT INTO public.operations (company_id, user_id, operation_type, status)

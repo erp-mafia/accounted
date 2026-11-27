@@ -2376,6 +2376,10 @@ export type JournalEntrySourceType =
   // (debit 1513 / credit 1510), the claim on Skatteverket an invoice issued
   // here books on day one. lib/invoices/migrated-deduction-apply.ts.
   | 'rot_rut_reclassification'
+  // One expense from a company card or spend platform (a card purchase, a
+  // fee, a refund, an utlägg or its reimbursement), booked with its receipt
+  // attached. lib/spend/book-item.ts.
+  | 'spend_item'
 
 // Journal entry status
 export type JournalEntryStatus = 'draft' | 'posted' | 'reversed' | 'cancelled'

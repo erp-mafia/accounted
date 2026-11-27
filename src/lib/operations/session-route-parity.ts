@@ -749,6 +749,20 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   ]),
   'POST /api/pos-sales/days/:id/book': covered([`POST ${V}/pos-sales/days/:dayId/book`, 'gnubok_book_pos_sales_day']),
   'POST /api/pos-sales/fetch': covered([`POST ${V}/pos-sales/fetch`]),
+  // Spend (company card and spend platforms via Accounted Connect): lib/operations/spend.ts
+  'POST /api/spend/connections': uiOnly('OAuth consent at the provider: a browser round trip through the provider\'s consent page'),
+  'POST /api/spend/connections/key': uiOnly('the provider\'s API key is a secret a person types once; it goes to Accounted Connect and is never handed to an agent'),
+  'POST /api/spend/connections/:id/disconnect': covered([
+    `POST ${V}/spend/connections/:connectionId/disconnect`,
+    'gnubok_disconnect_spend_connection',
+  ]),
+  'PATCH /api/spend/connections/:id/settings': covered([
+    `PATCH ${V}/spend/connections/:connectionId/settings`,
+    'gnubok_update_spend_settings',
+  ]),
+  'POST /api/spend/items/:id/book': covered([`POST ${V}/spend/items/:itemId/book`, 'gnubok_book_spend_item']),
+  'POST /api/spend/items/book': covered([`POST ${V}/spend/items/book`, 'gnubok_book_spend_items']),
+  'POST /api/spend/fetch': covered([`POST ${V}/spend/fetch`]),
 
   // Liquidity forecast rows (lib/forecast/rows.ts): written directly, not bookkeeping
   'POST /api/reports/cash-forecast/rows': covered(

@@ -745,6 +745,13 @@ export const SESSION_DOOR_RULES: Readonly<Record<string, DoorSpec | StagingSpec 
     '/api/pos-sales': BOOK_RECORD,
     'POST /api/pos-sales/fetch': BOOK_HOUSE,
     'POST /api/pos-sales/days/:id/book': BOOK,
+    // Kortköp (spend platforms through Accounted Connect), the same doors as
+    // the kassa: connecting, the accounts and disconnecting are records, the
+    // fetch is housekeeping, booking an expense posts its verifikat.
+    '/api/spend': BOOK_RECORD,
+    'POST /api/spend/fetch': BOOK_HOUSE,
+    'POST /api/spend/items/:id/book': BOOK,
+    'POST /api/spend/items/book': BOOK,
     '/api/webshop-orders': BOOK,
     'POST /api/webshop-orders/:id/create-invoice': INVOICING,
     // Reads a Kustom settlement file onto the Orders page; books nothing.

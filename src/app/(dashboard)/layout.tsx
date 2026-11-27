@@ -596,6 +596,7 @@ export default async function DashboardLayout({
     hasMileage,
     hasExpenseClaims: navFlags.hasExpenseClaims,
     hasPosSales: navFlags.hasPosSales,
+    hasSpend: navFlags.hasSpend,
     ...navRollouts(companyId, { bolagetRegisters: (companyRow as { bolaget_registers_enabled?: boolean }).bolaget_registers_enabled === true }),
   }
 
