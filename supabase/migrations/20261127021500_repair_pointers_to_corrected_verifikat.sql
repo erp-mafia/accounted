@@ -26,6 +26,12 @@
 --   * a row whose verifikat was reversed by a plain storno (no rättelse):
 --     nothing stands in its place;
 --   * a row whose chain ends in more than one posted verifikat;
+--   * an invoice, a supplier invoice or a payment row whose reversed
+--     verifikat posted to kundfordringar (151x) or leverantörsskulder (244x)
+--     while the standing verifikat posts to neither: the rättelse no longer
+--     books the receivable or the payable the record stands for, so the
+--     record is not moved to it. Inbox items and expense claims have no such
+--     account and are not held to this;
 --   * every row of a company archived by a migration reset
 --     (.claude/rules/database.md, rule 9);
 --   * a row whose own table refuses the move. Each row is written in its own
@@ -57,16 +63,18 @@ BEGIN
   PERFORM set_config('lock_timeout', '5s', true);
 
   FOR v_pointer IN
-    SELECT p.tbl, p.col
+    -- family: the account group the record stands on (kundfordringar 151x,
+    -- leverantörsskulder 244x), NULL where there is none.
+    SELECT p.tbl, p.col, p.family
     FROM (VALUES
-      ('invoices', 'journal_entry_id'),
-      ('supplier_invoices', 'registration_journal_entry_id'),
-      ('supplier_invoices', 'payment_journal_entry_id'),
-      ('invoice_payments', 'journal_entry_id'),
-      ('supplier_invoice_payments', 'journal_entry_id'),
-      ('invoice_inbox_items', 'created_journal_entry_id'),
-      ('expense_claims', 'journal_entry_id')
-    ) AS p(tbl, col)
+      ('invoices', 'journal_entry_id', '151'),
+      ('supplier_invoices', 'registration_journal_entry_id', '244'),
+      ('supplier_invoices', 'payment_journal_entry_id', '244'),
+      ('invoice_payments', 'journal_entry_id', '151'),
+      ('supplier_invoice_payments', 'journal_entry_id', '244'),
+      ('invoice_inbox_items', 'created_journal_entry_id', NULL),
+      ('expense_claims', 'journal_entry_id', NULL)
+    ) AS p(tbl, col, family)
   LOOP
     v_moved := 0;
     v_skipped := 0;
@@ -115,7 +123,20 @@ BEGIN
       SELECT s.row_id, st.standing_id
       FROM stale s
       JOIN standing st ON st.root = s.entry_id
-    $query$, v_pointer.col, v_pointer.tbl)
+      -- The standing verifikat still posts to the record's account group
+      -- when the reversed one did.
+      WHERE %3$L IS NULL
+         OR NOT EXISTS (
+           SELECT 1 FROM public.journal_entry_lines l
+           WHERE l.journal_entry_id = s.entry_id
+             AND l.account_number LIKE %3$L || '%%'
+         )
+         OR EXISTS (
+           SELECT 1 FROM public.journal_entry_lines l
+           WHERE l.journal_entry_id = st.standing_id
+             AND l.account_number LIKE %3$L || '%%'
+         )
+    $query$, v_pointer.col, v_pointer.tbl, v_pointer.family)
     LOOP
       BEGIN
         EXECUTE format(
