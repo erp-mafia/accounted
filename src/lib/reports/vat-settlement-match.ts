@@ -257,8 +257,9 @@ export async function vatBalancesCarriedInto(
 /**
  * The posted momsredovisningar dated from `from` through `to`, oldest first:
  * tagged vat_settlement, or by either shape of get_vat_declaration_totals (a
- * declaration account and a 2650/1650 line, or a pure 26xx movement against
- * the skattekonto). A storno of one cancels it and is no settlement.
+ * declaration account and a 2650/1650 line, not a sale or a purchase with a
+ * same-side 2650/1650 line, or a pure 26xx movement against the skattekonto).
+ * A storno of one cancels it and is no settlement.
  */
 export async function settlementsDated(
   supabase: SupabaseClient,

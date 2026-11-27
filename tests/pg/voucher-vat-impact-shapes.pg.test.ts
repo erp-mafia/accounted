@@ -6,7 +6,9 @@
  * once the voucher is posted: every case below is posted as a manual verifikat
  * and get_vat_declaration_totals must list exactly the ones the restatement
  * calls a shape, with the skattekonto accounts read from
- * skattekonto_shape_accounts as the preview reads them.
+ * skattekonto_shape_accounts as the preview reads them. Shape 1 reads the
+ * side each line stands on, so the restatement is given the lines, not only
+ * their accounts.
  *
  * The account lists are the REAL ones the app passes (VAT_ACCOUNTS and
  * VAT_SETTLEMENT_NET_ACCOUNTS), as in vat-skattekonto-counter-entries.pg.test.ts.
@@ -20,7 +22,7 @@ import {
   insertPostedJournalEntry,
 } from './fixtures'
 import { VAT_ACCOUNTS, VAT_SETTLEMENT_NET_ACCOUNTS } from '@/lib/reports/vat-declaration'
-import { momsredovisningShapeOfLines } from '@/lib/vat/voucher-vat-impact'
+import { momsredovisningShapeOfLines, type VoucherImpactLine } from '@/lib/vat/voucher-vat-impact'
 
 const ALL_ACCOUNTS = [...VAT_ACCOUNTS, ...VAT_SETTLEMENT_NET_ACCOUNTS]
 const START = '2026-01-01'
@@ -50,7 +52,26 @@ const CASES: Line[][] = [
   [['2641', 0, 250], ['2650', 250, 0]],
   [['2611', 400.4, 0], ['2614', 500.5, 0], ['2645', 0, 500.5], ['1650', 0, 400], ['3740', 0, 0.4]],
   [['2611', 400.4, 0], ['1650', 0, 70], ['2650', 0, 330], ['3740', 0, 0.4]],
+  // A sale or a purchase with a same-side 2650/1650 line: no shape. A sale
+  // with a 2650 line next to it, its storno, a sale with its VAT on 2650, a
+  // grant next to a refund on the skattekonto.
+  [['1930', 1350, 0], ['3001', 0, 1000], ['2611', 0, 250], ['2650', 0, 100]],
+  [['1930', 0, 1350], ['3001', 1000, 0], ['2611', 250, 0], ['2650', 100, 0]],
+  [['1510', 1250, 0], ['3001', 0, 1000], ['2650', 0, 250]],
+  [['1630', 30000, 0], ['3980', 0, 24000], ['1650', 0, 6000]],
+  // Only 26xx next to a same-side 2650/1650 line, or a zero base line: the
+  // shape stays.
+  [['2641', 0, 488], ['2650', 0, 891], ['6992', 1379, 0]],
+  [['6110', 400, 0], ['2641', 100, 0], ['1650', 50, 0], ['1930', 0, 550]],
+  [['1930', 250, 0], ['3001', 0, 0], ['2611', 0, 150], ['2650', 0, 100]],
+  // A line against 2650/1650 among others: still the shape.
+  [['2611', 1000, 0], ['2641', 0, 400], ['2650', 0, 600], ['2650', 500, 0], ['1930', 0, 500]],
+  [['1510', 1000, 0], ['3001', 0, 1000], ['2611', 250, 0], ['2650', 0, 250]],
+  [['1930', 1225, 0], ['3001', 0, 1000], ['2611', 0, 250], ['2650', 0, 100], ['3001', 100, 0], ['2611', 25, 0]],
 ]
+
+const toImpactLines = (lines: Line[]): VoucherImpactLine[] =>
+  lines.map(([account_number, debit_amount, credit_amount]) => ({ account_number, debit_amount, credit_amount }))
 
 async function shapedIds(companyId: string): Promise<Set<string>> {
   const { rows } = await getPool().query(
@@ -88,7 +109,7 @@ async function disagreements(entityType: 'aktiebolag' | 'enskild_firma'): Promis
 
   return CASES.flatMap((lines, index) => {
     const sql = shaped.has(ids[index])
-    const ts = momsredovisningShapeOfLines(lines.map(([account]) => account), taxAccounts) !== null
+    const ts = momsredovisningShapeOfLines(toImpactLines(lines), taxAccounts) !== null
     return sql === ts ? [] : [`${entityType} ${lines.map(([a]) => a).join('/')}: sql ${sql}, preview ${ts}`]
   })
 }
