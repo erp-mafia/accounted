@@ -44,7 +44,7 @@ afterEach(() => {
 })
 
 describe('unapproveSalaryRun: a run of a month with several runs', () => {
-  it("keeps the month's declaration and takes the run out of the runs it covers", async () => {
+  it("keeps the month's declaration and leaves it covering no run until the month is generated again", async () => {
     const { supabase, enqueueMany, findCall, findCalls } = createQueuedMockSupabase()
     enqueueMany([
       { data: APPROVED }, // the run
@@ -59,7 +59,7 @@ describe('unapproveSalaryRun: a run of a month with several runs', () => {
 
     expect(result).toMatchObject({ ok: true, data: { deletedAgiDeclarationId: null } })
     expect(findCall('agi_declarations', 'delete')).toBeUndefined()
-    expect(findCalls('agi_declarations', 'update')).toEqual([[{ salary_run_ids: ['run-a'] }]])
+    expect(findCalls('agi_declarations', 'update')).toEqual([[{ salary_run_ids: [] }]])
   })
 
   it("still deletes a stale declaration of the run's own month alone", async () => {

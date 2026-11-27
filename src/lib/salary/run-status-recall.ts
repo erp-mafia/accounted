@@ -187,9 +187,10 @@ export async function unapproveSalaryRun(
   // cleared agi_generated_at makes the panel and the submit regenerate it.
   const staleAgi = agi && AGI_STALE_STATUSES.includes(agi.status) && !runRow.is_correction ? agi : null
   // The month's declaration of several runs is not deleted with one of them:
-  // it carries the month's tax payment tracking. The recalled run leaves the
-  // runs it covers instead, so the declaration no longer covers the month and
-  // is neither paid nor answered as filed until it is generated again.
+  // it carries the month's tax payment tracking. It is left covering no run
+  // instead (salary_run_ids empty): its totals still hold the recalled run's
+  // pay, so it is neither paid nor answered as filed until the month is
+  // generated again (agi-payable-declaration.ts, decideMonthAgiWrite).
   const monthCovered = staleAgi
     ? (staleAgi.salary_run_ids ?? (staleAgi.salary_run_id ? [staleAgi.salary_run_id] : []))
     : []
@@ -282,7 +283,7 @@ export async function unapproveSalaryRun(
   if (staleAgi && keepMonthDeclaration) {
     const { error: uncoverError } = await supabase
       .from('agi_declarations')
-      .update({ salary_run_ids: monthCovered.filter((id) => id !== salaryRunId) })
+      .update({ salary_run_ids: [] })
       .eq('id', staleAgi.id)
       .eq('company_id', companyId)
       .in('status', AGI_STALE_STATUSES)

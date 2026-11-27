@@ -194,6 +194,33 @@ describe('readAgiPaymentPeriodConflict: several runs in one month', () => {
     expect(result).toMatchObject({ ok: true, conflict: { code: 'AGI_PAYMENT_PERIOD_CONFLICT' } })
   })
 
+  it('refuses a declaration that still counts a run that left the month, when its holder is the only run left', async () => {
+    // A and C were summed; C went back to draft (or moved to December).
+    db = createTableMockSupabase({
+      salary_runs: salaryRuns(OWN_RUN, [OWN_LIVE]),
+      agi_declarations: () => ({ data: { salary_run_ids: ['run-own', 'run-c'] } }),
+    })
+    const result = await readAgiPaymentPeriodConflict(db.supabase as never, COMPANY, UNFILED)
+    expect(result).toMatchObject({ ok: true, conflict: { code: 'AGI_PAYMENT_PERIOD_CONFLICT', details: { other_runs: [] } } })
+  })
+
+  it('refuses a declaration a recall left covering no run', async () => {
+    db = createTableMockSupabase({
+      salary_runs: salaryRuns(OWN_RUN, [OWN_LIVE]),
+      agi_declarations: () => ({ data: { salary_run_ids: [] } }),
+    })
+    const result = await readAgiPaymentPeriodConflict(db.supabase as never, COMPANY, UNFILED)
+    expect(result).toMatchObject({ ok: true, conflict: { code: 'AGI_PAYMENT_PERIOD_CONFLICT' } })
+  })
+
+  it('pays a one-run declaration that lists no runs, as every declaration before the list', async () => {
+    db = createTableMockSupabase({
+      salary_runs: salaryRuns(OWN_RUN, [OWN_LIVE]),
+      agi_declarations: () => ({ data: { salary_run_ids: null } }),
+    })
+    expect(await readAgiPaymentPeriodConflict(db.supabase as never, COMPANY, UNFILED)).toEqual({ ok: true, conflict: null })
+  })
+
   it('refuses a declaration that leaves a live run of the month out', async () => {
     db = createTableMockSupabase({
       salary_runs: salaryRuns(OWN_RUN, [OWN_LIVE, OTHER_LIVE]),
