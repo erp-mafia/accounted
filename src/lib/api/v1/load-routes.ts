@@ -304,6 +304,8 @@ import '@/app/api/v1/companies/[companyId]/skatteverket/agi/validate-individuppg
 import '@/app/api/v1/companies/[companyId]/skattekonto/sync/route'
 // Operation registry, wave 3: documents, transactions, rättelse, filing.
 import '@/app/api/v1/companies/[companyId]/documents/[id]/route'
+// What an archived document is (documents.set-type, Dokument's "Ändra typ").
+import '@/app/api/v1/companies/[companyId]/documents/[id]/type/route'
 import '@/app/api/v1/companies/[companyId]/inbox-items/route'
 import '@/app/api/v1/companies/[companyId]/inbox-items/[id]/route'
 import '@/app/api/v1/companies/[companyId]/inbox-items/[id]/unmatch-transaction/route'

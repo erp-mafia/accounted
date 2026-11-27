@@ -27,7 +27,7 @@ import { UpgradeNote } from '@/components/billing/UpgradeNote'
 import { useBankLedgerSuggestionNotice } from '@/components/transactions/BankLedgerSuggestionNotice'
 import { useBankSwitchCampaign } from '@/components/bank-feed/use-bank-switch-campaign'
 import { useOpenPaymentsAvailability } from '@/components/bank-feed/use-open-payments-availability'
-import { bankCoveredByOpenPayments, enableBankingOffers } from '@/lib/bank-feed/bank-coverage'
+import { enableBankingOffers, enableBankingWayOn } from '@/lib/bank-feed/bank-coverage'
 import { BANK_FILE_IMPORT_PATH } from '@/lib/bank-feed/switch-link'
 import {
   SettingsGroup,
@@ -139,9 +139,21 @@ export default function BankingSettingsPanel() {
   // where the campaign applies (the door is open, so the switch can be
   // made): elsewhere nothing changes.
   const switchCampaign = useBankSwitchCampaign()
-  const sunsetActive = Boolean(switchCampaign.progress?.campaign.passed && switchCampaign.progress.company)
+  const campaignApplies = Boolean(switchCampaign.progress?.company)
+  const sunsetActive = Boolean(switchCampaign.progress?.campaign.passed && campaignApplies)
   const sunsetFor = (connection: { bank_name: string | null }): SunsetPath | null =>
-    sunsetActive ? (bankCoveredByOpenPayments(connection.bank_name) ? 'switch' : 'import') : null
+    sunsetActive ? enableBankingWayOn(connection.bank_name, campaignApplies) : null
+  // Once the switch campaign is on, Enable Banking takes no new connection,
+  // renewal or reuse (lib/bank-feed/switch-campaign.ts
+  // enableBankingClosedToNew; the routes refuse them too). The connect-new
+  // surface and the reuse offer give way to one line saying where a bank
+  // goes now. A row whose consent has run out or is about to offers that way
+  // on instead of a renewal (the switch where it can be made, the file import
+  // elsewhere), and no row starts a login there: a new attempt or a renewed
+  // login would only be refused.
+  const ebClosedToNew = Boolean(switchCampaign.progress?.campaign.on)
+  const renewalClosedFor = (connection: { bank_name: string | null }): SunsetPath | null =>
+    ebClosedToNew ? enableBankingWayOn(connection.bank_name, campaignApplies) : null
   // No bank_sync capability (a trial that ended, no subscription; self-hosted,
   // no connector key): the sync cron skips the company and Synka is refused,
   // so every row and the page's sentence say why instead of "kör Synka".
@@ -797,19 +809,13 @@ export default function BankingSettingsPanel() {
   const visibleConnections = sortConnectionsByPrecedence(
     bankConnections
       .filter((c) => c.status !== 'revoked')
-      .map((c) => ({ ...c, sunset: sunsetFor(c), paused: syncPause })),
+      .map((c) => ({ ...c, sunset: sunsetFor(c), paused: syncPause, renewal_closed: renewalClosedFor(c) })),
     stateNow,
   )
   const hasVisibleConnections = visibleConnections.length > 0
   // Exactly one page-level attention sentence for the worst state, or none
   // (design convention 6).
   const pageAttention = selectPageAttention(visibleConnections, stateNow)
-  // Once the switch campaign is on, Enable Banking takes no new connection,
-  // renewal or reuse (lib/bank-feed/switch-campaign.ts
-  // enableBankingClosedToNew; the routes refuse them too): the connect-new
-  // surface and the reuse offer give way to one line saying where a bank
-  // goes now.
-  const ebClosedToNew = Boolean(switchCampaign.progress?.campaign.on)
   // With zero connections the bank list IS the page; with any connection it
   // collapses behind one button.
   const connectNewExpanded = !ebClosedToNew && (connectNewOpen || !hasVisibleConnections)
@@ -883,7 +889,7 @@ export default function BankingSettingsPanel() {
           accounts={pickerAccounts}
           isInitialSelection={pickerConnection.status === 'pending_selection'}
           newAccountsSyncFrom={hasBankSync ? nextScheduledSyncFrom(pickerConnection, stateNow) : null}
-          onReauthorize={() => {
+          onReauthorize={ebClosedToNew ? undefined : () => {
             setPickerConnectionId(null)
             handleRetryConnect(pickerConnection)
           }}
@@ -944,10 +950,11 @@ export default function BankingSettingsPanel() {
               connection={connection}
               sunset={connection.sunset}
               paused={connection.paused}
+              renewalClosed={connection.renewal_closed}
               onSync={handleSyncTransactions}
               onDisconnect={handleDisconnectBank}
               onReconnect={handleReconnect}
-              onRetry={handleRetryConnect}
+              onRetry={ebClosedToNew ? undefined : handleRetryConnect}
               onManageAccounts={(connectionId) => setPickerConnectionId(connectionId)}
               isSyncing={syncingConnectionId === connection.id}
             />

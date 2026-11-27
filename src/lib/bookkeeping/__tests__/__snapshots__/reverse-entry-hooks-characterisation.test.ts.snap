@@ -1,5 +1,34 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
+exports[`correctEntry: runs no reversal hook (characterisation) > invoice_created 1`] = `
+[
+  "read journal_entries (*, lines:journal_entry_lines(*))",
+  "assertStornoTarget",
+  "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+  "insert journal_entry_lines x2",
+  "rpc commit_journal_entry",
+  "insert journal_entries correction_of_id=entry-1 source_type=correction status=draft",
+  "insert journal_entry_lines x2",
+  "rpc commit_journal_entry",
+  "update journal_entries reversed_by_id=reversal-1 status=reversed",
+  "update transactions journal_entry_id=corrected-1",
+  "update transaction_voucher_links journal_entry_id=corrected-1",
+  "update invoice_payments journal_entry_id=corrected-1",
+  "update supplier_invoice_payments journal_entry_id=corrected-1",
+  "update supplier_invoices payment_journal_entry_id=corrected-1",
+  "update invoices journal_entry_id=corrected-1",
+  "update supplier_invoices registration_journal_entry_id=corrected-1",
+  "update invoice_inbox_items created_journal_entry_id=corrected-1",
+  "update expense_claims journal_entry_id=corrected-1",
+  "rpc relink_documents_to_correction",
+  "read journal_entries (*, lines:journal_entry_lines(*))",
+  "read journal_entries (*, lines:journal_entry_lines(*))",
+  "emit journal_entry.committed",
+  "emit journal_entry.committed",
+  "emit journal_entry.corrected",
+]
+`;
+
 exports[`correctEntry: runs no reversal hook (characterisation) > invoice_paid 1`] = `
 [
   "read journal_entries (*, lines:journal_entry_lines(*))",
@@ -16,6 +45,10 @@ exports[`correctEntry: runs no reversal hook (characterisation) > invoice_paid 1
   "update invoice_payments journal_entry_id=corrected-1",
   "update supplier_invoice_payments journal_entry_id=corrected-1",
   "update supplier_invoices payment_journal_entry_id=corrected-1",
+  "update invoices journal_entry_id=corrected-1",
+  "update supplier_invoices registration_journal_entry_id=corrected-1",
+  "update invoice_inbox_items created_journal_entry_id=corrected-1",
+  "update expense_claims journal_entry_id=corrected-1",
   "rpc relink_documents_to_correction",
   "read journal_entries (*, lines:journal_entry_lines(*))",
   "read journal_entries (*, lines:journal_entry_lines(*))",
@@ -38,6 +71,13 @@ exports[`correctEntry: runs no reversal hook (characterisation) > rot_rut_reclai
   "update journal_entries reversed_by_id=reversal-1 status=reversed",
   "update transactions journal_entry_id=corrected-1",
   "update transaction_voucher_links journal_entry_id=corrected-1",
+  "update invoice_payments journal_entry_id=corrected-1",
+  "update supplier_invoice_payments journal_entry_id=corrected-1",
+  "update supplier_invoices payment_journal_entry_id=corrected-1",
+  "update invoices journal_entry_id=corrected-1",
+  "update supplier_invoices registration_journal_entry_id=corrected-1",
+  "update invoice_inbox_items created_journal_entry_id=corrected-1",
+  "update expense_claims journal_entry_id=corrected-1",
   "rpc relink_documents_to_correction",
   "read journal_entries (*, lines:journal_entry_lines(*))",
   "read journal_entries (*, lines:journal_entry_lines(*))",
@@ -60,6 +100,71 @@ exports[`correctEntry: runs no reversal hook (characterisation) > rot_rut_reclas
   "update journal_entries reversed_by_id=reversal-1 status=reversed",
   "update transactions journal_entry_id=corrected-1",
   "update transaction_voucher_links journal_entry_id=corrected-1",
+  "update invoice_payments journal_entry_id=corrected-1",
+  "update supplier_invoice_payments journal_entry_id=corrected-1",
+  "update supplier_invoices payment_journal_entry_id=corrected-1",
+  "update invoices journal_entry_id=corrected-1",
+  "update supplier_invoices registration_journal_entry_id=corrected-1",
+  "update invoice_inbox_items created_journal_entry_id=corrected-1",
+  "update expense_claims journal_entry_id=corrected-1",
+  "rpc relink_documents_to_correction",
+  "read journal_entries (*, lines:journal_entry_lines(*))",
+  "read journal_entries (*, lines:journal_entry_lines(*))",
+  "emit journal_entry.committed",
+  "emit journal_entry.committed",
+  "emit journal_entry.corrected",
+]
+`;
+
+exports[`correctEntry: runs no reversal hook (characterisation) > salary_payment 1`] = `
+[
+  "read journal_entries (*, lines:journal_entry_lines(*))",
+  "assertStornoTarget",
+  "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+  "insert journal_entry_lines x2",
+  "rpc commit_journal_entry",
+  "insert journal_entries correction_of_id=entry-1 source_type=correction status=draft",
+  "insert journal_entry_lines x2",
+  "rpc commit_journal_entry",
+  "update journal_entries reversed_by_id=reversal-1 status=reversed",
+  "update transactions journal_entry_id=corrected-1",
+  "update transaction_voucher_links journal_entry_id=corrected-1",
+  "update invoice_payments journal_entry_id=corrected-1",
+  "update supplier_invoice_payments journal_entry_id=corrected-1",
+  "update supplier_invoices payment_journal_entry_id=corrected-1",
+  "update invoices journal_entry_id=corrected-1",
+  "update supplier_invoices registration_journal_entry_id=corrected-1",
+  "update invoice_inbox_items created_journal_entry_id=corrected-1",
+  "update expense_claims journal_entry_id=corrected-1",
+  "rpc relink_documents_to_correction",
+  "read journal_entries (*, lines:journal_entry_lines(*))",
+  "read journal_entries (*, lines:journal_entry_lines(*))",
+  "emit journal_entry.committed",
+  "emit journal_entry.committed",
+  "emit journal_entry.corrected",
+]
+`;
+
+exports[`correctEntry: runs no reversal hook (characterisation) > supplier_invoice_registered 1`] = `
+[
+  "read journal_entries (*, lines:journal_entry_lines(*))",
+  "assertStornoTarget",
+  "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+  "insert journal_entry_lines x2",
+  "rpc commit_journal_entry",
+  "insert journal_entries correction_of_id=entry-1 source_type=correction status=draft",
+  "insert journal_entry_lines x2",
+  "rpc commit_journal_entry",
+  "update journal_entries reversed_by_id=reversal-1 status=reversed",
+  "update transactions journal_entry_id=corrected-1",
+  "update transaction_voucher_links journal_entry_id=corrected-1",
+  "update invoice_payments journal_entry_id=corrected-1",
+  "update supplier_invoice_payments journal_entry_id=corrected-1",
+  "update supplier_invoices payment_journal_entry_id=corrected-1",
+  "update invoices journal_entry_id=corrected-1",
+  "update supplier_invoices registration_journal_entry_id=corrected-1",
+  "update invoice_inbox_items created_journal_entry_id=corrected-1",
+  "update expense_claims journal_entry_id=corrected-1",
   "rpc relink_documents_to_correction",
   "read journal_entries (*, lines:journal_entry_lines(*))",
   "read journal_entries (*, lines:journal_entry_lines(*))",
@@ -295,6 +400,7 @@ exports[`reverseEntry: reversal hooks per source type (characterisation) > invoi
 {
   "trace": [
     "read journal_entries (*, lines:journal_entry_lines(*))",
+    "assertInvoiceVerifikatReversible(<client>, "company-1", "entry-1")",
     "assertStornoTarget",
     "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
     "insert journal_entry_lines x2",
@@ -491,6 +597,7 @@ exports[`reverseEntry: reversal hooks per source type (characterisation) > salar
 {
   "trace": [
     "read journal_entries (*, lines:journal_entry_lines(*))",
+    "assertSalaryRunVerifikatReversible(<client>, "company-1", <original>)",
     "assertStornoTarget",
     "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
     "insert journal_entry_lines x2",
@@ -604,12 +711,14 @@ exports[`reverseEntry: reversal hooks per source type (characterisation) > suppl
 {
   "trace": [
     "read journal_entries (*, lines:journal_entry_lines(*))",
+    "assertSupplierInvoiceRegistrationReversible(<client>, "company-1", "entry-1")",
     "assertStornoTarget",
     "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
     "insert journal_entry_lines x2",
     "rpc commit_journal_entry",
     "update journal_entries reversed_by_id=reversal-1 status=reversed",
     "rpc release_reversed_entry_transactions",
+    "releaseSupplierInvoiceRegistrationAfterReversal(<client>, "company-1", "entry-1")",
     "read journal_entries (*, lines:journal_entry_lines(*))",
     "emit journal_entry.committed",
     "emit journal_entry.reversed",

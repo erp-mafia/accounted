@@ -71,6 +71,16 @@ describe('setDocumentTypeByPerson', () => {
     expect(withdrawDerivedAgreement).toHaveBeenCalledWith(supabase, DOC, 'minutes.board', expect.stringContaining('minutes.board'))
   })
 
+  it('answers the type a booked document showed when its period lock kept the type on the classification', async () => {
+    enqueue({ data: { id: DOC, doc_type: null, journal_entry_id: 'je-1', journal_entry_line_id: null } })
+    enqueue({ data: [{ document_id: DOC, doc_type: 'receipt' }] })
+
+    const out = await setDocumentTypeByPerson(supabase as never, INPUT)
+
+    expect(out).toMatchObject({ status: 'set', previousDocType: 'receipt' })
+    expect(findCalls('document_classifications', 'eq')).toEqual([['is_current', true]])
+  })
+
   it('answers an error when the classification is not saved, and queues no extraction', async () => {
     enqueue({ data: { id: DOC, doc_type: null } })
     vi.mocked(recordHumanClassification).mockResolvedValueOnce({ status: 'error', reason: 'insert failed: boom' } as never)

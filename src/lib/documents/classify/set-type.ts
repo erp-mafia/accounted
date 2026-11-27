@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { withdrawDerivedAgreement } from '@/lib/arkiv/agreements/store'
 import { isArkivBrainEnabled } from '@/lib/arkiv/flag'
 import { enqueueDocumentJob } from '@/lib/documents/jobs/queue'
+import { fillTypeFromClassification } from '@/lib/documents/locked-period'
 import { recordHumanClassification } from './classify'
 import type { DocType } from './taxonomy'
 
@@ -31,13 +32,18 @@ export async function setDocumentTypeByPerson(
   const { companyId, documentId, userId, docType } = input
   const { data: doc, error } = await supabase
     .from('document_attachments')
-    .select('id, doc_type')
+    .select('id, doc_type, journal_entry_id, journal_entry_line_id')
     .eq('id', documentId)
     .eq('company_id', companyId)
     .maybeSingle()
   if (error) return { status: 'error', reason: `document fetch failed: ${error.message}` }
   if (!doc) return { status: 'not_found' }
-  const previousDocType = (doc as { doc_type?: string | null }).doc_type ?? null
+  // The type it showed: a booked document typed after its period closed keeps
+  // it on the classification. Best effort, as it only reports what was there.
+  const [shown] = await fillTypeFromClassification(supabase, [
+    doc as { id: string; doc_type: string | null; journal_entry_id: string | null; journal_entry_line_id: string | null },
+  ])
+  const previousDocType = shown.doc_type ?? null
 
   // Withdraw first, save the type after: a failed withdrawal leaves the old type in place with nothing
   // half-corrected, and the withdrawal is idempotent, so a retry finishes the job.

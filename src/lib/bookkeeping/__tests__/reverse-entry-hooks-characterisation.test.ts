@@ -12,7 +12,14 @@
  *     refusal spends no voucher number), syncMigratedDeductionAfterReversal
  *     after the storno;
  *   - the four payment source types: syncInvoiceStatusFromPaymentEntry;
- *   - rot_rut_reclaim: syncRotRutReclaimAfterReversal.
+ *   - rot_rut_reclaim: syncRotRutReclaimAfterReversal;
+ *   - supplier_invoice_registered: assertSupplierInvoiceRegistrationReversible
+ *     before (the same place as the migrated-deduction check), and
+ *     releaseSupplierInvoiceRegistrationAfterReversal after the storno;
+ *   - invoice_created: assertInvoiceVerifikatReversible before, nothing after;
+ *   - salary_payment: assertSalaryRunVerifikatReversible before, nothing
+ *     after, skipped on Korrigera lönekörning's own stornos
+ *     (salaryRunCorrection).
  * Every after-hook runs after the CAS to 'reversed', the bank-line release,
  * the IB unlink and the depreciation release, and before the emits. Nothing
  * catches a hook's throw: it propagates, the storno stands and the emits are
@@ -43,6 +50,10 @@ const h = vi.hoisted(() => {
     syncRotRutReclaimAfterReversal: hook('syncRotRutReclaimAfterReversal'),
     assertMigratedDeductionReversible: hook('assertMigratedDeductionReversible'),
     syncMigratedDeductionAfterReversal: hook('syncMigratedDeductionAfterReversal'),
+    assertSupplierInvoiceRegistrationReversible: hook('assertSupplierInvoiceRegistrationReversible'),
+    releaseSupplierInvoiceRegistrationAfterReversal: hook('releaseSupplierInvoiceRegistrationAfterReversal'),
+    assertInvoiceVerifikatReversible: hook('assertInvoiceVerifikatReversible'),
+    assertSalaryRunVerifikatReversible: hook('assertSalaryRunVerifikatReversible'),
     emit: vi.fn(async (event: { type: string }) => {
       trace.push(`emit ${event.type}`)
       return []
@@ -69,6 +80,16 @@ vi.mock('@/lib/invoices/rot-rut-reclaim-reversal', () => ({
 vi.mock('@/lib/invoices/migrated-deduction-reversal', () => ({
   assertMigratedDeductionReversible: h.assertMigratedDeductionReversible,
   syncMigratedDeductionAfterReversal: h.syncMigratedDeductionAfterReversal,
+}))
+vi.mock('@/lib/supplier-invoices/registration-reversal', () => ({
+  assertSupplierInvoiceRegistrationReversible: h.assertSupplierInvoiceRegistrationReversible,
+  releaseSupplierInvoiceRegistrationAfterReversal: h.releaseSupplierInvoiceRegistrationAfterReversal,
+}))
+vi.mock('@/lib/invoices/invoice-verifikat-reversal', () => ({
+  assertInvoiceVerifikatReversible: h.assertInvoiceVerifikatReversible,
+}))
+vi.mock('@/lib/salary/run-verifikat-reversal', () => ({
+  assertSalaryRunVerifikatReversible: h.assertSalaryRunVerifikatReversible,
 }))
 
 import { reverseEntry } from '../engine'
@@ -120,6 +141,18 @@ const HOOK_FUNCTIONS = [
   'syncRotRutReclaimAfterReversal',
   'assertMigratedDeductionReversible',
   'syncMigratedDeductionAfterReversal',
+  'assertSupplierInvoiceRegistrationReversible',
+  'releaseSupplierInvoiceRegistrationAfterReversal',
+  'assertInvoiceVerifikatReversible',
+  'assertSalaryRunVerifikatReversible',
+] as const
+
+/** The before-hooks among HOOK_FUNCTIONS: each refuses before anything is written. */
+const BEFORE_HOOK_CHECKS = [
+  ['rot_rut_reclassification', 'assertMigratedDeductionReversible'],
+  ['supplier_invoice_registered', 'assertSupplierInvoiceRegistrationReversible'],
+  ['invoice_created', 'assertInvoiceVerifikatReversible'],
+  ['salary_payment', 'assertSalaryRunVerifikatReversible'],
 ] as const
 
 const CHART = ['1510', '1513', '1930', '3001', '3002'].map((n) => ({ id: `acc-${n}`, account_number: n }))
@@ -225,14 +258,19 @@ function recordingClient(original: ReturnType<typeof originalOf>) {
   }
 }
 
-async function runReverse(sourceType: JournalEntrySourceType, overrides: Partial<ReturnType<typeof originalOf>> = {}) {
+async function runReverse(
+  sourceType: JournalEntrySourceType,
+  overrides: Partial<ReturnType<typeof originalOf>> = {},
+  options?: Parameters<typeof reverseEntry>[5],
+) {
   const original = { ...originalOf(sourceType), ...overrides }
   const client = recordingClient(original)
   h.subject.client = client
   h.subject.original = original
   let error: string | undefined
   try {
-    await reverseEntry(client as never, 'company-1', 'user-1', 'entry-1')
+    if (options) await reverseEntry(client as never, 'company-1', 'user-1', 'entry-1', undefined, options)
+    else await reverseEntry(client as never, 'company-1', 'user-1', 'entry-1')
   } catch (err) {
     error = err instanceof Error ? `${err.name}: ${err.message}` : JSON.stringify(err)
   }
@@ -257,7 +295,7 @@ describe('reverseEntry: reversal hooks per source type (characterisation)', () =
       h.trace.length = 0
       const { trace } = await runReverse(sourceType)
       if (sourceType === 'storno') continue
-      const after = hookCalls(trace).filter((step) => !step.startsWith('assertMigratedDeductionReversible('))
+      const after = hookCalls(trace).filter((step) => !BEFORE_HOOK_CHECKS.some(([, fn]) => step.startsWith(`${fn}(`)))
       expect(after.length, sourceType).toBeLessThanOrEqual(1)
       if (after.length === 0) continue
       const at = trace.indexOf(after[0])
@@ -289,11 +327,40 @@ describe('reverseEntry: reversal hooks per source type (characterisation)', () =
     expect(result.trace.filter((s) => !s.startsWith('read journal_entries') && !s.startsWith('assertMigratedDeductionReversible('))).toEqual([])
   })
 
+  it.each(BEFORE_HOOK_CHECKS.filter(([sourceType]) => sourceType !== 'rot_rut_reclassification'))(
+    'runs the %s check right before the storno target check, and a refusal writes nothing',
+    async (sourceType, fn) => {
+      const { trace } = await runReverse(sourceType)
+      const at = trace.findIndex((s) => s.startsWith(`${fn}(`))
+      expect(at).toBeGreaterThan(0)
+      expect(trace.indexOf('assertStornoTarget')).toBe(at + 1)
+
+      h.trace.length = 0
+      h[fn].mockRejectedValueOnce(new Error('refused'))
+      const result = await runReverse(sourceType)
+      expect(result.error).toBe('Error: refused')
+      expect(result.trace.filter((s) => !s.startsWith('read journal_entries') && !s.startsWith(`${fn}(`))).toEqual([])
+    },
+  )
+
+  it('skips the salary run check on the stornos of Korrigera lönekörning (salaryRunCorrection), and only there', async () => {
+    const corrected = await runReverse('salary_payment', {}, { salaryRunCorrection: true })
+    expect(corrected.error).toBeUndefined()
+    expect(h.assertSalaryRunVerifikatReversible).not.toHaveBeenCalled()
+    expect(corrected.trace).toContain('rpc commit_journal_entry')
+
+    // The other storno options leave the check in place.
+    h.trace.length = 0
+    await runReverse('salary_payment', {}, { allowDeepChain: true, collectionsRebook: true })
+    expect(h.assertSalaryRunVerifikatReversible).toHaveBeenCalledOnce()
+  })
+
   it.each([
     ['invoice_paid', 'syncInvoiceStatusFromPaymentEntry'],
     ['supplier_invoice_cash_payment', 'syncInvoiceStatusFromPaymentEntry'],
     ['rot_rut_reclaim', 'syncRotRutReclaimAfterReversal'],
     ['rot_rut_reclassification', 'syncMigratedDeductionAfterReversal'],
+    ['supplier_invoice_registered', 'releaseSupplierInvoiceRegistrationAfterReversal'],
   ] as const)(
     'propagates a throw from the %s after-hook: the storno stands and the emits are skipped',
     async (sourceType, fn) => {
@@ -308,7 +375,14 @@ describe('reverseEntry: reversal hooks per source type (characterisation)', () =
 })
 
 describe('correctEntry: runs no reversal hook (characterisation)', () => {
-  it.each(['invoice_paid', 'rot_rut_reclaim', 'rot_rut_reclassification'] as const)('%s', async (sourceType) => {
+  it.each([
+    'invoice_paid',
+    'rot_rut_reclaim',
+    'rot_rut_reclassification',
+    'supplier_invoice_registered',
+    'invoice_created',
+    'salary_payment',
+  ] as const)('%s', async (sourceType) => {
     const original = originalOf(sourceType)
     const client = recordingClient(original)
     h.subject.client = client
@@ -322,5 +396,29 @@ describe('correctEntry: runs no reversal hook (characterisation)', () => {
     for (const fn of HOOK_FUNCTIONS) expect(h[fn], fn).not.toHaveBeenCalled()
     expect(hookCalls(h.trace)).toEqual([])
     expect(h.trace).toMatchSnapshot()
+  })
+
+  // The payment rows follow the rättelse whatever booked the payment
+  // (correction-payment-relink.ts). A privately paid supplier invoice is paid
+  // by the verifikat of its utlägg, source_type 'expense_claim', which is not
+  // one of the payment source types: its rows used to stay on the reversed
+  // original.
+  it('moves the payment rows of an original that no payment source type names (expense_claim)', async () => {
+    const original = originalOf('expense_claim')
+    const client = recordingClient(original)
+    h.subject.client = client
+    h.subject.original = original
+
+    await correctEntry(client as never, 'company-1', 'user-1', 'entry-1', [
+      { account_number: '1930', debit_amount: 100, credit_amount: 0 },
+      { account_number: '3002', debit_amount: 0, credit_amount: 100 },
+    ])
+
+    const paymentRowMoves = h.trace.filter((step) => /^update (invoice_payments|supplier_invoice_payments) |payment_journal_entry_id=/.test(step))
+    expect(paymentRowMoves).toEqual([
+      'update invoice_payments journal_entry_id=corrected-1',
+      'update supplier_invoice_payments journal_entry_id=corrected-1',
+      'update supplier_invoices payment_journal_entry_id=corrected-1',
+    ])
   })
 })

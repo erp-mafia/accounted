@@ -543,6 +543,43 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
       'The entry cannot be reversed: its source type needs a reversal hook to keep its sub-ledger in step, and none is registered in this installation. Nothing was written. Contact support.',
     retryable: false,
   },
+  // The refusals of three reversal hooks (lib/composition/reversal-hooks.ts),
+  // raised before anything is written.
+  SI_REGISTRATION_STORNO_HAS_PAYMENTS: {
+    httpStatus: 409,
+    message_sv:
+      'Leverantörsfakturan som verifikationen bokför har betalningar, så verifikationen kan inte återföras ännu. Ångra betalningarna först: återför betalningsverifikationen, ångra bokningen på bankraden eller koppla bort verifikationen på fakturan. Återför sedan verifikationen, så blir fakturan obokförd och kan bokföras igen.',
+    message_en:
+      'The supplier invoice this voucher books has payments, so the voucher cannot be reversed yet. Undo the payments first: reverse the payment voucher, undo the booking on the bank row, or unlink the voucher on the invoice. Then reverse this voucher; the invoice then reads not booked and can be booked again.',
+    remediation: {
+      description:
+        'details.supplierInvoiceId is the invoice the registration voucher books. Undo each of its payments first: reverse the payment voucher (gnubok_reverse_journal_entry), uncategorize the bank row the payment was booked from, unlink a linked voucher, or reverse a set-off voucher. Then reverse the registration voucher again: the invoice reads not booked and is booked again with gnubok_book_supplier_invoice. Nothing was written.',
+    },
+  },
+  INVOICE_STORNO_ISSUED: {
+    httpStatus: 409,
+    message_sv:
+      'Verifikationen bokför en kundfaktura som är skickad eller betald och återförs inte för sig. Kreditera fakturan i stället, så följer fakturan, kundreskontran och periodiseringarna med. En delbetald faktura krediteras när betalningen är ångrad.',
+    message_en:
+      'The voucher books a customer invoice that has been sent or paid and is not reversed on its own. Credit the invoice instead, so the invoice, the receivables ledger and its accruals follow. A partly paid invoice is credited once its payment is undone.',
+    remediation: {
+      description:
+        'details.invoiceId is the invoice the voucher books. Credit it (gnubok_credit_invoice, POST /api/v1/companies/{companyId}/invoices/{id}/credit): the credit note reverses the sale and the invoice reads credited. A part-paid invoice is credited once its payment is undone. Nothing was written.',
+      tool: 'gnubok_credit_invoice',
+    },
+  },
+  SALARY_RUN_STORNO_BOOKED: {
+    httpStatus: 409,
+    message_sv:
+      'Verifikationen hör till en bokförd lönekörning och återförs inte för sig. Använd Korrigera lönekörning på lönekörningen i stället, så återförs alla dess verifikationer tillsammans och en ny körning för perioden skapas.',
+    message_en:
+      'The voucher belongs to a booked payroll run and is not reversed on its own. Use Correct payroll run (Korrigera lönekörning) on the run instead, so all its vouchers are reversed together and a new run for the period is created.',
+    remediation: {
+      description:
+        'details.salaryRunId is the booked run. Correct it (gnubok_correct_salary_run, POST /api/v1/companies/{companyId}/salary-runs/{id}/correct): every voucher of the run is reversed together and a correction run for the period is created as a draft. Nothing was written.',
+      tool: 'gnubok_correct_salary_run',
+    },
+  },
   CURRENCY_REVALUATION_ALREADY_EXISTS: {
     httpStatus: 409,
     message_sv: 'En valutaomvärdering finns redan för denna period.',
