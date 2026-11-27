@@ -36,6 +36,10 @@ describe('canCopyInvoice', () => {
     expect(canCopyInvoice(makeInvoice({ status: 'sent', document_type: 'proforma' }))).toBe(false)
     expect(canCopyInvoice(makeInvoice({ status: 'sent', is_self_billed: true }))).toBe(false)
   })
+
+  it('rejects a räntefaktura: a copy would charge the same interest again', () => {
+    expect(canCopyInvoice(makeInvoice({ status: 'paid', is_late_interest_invoice: true }))).toBe(false)
+  })
 })
 
 describe('buildInvoiceCopyInitial', () => {

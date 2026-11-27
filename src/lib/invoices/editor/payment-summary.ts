@@ -367,8 +367,9 @@ export function paymentTermsTexts(
     | null
     | undefined,
   lang: 'sv' | 'en' = 'sv',
+  options: { lateInterestInvoice?: boolean } = {},
 ): string[] {
-  const { creditTerms, lateFee } = invoiceFinePrint(settings, lang)
+  const { creditTerms, lateFee } = invoiceFinePrint(settings, lang, options)
   return [creditTerms, lateFee]
     .map((text) => clean(text?.split('\n')[0]))
     .filter((text): text is string => text !== null)

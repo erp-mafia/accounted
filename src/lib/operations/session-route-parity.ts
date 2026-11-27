@@ -602,6 +602,10 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/invoices/:id/resend': gap('P3', 'email an already emailed invoice again as a copy (crm#1339)'),
   'POST /api/invoices/:id/uncredit': gap('P2', 'undo the credit of an invoice whose credit note never reached the customer (Ångra kreditering); dashboard first, the supplier side has v1 supplier-invoices/:id/uncredit and gnubok_uncredit_supplier_invoice'),
   'POST /api/invoices/self-billed': covered([`POST ${V}/invoices`], 'is_self_billed: true runs the same service (createSelfBilledSaleInvoice); gnubok_create_invoice has no such argument'),
+  'POST /api/invoices/late-payment-interest/invoices': gap(
+    'P2',
+    'create räntefakturor that mark the invoices they charge; POST /invoices makes the same draft (lines on 8313, vat_treatment outside_scope) but leaves the interest chargeable on the report',
+  ),
   'POST /api/invoices/preview-pdf': uiOnly(PREVIEW),
   'POST /api/invoices/preview-email': uiOnly(PREVIEW),
   'POST /api/invoices/recurring': covered(['gnubok_create_recurring_schedule']),

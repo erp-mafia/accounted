@@ -27,12 +27,25 @@ export function isZeroRatedInvoiceTreatment(treatment: VatTreatment | null | und
 }
 
 /**
+ * The invoice treatment under which a 0 % line carries no Swedish VAT
+ * because it is not a supply made in Sweden at all (dröjsmålsränta on a
+ * räntefaktura): neither momsfri (no ML 10 kap. exemption) nor zero-rated
+ * (no ruta). Its lines keep their own account, which the invoice builder
+ * requires on every priced line (outsideScopeLineRefusal), and are never
+ * deferred.
+ */
+export function isOutsideScopeInvoiceTreatment(treatment: VatTreatment | null | undefined): boolean {
+  return treatment === 'outside_scope'
+}
+
+/**
  * The treatment one invoice line books under: a 0 % line takes the invoice's
- * zero-rated treatment, any other line its own rate's. The one rule behind
- * the invoice, credit note, cash and accrual bookings.
+ * zero-rated or outside-scope treatment, any other line its own rate's. The
+ * one rule behind the invoice, credit note, cash and accrual bookings.
  */
 export function resolveLineVatTreatment(rate: number, invoiceTreatment: VatTreatment | null | undefined): VatTreatment {
-  return rate === 0 && invoiceTreatment && isZeroRatedInvoiceTreatment(invoiceTreatment)
+  return rate === 0 && invoiceTreatment &&
+    (isZeroRatedInvoiceTreatment(invoiceTreatment) || isOutsideScopeInvoiceTreatment(invoiceTreatment))
     ? invoiceTreatment
     : getVatTreatmentForRate(rate)
 }

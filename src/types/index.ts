@@ -381,6 +381,7 @@ export type VatTreatment =
   | 'reverse_charge_domestic' // Domestic reverse charge, construction services (0%, ruta 41)
   | 'export'            // Non-EU export (0%)
   | 'exempt'            // VAT exempt
+  | 'outside_scope'     // No Swedish VAT: not a supply made in Sweden (dröjsmålsränta on a räntefaktura, no ruta)
 
 // Accounting method (bokföringsmetod)
 export type AccountingMethod = 'accrual' | 'cash'
@@ -1817,6 +1818,13 @@ export interface Invoice {
   // for pre-migration fixtures.
   vat_treatment_override?: import('@/lib/invoices/invoice-vat-override').InvoiceVatTreatmentOverride | null
   delivery_country?: string | null
+  // Räntefaktura (migration 20261127160500). On an invoice paid late: the
+  // räntefaktura that charges its dröjsmålsränta, set once (null = not
+  // charged). On the räntefaktura itself: true, so it earns no dröjsmålsränta
+  // and prints no late-payment terms. Optional in TS for pre-migration
+  // fixtures.
+  late_interest_invoice_id?: string | null
+  is_late_interest_invoice?: boolean
 
   // Reference
   your_reference: string | null
