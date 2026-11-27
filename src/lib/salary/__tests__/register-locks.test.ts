@@ -845,6 +845,195 @@ describe('planRegisterUpsert: late days', () => {
   })
 })
 
+describe('planRegisterUpsert: days between two windows', () => {
+  /** November, booked, reading November: the run after a switch from previous_month to same_month. */
+  const BOOKED_NOVEMBER = { ...DRAFT_NOVEMBER, status: 'booked' }
+
+  it('a day no window read, behind a booked run, is a late day of the next run: October between September and November', async () => {
+    const runs = [BOOKED_OCTOBER_READS_SEPTEMBER, BOOKED_NOVEMBER, DRAFT_DECEMBER]
+    mock.enqueue({ data: runs })
+    mock.enqueue({ data: [] })
+    mock.enqueue(payslips(['run-dec'], ['run-oct']))
+    const refused = await upsert(['2026-10-19', '2026-10-20', '2026-10-21'], { absenceType: 'vab' })
+    expect(refused).toMatchObject({
+      ok: false,
+      code: 'SALARY_REGISTER_DATES_LOCKED_BY_RUN',
+      details: {
+        // October's pay went out in full: the days belong to its period.
+        salary_run_id: 'run-oct',
+        locked_dates: ['2026-10-19', '2026-10-20', '2026-10-21'],
+        settled: true,
+        reason: 'late_day_needs_later_run',
+        later_salary_run: { salary_run_id: 'run-dec', status: 'draft', period_year: 2026, period_month: 12 },
+      },
+    })
+
+    mock.enqueue({ data: runs })
+    mock.enqueue({ data: [] })
+    mock.enqueue(payslips(['run-dec'], ['run-oct']))
+    const carried = await upsert(['2026-10-19', '2026-10-20', '2026-10-21'], { absenceType: 'vab', carriedToRunId: 'run-dec' })
+    expect(carriedTo(carried)).toEqual({ '2026-10-19': 'run-dec', '2026-10-20': 'run-dec', '2026-10-21': 'run-dec' })
+    expect(carried.ok && carried.plan.carriedReaderRunIds).toEqual(['run-dec'])
+    expect(mock.findCalls('salary_run_employees', 'in').at(-1)).toEqual(['salary_run_id', ['run-dec', 'run-oct']])
+  })
+
+  it('leaves an hourly employee\'s absence between the windows as before', async () => {
+    mock.enqueue({ data: [BOOKED_OCTOBER_READS_SEPTEMBER, BOOKED_NOVEMBER, DRAFT_DECEMBER] })
+    mock.enqueue({ data: [] })
+    mock.enqueue(payslips(['run-dec', 'hourly'], ['run-oct', 'hourly']))
+    const result = await upsert(['2026-10-19'], { absenceType: 'vab' })
+    expect(carriedTo(result)).toEqual({ '2026-10-19': null })
+  })
+
+  it('leaves hours worked between the windows as before', async () => {
+    mock.enqueue({ data: [BOOKED_OCTOBER_READS_SEPTEMBER, BOOKED_NOVEMBER, DRAFT_DECEMBER] })
+    mock.enqueue({ data: [] })
+    const result = await upsert(['2026-10-19'], { kind: 'worked', carriedToRunId: 'run-dec' })
+    expect(carriedTo(result)).toEqual({ '2026-10-19': null })
+    expect(fromCalls()).not.toContain('salary_run_employees')
+  })
+
+  it('leaves absence between the windows as before when October paid the employee nothing', async () => {
+    mock.enqueue({ data: [BOOKED_OCTOBER_READS_SEPTEMBER, BOOKED_NOVEMBER, DRAFT_DECEMBER] })
+    mock.enqueue({ data: [] })
+    mock.enqueue(payslips(['run-dec']))
+    const result = await upsert(['2026-10-19'], { absenceType: 'vab', carriedToRunId: 'run-dec' })
+    expect(carriedTo(result)).toEqual({ '2026-10-19': null })
+  })
+
+  it('carries a day registered between the windows before November settled, when the later run is named', async () => {
+    const runs = [BOOKED_OCTOBER_READS_SEPTEMBER, BOOKED_NOVEMBER, DRAFT_DECEMBER]
+    mock.enqueue({ data: runs })
+    mock.enqueue({ data: [{ absence_date: '2026-10-19', carried_to_run_id: null }] })
+    const kept = await upsert(['2026-10-19'], { absenceType: 'vab' })
+    expect(carriedTo(kept)).toEqual({ '2026-10-19': null })
+    expect(fromCalls()).not.toContain('salary_run_employees')
+
+    mock.enqueue({ data: runs })
+    mock.enqueue({ data: [{ absence_date: '2026-10-19', carried_to_run_id: null }] })
+    mock.enqueue(payslips(['run-dec'], ['run-oct']))
+    const carried = await upsert(['2026-10-19'], { absenceType: 'vab', carriedToRunId: 'run-dec' })
+    expect(carriedTo(carried)).toEqual({ '2026-10-19': 'run-dec' })
+  })
+
+  it('leaves history before a first window that starts inside its pay month free', async () => {
+    const BOOKED_FIRST_OCTOBER = run({
+      id: 'run-oct',
+      status: 'booked',
+      period_year: 2026,
+      period_month: 10,
+      deviation_period_start: '2026-10-16',
+      deviation_period_end: '2026-10-31',
+    })
+    mock.enqueue({ data: [BOOKED_FIRST_OCTOBER, BOOKED_NOVEMBER, DRAFT_DECEMBER] })
+    mock.enqueue({ data: [] })
+    const result = await upsert(['2026-10-05'], { absenceType: 'sick' })
+    expect(carriedTo(result)).toEqual({ '2026-10-05': null })
+  })
+
+  it('leaves a day free that a later run can still read: no run after it is paid or declared', async () => {
+    mock.enqueue({ data: [BOOKED_OCTOBER_READS_SEPTEMBER] })
+    mock.enqueue({ data: [] })
+    const noNovember = await upsert(['2026-10-19'], { absenceType: 'vab' })
+    expect(carriedTo(noNovember)).toEqual({ '2026-10-19': null })
+
+    // A November draft reading November can still be made again to read October.
+    mock.enqueue({ data: [BOOKED_OCTOBER_READS_SEPTEMBER, DRAFT_NOVEMBER] })
+    mock.enqueue({ data: [] })
+    const draftNovember = await upsert(['2026-10-19'], { absenceType: 'vab', carriedToRunId: 'run-nov' })
+    expect(carriedTo(draftNovember)).toEqual({ '2026-10-19': null })
+    expect(fromCalls()).not.toContain('salary_run_employees')
+  })
+
+  it('leaves a day free in a month the company ran no payroll for: a month without a run paid nobody', async () => {
+    const BOOKED_SEPTEMBER = run({
+      id: 'run-sep',
+      status: 'booked',
+      period_year: 2026,
+      period_month: 9,
+      deviation_period_start: '2026-09-01',
+      deviation_period_end: '2026-09-30',
+    })
+    mock.enqueue({ data: [BOOKED_SEPTEMBER, BOOKED_NOVEMBER, DRAFT_DECEMBER] })
+    mock.enqueue({ data: [] })
+    const result = await upsert(['2026-10-19'], { absenceType: 'vab', carriedToRunId: 'run-dec' })
+    expect(carriedTo(result)).toEqual({ '2026-10-19': null })
+  })
+
+  it('leaves history before the first run free: sick days registered for the lookback', async () => {
+    mock.enqueue({ data: [BOOKED_OCTOBER_READS_SEPTEMBER, BOOKED_NOVEMBER, DRAFT_DECEMBER] })
+    mock.enqueue({ data: [] })
+    const result = await upsert(['2026-06-10', '2026-08-31'], { absenceType: 'sick' })
+    expect(carriedTo(result)).toEqual({ '2026-06-10': null, '2026-08-31': null })
+  })
+
+  it('takes the last version of the month that paid: a corrected October under its correction', async () => {
+    const correctedOctober = { ...BOOKED_OCTOBER_READS_SEPTEMBER, status: 'corrected' }
+    const octoberCorrection = { ...BOOKED_OCTOBER_READS_SEPTEMBER, id: 'run-oct-c1', corrects_run_id: 'run-oct' }
+    mock.enqueue({ data: [correctedOctober, octoberCorrection, BOOKED_NOVEMBER, DRAFT_DECEMBER] })
+    mock.enqueue({ data: [] })
+    mock.enqueue(payslips(['run-dec'], ['run-oct-c1']))
+    const result = await upsert(['2026-10-19'], { absenceType: 'vab', carriedToRunId: 'run-dec' })
+    expect(carriedTo(result)).toEqual({ '2026-10-19': 'run-dec' })
+  })
+
+  describe('a booked correction of the month left the employee off', () => {
+    const CORRECTED_OCTOBER = { ...BOOKED_OCTOBER_READS_SEPTEMBER, status: 'corrected' }
+    const OCTOBER_CORRECTION = { ...BOOKED_OCTOBER_READS_SEPTEMBER, id: 'run-oct-c1', corrects_run_id: 'run-oct' }
+    const RUNS = [CORRECTED_OCTOBER, OCTOBER_CORRECTION, BOOKED_NOVEMBER, DRAFT_DECEMBER]
+    /** The employee's payslips read once, on December and on both versions of October. */
+    const READ = ['salary_run_id', ['run-dec', 'run-oct', 'run-oct-c1']]
+
+    it('refuses the day when the original paid a monthly salary: the correction paid nothing to deduct from (not_paid_then)', async () => {
+      mock.enqueue({ data: RUNS })
+      mock.enqueue({ data: [] })
+      mock.enqueue(payslips(['run-dec'], ['run-oct']))
+      const carried = await upsert(['2026-10-19'], { absenceType: 'vab', carriedToRunId: 'run-dec' })
+      expect(carried).toEqual({
+        ok: false,
+        code: 'SALARY_REGISTER_LATE_DAY_REFUSED',
+        details: {
+          carried_to_run_id: 'run-dec',
+          reason: 'not_paid_then',
+          late_dates: ['2026-10-19'],
+          salary_run: { salary_run_id: 'run-dec', status: 'draft', period_year: 2026, period_month: 12 },
+          period_salary_run: { salary_run_id: 'run-oct-c1', status: 'booked', period_year: 2026, period_month: 10 },
+        },
+      })
+      expect(mock.findCalls('salary_run_employees', 'in').at(-1)).toEqual(READ)
+
+      // Without a later run named the write is refused as a late day, as in a window: never stored unread.
+      mock.enqueue({ data: RUNS })
+      mock.enqueue({ data: [] })
+      mock.enqueue(payslips(['run-dec'], ['run-oct']))
+      const plain = await upsert(['2026-10-19'], { absenceType: 'vab' })
+      expect(plain).toMatchObject({
+        ok: false,
+        code: 'SALARY_REGISTER_DATES_LOCKED_BY_RUN',
+        details: { salary_run_id: 'run-oct-c1', reason: 'late_day_needs_later_run', later_salary_run: { salary_run_id: 'run-dec' } },
+      })
+    })
+
+    it('leaves the day as before when no version of the month paid the employee', async () => {
+      mock.enqueue({ data: RUNS })
+      mock.enqueue({ data: [] })
+      mock.enqueue(payslips(['run-dec']))
+      const result = await upsert(['2026-10-19'], { absenceType: 'vab', carriedToRunId: 'run-dec' })
+      expect(carriedTo(result)).toEqual({ '2026-10-19': null })
+      expect(mock.findCalls('salary_run_employees', 'in').at(-1)).toEqual(READ)
+    })
+
+    it('leaves the day as before when the original paid the employee by the hour', async () => {
+      mock.enqueue({ data: RUNS })
+      mock.enqueue({ data: [] })
+      mock.enqueue(payslips(['run-dec', 'hourly'], ['run-oct', 'hourly']))
+      const result = await upsert(['2026-10-19'], { absenceType: 'vab', carriedToRunId: 'run-dec' })
+      expect(carriedTo(result)).toEqual({ '2026-10-19': null })
+      expect(mock.findCalls('salary_run_employees', 'in').at(-1)).toEqual(READ)
+    })
+  })
+})
+
 describe('planRegisterUpsert: days already registered', () => {
   it('does not rewrite a day a booked run read, even with a later run named', async () => {
     mock.enqueue({ data: [BOOKED_OCTOBER, DRAFT_NOVEMBER] })

@@ -61,7 +61,7 @@ export const CarriedToRunIdSchema = z
   .string()
   .uuid()
   .describe(
-    'For days on dates a paid, booked or declared salary run already read (late days): the next ordinary salary run that is neither paid nor declared, a draft with the employee on it. It deducts or pays them, shows them on the payslip and reports them in its AGI. A correction draft is taken only when named, and only while its period\'s AGI is not filed. Days no paid or declared run read ignore it.',
+    'For days on dates a paid, booked or declared salary run already read, or a monthly-paid employee\'s absence between two runs\' windows behind one (late days): the next ordinary salary run that is neither paid nor declared, a draft with the employee on it. It deducts or pays them, shows them on the payslip and reports them in its AGI. A correction draft is taken only when named, and only while its period\'s AGI is not filed. Other days ignore it.',
   )
 
 /**
