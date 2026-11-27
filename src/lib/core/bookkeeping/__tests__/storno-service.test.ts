@@ -113,7 +113,7 @@ vi.mock('@/lib/core/bookkeeping/correction-bank-leg', () => ({
 // the inbox item, the utlägg) follow the correction
 // (correction-payment-relink.test.ts covers the queries). Neither consumes a
 // queued result.
-const mockRelinkPaymentRows = vi.fn(async () => undefined)
+const mockRelinkPaymentRows = vi.fn(async (): Promise<string | undefined> => undefined)
 const mockRelinkBookedRecords = vi.fn(async (): Promise<string | undefined> => undefined)
 vi.mock('@/lib/core/bookkeeping/correction-payment-relink', () => ({
   relinkPaymentRowsToEntry: (...args: unknown[]) => mockRelinkPaymentRows(...(args as [])),
@@ -359,6 +359,7 @@ describe('correctEntry', () => {
       expect(result.corrected.id).toBe('corrected-1')
       expect(result).not.toHaveProperty('transactionRelinkError')
       expect(result).not.toHaveProperty('documentRelinkError')
+      expect(result).not.toHaveProperty('recordRelinkError')
     })
 
     it('keeps the person\'s own text and puts the reference after it', async () => {
@@ -1103,8 +1104,20 @@ describe('correctEntry', () => {
 
       expect(result.reversal.id).toBe('reversal-1')
       expect(result.corrected.id).toBe('corrected-1')
+      // The failure is on the result, like the bank row and underlag relinks.
+      expect(result.recordRelinkError).toBe('KONTANTMETOD_CARRY_LINK_LOCKED')
       // The underlag still follows: the relinks do not depend on each other.
       expect(supabase.rpc).toHaveBeenCalledWith('relink_documents_to_correction', expect.anything())
+    })
+
+    it('surfaces a payment row relink failure on the result the same way', async () => {
+      setupResults()
+      mockRelinkPaymentRows.mockResolvedValueOnce('permission denied for table invoice_payments')
+      const supabase = makeClient()
+      const result = await correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', correctedLines)
+
+      expect(result.corrected.id).toBe('corrected-1')
+      expect(result.recordRelinkError).toBe('permission denied for table invoice_payments')
     })
 
     it('surfaces a junction relink failure on the result instead of throwing (correction chain stays traceable)', async () => {

@@ -380,6 +380,8 @@ export async function correctEntry(
   corrected: JournalEntry
   transactionRelinkError?: string
   documentRelinkError?: string
+  /** A payment row or a booked record (invoice, inbox item, utlägg) that stayed on the reversed original. */
+  recordRelinkError?: string
 }> {
   // Validate the corrected lines are balanced
   const balance = validateBalance(correctedLines)
@@ -781,6 +783,7 @@ export async function correctEntry(
   // (reverses_id, correction_of_id).
   let transactionRelinkError: string | undefined
   let documentRelinkError: string | undefined
+  let recordRelinkError: string | undefined
   if (!moved) {
     // ===== Mark original as reversed (CAS guard: only if still 'posted') =====
     const { data: updatedOriginal, error: casError } = await supabase
@@ -851,11 +854,14 @@ export async function correctEntry(
     }
     // The invoice payment rows follow too, so the invoice reads as paid by the
     // verifikat that stands, not by the reversed original (PH 227).
-    await relinkPaymentRowsToEntry(supabase, companyId, originalEntryId, correctedEntry!.id)
+    const paymentRowRelinkError = await relinkPaymentRowsToEntry(supabase, companyId, originalEntryId, correctedEntry!.id)
     // So do the records the original books, each by its own verifikat
     // pointer: the invoice, the inbox item it was booked from and the utlägg.
     // The corrected verifikat books them now.
-    await relinkBookedRecordsToEntry(supabase, companyId, originalEntryId, correctedEntry!.id)
+    const bookedRecordRelinkError = await relinkBookedRecordsToEntry(supabase, companyId, originalEntryId, correctedEntry!.id)
+    // Surfaced on the result like the two relinks beside them, so a caller
+    // can warn instead of reporting a clean correction.
+    recordRelinkError = paymentRowRelinkError ?? bookedRecordRelinkError
     documentRelinkError = await relinkDocumentsToEntry(
       supabase,
       userId,
@@ -882,6 +888,7 @@ export async function correctEntry(
     corrected: finalCorrected as JournalEntry,
     ...(transactionRelinkError ? { transactionRelinkError } : {}),
     ...(documentRelinkError ? { documentRelinkError } : {}),
+    ...(recordRelinkError ? { recordRelinkError } : {}),
   }
 
   // Both new verifikat are posted vouchers like any other: announce each as
