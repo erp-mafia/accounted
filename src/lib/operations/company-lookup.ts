@@ -7,11 +7,16 @@
  * extension, through lib/company-lookup/registry-lookup.ts): core never
  * imports extension code, so without the extension the answer is
  * `unavailable`, reason not_configured. The call is charged to the share the
- * MCP lookup spends (mcp_lookup in lib/tic-budget) with its daily cap per
- * subject, here the key's user, so a key reaches no further over REST than
- * over MCP. MCP keeps its hand-written tool: it works before any company
- * exists and adds the onboarding guidance (the create_company prefill, the
- * questions still to ask) on top of the same register answer.
+ * MCP lookup spends (mcp_lookup in lib/tic-budget) under the same subject the
+ * MCP tool charges, the API key (its user when there is none), so one key has
+ * one daily cap over both doors and reaches no further over REST than over
+ * MCP. MCP keeps its hand-written tool: it works before any company exists
+ * and adds the onboarding guidance (the create_company prefill, the questions
+ * still to ask) on top of the same register answer.
+ *
+ * The v1 gates treat every POST as a write: a viewer's key, a key with
+ * read-only access to the company and a test key are refused, as for every
+ * POST. MCP's tool serves them.
  *
  * A read sent as POST: a sole trader's organisationsnummer is the owner's
  * personnummer, and a URL is copied into request logs and error telemetry
@@ -75,13 +80,15 @@ export const companyLookupGet = defineOperation({
   docs: {
     summary: 'Look up a Swedish company in the public register by organisationsnummer.',
     description:
-      'Asks the public company register for the company behind an organisationsnummer: its registered name, address, legal form, F-skatt and VAT registration, fiscal year, registration date and SNI codes, and whether it has ceased. status found answers the company; not_found means the register knows no such number; unavailable means the register could not be asked (reason). The same register answer gnubok_lookup_company gives over MCP. A read sent as POST, so the number (a sole trader\'s is a personnummer) stays out of URLs and logs.',
+      'Asks the public company register for the company behind an organisationsnummer: its registered name, address, legal form, F-skatt and VAT registration, fiscal year, registration date and SNI codes, and whether it has ceased. status found answers the company; not_found means the register knows no such number; unavailable means the register gave no usable answer (reason). The same register answer gnubok_lookup_company gives over MCP. A read sent as POST, so the number (a sole trader\'s is a personnummer) stays out of the URL, which request logs and error telemetry copy; keep it out of your own logs too.',
     useWhen:
       'Before creating a customer or supplier from an organisationsnummer, or to check a counterparty\'s name, address, F-skatt or VAT registration.',
     doNotUseFor:
       'The company\'s own settings (GET /settings), Bankgirot\'s name for a giro number (GET /payments/creditor-lookup), or searching the register by name.',
     pitfalls: [
-      'Every lookup the register is asked spends from a shared monthly budget, with a daily cap per user: past it the answer is unavailable, reason rate_limited, until the next day. Keep the answer instead of asking again.',
+      'Every lookup the register is asked spends from a shared monthly budget, with a daily cap per API key that counts its MCP lookups too: past either the answer is unavailable, reason rate_limited (the daily cap resets the next day, the monthly budget at its next cycle). Keep the answer instead of asking again.',
+      'Send no Idempotency-Key: this is a read, and with a key the answer, an unavailable one too, is replayed for 24 hours.',
+      'A viewer\'s key, a key with read-only access to the company and a test key are refused (403), as on every POST; over MCP gnubok_lookup_company serves them.',
       'A newly registered company can take days to appear: not_found is the register\'s answer today, not proof the number is wrong.',
       'vat_registered false also covers a register that says nothing: confirm VAT with the company before invoicing without it.',
       'A sole trader\'s number is the owner\'s personnummer, and the register answers the owner\'s name: treat the answer as personal data.',
@@ -123,7 +130,7 @@ export const companyLookupGet = defineOperation({
     reason: z
       .enum(REGISTRY_UNAVAILABLE_REASONS)
       .nullable()
-      .describe('With unavailable: not_configured (this installation has no register), rate_limited (the lookup budget or the register\'s quota is spent: try tomorrow), timeout, registry_error. Null otherwise.'),
+      .describe('With unavailable: not_configured (this installation has no register), rate_limited (the key\'s daily cap, the monthly lookup budget or the register\'s own quota is spent), timeout, registry_error (the register failed or answered something unreadable). Null otherwise.'),
   }),
   http: { method: 'POST', path: '/api/v1/companies/:companyId/company-lookup' },
   run: async (ctx, { org_number }) => {
@@ -131,7 +138,8 @@ export const companyLookupGet = defineOperation({
     const orgNumber = normalizeOrgNumber(org_number) as string
     let outcome: Awaited<ReturnType<typeof lookupCompanyInRegistry>>
     try {
-      outcome = await lookupCompanyInRegistry(orgNumber, { purpose: 'mcp_lookup', subject: ctx.userId })
+      // The subject gnubok_lookup_company charges: the key, else its user.
+      outcome = await lookupCompanyInRegistry(orgNumber, { purpose: 'mcp_lookup', subject: ctx.apiKeyId ?? ctx.userId })
     } catch (err) {
       return { ok: false, code: 'UNKNOWN_ERROR', error: err }
     }

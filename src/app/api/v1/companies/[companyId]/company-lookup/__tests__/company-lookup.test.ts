@@ -111,7 +111,7 @@ describe('POST /api/v1/companies/:companyId/company-lookup', () => {
     },
   )
 
-  it('answers the register\'s company, charged to the MCP lookup\'s share per user', async () => {
+  it('answers the register\'s company, charged to the MCP lookup\'s share under the key, as MCP charges it', async () => {
     lookup.mockResolvedValue({ status: 'found', result: found() })
     const res = await post({ org_number: ' 556677-8899 ' })
     expect(res.status).toBe(200)
@@ -131,8 +131,8 @@ describe('POST /api/v1/companies/:companyId/company-lookup', () => {
       },
       reason: null,
     })
-    // The canonical number, and the budget the MCP lookup spends.
-    expect(lookup).toHaveBeenCalledWith('5566778899', { purpose: 'mcp_lookup', subject: 'user-1' })
+    // The canonical number, and the budget and subject the MCP lookup spends (the key's id).
+    expect(lookup).toHaveBeenCalledWith('5566778899', { purpose: 'mcp_lookup', subject: 'ak_1' })
   })
 
   it('a twelve-digit number with the century is the same number', async () => {
@@ -157,6 +157,13 @@ describe('POST /api/v1/companies/:companyId/company-lookup', () => {
     const res = await post({ org_number: '5566778899' })
     expect(res.status).toBe(200)
     expect((await res.json()).data).toEqual({ status: 'unavailable', company: null, reason: 'rate_limited' })
+  })
+
+  it('a reply the provider could not read is the register giving no answer, not a server error', async () => {
+    lookup.mockRejectedValue(new TypeError("Cannot read properties of undefined (reading 'names')"))
+    const res = await post({ org_number: '5566778899' })
+    expect(res.status).toBe(200)
+    expect((await res.json()).data).toEqual({ status: 'unavailable', company: null, reason: 'registry_error' })
   })
 
   it('without an extension that provides the register, answers unavailable: not_configured', async () => {

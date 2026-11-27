@@ -1,5 +1,8 @@
+import { createLogger } from '@/lib/logger'
 import type { TicCallPurpose } from '@/lib/tic-budget/budget'
 import { LOOKUP_COMPANY_SERVICE, type RegistryLookupOutcome } from './types'
+
+const log = createLogger('company-lookup')
 
 /**
  * A company in the public register by organisationsnummer, asked of the
@@ -24,5 +27,13 @@ export async function lookupCompanyInRegistry(
     (ext) => typeof ext.services?.[LOOKUP_COMPANY_SERVICE] === 'function',
   )
   if (!provider) return { status: 'unavailable', reason: 'not_configured' }
-  return (await provider.services![LOOKUP_COMPANY_SERVICE](orgNumber, charge)) as RegistryLookupOutcome
+  try {
+    return (await provider.services![LOOKUP_COMPANY_SERVICE](orgNumber, charge)) as RegistryLookupOutcome
+  } catch (err) {
+    // The provider answers the register's own failures itself; anything it
+    // throws (a reply it could not read, its own bug) is still the register
+    // giving no answer to the caller. Logged, so a bug stays visible.
+    log.error('registry lookup failed', { provider: provider.id, error: err instanceof Error ? err.message : String(err) })
+    return { status: 'unavailable', reason: 'registry_error' }
+  }
 }
