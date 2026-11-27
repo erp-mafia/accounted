@@ -11776,6 +11776,13 @@ const POS_SALES: Record<string, StructuredErrorEntry> = {
     message_sv: 'Kassan är redan kopplad till företaget.',
     message_en: 'This point-of-sale venue is already connected to the company.',
   },
+  // The exchange-rate read (lib/operations/exchange-rates.ts): Riksbanken
+  // limits requests per IP, so a sandbox company never asks it.
+  EXCHANGE_RATE_SANDBOX: {
+    httpStatus: 403,
+    message_sv: 'Valutakursen kan inte hämtas från sandlådan. Skapa ett konto för att använda externa tjänster.',
+    message_en: 'The exchange rate cannot be read from the sandbox. Create an account to use external services.',
+  },
   POS_SANDBOX_BLOCKED: {
     httpStatus: 403,
     message_sv: 'Kassasystem kan inte kopplas i sandlådan.',

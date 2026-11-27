@@ -17779,7 +17779,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_reconcile_signoff',
     keywords: ['avstämning', 'avstämt', 'signera avstämning'],
     title: 'Reconcile: Sign off',
-    description: 'Mark one account (skattekonto, bank:<id> or manual:<BAS>) as reconciled through a date ("avstämt t.o.m."). Refused unless unexplained_difference is 0, or force + note. Manual accounts without a specification take external_balance (underlag, ledger sign). Stages; dry_run previews.',
+    description: 'Mark one account (skattekonto, bank:<id> or manual:<BAS>) as reconciled through a date ("avstämt t.o.m."). Refused unless unexplained_difference is 0, or force + note. Manual (no specification) and unconnected bank accounts take external_balance. Stages; dry_run previews.',
     catalogVisibility: 'search',
     inputSchema: {
       type: 'object',
@@ -17789,7 +17789,7 @@ export const tools: McpTool[] = [
         through_date: { type: 'string', description: 'Inclusive YYYY-MM-DD the account is reconciled through (not in the future; not past the skattekonto snapshot).' },
         note: { type: 'string', description: 'Free text. Required with force.' },
         force: { type: 'boolean', description: 'Sign despite an unexplained difference or an unknown outside balance. Needs note.' },
-        external_balance: { type: 'number', description: 'Manual accounts without a system specification only: balance per underlag, ledger sign (liabilities negative).' },
+        external_balance: { type: 'number', description: 'Balance per underlag at the end of through_date, ledger sign (liabilities negative), judged against the booked balance. Manual accounts without a system specification, and bank accounts without a bank connection (the statement balance).' },
         ...STAGING_ARGS_PROPERTIES,
       },
       required: ['account_key', 'through_date'],
