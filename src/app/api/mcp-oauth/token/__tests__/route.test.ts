@@ -1,3 +1,4 @@
+import { createHash } from 'crypto'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 
@@ -296,16 +297,27 @@ describe('POST /api/mcp-oauth/token', () => {
       const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
       mocks.supabaseFactory.mockReturnValue(supabase)
       const results = exchangeResults()
-      results.splice(3, 0, {
-        data: [{ id: 'p-1', slug: 'acme', name: 'Acme', host: 'partner.example.com', path: '/oauth/callback', match: 'exact', created_at: '2026-11-19T12:00:00Z' }],
-        error: null,
-      })
+      results.splice(
+        3,
+        0,
+        {
+          data: [{ id: 'p-1', slug: 'acme', name: 'Acme', host: 'partner.example.com', path: '/oauth/callback', match: 'exact', created_at: '2026-11-19T12:00:00Z' }],
+          error: null,
+        },
+        { data: 'public', error: null }, // oauth_client_authentication: the partner holds no secret
+      )
       enqueueMany(results)
       const res = await POST(formRequest({ ...codeExchange, redirect_uri: redirectUri }))
       expect(res.status).toBe(200)
       expect(createKeyArgs(supabase)).toMatchObject({ p_client: 'partner:acme', p_name: 'MCP-klient (OAuth)' })
       expect(findCall('oauth_partner_clients', 'eq')).toEqual(['host', 'partner.example.com'])
       expect(findCall('oauth_client_registrations', 'eq')).toBeUndefined()
+      // A code from before /authorize bound the client is checked all the same.
+      expect(supabase.rpc).toHaveBeenCalledWith('oauth_client_authentication', {
+        p_client: 'partner:acme',
+        p_client_id: null,
+        p_client_secret_hash: null,
+      })
     })
 
     it('rejects an already-used auth code (replay)', async () => {
@@ -1058,6 +1070,271 @@ describe('POST /api/mcp-oauth/token', () => {
       expect(res.status).toBe(500)
       const body = await res.json()
       expect(body.error).toBe('server_error')
+    })
+  })
+
+  describe('client authentication (a partner client that holds a secret)', () => {
+    const PARTNER_URI = 'https://partner.example.com/oauth/callback'
+    const SECRET = `accounted_cs_${'ab'.repeat(32)}`
+    const SECRET_HASH = createHash('sha256').update(SECRET).digest('hex')
+
+    function tokenRequest(body: Record<string, string>, headers: Record<string, string> = {}) {
+      return new Request('http://localhost/api/mcp-oauth/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...headers },
+        body: new URLSearchParams(body).toString(),
+      })
+    }
+
+    /** RFC 6749 section 2.3.1: both halves form-encoded, then Base64. */
+    function basic(clientId: string, secret: string): string {
+      return `Basic ${Buffer.from(`${encodeURIComponent(clientId)}:${encodeURIComponent(secret)}`).toString('base64')}`
+    }
+
+    /** A code /authorize bound to the partner client acme. */
+    function partnerCode() {
+      vi.mocked(decryptAuthCode).mockReturnValue({
+        userId: 'user-1',
+        codeChallenge: 'challenge',
+        redirectUri: PARTNER_URI,
+        partnerClientId: 'acme',
+        exp: Date.now() + 60_000,
+      })
+      vi.mocked(verifyPkce).mockReturnValue(true)
+    }
+
+    /** exchangeResults with the client-authentication answer before the pause lookup. */
+    function boundExchange(answer: { data?: unknown; error?: unknown }) {
+      const results = exchangeResults()
+      results.splice(3, 0, answer)
+      return results
+    }
+
+    const partnerExchange = { ...codeExchange, redirect_uri: PARTNER_URI }
+
+    function rpcNames(supabase: ReturnType<typeof createQueuedMockSupabase>['supabase']): string[] {
+      return supabase.rpc.mock.calls.map((c) => c[0] as string)
+    }
+
+    describe('authorization_code grant', () => {
+      it('exchanges the code for a client that authenticates with HTTP Basic (client_secret_basic)', async () => {
+        partnerCode()
+        const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+        mocks.supabaseFactory.mockReturnValue(supabase)
+        enqueueMany(boundExchange({ data: 'authenticated', error: null }))
+
+        const res = await POST(tokenRequest(partnerExchange, { Authorization: basic('acme', SECRET) }))
+        expect(res.status).toBe(200)
+        expect(supabase.rpc).toHaveBeenCalledWith('oauth_client_authentication', {
+          p_client: 'partner:acme',
+          p_client_id: 'acme',
+          p_client_secret_hash: SECRET_HASH,
+        })
+        // The key belongs to the client the code was bound to; the redirect
+        // URI is not looked up again.
+        expect(createKeyArgs(supabase).p_client).toBe('partner:acme')
+        expect(findCall('oauth_partner_clients', 'select')).toBeUndefined()
+        expect(findCall('oauth_client_registrations', 'select')).toBeUndefined()
+      })
+
+      it('accepts client_id and client_secret in the form body (client_secret_post)', async () => {
+        partnerCode()
+        const { supabase, enqueueMany } = createQueuedMockSupabase()
+        mocks.supabaseFactory.mockReturnValue(supabase)
+        enqueueMany(boundExchange({ data: 'authenticated', error: null }))
+
+        const res = await POST(tokenRequest({ ...partnerExchange, client_id: 'acme', client_secret: SECRET }))
+        expect(res.status).toBe(200)
+        expect(supabase.rpc).toHaveBeenCalledWith('oauth_client_authentication', {
+          p_client: 'partner:acme',
+          p_client_id: 'acme',
+          p_client_secret_hash: SECRET_HASH,
+        })
+      })
+
+      it('refuses a request without credentials: 401 invalid_client with a Basic challenge, and no key', async () => {
+        partnerCode()
+        const { supabase, enqueueMany } = createQueuedMockSupabase()
+        mocks.supabaseFactory.mockReturnValue(supabase)
+        enqueueMany(boundExchange({ data: 'refused', error: null }))
+
+        const res = await POST(tokenRequest({ ...partnerExchange, client_id: 'acme' }))
+        expect(res.status).toBe(401)
+        expect(res.headers.get('WWW-Authenticate')).toBe('Basic realm="oauth"')
+        const body = await res.json()
+        expect(body.error).toBe('invalid_client')
+        expect(body.access_token).toBeUndefined()
+        expect(supabase.rpc).toHaveBeenCalledWith('oauth_client_authentication', {
+          p_client: 'partner:acme',
+          p_client_id: null,
+          p_client_secret_hash: null,
+        })
+        expect(rpcNames(supabase)).not.toContain('create_api_key_with_allowlist')
+      })
+
+      it('refuses a wrong secret the same way, and sends only its hash', async () => {
+        partnerCode()
+        const { supabase, enqueueMany } = createQueuedMockSupabase()
+        mocks.supabaseFactory.mockReturnValue(supabase)
+        enqueueMany(boundExchange({ data: 'refused', error: null }))
+
+        const res = await POST(tokenRequest(partnerExchange, { Authorization: basic('acme', 'not-the-secret') }))
+        expect(res.status).toBe(401)
+        expect((await res.json()).error).toBe('invalid_client')
+        const args = supabase.rpc.mock.calls.find((c) => c[0] === 'oauth_client_authentication')![1] as Record<string, unknown>
+        expect(args.p_client_secret_hash).toBe(createHash('sha256').update('not-the-secret').digest('hex'))
+        expect(JSON.stringify(supabase.rpc.mock.calls)).not.toContain('not-the-secret')
+        expect(rpcNames(supabase)).not.toContain('create_api_key_with_allowlist')
+      })
+
+      it('answers invalid_request for a client that authenticates two ways at once', async () => {
+        partnerCode()
+        const { supabase, enqueueMany } = createQueuedMockSupabase()
+        mocks.supabaseFactory.mockReturnValue(supabase)
+        enqueueMany(boundExchange({ data: 'refused', error: null }))
+
+        const res = await POST(tokenRequest(
+          { ...partnerExchange, client_id: 'acme', client_secret: SECRET },
+          { Authorization: basic('acme', SECRET) },
+        ))
+        expect(res.status).toBe(400)
+        expect((await res.json()).error).toBe('invalid_request')
+        expect(rpcNames(supabase)).not.toContain('create_api_key_with_allowlist')
+      })
+
+      it('answers 500 and mints nothing when the lookup fails, rather than treat the client as public', async () => {
+        partnerCode()
+        const { supabase, enqueueMany } = createQueuedMockSupabase()
+        mocks.supabaseFactory.mockReturnValue(supabase)
+        enqueueMany(boundExchange({ data: null, error: { code: 'PGRST202', message: 'function not found' } }))
+
+        const res = await POST(tokenRequest(partnerExchange, { Authorization: basic('acme', SECRET) }))
+        expect(res.status).toBe(500)
+        expect((await res.json()).error).toBe('server_error')
+        expect(rpcNames(supabase)).not.toContain('create_api_key_with_allowlist')
+      })
+
+      it('refuses a code resolved to the partner by its redirect URI too (a code from before the binding)', async () => {
+        vi.mocked(decryptAuthCode).mockReturnValue({ userId: 'user-1', codeChallenge: 'challenge', redirectUri: PARTNER_URI, exp: Date.now() + 60_000 })
+        vi.mocked(verifyPkce).mockReturnValue(true)
+        const { supabase, enqueueMany } = createQueuedMockSupabase()
+        mocks.supabaseFactory.mockReturnValue(supabase)
+        const results = exchangeResults()
+        results.splice(
+          3,
+          0,
+          {
+            data: [{ id: 'p-1', slug: 'acme', name: 'Acme', host: 'partner.example.com', path: '/oauth/callback', match: 'exact', created_at: '2026-11-19T12:00:00Z' }],
+            error: null,
+          },
+          { data: 'refused', error: null },
+        )
+        enqueueMany(results)
+
+        const res = await POST(tokenRequest(partnerExchange))
+        expect(res.status).toBe(401)
+        expect(rpcNames(supabase)).not.toContain('create_api_key_with_allowlist')
+      })
+
+      // Public clients: Claude, ChatGPT and Gemini register as public clients
+      // (register/__tests__) and are never asked for credentials. Whatever
+      // they send is not read, and their exchange makes no new call.
+      it.each([
+        ['Claude with no credentials', 'https://claude.ai/api/cb', {}, {}],
+        ['ChatGPT with its client_id in the body', 'https://chatgpt.com/connector_platform_oauth_redirect', { client_id: 'b9f6a1e2-1111-4222-8333-944455556666' }, {}],
+        [
+          'Gemini, which asked for client_secret_post at registration, with an empty secret',
+          'https://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-1234567890-app_accounted_se',
+          { client_id: 'b9f6a1e2-1111-4222-8333-944455556666', client_secret: '' },
+          {},
+        ],
+        ['a public client with a Basic header and an empty password', 'https://claude.ai/api/cb', {}, { Authorization: basic('b9f6a1e2-1111-4222-8333-944455556666', '') }],
+        ['a public client with a secret it was never issued', 'https://claude.ai/api/cb', { client_id: 'b9f6a1e2-1111-4222-8333-944455556666', client_secret: 'stray' }, {}],
+        ['a public client with credentials sent two ways', 'https://claude.ai/api/cb', { client_secret: 'stray' }, { Authorization: basic('x', 'y') }],
+      ])('exchanges the code of %s exactly as before', async (_name, redirectUri, extraBody, headers) => {
+        vi.mocked(decryptAuthCode).mockReturnValue({ userId: 'user-1', codeChallenge: 'challenge', redirectUri, exp: Date.now() + 60_000 })
+        vi.mocked(verifyPkce).mockReturnValue(true)
+        const { supabase, enqueueMany } = createQueuedMockSupabase()
+        mocks.supabaseFactory.mockReturnValue(supabase)
+        enqueueMany(exchangeResults())
+
+        const res = await POST(tokenRequest({ ...codeExchange, redirect_uri: redirectUri, ...extraBody }, headers))
+        expect(res.status).toBe(200)
+        expect(rpcNames(supabase)).toEqual(['create_api_key_with_allowlist'])
+      })
+    })
+
+    describe('refresh_token grant', () => {
+      const refreshBody = (token: string, extra: Record<string, string> = {}) => ({ grant_type: 'refresh_token', refresh_token: token, ...extra })
+
+      it('hands the credentials to the rotation, which checks them in its own transaction', async () => {
+        const { token: refreshToken } = generateRefreshToken()
+        const { supabase, enqueue } = createQueuedMockSupabase()
+        mocks.supabaseFactory.mockReturnValue(supabase)
+        enqueue({ data: [{ outcome: 'rotated', scopes: ['reports:read'], api_key_id: 'key-1' }], error: null })
+
+        const res = await POST(tokenRequest(refreshBody(refreshToken), { Authorization: basic('acme', SECRET) }))
+        expect(res.status).toBe(200)
+        expect(rpcNames(supabase)).toEqual(['rotate_mcp_refresh_token_for_client'])
+        expect(supabase.rpc.mock.calls[0]![1]).toMatchObject({
+          p_presented_hash: hashRefreshToken(refreshToken),
+          p_grace_seconds: 120,
+          p_client_id: 'acme',
+          p_client_secret_hash: SECRET_HASH,
+        })
+      })
+
+      it('answers 401 invalid_client and no new pair when the grant needs the client to authenticate', async () => {
+        const { supabase, enqueue } = createQueuedMockSupabase()
+        mocks.supabaseFactory.mockReturnValue(supabase)
+        enqueue({ data: [{ outcome: 'client_auth_required', scopes: null, api_key_id: 'key-1' }], error: null })
+
+        const res = await POST(tokenRequest(refreshBody(generateRefreshToken().token, { client_id: 'acme' })))
+        expect(res.status).toBe(401)
+        expect(res.headers.get('WWW-Authenticate')).toBe('Basic realm="oauth"')
+        const body = await res.json()
+        expect(body.error).toBe('invalid_client')
+        expect(body.access_token).toBeUndefined()
+        expect(body.refresh_token).toBeUndefined()
+        expect(mocks.logInfo).toHaveBeenCalledWith('refresh refused: client authentication failed', {
+          apiKeyId: 'key-1',
+          outcome: 'client_auth_required',
+          credentials: 'none',
+        })
+      })
+
+      it('answers invalid_request when the grant needs the client and it authenticated two ways at once', async () => {
+        const { supabase, enqueue } = createQueuedMockSupabase()
+        mocks.supabaseFactory.mockReturnValue(supabase)
+        enqueue({ data: [{ outcome: 'client_auth_required', scopes: null, api_key_id: 'key-1' }], error: null })
+
+        const res = await POST(tokenRequest(
+          refreshBody(generateRefreshToken().token, { client_id: 'acme', client_secret: SECRET }),
+          { Authorization: basic('acme', SECRET) },
+        ))
+        expect(res.status).toBe(400)
+        expect((await res.json()).error).toBe('invalid_request')
+        // Unreadable credentials are not handed on: the rotation sees none.
+        expect(rpcNames(supabase)).toEqual(['rotate_mcp_refresh_token'])
+      })
+
+      it('makes the same call as before for a public client, whose client_id is not a credential', async () => {
+        const { token: refreshToken } = generateRefreshToken()
+        const { supabase, enqueue } = createQueuedMockSupabase()
+        mocks.supabaseFactory.mockReturnValue(supabase)
+        enqueue({ data: [{ outcome: 'rotated', scopes: null, api_key_id: 'key-1' }], error: null })
+
+        const res = await POST(tokenRequest(refreshBody(refreshToken, { client_id: 'b9f6a1e2-1111-4222-8333-944455556666' })))
+        expect(res.status).toBe(200)
+        expect(rpcNames(supabase)).toEqual(['rotate_mcp_refresh_token'])
+        expect(Object.keys(supabase.rpc.mock.calls[0]![1] as object).sort()).toEqual([
+          'p_grace_seconds',
+          'p_new_key_hash',
+          'p_new_key_prefix',
+          'p_new_refresh_hash',
+          'p_presented_hash',
+        ])
+      })
     })
   })
 
