@@ -180,6 +180,7 @@ import {
   describeUnnumberedInvoice,
   expectedNumberSuffix,
   refundEntryPreview,
+  sentDocumentKind,
 } from './invoice-stage-preview'
 import {
   describeRefundFailure,
@@ -5001,6 +5002,7 @@ async function stageInvoiceMailboxSend(request: {
       recipient_kind: check.data.recipient_kind,
       total: invoice.total,
       currency: invoice.currency,
+      document_kind: sentDocumentKind(invoice),
       ...issue,
     },
     actor,
@@ -12852,6 +12854,7 @@ export const tools: McpTool[] = [
           customer_email: customer.email,
           total: invoice.total,
           currency: invoice.currency,
+          document_kind: sentDocumentKind(invoice),
           ...(attachments.value.length > 0
             ? { attachments: attachments.value.map((a) => a.file_name) }
             : {}),
