@@ -1190,5 +1190,9 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * 160 -> 161 (2026-11-27): Ångra kreditering of a customer invoice
  * (POST /api/invoices/:id/uncredit), dashboard first; a v1 route and an MCP
  * tool are a follow-up.
+ * 161 -> 162 (2026-11-27): Skapa räntefaktura on the Dröjsmålsränta page
+ * (POST /api/invoices/late-payment-interest/invoices), dashboard first; its
+ * pull request raised 160 -> 161 beside the one above, and the two merged as
+ * one raise.
  */
-export const GAP_CEILING = 161
+export const GAP_CEILING = 162
