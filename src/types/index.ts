@@ -290,6 +290,11 @@ export interface UserUiState {
   // JournalEntryList). Per person, for every company and device: a sign-out
   // empties the browser's storage, so it is kept here.
   journal_density?: 'compact' | 'comfortable'
+  // Startsida, keyed per company (companyId -> start page id,
+  // lib/company/start-page.ts): where a sign-in or a company switch lands
+  // when nothing asked for another page. Read through storedStartPages: an
+  // id this build does not know reads as no choice.
+  start_page?: Record<string, string>
 }
 
 export type AgentPanelMode = 'docked' | 'floating'
