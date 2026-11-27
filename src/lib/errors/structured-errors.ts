@@ -11575,37 +11575,37 @@ const WEBSHOP_ORDERS: Record<string, StructuredErrorEntry> = {
   WEBSHOP_ORDER_VOIDED: {
     httpStatus: 409,
     message_sv:
-      'Ordern är markerad som makulerad. Ångra makuleringen först om du vill bokföra eller fakturera den härifrån.',
+      'Ordern är makulerad. Ångra makuleringen först för att bokföra eller fakturera den.',
     message_en:
-      'The order is marked as voided. Undo the void first if you want to book or invoice it from here.',
+      'The order is voided. Undo the void first to book or invoice it.',
   },
   WEBSHOP_ORDER_REFUND_PARENT_VOIDED: {
     httpStatus: 409,
     message_sv:
-      'Ordern som återbetalningen hör till är markerad som makulerad. Butiken har betalat tillbaka pengar, så ångra makuleringen och bokför ordern och återbetalningen.',
+      'Återbetalningens order är makulerad. Ångra makuleringen och bokför ordern och återbetalningen.',
     message_en:
-      'The order this refund belongs to is marked as voided. The store has refunded money, so undo the void and book the order and its refund.',
+      "The refund's order is voided. Undo the void and book the order and its refund.",
   },
   WEBSHOP_ORDER_NOT_CANCELLED: {
     httpStatus: 409,
     message_sv:
-      'Butiken rapporterar inte ordern som avbruten, så den kan inte makuleras. Bokför den, eller markera den som bokförd om den redan är bokförd.',
+      'Butiken rapporterar inte ordern som avbruten, så den kan inte makuleras.',
     message_en:
-      'The store does not report the order as cancelled, so it cannot be voided. Book it, or mark it as booked if it is already booked.',
+      'The store does not report the order as cancelled, so it cannot be voided.',
   },
   WEBSHOP_ORDER_CANCELLED_WITH_REFUND: {
     httpStatus: 409,
     message_sv:
-      'Butiken har betalat tillbaka pengar på ordern. Då har pengar rört sig, så ordern och återbetalningen bokförs i stället för att ordern makuleras.',
+      'Butiken har betalat tillbaka pengar på ordern, så den bokförs med sin återbetalning i stället för att makuleras.',
     message_en:
-      'The store has refunded money on the order. Money has then moved, so the order and its refund are booked instead of voiding the order.',
+      'The store has refunded money on the order, so it is booked with its refund instead of voided.',
   },
   WEBSHOP_ORDER_CANCELLED_IN_STORE: {
     httpStatus: 422,
     message_sv:
-      'Ordern är avbruten i butiken och bokförs inte automatiskt. Markera den som makulerad, eller bokför den enskilt om kunden har betalat.',
+      'Ordern är avbruten i butiken och bokförs inte automatiskt. Makulera den, eller bokför den enskilt om kunden har betalat.',
     message_en:
-      'The order is cancelled in the store and is not booked automatically. Mark it as voided, or book it individually if the customer has paid.',
+      'The order is cancelled in the store and is not booked automatically. Void it, or book it individually if the customer paid.',
   },
   WEBSHOP_ORDER_MARK_ENTRY_NOT_FOUND: {
     httpStatus: 404,
