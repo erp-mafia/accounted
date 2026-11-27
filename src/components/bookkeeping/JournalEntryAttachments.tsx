@@ -42,8 +42,8 @@ import { useViewerLock } from '@/components/ui/viewer-lock'
 import { useBranding } from '@/lib/branding/brand-context'
 import { DOCUMENT_UPLOAD_ACCEPT } from '@/lib/documents/upload-types'
 
-// "Välj från inkorgen": a dialog, loaded when the attachments first render it
-// rather than with every page that lists verifikat.
+// "Välj från inkorgen": mounted when it is first used, so the picker's code
+// loads then and not with every page that lists verifikat.
 const InboxDocumentPicker = dynamic(() => import('@/components/bookkeeping/InboxDocumentPicker'))
 
 interface DocumentRecord {
@@ -96,6 +96,7 @@ export default function JournalEntryAttachments({
   const [expandedDoc, setExpandedDoc] = useState<string | null>(null)
   const [showUpload, setShowUpload] = useState(false)
   const [showInboxPicker, setShowInboxPicker] = useState(false)
+  const [inboxPickerUsed, setInboxPickerUsed] = useState(false)
   const [uploadFiles, setUploadFiles] = useState<UploadedFile[]>([])
 
   // Docs listed here are filtered by journal_entry_id, so every row is bound
@@ -321,7 +322,10 @@ export default function JournalEntryAttachments({
         <div className="flex items-center gap-2">
           <Button
             variant="outline"
-            onClick={() => setShowInboxPicker(true)}
+            onClick={() => {
+              setInboxPickerUsed(true)
+              setShowInboxPicker(true)
+            }}
             disabled={!canWrite}
             title={lockedTitle}
           >
@@ -542,12 +546,14 @@ export default function JournalEntryAttachments({
         </DialogContent>
       </Dialog>
 
-      <InboxDocumentPicker
-        open={showInboxPicker}
-        onClose={() => setShowInboxPicker(false)}
-        journalEntryId={journalEntryId}
-        onLinked={fetchDocuments}
-      />
+      {inboxPickerUsed && (
+        <InboxDocumentPicker
+          open={showInboxPicker}
+          onClose={() => setShowInboxPicker(false)}
+          journalEntryId={journalEntryId}
+          onLinked={fetchDocuments}
+        />
+      )}
     </div>
   )
 }

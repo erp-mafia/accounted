@@ -49,9 +49,9 @@ import type { AvailableInboxDoc } from '@/lib/documents/inbox-available'
 //   `journalEntryIds` names the verifikat the user selected, and one pick
 //   links the document to all of them in one go: a monthly invoice or a bank
 //   statement that backs several verifikat. Each verifikat goes through the
-//   same POST link with copy: true, in the order given, so the first one
-//   takes a document nothing holds yet and every later one gets its own
-//   byte-identical copy. A document row holds one verifikat for good
+//   same POST link, in the order given: the first takes an inbox document
+//   itself and every later one gets its own byte-identical copy (copy: true).
+//   A document row holds one verifikat for good
 //   (enforce_document_journal_entry_immutability), and nothing moves.
 //
 // Each row carries a "Förhandsgranska" button that opens a quick dialog
@@ -310,10 +310,12 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, jou
   }
 
   // Sweep mode: the picked document onto every selected verifikat, one link
-  // per verifikat through the same route the single pick uses. copy: true on
-  // every call is safe: a document nothing holds is linked itself (the first
-  // verifikat), and one another verifikat holds is copied. One at a time, so
-  // the first link lands before the copies ask who holds the document.
+  // per verifikat through the same route the single pick uses, one at a time.
+  // An inbox document is linked itself first, without copy: if another
+  // verifikat took it since the list was read, the refusal stands, as for a
+  // single pick (a second verifikat on the same receipt is usually the same
+  // purchase booked twice). Once it is linked, and for a document from
+  // "Andra verifikationer", every verifikat gets a copy.
   async function handleSweep(doc: SweepDoc) {
     if (sweepIds.length === 0) return
     setLinkingId(doc.document_id)
@@ -328,7 +330,7 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, jou
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             journal_entry_id: id,
-            copy: true,
+            copy: doc.held || linked.length > 0,
             ...(doc.inbox_item_id && linked.length === 0 ? { inbox_item_id: doc.inbox_item_id } : {}),
           }),
         })

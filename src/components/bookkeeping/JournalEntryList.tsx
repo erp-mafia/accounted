@@ -105,9 +105,8 @@ import { collectPages } from '@/lib/lists/collect-pages'
 import type { JournalEntry, JournalEntryLine, UserUiState } from '@/types'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 
-// The underlag picker, loaded when the bulk bar's "Koppla underlag" or a
-// row's "Välj från inkorgen" first renders it: a dialog the list's first view
-// never shows.
+// The underlag picker: mounted when "Koppla underlag" is first used, so its
+// code loads then and not with the list.
 const InboxDocumentPicker = dynamic(() => import('@/components/bookkeeping/InboxDocumentPicker'))
 
 // Shared source of truth (lib/worklist/types.ts) so the per-row chip and
@@ -302,6 +301,8 @@ export default function JournalEntryList({
   // the picker opened so a refetch cannot change what is linked.
   const [sweepIds, setSweepIds] = useState<string[]>([])
   const [sweepOpen, setSweepOpen] = useState(false)
+  // Bumped after a sweep: an expanded row's underlag list reads itself again.
+  const [sweepRound, setSweepRound] = useState(0)
   const [bulkOpen, setBulkOpen] = useState(false)
   const [bulkCount, setBulkCount] = useState<number | null>(null)
   const [bulkReason, setBulkReason] = useState('')
@@ -961,6 +962,7 @@ export default function JournalEntryList({
       return next
     })
     selection.deselect(linkedIds)
+    setSweepRound((round) => round + 1)
     if (showMissingOnly) void fetchEntries({ preserveSelection: true })
   }
 
@@ -1991,6 +1993,7 @@ export default function JournalEntryList({
                               <JournalEntryTransactionLinks journalEntryId={entry.id} />
 
                               <JournalEntryAttachments
+                                key={`${entry.id}:${sweepRound}`}
                                 journalEntryId={entry.id}
                                 onCountChange={(c) => handleAttachmentCountChange(entry.id, c)}
                               />
@@ -2100,12 +2103,14 @@ export default function JournalEntryList({
       </div>
       )}
 
-      <InboxDocumentPicker
-        open={sweepOpen}
-        onClose={() => setSweepOpen(false)}
-        journalEntryIds={sweepIds}
-        onLinked={handleSweepLinked}
-      />
+      {sweepIds.length > 0 && (
+        <InboxDocumentPicker
+          open={sweepOpen}
+          onClose={() => setSweepOpen(false)}
+          journalEntryIds={sweepIds}
+          onLinked={handleSweepLinked}
+        />
+      )}
 
       {/* Filter-scoped bulk "Inget underlag krävs" confirmation */}
       <Dialog
