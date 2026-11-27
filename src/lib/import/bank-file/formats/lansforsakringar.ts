@@ -48,6 +48,7 @@ import { prepareContent } from '../../shared/encoding'
 import { preambleAccountIdentity } from '../account-identity'
 import { normalizeDate } from '../date-utils'
 import {
+  emptyParseResult,
   headerLikeCells,
   normalizeHeader,
   sniffDelimiter,
@@ -268,16 +269,7 @@ function rowAmount(cells: string[], layout: RowLayout): { value: number | null; 
 }
 
 function emptyResult(issue: BankFileParseIssue, columns?: BankFileParseResult['unrecognized_columns']): BankFileParseResult {
-  return {
-    format: FORMAT_ID,
-    format_name: FORMAT_NAME,
-    transactions: [],
-    date_from: null,
-    date_to: null,
-    issues: [issue],
-    ...(columns ? { unrecognized_columns: columns } : {}),
-    stats: { total_rows: 0, parsed_rows: 0, skipped_rows: 0, total_income: 0, total_expenses: 0 },
-  }
+  return emptyParseResult(FORMAT_ID, FORMAT_NAME, issue, columns)
 }
 
 export const lansforsakringarFormat: BankFileFormat = {

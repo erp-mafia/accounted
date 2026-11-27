@@ -30,6 +30,22 @@ export function bankCoveredByOpenPayments(bankName: string | null | undefined): 
 }
 
 /**
+ * Where an Enable Banking connection goes on once the old provider no longer
+ * carries it: its renewal is closed (the switch campaign is on) or its feed
+ * has ended (the deadline has passed). The switch to Open Payments where the
+ * campaign applies to the company (the switch can be made there) and Open
+ * Payments reaches the bank; the bank file import otherwise. The settings rows
+ * and the transactions page's renewal both read it, so a connection is sent
+ * to the same place from either.
+ */
+export function enableBankingWayOn(
+  bankName: string | null | undefined,
+  campaignAppliesToCompany: boolean,
+): 'switch' | 'import' {
+  return campaignAppliesToCompany && bankCoveredByOpenPayments(bankName) ? 'switch' : 'import'
+}
+
+/**
  * Whether the Koppla banken flow may go on with a bank: the server's answer
  * for this company when the bank list carried one (BankView.reached, which
  * lets a pilot company through to a bank on the list above), else the list.

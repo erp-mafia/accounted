@@ -18,6 +18,7 @@ import { lunarFormat } from './formats/lunar'
 import { northmillFormat } from './formats/northmill'
 import { wiseFormat } from './formats/wise'
 import { wiseStatementFormat } from './formats/wise-statement'
+import { myntFormat } from './formats/mynt'
 import { camt053Format } from './formats/camt053'
 import { genericCSVFormat } from './formats/generic-csv'
 
@@ -25,6 +26,10 @@ import { genericCSVFormat } from './formats/generic-csv'
  * Ordered list of format detectors.
  * camt.053 first (XML detection is unambiguous), then bank-specific CSV formats.
  * New bank formats go after existing ones but before generic_csv.
+ * One exception: Mynt goes ahead of Länsförsäkringar. Its header names seven
+ * columns no bank file has, while Länsförsäkringar also claims a file with
+ * no header it knows when a leading row holds two dates and an amount in the
+ * fifth column, which a Mynt row with a purchase in another currency does.
  * Generic CSV is last: it never auto-detects (manual fallback only).
  */
 const FORMATS: BankFileFormat[] = [
@@ -34,6 +39,7 @@ const FORMATS: BankFileFormat[] = [
   sebFormat,
   swedbankFormat,
   handelsbankenFormat,
+  myntFormat,
   lansforsakringarFormat,
   icaBankenFormat,
   skandiaFormat,

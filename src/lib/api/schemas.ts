@@ -6538,7 +6538,7 @@ export const MileageDistanceQuerySchema = z.object({
  * at compile time; a format id added to the union but not listed here only
  * degrades the ADVISORY duplicate preview (400), never the import itself.
  */
-const BANK_FILE_FORMAT_IDS = [
+export const BANK_FILE_FORMAT_IDS = [
   'nordea',
   'nordea_business',
   'seb',
@@ -6551,6 +6551,7 @@ const BANK_FILE_FORMAT_IDS = [
   'northmill',
   'wise',
   'wise_statement',
+  'mynt',
   'generic_csv',
   'camt053',
 ] as const satisfies readonly BankFileFormatId[]
