@@ -24,6 +24,7 @@ import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
 import { lineBalance } from '@/lib/bookkeeping/line-balance'
+import { isKronorCurrency } from '@/lib/bookkeeping/currency-utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { backfillStandardBASAccounts } from '@/lib/bookkeeping/account-backfill'
@@ -362,6 +363,11 @@ export async function strikeJournalEntryLines(
       credit_amount: l.credit_amount,
       line_description: l.line_description ?? null,
       dimensions: l.dimensions ?? {},
+      // Only what the caller stated: the RPC reads a line that names no
+      // currency as kronor, and refuses one beside a struck foreign line.
+      ...(l.currency !== undefined ? { currency: l.currency } : {}),
+      ...(l.amount_in_currency !== undefined ? { amount_in_currency: l.amount_in_currency } : {}),
+      ...(l.exchange_rate !== undefined ? { exchange_rate: l.exchange_rate } : {}),
     })),
     p_user_id: ctx.userId,
   })
@@ -391,6 +397,8 @@ interface LineRow {
   credit_amount: number | string
   line_description: string | null
   currency: string | null
+  amount_in_currency: number | string | null
+  exchange_rate: number | string | null
   dimensions: Record<string, string> | null
   sort_order: number
 }
@@ -401,18 +409,42 @@ interface PreviewLine {
   credit_amount: number
   line_description: string | null
   dimensions: Record<string, string>
+  /** The code as the RPC stores it: upper case, SEK for a line in kronor. */
+  currency: string
+  /** Foreign lines only: the amount in the currency, to the öre, and the rate. */
+  amount_in_currency: number | null
+  exchange_rate: number | null
 }
 
-/** Canonical key of a line, the same fields the RPC compares for "changes nothing". */
+/** The RPC's refusal of a struck foreign-currency line beside an added line that names no currency. */
+const FOREIGN_STRIKE_NEEDS_CURRENCY =
+  'Rättelsen stryker en rad i utländsk valuta. Ange valuta på varje ny rad: valutakod med belopp i valutan och kurs, eller SEK för en rad i kronor.'
+
+/** The code a line names, as the RPC stores it: upper case, SEK when it names none. */
+function storedCurrencyCode(code: string | null | undefined): string {
+  const trimmed = code?.trim()
+  return trimmed ? trimmed.toUpperCase() : 'SEK'
+}
+
+/**
+ * Canonical key of a line, the same fields the RPC compares for "changes
+ * nothing": a kronor line is plain SEK, a foreign one its code, amount in the
+ * currency and rate.
+ */
 function lineKey(l: PreviewLine): string {
   const dims = Object.keys(l.dimensions)
     .sort()
     .map((k) => `${k}=${l.dimensions[k]}`)
     .join(',')
-  return [l.account_number, roundOre(l.debit_amount), roundOre(l.credit_amount), l.line_description ?? '', dims].join('|')
+  const currency = isKronorCurrency(l.currency)
+    ? 'SEK'
+    : [l.currency, l.amount_in_currency ?? '', l.exchange_rate ?? ''].join('|')
+  return [l.account_number, roundOre(l.debit_amount), roundOre(l.credit_amount), l.line_description ?? '', dims, currency].join('|')
 }
 
 function toPreviewLine(row: LineRow): PreviewLine & { id: string } {
+  const currency = storedCurrencyCode(row.currency)
+  const foreign = !isKronorCurrency(currency)
   return {
     id: row.id,
     account_number: row.account_number,
@@ -420,6 +452,9 @@ function toPreviewLine(row: LineRow): PreviewLine & { id: string } {
     credit_amount: roundOre(Number(row.credit_amount) || 0),
     line_description: row.line_description,
     dimensions: row.dimensions ?? {},
+    currency,
+    amount_in_currency: foreign && row.amount_in_currency != null ? roundOre(Number(row.amount_in_currency)) : null,
+    exchange_rate: foreign && row.exchange_rate != null ? Number(row.exchange_rate) : null,
   }
 }
 
@@ -466,7 +501,9 @@ async function previewLineRattelse(
 
   const { data: lineData, error: linesError } = await supabase
     .from('journal_entry_lines')
-    .select('id, account_number, debit_amount, credit_amount, line_description, currency, dimensions, sort_order')
+    .select(
+      'id, account_number, debit_amount, credit_amount, line_description, currency, amount_in_currency, exchange_rate, dimensions, sort_order',
+    )
     .eq('journal_entry_id', entry.id)
     .order('sort_order', { ascending: true })
   if (linesError) {
@@ -481,8 +518,13 @@ async function previewLineRattelse(
     return refused('En eller flera rader som ska strykas hör inte till verifikationen.')
   }
   const struckRows = strikeIds.map((id) => byId.get(id)!)
-  if (struckRows.some((l) => l.currency && l.currency !== 'SEK')) {
-    return refused(`Rader i utländsk valuta kan inte strykas: ${STORNO_HINT}`)
+  // A struck foreign-currency line is replaced only by lines that name their
+  // currency, so none drops to kronor because its caller left it out.
+  if (
+    struckRows.some((l) => !isKronorCurrency(l.currency?.trim())) &&
+    input.lines.some((l) => !l.currency?.trim())
+  ) {
+    return refused(FOREIGN_STRIKE_NEEDS_CURRENCY)
   }
   if (strikeIds.length > 0) {
     const { data: linkedDocs } = await supabase
@@ -496,7 +538,8 @@ async function previewLineRattelse(
     }
   }
 
-  // Replacement lines: the same shape rules the RPC applies, SEK only.
+  // Replacement lines: the same shape rules the RPC applies. The amounts are
+  // kronor; a foreign line carries its code, amount in the currency and rate.
   const added: PreviewLine[] = []
   for (const l of input.lines) {
     const debit = roundOre(l.debit_amount || 0)
@@ -507,12 +550,25 @@ async function previewLineRattelse(
     if (debit === 0 && credit === 0) {
       return refused(`En rad måste ha ett belopp (konto ${l.account_number}).`)
     }
+    const currency = storedCurrencyCode(l.currency)
+    if (!/^[A-Z]{3}$/.test(currency)) {
+      return refused(`Valutakoden "${l.currency}" är ogiltig: ange tre bokstäver, till exempel EUR (konto ${l.account_number}).`)
+    }
+    const foreign = !isKronorCurrency(currency)
+    const amountInCurrency = foreign && l.amount_in_currency != null ? roundOre(l.amount_in_currency) : null
+    const exchangeRate = foreign ? (l.exchange_rate ?? null) : null
+    if (foreign && (amountInCurrency === null || amountInCurrency <= 0 || exchangeRate === null || exchangeRate <= 0)) {
+      return refused(`En rad i ${currency} måste ha belopp i valutan och kurs, båda över noll (konto ${l.account_number}).`)
+    }
     added.push({
       account_number: l.account_number,
       debit_amount: debit,
       credit_amount: credit,
       line_description: l.line_description?.trim() ? l.line_description.trim() : null,
       dimensions: l.dimensions ?? {},
+      currency,
+      amount_in_currency: amountInCurrency,
+      exchange_rate: exchangeRate,
     })
   }
 

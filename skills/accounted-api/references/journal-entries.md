@@ -1317,17 +1317,18 @@ Example response `200`:
 **Strike lines of a posted verifikat and add replacement lines inside the same verifikat (inline rättelse).**
 `scope:bookkeeping:write · risk:high · idempotent · dry-run`
 
-Line rättelse (BFL 5 kap 5 §): removes the listed lines from a posted verifikat and adds replacement lines in the same verifikat, without a rättelseverifikation and without a new voucher number. The correct_entry_lines_inline RPC enforces the envelope (posted, open and unlocked period, after the company lock date, at least two lines left, balanced to the öre, SEK only) and snapshots the struck originals with who and when to the immutable rättelse log, so the original stays readable. Standard BAS accounts missing from the chart are added first. Idempotent. Dry-runnable: the dry run shows the struck, added and resulting lines and writes nothing.
+Line rättelse (BFL 5 kap 5 §): removes the listed lines from a posted verifikat and adds replacement lines in the same verifikat, without a rättelseverifikation and without a new voucher number. The correct_entry_lines_inline RPC enforces the envelope (posted, open and unlocked period, after the company lock date, at least two lines left, balanced to the öre) and snapshots the struck originals with who and when to the immutable rättelse log, so the original stays readable. Amounts are kronor; a replacement line in a foreign currency also carries its currency, amount_in_currency and exchange_rate. Standard BAS accounts missing from the chart are added first. Idempotent. Dry-runnable: the dry run shows the struck, added and resulting lines and writes nothing.
 
-**Use when:** A posted verifikat in an open, unlocked period was booked on the wrong account or with a wrong amount split, e.g. 5410 that should have been 5420, and the user wants it fixed inside the verifikat the way Fortnox "ändra verifikat" does.
-**Do not use for:** Locked or closed periods (storno: POST /journal-entries/{id}/correct), foreign-currency lines, lines with a linked underlag, storno/year-end/VAT-settlement entries, drafts (PATCH /journal-entries/{id}), or cancelling a whole verifikat (/reverse).
+**Use when:** A posted verifikat in an open, unlocked period was booked on the wrong account or with a wrong amount split, e.g. 5410 that should have been 5420, or a line's kronor are right but its currency, amount in the currency or rate is missing or wrong, and the user wants it fixed inside the verifikat the way Fortnox "ändra verifikat" does.
+**Do not use for:** Locked or closed periods (storno: POST /journal-entries/{id}/correct), lines with a linked underlag, storno/year-end/VAT-settlement entries, drafts (PATCH /journal-entries/{id}), or cancelling a whole verifikat (/reverse).
 
 **Pitfalls:**
 - Inline rättelse is only for an open, unlocked period after the company lock date: otherwise 409 JOURNAL_RATTELSE_PERIOD_LOCKED, and storno (POST /journal-entries/{id}/correct) is the only lawful path (BFL 5 kap 5 §).
 - The resulting verifikat must balance (sum debit = sum credit > 0): 400 JOURNAL_ENTRY_NOT_BALANCED otherwise. Amounts are SEK with at most two decimals; account numbers are 4-digit strings.
-- strike_line_ids must be ids of this verifikat's lines (GET /journal-entries/{id}); a line in foreign currency or with a linked underlag cannot be struck (409 JOURNAL_RATTELSE_REFUSED).
+- strike_line_ids must be ids of this verifikat's lines (GET /journal-entries/{id}); a line with a linked underlag cannot be struck (409 JOURNAL_RATTELSE_REFUSED).
+- A line in a foreign currency needs currency (three letters), amount_in_currency and exchange_rate, both above zero; a line with no currency, or SEK, is kronor and stores neither. Striking a foreign-currency line needs currency on every added line (its code, or SEK to put it in kronor): 409 JOURNAL_RATTELSE_REFUSED otherwise.
 - A verifikat linked to a bank transaction may only change its bank-account net to the linked bank amount; linked customer/supplier payments keep their 15xx/24xx net. The dry run flags bank_anchor_check; the commit is authoritative.
-- Striking and re-adding identical lines answers 400 MEANINGLESS_CORRECTION.
+- Striking and re-adding identical lines, currency facts included, answers 400 MEANINGLESS_CORRECTION.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -1340,7 +1341,7 @@ Request body:
 ```ts
 {
   strike_line_ids?: string[],
-  lines?: { account_number: string, debit_amount?: number, credit_amount?: number, line_description?: string, dimensions?: Record<string, string> }[]
+  lines?: { account_number: string, debit_amount?: number, credit_amount?: number, line_description?: string, dimensions?: Record<string, string>, currency?: string, amount_in_currency?: number, exchange_rate?: number }[]
 }
 ```
 
