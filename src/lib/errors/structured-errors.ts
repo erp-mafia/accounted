@@ -13783,8 +13783,8 @@ const BOLAGET: Record<string, StructuredErrorEntry> = {
 const COMMITMENTS: Record<string, StructuredErrorEntry> = {
   COMMITMENTS_UNAVAILABLE: {
     httpStatus: 404,
-    message_sv: 'Avtal och åtaganden finns inte här ännu.',
-    message_en: 'Agreements and commitments are not available here yet.',
+    message_sv: 'Avtal och åtaganden slås på bolag för bolag och är inte påslaget för det här bolaget: skriv till support@accounted.se för att få det påslaget.',
+    message_en: 'Agreements and commitments are switched on company by company and are not on for this company: write to support@accounted.se to have them switched on.',
   },
   COMMITMENTS_REFERENCE_NOT_FOUND: {
     httpStatus: 404,

@@ -257,7 +257,7 @@ Example response `200`:
 **Which building blocks this company can use, and why not.**
 `scope:companies:read · risk:low · idempotent`
 
-Lists every module (the OpenAPI tags) for the company with a status, the reasons behind it and a resolution sentence, like Stripe account capabilities. Statuses: active (usable now); needs_plan (the paid plan does not include it: upgrade, or on a self-hosted instance add a connector key); off (turned off for this company); unsupported (not offered for this company: its country, or its legal form, such as payroll for an enskild firma that has not said it pays salaries). Reasons, the deciding one first: unsupported_country, unsupported_legal_form, needs_plan, disabled_by_company, dependency_unavailable (a module it needs is unsupported or off; it then takes that status). Kernels (platform, ledger) are always active. profile names the company profile (sole-trader, limited-company-no-employees, limited-company-with-employees, retail, association, or standard, every package on): the starting point for which packages the app menu and the MCP tool list show. A module in a package the profile leaves off is hidden there but keeps its status and still answers when called. A company without a stored profile has standard (source implicit). This is a read-only report: nothing here changes a profile or a module.
+Lists every module (the OpenAPI tags) for the company with a status, the reasons behind it and a resolution sentence, like Stripe account capabilities. Statuses: active (usable now); needs_plan (the paid plan does not include it: upgrade, or on a self-hosted instance add a connector key); off (turned off for this company); unsupported (not offered for this company: its country, or its legal form, such as payroll for an enskild firma that has not said it pays salaries). Reasons, the deciding one first: unsupported_country, unsupported_legal_form, needs_plan, disabled_by_company, dependency_unavailable (a module it needs is unsupported or off; it then takes that status). Kernels (platform, ledger) are always active. parts lists a part of a module that is switched on company by company (Avtal och åtaganden in year-end: agreements, securities and group links): its status is off, with the reason switched_on_per_company and a resolution, while the module itself stays active. profile names the company profile (sole-trader, limited-company-no-employees, limited-company-with-employees, retail, association, or standard, every package on): the starting point for which packages the app menu and the MCP tool list show. A module in a package the profile leaves off is hidden there but keeps its status and still answers when called. A company without a stored profile has standard (source implicit). This is a read-only report: nothing here changes a profile or a module.
 
 **Use when:** At the start of an integration or agent session, before calling endpoints of an optional module (bank feed, payroll, Skatteverket filing, collections, the AI agent), or to explain to a user why something is unavailable.
 **Do not use for:** Turning a module on or off, or changing the profile: nothing here writes. API key scopes are a separate axis (GET /api/v1/api-key); a module can be active while the key lacks the scope for its endpoints.
@@ -278,7 +278,7 @@ Response `200`:
     jurisdiction: string,
     ledger_currency: string,
     profile: { id: "sole-trader" | "limited-company-no-employees" | "limited-company-with-employees" | "retail" | "association" | "standard", version: number, name: string, name_sv: string, source: "stored" | "implicit" },
-    modules: { id: string, kind: "kernel" | "block", name: string, name_sv: string, summary: string, depends_on: string[], status: "active" | "off" | "needs_plan" | "unsupported", reasons: ("unsupported_country" | "unsupported_legal_form" | "needs_plan" | "disabled_by_company" | "dependency_unavailable")[], resolution: string | null }[]
+    modules: { id: string, kind: "kernel" | "block", name: string, name_sv: string, summary: string, depends_on: string[], status: "active" | "off" | "needs_plan" | "unsupported", reasons: ("unsupported_country" | "unsupported_legal_form" | "needs_plan" | "disabled_by_company" | "dependency_unavailable")[], resolution: string | null, parts: { id: "commitments", name: string, name_sv: string, status: "active" | "off", reasons: "switched_on_per_company"[], resolution: string | null }[] }[]
   },
   meta: {
     request_id: string,
@@ -317,7 +317,33 @@ Example response `200`:
         ],
         "status": "active",
         "reasons": [],
-        "resolution": null
+        "resolution": null,
+        "parts": []
+      },
+      {
+        "id": "year-end",
+        "kind": "block",
+        "name": "Year-end and annual report",
+        "name_sv": "Bokslut och årsredovisning",
+        "summary": "The bokslut workspace (accruals, reserves, tax provision, readiness) and the årsredovisning, ...",
+        "depends_on": [
+          "assets"
+        ],
+        "status": "active",
+        "reasons": [],
+        "resolution": null,
+        "parts": [
+          {
+            "id": "commitments",
+            "name": "Agreements and commitments",
+            "name_sv": "Avtal och åtaganden",
+            "status": "off",
+            "reasons": [
+              "switched_on_per_company"
+            ],
+            "resolution": "Agreements and commitments is switched on company by company and is not on for this company: write to support@accounted.se to have it switched on."
+          }
+        ]
       },
       {
         "id": "bank-feed",
@@ -332,7 +358,8 @@ Example response `200`:
         "reasons": [
           "needs_plan"
         ],
-        "resolution": "Upgrade the plan to use Bank feed."
+        "resolution": "Upgrade the plan to use Bank feed.",
+        "parts": []
       },
       {
         "id": "payroll",
@@ -345,7 +372,8 @@ Example response `200`:
         "reasons": [
           "unsupported_legal_form"
         ],
-        "resolution": "Payroll is on for every legal person; an enskild firma turns it on by setting pays_salaries in the company tax profile."
+        "resolution": "Payroll is on for every legal person; an enskild firma turns it on by setting pays_salaries in the company tax profile.",
+        "parts": []
       }
     ]
   },
