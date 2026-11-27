@@ -27,6 +27,7 @@ function conn(overrides: {
   error_message?: string | null
   sunset?: 'switch' | 'import' | null
   paused?: 'subscription' | 'connector_key' | null
+  renewal_closed?: 'switch' | 'import' | null
 }) {
   return {
     status: 'active',
@@ -166,6 +167,50 @@ describe('the sunset state (the Enable Banking feed has ended)', () => {
     expect(offersAccountChoice(conn({}), [savingsOff], NOW)).toBe(true)
     expect(offersAccountChoice(conn({ sunset: 'switch' }), [savingsOff], NOW)).toBe(false)
     expect(nextScheduledSyncFrom(conn({ sunset: 'import' }), NOW)).toBeNull()
+  })
+})
+
+describe('renewals closed (the switch campaign is on, before its deadline)', () => {
+  it('keeps the state: the feed runs until the consent ends', () => {
+    expect(getConnectionUiState(conn({ renewal_closed: 'switch', status: 'expired' }), NOW)).toBe('expired')
+    expect(getConnectionUiState(conn({ renewal_closed: 'switch', consent_expires: iso(2) }), NOW)).toBe('expiring')
+    expect(getConnectionUiState(conn({ renewal_closed: 'import' }), NOW)).toBe('active')
+  })
+
+  it('points an expired consent at the switch, or the file import, never at a renewal', () => {
+    const covered = selectPageAttention([conn({ bank_name: 'Swedbank', status: 'expired', renewal_closed: 'switch' })], NOW)!
+    expect(buildPageAttentionSentence(covered, NOW)).toBe(
+      'Swedbank: PSD2-samtycket har löpt ut, och den gamla bankkopplingen tar inte emot förnyelser. Byt till ny koppling för att återuppta synkroniseringen.',
+    )
+    const uncovered = selectPageAttention([conn({ bank_name: 'Wise', status: 'expired', renewal_closed: 'import' })], NOW)!
+    expect(buildPageAttentionSentence(uncovered, NOW)).toBe(
+      'Wise: PSD2-samtycket har löpt ut, och den gamla bankkopplingen tar inte emot förnyelser. Importera kontoutdrag som fil (SIE eller CSV) tills vidare.',
+    )
+  })
+
+  it('points an expiring consent at the switch, or the file import once it has run out', () => {
+    const covered = selectPageAttention([conn({ bank_name: 'SEB', consent_expires: iso(2), renewal_closed: 'switch' })], NOW)!
+    expect(buildPageAttentionSentence(covered, NOW)).toBe(
+      'SEB: samtycket går ut om 2 dagar, och den gamla bankkopplingen tar inte emot förnyelser. Byt till ny koppling för att undvika avbrott i synkroniseringen.',
+    )
+    const uncovered = selectPageAttention([conn({ bank_name: 'Wise', consent_expires: iso(1), renewal_closed: 'import' })], NOW)!
+    expect(buildPageAttentionSentence(uncovered, NOW)).toBe(
+      'Wise: samtycket går ut om 1 dag, och den gamla bankkopplingen tar inte emot förnyelser. Importera kontoutdrag som fil (SIE eller CSV) när det har gått ut.',
+    )
+  })
+
+  it('offers a failed connection the retry and the way on, never a renewal', () => {
+    const covered = selectPageAttention([conn({ bank_name: 'SEB', status: 'error', renewal_closed: 'switch' })], NOW)!
+    expect(buildPageAttentionSentence(covered, NOW)).toBe('SEB: anslutningen har ett fel. Försök igen eller byt till ny koppling.')
+    const uncovered = selectPageAttention([conn({ bank_name: 'Wise', status: 'error', renewal_closed: 'import' })], NOW)!
+    expect(buildPageAttentionSentence(uncovered, NOW)).toBe('Wise: anslutningen har ett fel. Försök igen eller importera kontoutdrag som fil.')
+  })
+
+  it('still offers the renewal while renewals are open', () => {
+    const expired = selectPageAttention([conn({ bank_name: 'SEB', status: 'expired', renewal_closed: null })], NOW)!
+    expect(buildPageAttentionSentence(expired, NOW)).toBe(
+      'SEB: PSD2-samtycket har löpt ut. Förnya samtycket för att återuppta synkroniseringen.',
+    )
   })
 })
 
