@@ -8,7 +8,8 @@ const NOW = new Date('2026-07-07T10:00:00Z')
 
 // Queue order mirrors the Promise.all call order in buildLedgerContext:
 // rpc stats, company_settings, mapping_rules, categorization_templates,
-// posted-entry count, voucher_sequences, salary_runs.
+// posted-entry count, voucher_sequences, salary_runs, and the names of the
+// switched-off counterparty rules (empty unless given).
 function enqueueAll(
   mock: ReturnType<typeof createQueuedMockSupabase>,
   overrides: {
@@ -19,6 +20,8 @@ function enqueueAll(
     entryCount?: number
     voucherSeries?: unknown[]
     salaryCount?: number
+    /** The read of the switched-off counterparty rules' names, as the table answers it. */
+    switchedOff?: { data: unknown[] | null; error?: { message: string } }
   } = {},
 ) {
   mock.enqueueMany([
@@ -29,6 +32,7 @@ function enqueueAll(
     { count: overrides.entryCount ?? 0 },
     { data: overrides.voucherSeries ?? [] },
     { count: overrides.salaryCount ?? 0 },
+    overrides.switchedOff ?? { data: [] },
   ])
 }
 
@@ -361,6 +365,25 @@ describe('buildLedgerContext', () => {
     const ctx = await buildLedgerContext(mock.supabase as unknown as SupabaseClient, COMPANY_ID, NOW)
 
     expect(ctx.explicit_rules.map((r) => r.account_number)).toEqual(['3001', '6212'])
+  })
+
+  it('leaves out a learned rule whose counterparty rule the company switched off; a failed read of them lists the rules as stored', async () => {
+    const rules = [
+      { rule_name: 'Learned: Shop payout', merchant_pattern: 'Shop payout', description_pattern: null, debit_account: '1930', credit_account: '3001', vat_treatment: null, company_id: COMPANY_ID, source: 'auto' },
+      { rule_name: 'Learned: Telia', merchant_pattern: 'Telia', description_pattern: null, debit_account: '6212', credit_account: '1930', vat_treatment: null, company_id: COMPANY_ID, source: 'auto' },
+      { rule_name: 'Described: SL', merchant_pattern: 'SL', description_pattern: null, debit_account: '5810', vat_treatment: null, company_id: COMPANY_ID, source: 'user_description' },
+    ]
+    const pausedPayout = { id: 'tpl-1', counterparty_name: 'shop payout', counterparty_aliases: ['shop payout'], debit_account: '1930', credit_account: '3001' }
+    enqueueAll(mock, { rules, switchedOff: { data: [pausedPayout] } })
+    const ctx = await buildLedgerContext(mock.supabase as unknown as SupabaseClient, COMPANY_ID, NOW)
+    expect(ctx.explicit_rules.map((r) => r.rule_name)).toEqual(['Learned: Telia', 'Described: SL'])
+    // Who wrote a row is read with it, so a learned row can be told from a described one.
+    expect(mock.findCalls('mapping_rules', 'select')[0][0]).toContain('company_id, source')
+
+    const failed = createQueuedMockSupabase()
+    enqueueAll(failed, { rules, switchedOff: { data: null, error: { message: 'read failed' } } })
+    const asStored = await buildLedgerContext(failed.supabase as unknown as SupabaseClient, COMPANY_ID, NOW)
+    expect(asStored.explicit_rules.map((r) => r.rule_name)).toEqual(['Learned: Shop payout', 'Learned: Telia', 'Described: SL'])
   })
 
   it('reads every active mapping row of the company while its auto-learned rows are read', async () => {
