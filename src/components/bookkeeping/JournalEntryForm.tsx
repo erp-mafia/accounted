@@ -280,11 +280,6 @@ export default function JournalEntryForm({
   // effect below.
   const seriesMapRef = useRef<Record<string, string> | null>(null)
   const defaultSeriesRef = useRef<string>('A')
-  // Series letters this company has configured beyond the fixed presets. The
-  // dropdown is a closed list, so anything already in use (a legacy letter, an
-  // override in the per-source-type map) has to stay selectable: otherwise the
-  // Select would render blank on a value it does not offer.
-  const [configuredSeries, setConfiguredSeries] = useState<string[]>([])
   // Mirror of effectiveSourceType for the settings-fetch callback: if a template
   // routed the source type before /api/settings resolved, the late callback must
   // re-apply the series for the ROUTED type, not the mount-time base (otherwise
@@ -390,14 +385,13 @@ export default function JournalEntryForm({
     setVoucherSeries(perSource !== 'A' ? perSource : defaultSeriesRef.current || 'A')
   }, [])
 
-  // The series picker: the fixed Swedish presets first, then any letter this
-  // company already uses (settings map, global default, or the series a draft
-  // was saved with) so no existing value falls out of the list. Names come
-  // from the company's own voucher_series_labels, preset text as fallback.
+  // The series picker: the Swedish presets first, then every other letter
+  // A-Z. Names come from the company's own voucher_series_labels, preset
+  // text as fallback.
   const seriesLabels = companySettings?.voucher_series_labels ?? null
   const seriesOptions = useMemo(
-    () => buildVoucherSeriesOptions(seriesLabels, [...configuredSeries, voucherSeries]),
-    [seriesLabels, configuredSeries, voucherSeries],
+    () => buildVoucherSeriesOptions(seriesLabels),
+    [seriesLabels],
   )
 
   useEffect(() => {
@@ -415,16 +409,6 @@ export default function JournalEntryForm({
     seriesMapRef.current =
       (companySettings.default_voucher_series_per_source_type as Record<string, string> | null) ?? null
     defaultSeriesRef.current = companySettings.default_voucher_series || 'A'
-    setConfiguredSeries(
-      Array.from(
-        new Set(
-          [
-            ...Object.values(seriesMapRef.current || {}),
-            defaultSeriesRef.current,
-          ].filter((v): v is string => typeof v === 'string' && /^[A-Z]$/.test(v)),
-        ),
-      ),
-    )
     if (!embedded && !editEntryId) {
       applySeriesForSourceType(effectiveSourceTypeRef.current)
     }
@@ -1642,9 +1626,9 @@ export default function JournalEntryForm({
             />
           </div>
           {showSeries && (
-            // Closed list, not free text: the letters carry fixed meanings
-            // (A = redovisning, B = kundfakturor, ...) and a typo here silently
-            // starts a new series with its own number sequence.
+            // A list of single letters A-Z, not free text: a typo in a text
+            // field would silently start a series no picker offers, with its
+            // own number sequence. The named presets come first.
             <div className="w-full">
               <Label className="text-xs text-muted-foreground">{t('series')}</Label>
               <Select
