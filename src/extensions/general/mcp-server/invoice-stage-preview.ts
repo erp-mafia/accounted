@@ -301,6 +301,22 @@ export function describeUnnumberedInvoice(invoice: StagedInvoiceRow, customerNam
   return customerName ? `${customerName}, ${amount}` : amount
 }
 
+/** What a send delivers to the customer. */
+export type SentDocumentKind = 'invoice' | 'credit_note' | 'proforma' | 'quote'
+
+/**
+ * The document a send delivers, so the approval names it: a quote, a
+ * proforma or a credit note is not "the invoice" (the dialog's sentence,
+ * components/pending-operations/vocabulary.ts).
+ */
+export function sentDocumentKind(
+  invoice: Pick<StagedInvoiceRow, 'document_type' | 'credited_invoice_id' | 'total'>,
+): SentDocumentKind {
+  if (invoice.document_type === 'quote') return 'quote'
+  if (invoice.document_type === 'proforma') return 'proforma'
+  return isCreditNoteDocument(invoice) ? 'credit_note' : 'invoice'
+}
+
 export interface IssuePreview {
   /** Whether approving posts the invoice's own verifikat now (faktureringsmetoden, not deferred). */
   will_post_journal_entry: boolean

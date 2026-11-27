@@ -245,17 +245,30 @@ const REGISTER_BOOKED_SENTENCE_KEYS: Record<RegisterBookedLedger, string> = {
 }
 
 /**
+ * What approving a send delivers, by the preview's document_kind (the server's
+ * sentDocumentKind): a quote, a proforma or a credit note is not "the
+ * invoice". An invoice, and a row staged before the preview carried the kind,
+ * keep the send_invoice sentence.
+ */
+const SEND_DOCUMENT_SENTENCE_KEYS: Readonly<Record<string, string>> = {
+  quote: 'warning_send_invoice_quote',
+  proforma: 'warning_send_invoice_proforma',
+  credit_note: 'warning_send_invoice_credit_note',
+}
+
+/**
  * The consequence sentence the approver consents to. Keyed on the operation
  * type; the types whose outcome depends on their params read them, so the
  * dialog never promises what the approval will not do: convert_invoice with
  * target 'order' creates a draft kundorder (no F-number, nothing booked), and
  * a create_invoice or create_supplier_invoice_from_inbox staged as the
  * registration of an already-booked invoice posts nothing (crm#1094).
- * One type reads the staged preview instead: delete_inbox_item says the item
+ * Two types read the staged preview instead: delete_inbox_item says the item
  * can be put back only when the preview's can_be_put_back is true (the
  * server's removalCanBePutBack, lib/documents/inbox-item-state.ts), and
  * says permanent for every other removal, also one staged before the
- * preview carried it.
+ * preview carried it; send_invoice names the document it delivers
+ * (SEND_DOCUMENT_SENTENCE_KEYS).
  * `t` reads the "pending" namespace.
  */
 export function singleActionWarning(
@@ -266,6 +279,12 @@ export function singleActionWarning(
 ): string {
   if (operationType === 'delete_inbox_item' && (preview as { can_be_put_back?: unknown } | null | undefined)?.can_be_put_back === true) {
     return t('warning_delete_inbox_item_put_back')
+  }
+  if (operationType === 'send_invoice') {
+    const kind = (preview as { document_kind?: unknown } | null | undefined)?.document_kind
+    if (typeof kind === 'string' && Object.hasOwn(SEND_DOCUMENT_SENTENCE_KEYS, kind)) {
+      return t(SEND_DOCUMENT_SENTENCE_KEYS[kind])
+    }
   }
   if (operationType === 'convert_invoice' && params?.target === 'order') {
     return t('warning_convert_invoice_order')
@@ -328,12 +347,15 @@ export function rowConsentSentence(
     status: string
     risk_level?: string | null
     params?: Record<string, unknown> | null
+    preview_data?: unknown
   },
   t: (key: string) => string,
 ): string {
   if (op.status !== 'pending') return ''
   const registration = registerBookedLedgerOf(op.operation_type, op.params) !== null
-  return op.risk_level === 'high' || registration ? singleActionWarning(op.operation_type, op.params, t) : ''
+  return op.risk_level === 'high' || registration
+    ? singleActionWarning(op.operation_type, op.params, t, op.preview_data)
+    : ''
 }
 
 /**

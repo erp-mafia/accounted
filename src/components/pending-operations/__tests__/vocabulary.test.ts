@@ -190,6 +190,43 @@ describe('singleActionWarning: removing an inbox item', () => {
   })
 })
 
+/**
+ * A send names the document it delivers: approving the send of a quote
+ * said "skickas fakturan", so the approver could not tell an offert from an
+ * invoice. The staged preview's document_kind picks the sentence.
+ */
+describe('singleActionWarning: sending a document', () => {
+  const params = { invoice_id: 'i-1' }
+
+  it('names a quote, a proforma and a credit note, in sv and en', () => {
+    const expected = {
+      sv: { quote: 'offerten', proforma: 'proformafakturan', credit_note: 'kreditfakturan' },
+      en: { quote: 'the quote', proforma: 'the proforma invoice', credit_note: 'the credit note' },
+    } as const
+    for (const lang of ['sv', 'en'] as const) {
+      const t = pendingTranslator(lang)
+      const invoiceSentence = ((lang === 'sv' ? sv : en).pending as unknown as Record<string, string>).warning_send_invoice
+      for (const [kind, noun] of Object.entries(expected[lang])) {
+        const sentence = singleActionWarning('send_invoice', params, t, { document_kind: kind })
+        expect(sentence, `${lang} ${kind}`).toContain(noun)
+        expect(sentence, `${lang} ${kind}`).not.toBe(invoiceSentence)
+      }
+    }
+  })
+
+  it('keeps the invoice sentence for an invoice, a row staged before the kind, and an unknown kind', () => {
+    for (const preview of [{ document_kind: 'invoice' }, {}, null, undefined, { document_kind: 'toString' }, { document_kind: 1 }]) {
+      expect(singleActionWarning('send_invoice', params, tSv, preview), JSON.stringify(preview)).toBe(svWarning('send_invoice'))
+    }
+  })
+
+  it('shows the same sentence on the Granskning row', () => {
+    const op = { operation_type: 'send_invoice', status: 'pending', risk_level: 'high', params, preview_data: { document_kind: 'quote' } }
+    expect(rowConsentSentence(op, tSv)).toBe(singleActionWarning('send_invoice', params, tSv, { document_kind: 'quote' }))
+    expect(rowConsentSentence(op, tSv)).toContain('offerten')
+  })
+})
+
 describe('rowConsentSentence and the bulk line', () => {
   const registration = { mode: 'register_booked', invoice_number: '1023' }
 
