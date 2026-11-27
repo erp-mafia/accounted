@@ -8,15 +8,17 @@
 -- name the invoice gives. The background import keeps each Fortnox supplier on
 -- a card of its own, so it can resolve the record's supplier to another card
 -- than the one holding the invoice. The invoice is still that invoice: adopted,
--- never inserted a second time. One booked here, one on a card that does not
--- name the record's supplier, or two of them, are refused; the resolved card
--- is asked first.
+-- never inserted a second time. One booked or paid here, one on a card that
+-- does not name the record's supplier, or two of them, are refused; the
+-- resolved card is asked first.
 BEGIN;
 DO $$
 DECLARE
   u uuid:=gen_random_uuid(); company uuid:=gen_random_uuid(); consent uuid:=gen_random_uuid(); worker uuid:=gen_random_uuid();
-  j public.migration_jobs; n bigint; rec jsonb; fy uuid:=gen_random_uuid(); booking uuid:=gen_random_uuid();
-  folded uuid; stub uuid; other uuid; stranger uuid; namesake uuid; network_card uuid; booked_here uuid;
+  j public.migration_jobs; n bigint; rec jsonb; fy uuid:=gen_random_uuid();
+  booking uuid:=gen_random_uuid(); cash_payment uuid:=gen_random_uuid(); payment_booking uuid:=gen_random_uuid();
+  folded uuid; stub uuid; other uuid; stranger uuid; namesake uuid; network_card uuid;
+  booked_here uuid; paid_here uuid; payment_linked uuid;
   second_card uuid; telecom uuid; network uuid;
   lease_march uuid; lease_april uuid; credit uuid; network_invoice uuid; later_copy uuid; held_elsewhere uuid;
   own_first uuid; number_holder uuid;
@@ -31,11 +33,13 @@ BEGIN
   INSERT INTO provider_consent_tokens(consent_id,provider,access_token) VALUES(consent,'fortnox','not-a-real-token');
   INSERT INTO sie_imports(company_id,user_id,filename,file_hash,sie_type,status)
     VALUES(company,u,'test.se',md5(company::text),4,'completed');
-  -- A verifikat an invoice registered here would carry.
+  -- Verifikat an invoice registered or paid here would carry.
   INSERT INTO fiscal_periods(id,user_id,company_id,name,period_start,period_end,is_closed)
     VALUES(fy,u,company,'2026','2026-01-01','2026-12-31',false);
   INSERT INTO journal_entries(id,user_id,company_id,fiscal_period_id,voucher_number,voucher_series,entry_date,description,source_type,status)
-    VALUES(booking,u,company,fy,1,'A','2026-03-02','Leverantörsfaktura','supplier_invoice_registered','draft');
+    VALUES(booking,u,company,fy,1,'A','2026-03-02','Leverantörsfaktura','supplier_invoice_registered','draft'),
+      (cash_payment,u,company,fy,2,'A','2026-03-20','Betalning leverantörsfaktura','supplier_invoice_cash_payment','draft'),
+      (payment_booking,u,company,fy,3,'A','2026-03-21','Betalning leverantörsfaktura','supplier_invoice_paid','draft');
   PERFORM set_config('request.jwt.claims','{"role":"service_role"}',true);
   PERFORM set_config('request.jwt.claim.role','service_role',true);
   SET LOCAL ROLE service_role;
@@ -92,12 +96,23 @@ BEGIN
   SELECT id INTO network_invoice FROM fixture_invoice WHERE label='network_invoice';
   SELECT id INTO later_copy FROM fixture_invoice WHERE label='later_copy';
   SELECT id INTO held_elsewhere FROM fixture_invoice WHERE label='held_elsewhere';
-  -- 4. also: an invoice of the lessor's on the folded card that was booked
-  -- here, so registered here, not by the older import.
+  -- 4. also: invoices of the lessor's on the folded card that were booked or
+  -- paid here (a payment row under kontantmetoden, a payment verifikat), so
+  -- registered here, not by the older import.
   SELECT insert_provider_migration_row('supplier_invoices', jsonb_build_object('user_id',u,'company_id',company,
       'supplier_id',folded,'arrival_number',get_next_arrival_number(company),'supplier_invoice_number','704',
       'invoice_date','2026-03-02','due_date','2026-04-01','currency','SEK','subtotal',1000,'vat_amount',250,'total',1250,
       'remaining_amount',1250,'status','overdue','registration_journal_entry_id',booking)) INTO booked_here;
+  SELECT insert_provider_migration_row('supplier_invoices', jsonb_build_object('user_id',u,'company_id',company,
+      'supplier_id',folded,'arrival_number',get_next_arrival_number(company),'supplier_invoice_number','705',
+      'invoice_date','2026-03-02','due_date','2026-04-01','currency','SEK','subtotal',1000,'vat_amount',250,'total',1250,
+      'paid_amount',1250,'remaining_amount',0,'status','paid')) INTO paid_here;
+  INSERT INTO supplier_invoice_payments(supplier_invoice_id,payment_date,amount,currency,journal_entry_id,user_id,company_id)
+    VALUES(paid_here,'2026-03-20',1250,'SEK',cash_payment,u,company);
+  SELECT insert_provider_migration_row('supplier_invoices', jsonb_build_object('user_id',u,'company_id',company,
+      'supplier_id',folded,'arrival_number',get_next_arrival_number(company),'supplier_invoice_number','706',
+      'invoice_date','2026-03-02','due_date','2026-04-01','currency','SEK','subtotal',1000,'vat_amount',250,'total',1250,
+      'paid_amount',1250,'remaining_amount',0,'status','paid','payment_journal_entry_id',payment_booking)) INTO payment_linked;
 
   -- The register as Fortnox lists it, and each invoice's supplier as the
   -- invoice gives it (entity-mapper.ts mappedParty): the name, and an org
@@ -120,7 +135,7 @@ BEGIN
     '[{"source_id":"sup-a","payload":"c","payload_hash":"h"},{"source_id":"sup-b","payload":"c","payload_hash":"h"},
       {"source_id":"sup-t","payload":"c","payload_hash":"h"},{"source_id":"sup-n","payload":"c","payload_hash":"h"}]',NULL);
   SELECT jsonb_agg(jsonb_build_object('source_id',s,'payload','c','payload_hash','h')) INTO rec
-    FROM unnest(ARRAY['501','502','503','504','601','602','603','604','701','702','703','704','801','802']) AS s;
+    FROM unnest(ARRAY['501','502','503','504','601','602','603','604','701','702','703','704','705','706','801','802']) AS s;
   PERFORM save_provider_migration_page(j.id,worker,j.attempt,'supplierInvoices',1,rec,NULL);
   SELECT id INTO ch_sup_a FROM migration_job_chunks WHERE job_id=j.id AND source_id='sup-a';
   SELECT id INTO ch_sup_b FROM migration_job_chunks WHERE job_id=j.id AND source_id='sup-b';
@@ -169,6 +184,8 @@ BEGIN
     ('702','sup-b',invoice_lessor,jsonb_build_object('supplier_invoice_number','LEAS-16')),
     ('703','sup-b',invoice_lessor,jsonb_build_object('supplier_invoice_number','LEAS-17')),
     ('704','sup-b',invoice_lessor,jsonb_build_object('supplier_invoice_number','LEAS-18')),
+    ('705','sup-b',invoice_lessor,jsonb_build_object('supplier_invoice_number','LEAS-19')),
+    ('706','sup-b',invoice_lessor,jsonb_build_object('supplier_invoice_number','LEAS-20')),
     ('801','sup-b',invoice_lessor,jsonb_build_object('supplier_invoice_number','LEAS-21','invoice_date','2026-06-01','due_date','2026-07-01')),
     ('802','sup-b',invoice_lessor,jsonb_build_object('supplier_invoice_number','LEAS-22','invoice_date','2026-07-01','due_date','2026-07-31'));
   FOR probe IN SELECT * FROM fixture_record ORDER BY source LOOP
@@ -210,16 +227,16 @@ BEGIN
     WHERE id IN (SELECT id FROM fixture_invoice WHERE label LIKE 'other\_%')),'an invoice of another header was taken for a record';
 
   -- 3. and 4. Two candidates, another supplier's own invoice, a namesake's
-  -- with another org number than the register gives the lessor, and one
-  -- booked here: refused for a person, nothing written to them and nothing
-  -- stored a second time.
+  -- with another org number than the register gives the lessor, and ones
+  -- booked or paid here: refused for a person, nothing written to them and
+  -- nothing stored a second time.
   ASSERT (SELECT bool_and(state='needs_attention' AND error_code='MIGRATION_INVOICE_AMBIGUOUS') FROM outcome
-    WHERE source IN ('701','702','703','704')),'a löpnummer held by an invoice the older import did not leave was not refused';
+    WHERE source IN ('701','702','703','704','705','706')),'a löpnummer held by an invoice the older import did not leave was not refused';
   ASSERT (SELECT bool_and(fortnox_number IS NULL) FROM supplier_invoices
     WHERE id IN (SELECT id FROM fixture_invoice WHERE label IN ('twin_a','twin_b','strangers_own','namesakes'))
-      OR id=booked_here),'an invoice the older import did not leave was taken for a record';
+      OR id IN (booked_here,paid_here,payment_linked)),'an invoice the older import did not leave was taken for a record';
   ASSERT NOT EXISTS(SELECT 1 FROM migration_source_records WHERE company_id=company AND resource='supplierInvoices'
-    AND source_id IN ('701','702','703','704')),'a refused record got a source map';
+    AND source_id IN ('701','702','703','704','705','706')),'a refused record got a source map';
 
   -- 5. The resolved card is asked first: its invoice under the supplier's own
   -- number is the record, and the copy on the folded card is left alone. Where
@@ -234,6 +251,6 @@ BEGIN
     'the invoice holding the supplier''s number was changed';
 
   SELECT count(*) INTO n FROM supplier_invoices WHERE company_id=company;
-  ASSERT n=21,'supplier invoices were duplicated or dropped';
+  ASSERT n=23,'supplier invoices were duplicated or dropped';
 END $$;
 ROLLBACK;

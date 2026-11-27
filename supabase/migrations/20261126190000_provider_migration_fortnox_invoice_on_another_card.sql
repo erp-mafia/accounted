@@ -16,15 +16,16 @@
 -- invoice in the company with no fortnox_number that holds the löpnummer as
 -- its supplier number with the record's date, currency, total and kind (the
 -- reading repair_fortnox_supplier_invoice_numbers, 20261013133930, makes of
--- these rows). It is adopted when it has no verifikat of its own, as that
--- path booked none, and its card names the record's supplier: by org number
--- (the one the invoice gives, else the one the resolved card has from
+-- these rows). It is adopted when no verifikat and no payment is tied to it,
+-- as that path booked none, and its card names the record's supplier: by org
+-- number (the one the invoice gives, else the one the resolved card has from
 -- Fortnox's register), or by the name the invoice gives with no other org
 -- number. An adopted invoice keeps its card and its header and gets the
 -- löpnummer and the record's source map, as on the resolved card. Any other
 -- such invoice, which may be another one (another supplier's own, or one
--- booked here), and two of them are refused as MIGRATION_INVOICE_AMBIGUOUS
--- for a person to decide. The candidate is read FOR UPDATE.
+-- booked or paid here), and two of them are refused as
+-- MIGRATION_INVOICE_AMBIGUOUS for a person to decide. The candidate is read
+-- FOR UPDATE.
 --
 -- Nothing else changes: the body is copied verbatim from 20261012161644
 -- (identical to production) with that one block added; privileges are kept by
@@ -161,14 +162,14 @@ BEGIN
         -- as the supplier number. The löpnummer is the company's own series at
         -- Fortnox, and only the same header makes an invoice holding it this
         -- record, as repair_fortnox_supplier_invoice_numbers reads it. Such an
-        -- invoice is adopted only when it has no verifikat of its own (that
-        -- import booked none; an invoice registered here is booked unless the
-        -- company defers booking or books on payment) and sits on a card that
-        -- names the record's supplier: its org number (the one the invoice
-        -- gives, else the one the resolved card has from Fortnox's register),
-        -- or the name the invoice gives with no other org number. Any other
-        -- may be another invoice, and two cannot be told apart: both are
-        -- refused for a person, never guessed at and never stored twice.
+        -- invoice is adopted only when no verifikat and no payment is tied to
+        -- it (that import booked none; one registered here is booked when it
+        -- is registered, or when it is paid) and it sits on a card that names
+        -- the record's supplier: its org number (the one the invoice gives,
+        -- else the one the resolved card has from Fortnox's register), or the
+        -- name the invoice gives with no other org number. Any other may be
+        -- another invoice, and two cannot be told apart: both are refused for
+        -- a person, never guessed at and never stored twice.
         IF target IS NULL AND fortnox IS NOT NULL THEN
           SELECT array_agg(id) INTO ids FROM (SELECT id FROM supplier_invoices WHERE company_id=j.company_id
             AND fortnox_number IS NULL AND supplier_invoice_number=fortnox
@@ -179,7 +180,8 @@ BEGIN
           IF ids[1] IS NOT NULL AND NOT EXISTS(SELECT 1 FROM supplier_invoices si JOIN suppliers s ON s.id=si.supplier_id
             CROSS JOIN LATERAL (SELECT COALESCE(public.party_org_key(r->'party'->>'org_number'),
               (SELECT public.party_org_key(p.org_number) FROM suppliers p WHERE p.id=party)) AS org_key) named
-            WHERE si.id=ids[1] AND si.registration_journal_entry_id IS NULL
+            WHERE si.id=ids[1] AND si.registration_journal_entry_id IS NULL AND si.payment_journal_entry_id IS NULL
+              AND NOT EXISTS(SELECT 1 FROM supplier_invoice_payments pay WHERE pay.supplier_invoice_id=si.id)
               AND (public.party_org_key(s.org_number)=named.org_key
                 OR (NULLIF(lower(btrim(regexp_replace(s.name,'\s+',' ','g'))),'')=lower(btrim(regexp_replace(r->'party'->>'name','\s+',' ','g')))
                   AND (public.party_org_key(s.org_number) IS NULL OR named.org_key IS NULL)))) THEN
