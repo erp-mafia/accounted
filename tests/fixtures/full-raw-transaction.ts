@@ -38,6 +38,8 @@ export function fullRawTransaction(overrides: Partial<RawTransaction> = {}): Req
     provider_transaction_id: 'ENTRY-FULL-1',
     raw_document_id: '00000000-0000-4000-8000-000000000001',
     counterparty_org_number: '5560160680',
+    billing_country: 'SE',
+    card_country: 'DE',
     instructed_amount: -2.22,
     instructed_currency: 'EUR',
     exchange_rate: 11.26,

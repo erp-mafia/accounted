@@ -1174,6 +1174,12 @@ export interface Transaction {
   is_enriched?: boolean | null
   enriched_at?: string | null
 
+  // The buyer's two countries on a Stripe sale (migration 20261127184200),
+  // ISO 3166-1 alpha-2: the billing address's and the card's, kept apart
+  // because they can differ. Null on every other row.
+  billing_country?: string | null
+  card_country?: string | null
+
   // Notes
   notes: string | null
 
@@ -4657,6 +4663,13 @@ export interface RawTransaction {
   raw_document_id?: string | null
   /** The counterparty's organisationsnummer, digits only, when the bank's enrichment names it. */
   counterparty_org_number?: string | null
+  /**
+   * The buyer's countries on a sale, as the source states them (the Stripe
+   * feed's charge): the billing address's and the card's, ISO 3166-1
+   * alpha-2. Kept apart, never one folded into the other: they can differ.
+   */
+  billing_country?: string | null
+  card_country?: string | null
   /** The amount in the currency the payment was made in, when that differs from the account currency. */
   instructed_amount?: number | null
   /** The currency of instructed_amount. */

@@ -1723,6 +1723,8 @@ export async function ingestTransactions(
         provider_transaction_id: raw.provider_transaction_id || null,
         raw_document_id: raw.raw_document_id || null,
         counterparty_org_number: raw.counterparty_org_number || null,
+        billing_country: raw.billing_country || null,
+        card_country: raw.card_country || null,
         instructed_amount: foreignPurchase ? raw.instructed_amount : null,
         instructed_currency: foreignPurchase ? instructedCurrency : null,
         balance_after: raw.balance_after ?? null,

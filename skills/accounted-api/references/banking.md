@@ -3658,6 +3658,8 @@ Response `200`:
     counterparty_account: string | null,
     counterparty_iban?: string | null,
     counterparty_org_number?: string | null,
+    billing_country?: string | null,
+    card_country?: string | null,
     instructed_amount?: number | null,
     instructed_currency?: string | null,
     balance_after?: number | null,

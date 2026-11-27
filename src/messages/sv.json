@@ -5571,6 +5571,9 @@
   },
   "tx_inbox_card": {
     "parts_hint": "{count} delbetalningar",
+    "buyer_country_billing": "adress {code}",
+    "buyer_country_card": "kort {code}",
+    "buyer_countries_title": "Köparens land enligt fakturaadressen och enligt kortet, som Stripe anger dem",
     "drawer_rec": "Vår rekommendation · {why}",
     "underlag_heading": "Underlag",
     "underlag_supplier": "Leverantör",
@@ -5594,6 +5597,8 @@
     "drawer_method": "Betalsätt",
     "drawer_amount_fx": "Belopp i SEK",
     "drawer_org_number": "Organisationsnummer",
+    "drawer_billing_country": "Fakturaadressens land",
+    "drawer_card_country": "Kortets land",
     "drawer_instructed_amount": "Ursprungligt belopp",
     "drawer_instructed_rate": "kurs {rate}",
     "drawer_balance_after": "Saldo efter",

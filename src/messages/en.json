@@ -5571,6 +5571,9 @@
   },
   "tx_inbox_card": {
     "parts_hint": "{count} part payments",
+    "buyer_country_billing": "address {code}",
+    "buyer_country_card": "card {code}",
+    "buyer_countries_title": "The buyer's country by billing address and by card, as Stripe states them",
     "drawer_rec": "Our recommendation · {why}",
     "underlag_heading": "Document",
     "underlag_supplier": "Supplier",
@@ -5594,6 +5597,8 @@
     "drawer_method": "Payment method",
     "drawer_amount_fx": "Amount in SEK",
     "drawer_org_number": "Organisation number",
+    "drawer_billing_country": "Billing address country",
+    "drawer_card_country": "Card country",
     "drawer_instructed_amount": "Original amount",
     "drawer_instructed_rate": "rate {rate}",
     "drawer_balance_after": "Balance after",

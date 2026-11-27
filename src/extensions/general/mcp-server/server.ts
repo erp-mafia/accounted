@@ -9536,7 +9536,7 @@ export const tools: McpTool[] = [
         .from('open_bank_rows')
         .select(
           'id, date, description, amount, currency, merchant_name, reference, is_business, category, cash_account_id, ' +
-          'counterparty_org_number, instructed_amount, instructed_currency, balance_after, is_enriched, potential_match_method, ' +
+          'counterparty_org_number, billing_country, card_country, instructed_amount, instructed_currency, balance_after, is_enriched, potential_match_method, ' +
           'counterparty_account, counterparty_iban, original_description, external_id, provider_transaction_id, ' + SUGGESTION_POINTER_COLUMNS,
           { count: 'exact' },
         )
