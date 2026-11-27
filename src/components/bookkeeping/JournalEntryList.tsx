@@ -2,6 +2,7 @@
 
 import { Fragment, useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
+import dynamic from 'next/dynamic'
 import { useTranslations } from 'next-intl'
 import {
   DataList,
@@ -75,7 +76,6 @@ import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
 import { voucherLineViews } from '@/lib/bookkeeping/voucher-line-view'
 import { useBasReference } from '@/lib/bookkeeping/use-bas-reference'
 import JournalEntryAttachments from '@/components/bookkeeping/JournalEntryAttachments'
-import InboxDocumentPicker from '@/components/bookkeeping/InboxDocumentPicker'
 import JournalEntryTransactionLinks from '@/components/bookkeeping/JournalEntryTransactionLinks'
 import NoDocRequiredToggle from '@/components/bookkeeping/NoDocRequiredToggle'
 import CorrectionEntryDialog from '@/components/bookkeeping/CorrectionEntryDialog'
@@ -104,6 +104,11 @@ import { NEEDS_DOC_SOURCE_TYPES } from '@/lib/worklist/types'
 import { collectPages } from '@/lib/lists/collect-pages'
 import type { JournalEntry, JournalEntryLine, UserUiState } from '@/types'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+
+// The underlag picker, loaded when the bulk bar's "Koppla underlag" or a
+// row's "Välj från inkorgen" first renders it: a dialog the list's first view
+// never shows.
+const InboxDocumentPicker = dynamic(() => import('@/components/bookkeeping/InboxDocumentPicker'))
 
 // Shared source of truth (lib/worklist/types.ts) so the per-row chip and
 // waiver UI can never drift from the worklist count and the SQL predicate

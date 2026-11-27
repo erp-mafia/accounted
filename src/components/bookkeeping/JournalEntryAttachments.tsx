@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
+import dynamic from 'next/dynamic'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton, LateReveal } from '@/components/ui/skeleton'
@@ -37,10 +38,13 @@ import {
 } from '@/components/icons'
 import DocumentUploadZone from '@/components/bookkeeping/DocumentUploadZone'
 import type { UploadedFile } from '@/components/bookkeeping/DocumentUploadZone'
-import InboxDocumentPicker from '@/components/bookkeeping/InboxDocumentPicker'
 import { useViewerLock } from '@/components/ui/viewer-lock'
 import { useBranding } from '@/lib/branding/brand-context'
 import { DOCUMENT_UPLOAD_ACCEPT } from '@/lib/documents/upload-types'
+
+// "Välj från inkorgen": a dialog, loaded when the attachments first render it
+// rather than with every page that lists verifikat.
+const InboxDocumentPicker = dynamic(() => import('@/components/bookkeeping/InboxDocumentPicker'))
 
 interface DocumentRecord {
   id: string
