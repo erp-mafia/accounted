@@ -5,6 +5,7 @@ import {
   invoiceDocumentCaveat,
   invoicePaymentConfirmationUrl,
   invoiceRerenderUrl,
+  latestSentDeliveryDocumentId,
   paymentConfirmationPdfSource,
   resolveInvoicePdfSource,
   type InvoicePdfDelivery,
@@ -343,5 +344,38 @@ describe('findArchivedInvoiceDelivery', () => {
     })
 
     expect(source).toMatchObject({ kind: 'archived', deliveryId: findArchivedInvoiceDelivery(deliveries)?.id })
+  })
+})
+
+describe('latestSentDeliveryDocumentId', () => {
+  it('takes the latest sent_at, not the first row listed', () => {
+    expect(
+      latestSentDeliveryDocumentId([
+        // Created last but sent earlier: list order is created_at, not sent_at.
+        emailDelivery({ id: 'created-last', document_attachment_id: 'earlier-send', sent_at: '2026-11-20T08:00:00.000Z' }),
+        emailDelivery({ id: 'created-first', document_attachment_id: 'later-send', sent_at: '2026-11-25T16:33:41.000Z' }),
+      ]),
+    ).toBe('later-send')
+  })
+
+  it('keeps the emailed copy past a later manual mark, unlike the download', () => {
+    const deliveries = [
+      emailDelivery({ id: 'manual', status: 'marked_sent', document_attachment_id: null, sent_at: '2026-11-26T09:00:00.000Z' }),
+      emailDelivery({ id: 'emailed' }),
+    ]
+
+    expect(latestSentDeliveryDocumentId(deliveries)).toBe(DOCUMENT_ID)
+    expect(findArchivedInvoiceDelivery(deliveries)).toBeNull()
+  })
+
+  it('is null when no delivery completed as sent with a file', () => {
+    expect(latestSentDeliveryDocumentId([])).toBeNull()
+    expect(
+      latestSentDeliveryDocumentId([
+        emailDelivery({ status: 'failed', document_attachment_id: null, sent_at: null }),
+        emailDelivery({ status: 'pending', sent_at: null }),
+        emailDelivery({ status: 'marked_sent', document_attachment_id: null }),
+      ]),
+    ).toBeNull()
   })
 })

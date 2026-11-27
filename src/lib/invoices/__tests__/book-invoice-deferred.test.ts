@@ -162,10 +162,11 @@ describe('bookInvoiceDeferred', () => {
     enqueue({ data: { ...invoice, journal_entry_id: 'je-1' }, error: null }) // CAS link
     enqueue({ data: null, error: SESSION_REFUSAL })
     // A session has no EXECUTE on the service sibling.
-    enqueue({
-      data: null,
-      error: { code: '42501', message: 'permission denied for function list_invoice_delivery_summaries_for_service' },
-    })
+    const serviceRefusal = {
+      code: '42501',
+      message: 'permission denied for function list_invoice_delivery_summaries_for_service',
+    }
+    enqueue({ data: null, error: serviceRefusal })
 
     const result = await book(invoice)
 
@@ -179,8 +180,29 @@ describe('bookInvoiceDeferred', () => {
     expect(mockLinkToJournalEntry).not.toHaveBeenCalled()
     expect(log.error).toHaveBeenCalledWith(
       'failed to find delivered invoice PDF for deferred booking',
-      SESSION_REFUSAL,
-      expect.objectContaining({ invoiceId: 'inv-1', serviceReadCode: '42501' }),
+      serviceRefusal,
+      expect.objectContaining({ invoiceId: 'inv-1', sessionReadCode: '42501', sessionReadError: SESSION_REFUSAL.message }),
+    )
+  })
+
+  it('does not ask the service reader when the session read fails for another reason', async () => {
+    const invoice = makeSentInvoice()
+    mockCreateInvoiceJournalEntry.mockResolvedValue({ id: 'je-1' })
+    enqueue({ data: { ...invoice, journal_entry_id: 'je-1' }, error: null }) // CAS link
+    const timeout = { code: '57014', message: 'canceling statement due to statement timeout' }
+    enqueue({ data: null, error: timeout })
+
+    const result = await book(invoice)
+
+    expect(result).toEqual(
+      expect.objectContaining({ ok: true, warnings: [expect.objectContaining({ code: 'PDF_LINK_FAILED' })] }),
+    )
+    expect(mockSupabase.rpc).not.toHaveBeenCalledWith('list_invoice_delivery_summaries_for_service', expect.anything())
+    expect(mockLinkToJournalEntry).not.toHaveBeenCalled()
+    expect(log.error).toHaveBeenCalledWith(
+      'failed to find delivered invoice PDF for deferred booking',
+      timeout,
+      { invoiceId: 'inv-1' },
     )
   })
 

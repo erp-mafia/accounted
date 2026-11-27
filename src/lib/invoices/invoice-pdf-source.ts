@@ -172,6 +172,26 @@ export function findArchivedInvoiceDelivery<T extends InvoicePdfDelivery>(
 }
 
 /**
+ * The archived file the deferred Bokför step links to the invoice's verifikat
+ * (book-invoice-deferred.ts): that of the newest delivery, by `sent_at`, that
+ * completed as sent and kept one. Unlike findArchivedInvoiceDelivery, a later
+ * manual mark does not hide it (a mark keeps no file), so an emailed invoice
+ * always gets its emailed copy, as `latest_sent_invoice_delivery_document`
+ * chose it. Reads `sent_at`, not list order.
+ */
+export function latestSentDeliveryDocumentId(
+  deliveries: readonly Pick<InvoicePdfDelivery, 'status' | 'document_attachment_id' | 'sent_at'>[],
+): string | null {
+  let newest: { documentId: string; sentAt: number } | null = null
+  for (const delivery of deliveries) {
+    if (delivery.status !== 'sent' || !delivery.document_attachment_id || !delivery.sent_at) continue
+    const sentAt = Date.parse(delivery.sent_at)
+    if (!newest || sentAt > newest.sentAt) newest = { documentId: delivery.document_attachment_id, sentAt }
+  }
+  return newest?.documentId ?? null
+}
+
+/**
  * Decide which file the download button may fetch.
  *
  * `deliveries` is the list as returned by `/api/invoices/[id]/deliveries`,
