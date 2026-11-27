@@ -12,6 +12,11 @@
  * Regenerate only on purpose, from the code before the move:
  *   UPDATE_ENGINE_INPUT_FIXTURE=1 npx vitest run src/lib/salary/__tests__/correct-run.engine-input.test.ts
  *
+ * Regenerated once since, on purpose: every storno now also carries the
+ * salaryRunCorrection option, which lets it past the salary run's reversal
+ * hook (a storno of one run verifikat alone is refused). Nothing else in the
+ * calls changed.
+ *
  * Since the stornos go through the posting port (reverseJournalEntry), the
  * scenarios also run with POSTING_EVENTS=shadow and strict: reverseEntry must
  * get the same calls with only the event link added, every storno of a run
@@ -212,11 +217,15 @@ describe('salary run correction engine input (posting port parity)', () => {
       expect(run.events, run.name).toHaveLength(run.calls.length)
       const eventId = run.events[0]!.id
       for (const [j, call] of run.calls.entries()) {
-        expect(before.calls[j]![0], run.name).toBe(4)
+        expect(before.calls[j]![0], run.name).toBe(6)
         expect(call[0], run.name).toBe(6)
         expect(call.slice(1, 5), run.name).toEqual(before.calls[j]!.slice(1, 5))
         expect(call[5], run.name).toBe('<undefined>')
-        expect(call[6], run.name).toEqual({ businessEvent: { id: eventId, role: 'reversal', onFailure: 'log' } })
+        expect(before.calls[j]![6], run.name).toEqual({ salaryRunCorrection: true })
+        expect(call[6], run.name).toEqual({
+          salaryRunCorrection: true,
+          businessEvent: { id: eventId, role: 'reversal', onFailure: 'log' },
+        })
       }
     }
   })

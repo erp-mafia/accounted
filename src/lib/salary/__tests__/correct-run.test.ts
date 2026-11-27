@@ -284,7 +284,11 @@ describe('correctSalaryRun live', () => {
       'sync',
     ])
     expect(reverseEntry).toHaveBeenCalledTimes(3)
-    expect(reverseEntry).toHaveBeenNthCalledWith(1, supabase, 'company-1', 'user-1', 'je-salary')
+    // The salaryRunCorrection option lets each storno past the salary run's
+    // reversal hook, which refuses a storno of one run verifikat alone.
+    expect(reverseEntry).toHaveBeenNthCalledWith(1, supabase, 'company-1', 'user-1', 'je-salary', undefined, {
+      salaryRunCorrection: true,
+    })
     expect(revokeLinksForRun).toHaveBeenCalledWith(supabase, 'run-1')
     expect(syncVacationLedgerForEmployees).toHaveBeenCalledWith(supabase, 'company-1', ['emp-1'])
 
