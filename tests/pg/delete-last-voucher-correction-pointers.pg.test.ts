@@ -11,25 +11,29 @@ import {
 import { getPool, withUserContext } from '@/tests/pg/setup'
 
 /**
- * Covers 20261126233000_delete_last_voucher_returns_invoice_pointer.
+ * Covers 20261126233000_delete_last_voucher_returns_correction_pointers.
  *
- * correctEntry leaves a corrected registration verifikat like this: the
- * original A1 reversed by the storno A2, the correction A3 posted with
- * correction_of_id = A1, and the pointer of the invoice the verifikat books
- * (invoices.journal_entry_id, supplier_invoices.registration_journal_entry_id)
- * moved to A3. The undo deletes A3 as the last voucher and then A2, which
- * posts A1 again. Before this migration the pointer went NULL with A3
- * (ON DELETE SET NULL), so A1 came back with no invoice naming it.
+ * correctEntry leaves a corrected verifikat like this: the original A1
+ * reversed by the storno A2, the correction A3 posted with
+ * correction_of_id = A1, and the pointer of each record the verifikat books
+ * moved to A3: the invoice (invoices.journal_entry_id,
+ * supplier_invoices.registration_journal_entry_id), the inbox item it was
+ * booked from (invoice_inbox_items.created_journal_entry_id) and the utlagg
+ * (expense_claims.journal_entry_id). The undo deletes A3 as the last voucher
+ * and then A2, which posts A1 again. Before this migration the invoice and
+ * inbox item pointers went NULL with A3 (ON DELETE SET NULL) and the utlagg
+ * was removed with it, so A1 came back with no record naming it.
  *
- * Pinned:
- *  - deleting the correction returns both pointers to the original;
- *  - deleting the storno after it posts the original again, and both
- *    pointers still name it;
- *  - a correction with no invoice behind it deletes as before, and a pointer
- *    that never left the original stays on it.
+ * Pinned, for each of the four records on a company of its own:
+ *  - deleting the correction returns the pointer to the original, and the
+ *    record is still there;
+ *  - deleting the storno after it posts the original again, and the pointer
+ *    still names it.
+ * And once: a correction with no record behind it deletes as before, and
+ * pointers that never left the original stay on it.
  *
- * One verifikat stands in for both registrations: the function moves the two
- * pointers independently, and its lines play no part.
+ * The verifikat is a plain one: the function reads the pointers, never the
+ * lines or the source of the verifikat they name.
  */
 
 type Queryable = Pick<PoolClient, 'query'>
@@ -37,22 +41,6 @@ type Queryable = Pick<PoolClient, 'query'>
 async function entryStatus(id: string, db: Queryable): Promise<string | null> {
   const { rows } = await db.query<{ status: string }>(`SELECT status FROM public.journal_entries WHERE id = $1`, [id])
   return rows[0]?.status ?? null
-}
-
-async function invoicePointer(id: string, db: Queryable): Promise<string | null> {
-  const { rows } = await db.query<{ journal_entry_id: string | null }>(
-    `SELECT journal_entry_id FROM public.invoices WHERE id = $1`,
-    [id],
-  )
-  return rows[0]?.journal_entry_id ?? null
-}
-
-async function supplierInvoicePointer(id: string, db: Queryable): Promise<string | null> {
-  const { rows } = await db.query<{ registration_journal_entry_id: string | null }>(
-    `SELECT registration_journal_entry_id FROM public.supplier_invoices WHERE id = $1`,
-    [id],
-  )
-  return rows[0]?.registration_journal_entry_id ?? null
 }
 
 /** Storno of a posted entry as the engine leaves it: swapped lines, posted, original reversed. */
@@ -149,16 +137,82 @@ async function correctedVerifikat(): Promise<CorrectedChain> {
   return { company, originalId, stornoId, correctionId }
 }
 
-/** A customer invoice and a supplier invoice whose verifikat pointers name `entryId`. */
-async function invoicesPointingAt(company: CashCompany, entryId: string) {
-  const invoiceId = await insertCustomerInvoice(company)
-  const supplierInvoiceId = await insertSupplierInvoice(company)
-  await getPool().query(`UPDATE public.invoices SET journal_entry_id = $1 WHERE id = $2`, [entryId, invoiceId])
-  await getPool().query(
-    `UPDATE public.supplier_invoices SET registration_journal_entry_id = $1 WHERE id = $2`,
-    [entryId, supplierInvoiceId],
+/** A record that names the verifikat that books it, and where it keeps that pointer. */
+interface BookedRecord {
+  name: string
+  table: string
+  column: string
+  /** Insert one whose pointer names `entryId`; answers its id. */
+  seed: (company: CashCompany, entryId: string) => Promise<string>
+}
+
+const BOOKED_RECORDS: BookedRecord[] = [
+  {
+    name: 'a customer invoice',
+    table: 'invoices',
+    column: 'journal_entry_id',
+    seed: async (company, entryId) => {
+      const id = await insertCustomerInvoice(company)
+      await getPool().query(`UPDATE public.invoices SET journal_entry_id = $1 WHERE id = $2`, [entryId, id])
+      return id
+    },
+  },
+  {
+    name: 'a supplier invoice',
+    table: 'supplier_invoices',
+    column: 'registration_journal_entry_id',
+    seed: async (company, entryId) => {
+      const id = await insertSupplierInvoice(company)
+      await getPool().query(
+        `UPDATE public.supplier_invoices SET registration_journal_entry_id = $1 WHERE id = $2`,
+        [entryId, id],
+      )
+      return id
+    },
+  },
+  {
+    name: 'an inbox item',
+    table: 'invoice_inbox_items',
+    column: 'created_journal_entry_id',
+    seed: async (company, entryId) => {
+      const { rows } = await getPool().query<{ id: string }>(
+        `INSERT INTO public.invoice_inbox_items
+           (company_id, user_id, source, status, document_id, created_journal_entry_id, created_supplier_invoice_id)
+         VALUES ($1, $2, 'upload', 'received', NULL, $3, NULL)
+         RETURNING id`,
+        [company.companyId, company.userId, entryId],
+      )
+      const row = rows[0]
+      if (!row) throw new Error('the inbox item insert returned no row')
+      return row.id
+    },
+  },
+  {
+    name: 'an utlagg',
+    table: 'expense_claims',
+    column: 'journal_entry_id',
+    seed: async (company, entryId) => {
+      const id = randomUUID()
+      await getPool().query(
+        `INSERT INTO public.expense_claims
+           (id, company_id, user_id, claimant_name, description, expense_date, amount_sek, vat_sek, expense_account)
+         VALUES ($1, $2, $3, 'Owner', 'Receipt', CURRENT_DATE - 10, 40, 0, '5410')`,
+        [id, company.companyId, company.userId],
+      )
+      await getPool().query(`UPDATE public.expense_claims SET journal_entry_id = $1 WHERE id = $2`, [entryId, id])
+      return id
+    },
+  },
+]
+
+/** The record's verifikat pointer, or 'record deleted' when the row is gone. */
+async function pointerOf(record: BookedRecord, id: string, db: Queryable): Promise<string | null> {
+  const { rows } = await db.query<{ pointer: string | null }>(
+    `SELECT ${record.column} AS pointer FROM public.${record.table} WHERE id = $1`,
+    [id],
   )
-  return { invoiceId, supplierInvoiceId }
+  const row = rows[0]
+  return row ? row.pointer : 'record deleted'
 }
 
 function deleteLast(db: Queryable, companyId: string, entryId: string) {
@@ -168,70 +222,60 @@ function deleteLast(db: Queryable, companyId: string, entryId: string) {
   )
 }
 
-describe('delete_last_voucher on a correction of a verifikat that books an invoice', () => {
-  it('returns the customer and the supplier invoice pointer to the original', async () => {
+describe.each(BOOKED_RECORDS)('delete_last_voucher on a correction of the verifikat that books $name', (record) => {
+  it('returns the pointer to the original and keeps the record', async () => {
     const { company, originalId, stornoId, correctionId } = await correctedVerifikat()
-    const { invoiceId, supplierInvoiceId } = await invoicesPointingAt(company, correctionId)
+    const recordId = await record.seed(company, correctionId)
 
     const result = await withUserContext(company.userId, async (c) => {
       await deleteLast(c, company.companyId, correctionId)
       await c.query('RESET ROLE')
       return {
-        invoice: await invoicePointer(invoiceId, c),
-        supplierInvoice: await supplierInvoicePointer(supplierInvoiceId, c),
+        pointer: await pointerOf(record, recordId, c),
         original: await entryStatus(originalId, c),
         storno: await entryStatus(stornoId, c),
         correction: await entryStatus(correctionId, c),
       }
     })
 
-    expect(result).toEqual({
-      invoice: originalId,
-      supplierInvoice: originalId,
-      original: 'reversed',
-      storno: 'posted',
-      correction: null,
-    })
+    expect(result).toEqual({ pointer: originalId, original: 'reversed', storno: 'posted', correction: null })
   })
 
   it('still names the original once the storno is deleted too and the original is posted again', async () => {
     const { company, originalId, stornoId, correctionId } = await correctedVerifikat()
-    const { invoiceId, supplierInvoiceId } = await invoicesPointingAt(company, correctionId)
+    const recordId = await record.seed(company, correctionId)
 
     const result = await withUserContext(company.userId, async (c) => {
       await deleteLast(c, company.companyId, correctionId)
       await deleteLast(c, company.companyId, stornoId)
       await c.query('RESET ROLE')
       return {
-        invoice: await invoicePointer(invoiceId, c),
-        supplierInvoice: await supplierInvoicePointer(supplierInvoiceId, c),
+        pointer: await pointerOf(record, recordId, c),
         original: await entryStatus(originalId, c),
         storno: await entryStatus(stornoId, c),
         correction: await entryStatus(correctionId, c),
       }
     })
 
-    expect(result).toEqual({
-      invoice: originalId,
-      supplierInvoice: originalId,
-      original: 'posted',
-      storno: null,
-      correction: null,
-    })
+    expect(result).toEqual({ pointer: originalId, original: 'posted', storno: null, correction: null })
   })
+})
 
-  it('deletes a correction with no invoice behind it as before, and leaves a pointer on the original alone', async () => {
+describe('delete_last_voucher on a correction with no record behind it', () => {
+  it('deletes as before and leaves pointers that never left the original alone', async () => {
     const { company, originalId, stornoId, correctionId } = await correctedVerifikat()
-    // The pointers never left the original: nothing names the correction.
-    const { invoiceId, supplierInvoiceId } = await invoicesPointingAt(company, originalId)
+    // Nothing names the correction: every pointer is still on the original.
+    const seeded: Array<{ record: BookedRecord; id: string }> = []
+    for (const record of BOOKED_RECORDS) seeded.push({ record, id: await record.seed(company, originalId) })
 
     const result = await withUserContext(company.userId, async (c) => {
       const deleted = await deleteLast(c, company.companyId, correctionId)
       await c.query('RESET ROLE')
+      const pointers: Array<string | null> = []
+      for (const { record, id } of seeded) pointers.push(await pointerOf(record, id, c))
       return {
         deleted: deleted.rows[0]?.result.deleted ?? null,
-        invoice: await invoicePointer(invoiceId, c),
-        supplierInvoice: await supplierInvoicePointer(supplierInvoiceId, c),
+        pointers,
         original: await entryStatus(originalId, c),
         storno: await entryStatus(stornoId, c),
         correction: await entryStatus(correctionId, c),
@@ -240,8 +284,7 @@ describe('delete_last_voucher on a correction of a verifikat that books an invoi
 
     expect(result).toEqual({
       deleted: true,
-      invoice: originalId,
-      supplierInvoice: originalId,
+      pointers: [originalId, originalId, originalId, originalId],
       original: 'reversed',
       storno: 'posted',
       correction: null,

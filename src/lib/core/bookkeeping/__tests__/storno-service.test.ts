@@ -109,14 +109,15 @@ vi.mock('@/lib/core/bookkeeping/correction-bank-leg', () => ({
   assertCorrectionKeepsBankAccount: (...args: unknown[]) => mockAssertBankAccount(...args),
 }))
 
-// The invoice payment rows and the invoice's own verifikat pointer follow the
-// correction (correction-payment-relink.test.ts covers the queries). Neither
-// consumes a queued result.
+// The invoice payment rows and the records the verifikat books (the invoice,
+// the inbox item, the utlägg) follow the correction
+// (correction-payment-relink.test.ts covers the queries). Neither consumes a
+// queued result.
 const mockRelinkPaymentRows = vi.fn(async () => undefined)
-const mockRelinkRegistrationPointers = vi.fn(async (): Promise<string | undefined> => undefined)
+const mockRelinkBookedRecords = vi.fn(async (): Promise<string | undefined> => undefined)
 vi.mock('@/lib/core/bookkeeping/correction-payment-relink', () => ({
   relinkPaymentRowsToEntry: (...args: unknown[]) => mockRelinkPaymentRows(...(args as [])),
-  relinkRegistrationPointersToEntry: (...args: unknown[]) => mockRelinkRegistrationPointers(...(args as [])),
+  relinkBookedRecordsToEntry: (...args: unknown[]) => mockRelinkBookedRecords(...(args as [])),
 }))
 
 import { correctEntry } from '../storno-service'
@@ -350,7 +351,7 @@ describe('correctEntry', () => {
       expect(mockIsStandingStorno).toHaveBeenCalledWith(supabase, 'company-1', 'orig-1', 'reversal-1')
       // No compare-and-set on the original, no relink out of its year.
       expect(mockRelinkPaymentRows).not.toHaveBeenCalled()
-      expect(mockRelinkRegistrationPointers).not.toHaveBeenCalled()
+      expect(mockRelinkBookedRecords).not.toHaveBeenCalled()
       expect(supabase.rpc).not.toHaveBeenCalledWith('relink_documents_to_correction', expect.anything())
       expect(vi.mocked(supabase.from).mock.calls.map(([table]) => table)).not.toContain('transactions')
       expect(resultIdx).toBe(11)
@@ -1088,20 +1089,20 @@ describe('correctEntry', () => {
       )
     })
 
-    // The invoice's own verifikat pointer follows as well: the corrected
-    // verifikat is the one that books the invoice now.
-    it('hands the original and the corrected entry to the registration pointer relink', async () => {
+    // The records the original books follow as well, each by its own
+    // verifikat pointer: the corrected verifikat is the one that books them now.
+    it('hands the original and the corrected entry to the relink of the records it books', async () => {
       setupResults()
       const supabase = makeClient()
       await correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', correctedLines)
 
-      expect(mockRelinkRegistrationPointers).toHaveBeenCalledTimes(1)
-      expect(mockRelinkRegistrationPointers).toHaveBeenCalledWith(supabase, 'company-1', 'orig-1', 'corrected-1')
+      expect(mockRelinkBookedRecords).toHaveBeenCalledTimes(1)
+      expect(mockRelinkBookedRecords).toHaveBeenCalledWith(supabase, 'company-1', 'orig-1', 'corrected-1')
     })
 
-    it('keeps the posted correction when the registration pointer relink fails', async () => {
+    it('keeps the posted correction when the relink of the records it books fails', async () => {
       setupResults()
-      mockRelinkRegistrationPointers.mockResolvedValueOnce('KONTANTMETOD_CARRY_LINK_LOCKED')
+      mockRelinkBookedRecords.mockResolvedValueOnce('KONTANTMETOD_CARRY_LINK_LOCKED')
       const supabase = makeClient()
       const result = await correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', correctedLines)
 

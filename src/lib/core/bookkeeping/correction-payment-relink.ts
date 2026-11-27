@@ -1,6 +1,6 @@
 /**
  * The payment rows of a corrected verifikat follow the correction, and so
- * does the pointer of the invoice the verifikat books.
+ * do the pointers of the records the verifikat books.
  *
  * A payment verifikat (invoice_paid, invoice_cash_payment and the supplier
  * pair) has a mirror outside the ledger: the invoice_payments or
@@ -28,32 +28,46 @@
  * held to the same anchor rule as the bank row (guard_cash_transaction_anchor):
  * when the correction takes the bank leg out, the row stays where it was.
  *
- * The invoice's own verifikat pointer follows the correction too
- * (relinkRegistrationPointersToEntry). invoices.journal_entry_id and
- * supplier_invoices.registration_journal_entry_id name the verifikat that
- * books the invoice or the credit note: the receivable or the skuld.
+ * The records the verifikat books follow the correction too
+ * (relinkBookedRecordsToEntry). Each names the verifikat that books it in a
+ * pointer of its own:
+ *   - an invoice or a credit note, invoices.journal_entry_id and
+ *     supplier_invoices.registration_journal_entry_id: the verifikat with
+ *     the receivable or the skuld;
+ *   - the inbox item it was booked from,
+ *     invoice_inbox_items.created_journal_entry_id;
+ *   - an utlägg, expense_claims.journal_entry_id.
  * correctEntry reverses that verifikat and posts the corrected one in its
- * place. Left behind, the invoice names the reversed original, and the
- * corrected verifikat that now carries the receivable or the skuld has no
- * invoice: what reads the pointer from either side (the underlag references
- * and counts of a verifikat among others) gets the wrong verifikat.
+ * place. Left behind, the record names the reversed original and the
+ * corrected verifikat has no record: what reads the pointer from either side
+ * (the underlag references and counts of a verifikat among others) gets the
+ * wrong verifikat. Two readers take a reversed verifikat as spent and act on
+ * it: an inbox item whose pointer is reversed reads as open and can be booked
+ * a second time (bookingStateOfItem), and removing an utlägg whose verifikat
+ * is reversed posts no storno (deleteExpenseClaim), which would leave the
+ * corrected verifikat in the books with no claim behind it.
  *
- * That move skips no source type. The pointer equals the original's id
- * exactly when the original is the invoice's verifikat, which its source type
- * does not say: beside the registration doors (invoice_created, credit_note,
+ * That move skips no source type. A pointer equals the original's id exactly
+ * when the original is the record's verifikat, which its source type does not
+ * say: beside the registration doors (invoice_created, credit_note,
  * supplier_invoice_registered, supplier_credit_note) an invoice is linked to
  * a verifikat that was already in the books, the imported voucher of a
  * migrated invoice (link-migrated-registration-vouchers.ts) or any posted
  * voucher that booked it (register-booked.ts, register-booked-invoice.ts),
- * and a corrected registration is itself corrected under 'correction'. A
- * filter would save two indexed updates that match no row, and would leave
- * those pointers on the reversed original.
+ * an inbox item is stamped by whichever door booked it, and a corrected
+ * verifikat is itself corrected under 'correction'. A filter would save a
+ * few indexed updates that match no row, and would leave those pointers on
+ * the reversed original.
  *
- * One trigger guards the two columns: guard_kontantmetod_carry_link holds the
- * pointer of a posted kontantmetod year-end carry. It does not meet this move,
- * since correctEntry refuses to correct a carry and the original is
- * 'reversed' before its pointers are moved. A refusal, from it or from
- * anything else, leaves the row where it is and is returned like the others.
+ * One trigger guards any of these columns: guard_kontantmetod_carry_link
+ * holds the invoice pointer of a posted kontantmetod year-end carry. It does
+ * not meet this move, since correctEntry refuses to correct a carry and the
+ * original is 'reversed' before its pointers are moved. A refusal, from it or
+ * from anything else, leaves the row where it is and is returned like the
+ * others. Under row level security a caller who may post the correction may
+ * move all four: the invoices and the inbox item take the write role in the
+ * active company that the verifikat itself takes, the utlägg any writing
+ * member of the company.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { isPaymentSourceType } from '@/lib/bookkeeping/payment-sync'
@@ -67,9 +81,12 @@ const PAYMENT_ROW_POINTERS: readonly EntryPointer[] = [
   { table: 'supplier_invoices', column: 'payment_journal_entry_id' },
 ]
 
-const REGISTRATION_POINTERS: readonly EntryPointer[] = [
+/** The records a verifikat books: each names it in a pointer of its own. */
+const BOOKED_RECORD_POINTERS: readonly EntryPointer[] = [
   { table: 'invoices', column: 'journal_entry_id' },
   { table: 'supplier_invoices', column: 'registration_journal_entry_id' },
+  { table: 'invoice_inbox_items', column: 'created_journal_entry_id' },
+  { table: 'expense_claims', column: 'journal_entry_id' },
 ]
 
 export function correctionCarriesPaymentRows(sourceType: string | null | undefined): boolean {
@@ -113,11 +130,11 @@ export async function relinkPaymentRowsToEntry(
   return moveEntryPointers(supabase, companyId, original.id, toEntryId, PAYMENT_ROW_POINTERS, 'relinkPaymentRowsToEntry')
 }
 
-export async function relinkRegistrationPointersToEntry(
+export async function relinkBookedRecordsToEntry(
   supabase: SupabaseClient,
   companyId: string,
   fromEntryId: string,
   toEntryId: string,
 ): Promise<string | undefined> {
-  return moveEntryPointers(supabase, companyId, fromEntryId, toEntryId, REGISTRATION_POINTERS, 'relinkRegistrationPointersToEntry')
+  return moveEntryPointers(supabase, companyId, fromEntryId, toEntryId, BOOKED_RECORD_POINTERS, 'relinkBookedRecordsToEntry')
 }

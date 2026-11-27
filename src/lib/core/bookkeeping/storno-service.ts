@@ -35,7 +35,7 @@ import { assertCorrectedImportVatBase } from '@/lib/bookkeeping/import-vat-base'
 import { assertCorrectionKeepsBankAccount } from '@/lib/core/bookkeeping/correction-bank-leg'
 import {
   relinkPaymentRowsToEntry,
-  relinkRegistrationPointersToEntry,
+  relinkBookedRecordsToEntry,
 } from '@/lib/core/bookkeeping/correction-payment-relink'
 import {
   correctionChainDepth,
@@ -776,9 +776,9 @@ export async function correctEntry(
   // A moved storno writes nothing to the original or its locked stretch (the
   // period-lock trigger refuses any write to a locked or closed year, and
   // what lies on or before the lock date stands as it was locked): the
-  // original keeps its status, bank rows, payment rows, invoice pointer and
-  // underlag, and the chain is read from the new verifikat (reverses_id,
-  // correction_of_id).
+  // original keeps its status, bank rows, payment rows, the records it books
+  // and its underlag, and the chain is read from the new verifikat
+  // (reverses_id, correction_of_id).
   let transactionRelinkError: string | undefined
   let documentRelinkError: string | undefined
   if (!moved) {
@@ -852,9 +852,10 @@ export async function correctEntry(
     // The invoice payment rows follow too, so the invoice reads as paid by the
     // verifikat that stands, not by the reversed original (PH 227).
     await relinkPaymentRowsToEntry(supabase, companyId, original, correctedEntry!.id)
-    // So does the invoice's own verifikat pointer, when the original is the
-    // verifikat that books an invoice: the corrected one books it now.
-    await relinkRegistrationPointersToEntry(supabase, companyId, originalEntryId, correctedEntry!.id)
+    // So do the records the original books, each by its own verifikat
+    // pointer: the invoice, the inbox item it was booked from and the utlägg.
+    // The corrected verifikat books them now.
+    await relinkBookedRecordsToEntry(supabase, companyId, originalEntryId, correctedEntry!.id)
     documentRelinkError = await relinkDocumentsToEntry(
       supabase,
       userId,

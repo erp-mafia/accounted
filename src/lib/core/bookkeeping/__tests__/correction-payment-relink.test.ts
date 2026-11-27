@@ -1,14 +1,15 @@
 /**
  * relinkPaymentRowsToEntry: a corrected payment verifikat's invoice payment
  * rows follow the correction, as the bank rows and the underlag do (PH 227).
- * relinkRegistrationPointersToEntry: so does the invoice's own verifikat
- * pointer when the corrected verifikat is the one that books the invoice.
+ * relinkBookedRecordsToEntry: so do the records the corrected verifikat
+ * books, each by its own verifikat pointer: the invoice, the inbox item it
+ * was booked from and the utlägg.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
   correctionCarriesPaymentRows,
   relinkPaymentRowsToEntry,
-  relinkRegistrationPointersToEntry,
+  relinkBookedRecordsToEntry,
 } from '../correction-payment-relink'
 
 type Result = { error: { message: string } | null }
@@ -86,33 +87,40 @@ describe('relinkPaymentRowsToEntry', () => {
   })
 })
 
-describe('relinkRegistrationPointersToEntry', () => {
-  it('re-points the customer invoice and the supplier invoice to the corrected verifikat, scoped by company', async () => {
+describe('relinkBookedRecordsToEntry', () => {
+  it('re-points the invoice, the supplier invoice, the inbox item and the utlägg to the corrected verifikat, scoped by company', async () => {
     const { client, calls } = makeClient()
-    const error = await relinkRegistrationPointersToEntry(client, 'company-1', 'a2', 'a4')
+    const error = await relinkBookedRecordsToEntry(client, 'company-1', 'a2', 'a4')
 
     expect(error).toBeUndefined()
     expect(calls).toEqual([
       { table: 'invoices', payload: { journal_entry_id: 'a4' }, eqs: [['company_id', 'company-1'], ['journal_entry_id', 'a2']] },
       { table: 'supplier_invoices', payload: { registration_journal_entry_id: 'a4' }, eqs: [['company_id', 'company-1'], ['registration_journal_entry_id', 'a2']] },
+      { table: 'invoice_inbox_items', payload: { created_journal_entry_id: 'a4' }, eqs: [['company_id', 'company-1'], ['created_journal_entry_id', 'a2']] },
+      { table: 'expense_claims', payload: { journal_entry_id: 'a4' }, eqs: [['company_id', 'company-1'], ['journal_entry_id', 'a2']] },
     ])
   })
 
-  it('returns the first failure without throwing and still moves the other pointer', async () => {
+  it('returns the first failure without throwing and still moves the other pointers', async () => {
     const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
     const { client, calls } = makeClient({ invoices: { error: { message: 'KONTANTMETOD_CARRY_LINK_LOCKED' } } })
-    const error = await relinkRegistrationPointersToEntry(client, 'company-1', 'a2', 'a4')
+    const error = await relinkBookedRecordsToEntry(client, 'company-1', 'a2', 'a4')
 
     expect(error).toBe('KONTANTMETOD_CARRY_LINK_LOCKED')
-    expect(calls.map((c) => c.table)).toEqual(['invoices', 'supplier_invoices'])
+    expect(calls.map((c) => c.table)).toEqual(['invoices', 'supplier_invoices', 'invoice_inbox_items', 'expense_claims'])
     expect(logged).toHaveBeenCalledTimes(1)
   })
 
-  it('returns the supplier side failure when only that one fails', async () => {
-    vi.spyOn(console, 'error').mockImplementation(() => {})
-    const { client } = makeClient({ supplier_invoices: { error: { message: 'permission denied for table supplier_invoices' } } })
-    const error = await relinkRegistrationPointersToEntry(client, 'company-1', 'a2', 'a4')
+  it.each(['supplier_invoices', 'invoice_inbox_items', 'expense_claims'])(
+    'returns the failure of %s when only that one fails, and still asks the others',
+    async (table) => {
+      const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const { client, calls } = makeClient({ [table]: { error: { message: `permission denied for table ${table}` } } })
+      const error = await relinkBookedRecordsToEntry(client, 'company-1', 'a2', 'a4')
 
-    expect(error).toBe('permission denied for table supplier_invoices')
-  })
+      expect(error).toBe(`permission denied for table ${table}`)
+      expect(calls).toHaveLength(4)
+      expect(logged).toHaveBeenCalledTimes(1)
+    },
+  )
 })

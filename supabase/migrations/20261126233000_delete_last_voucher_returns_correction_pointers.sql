@@ -1,31 +1,44 @@
--- delete_last_voucher: deleting a correction returns the invoice's verifikat
--- pointer to the corrected original.
+-- delete_last_voucher: deleting a correction returns the pointers it carries
+-- to the corrected original.
 --
 -- The gap. correctEntry moves what hangs on a corrected verifikat to the
 -- correction: the bank anchors, the payment rows, the underlag and the
--- pointer of the invoice the verifikat books (invoices.journal_entry_id,
--- supplier_invoices.registration_journal_entry_id). Deleting that correction
--- as the last voucher in the series, and then its storno, is the undo: the
--- original is posted again. 20260908095907 returns the bank anchors to the
--- original on the way (#2364). The invoice pointer was left to its foreign
--- key (ON DELETE SET NULL), so the original came back as the verifikat that
--- books the invoice while the invoice named no verifikat at all.
+-- pointer of each record the verifikat books: the invoice
+-- (invoices.journal_entry_id, supplier_invoices.registration_journal_entry_id),
+-- the inbox item it was booked from
+-- (invoice_inbox_items.created_journal_entry_id) and the utlagg
+-- (expense_claims.journal_entry_id). Deleting that correction as the last
+-- voucher in the series, and then its storno, is the undo: the original is
+-- posted again. 20260908095907 returns the bank anchors to the original on
+-- the way (#2364). The record pointers were not returned:
+--   * the invoice and the inbox item were left to their foreign keys
+--     (ON DELETE SET NULL), so the original came back as the verifikat that
+--     books them while they named no verifikat at all, and the inbox item
+--     read as open, to be booked a second time;
+--   * the utlagg was read by the register checks as this verifikat's own and
+--     removed with it (or the delete refused, when it was paid out or on a
+--     payslip), so the original came back with no claim behind it.
 --
--- The fix, inside the correction branch only: before the correction is
--- deleted, invoices.journal_entry_id and
--- supplier_invoices.registration_journal_entry_id go back to correction_of_id,
--- company-scoped, next to the bank anchors. A correction with no invoice
--- behind it matches no row. The payment pointers are not touched here: the
--- register reverts earlier in the function decide those, as before.
+-- The fix, for a correction only (correction_of_id set), company-scoped:
+--   1. expense_claims.journal_entry_id goes back to correction_of_id before
+--      the register checks read the claims of this verifikat. Deleting a
+--      correction then leaves the claim as it did while the pointer stayed
+--      on the original: not refused, not removed.
+--   2. In the branch that returns the bank anchors, invoices.journal_entry_id,
+--      supplier_invoices.registration_journal_entry_id and
+--      invoice_inbox_items.created_journal_entry_id go back the same way.
+-- A correction with no such record behind it matches no row. The payment
+-- pointers are not touched here: the register reverts decide those, as
+-- before.
 --
 -- Everything else is byte-for-byte 20261031220000 (prod body md5
 -- 2bdb134ea29cd905d38f4e81c0762a8a verified 2026-11-26): the last-in-series
--- rule, the owner/admin gate, the period checks, the register reverts, the
--- bank row of a deleted storno and the audit snapshot. CREATE OR REPLACE with
--- an unchanged signature, so grants are retained; no table, column,
--- constraint or index changes.
+-- rule, the owner/admin gate, the period checks, the register checks and
+-- reverts, the bank row of a deleted storno and the audit snapshot.
+-- CREATE OR REPLACE with an unchanged signature, so grants are retained; no
+-- table, column, constraint or index changes.
 --
--- pg-test: tests/pg/delete-last-voucher-correction-invoice-pointer.pg.test.ts
+-- pg-test: tests/pg/delete-last-voucher-correction-pointers.pg.test.ts
 
 CREATE OR REPLACE FUNCTION public.delete_last_voucher(p_company_id uuid, p_entry_id uuid)
  RETURNS jsonb
@@ -151,6 +164,18 @@ BEGIN
   IF v_ref_count > 0 THEN
     RAISE EXCEPTION 'Cannot delete: other entries reference this voucher (% references)',
       v_ref_count;
+  END IF;
+
+  -- A correction carries the pointer of the utlagg correctEntry moved off the
+  -- original. Returned here, ahead of the register checks: they read a claim
+  -- that names this verifikat as its own, refused when paid out and removed
+  -- with the verifikat, and this claim's verifikat is the original again. A
+  -- refusal further down rolls this back with everything else.
+  IF v_entry.correction_of_id IS NOT NULL THEN
+    UPDATE expense_claims
+    SET journal_entry_id = v_entry.correction_of_id
+    WHERE company_id = p_company_id
+      AND journal_entry_id = p_entry_id;
   END IF;
 
   -- ===== Registers that hang on this verifikat (see the file header) =====
@@ -352,10 +377,12 @@ BEGIN
   -- ON DELETE SET NULL, junction: ON DELETE CASCADE), so the original, once
   -- its storno is deleted too, still explains its bank rows.
   --
-  -- It carries the pointer of the invoice it books the same way
-  -- (invoices.journal_entry_id, supplier_invoices.registration_journal_entry_id,
-  -- both ON DELETE SET NULL). Returned to the original too, so the invoice
-  -- names the verifikat that books it once the storno is deleted as well.
+  -- It carries the pointers of the records it books the same way: the invoice
+  -- (invoices.journal_entry_id, supplier_invoices.registration_journal_entry_id)
+  -- and the inbox item it was booked from
+  -- (invoice_inbox_items.created_journal_entry_id), all ON DELETE SET NULL.
+  -- Returned to the original too, so each names the verifikat that books it
+  -- once the storno is deleted as well. The utlagg went back above.
   IF v_entry.correction_of_id IS NOT NULL THEN
     UPDATE transactions
     SET journal_entry_id = v_entry.correction_of_id
@@ -385,6 +412,11 @@ BEGIN
     SET registration_journal_entry_id = v_entry.correction_of_id
     WHERE company_id = p_company_id
       AND registration_journal_entry_id = p_entry_id;
+
+    UPDATE invoice_inbox_items
+    SET created_journal_entry_id = v_entry.correction_of_id
+    WHERE company_id = p_company_id
+      AND created_journal_entry_id = p_entry_id;
   END IF;
 
   v_is_period_ib := (v_period.opening_balance_entry_id = p_entry_id);
