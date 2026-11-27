@@ -34,6 +34,9 @@ export const CANNOT_CANCEL_NON_DRAFT = 'CANNOT_CANCEL_NON_DRAFT' as const
 export const ENTRY_ALREADY_REVERSED = 'ENTRY_ALREADY_REVERSED' as const
 export const MIGRATED_DEDUCTION_HELD_BY_REQUEST = 'MIGRATED_DEDUCTION_HELD_BY_REQUEST' as const
 export const REVERSAL_HOOK_MISSING = 'REVERSAL_HOOK_MISSING' as const
+export const SI_REGISTRATION_STORNO_HAS_PAYMENTS = 'SI_REGISTRATION_STORNO_HAS_PAYMENTS' as const
+export const INVOICE_STORNO_ISSUED = 'INVOICE_STORNO_ISSUED' as const
+export const SALARY_RUN_STORNO_BOOKED = 'SALARY_RUN_STORNO_BOOKED' as const
 export const CURRENCY_REVALUATION_ALREADY_EXISTS = 'CURRENCY_REVALUATION_ALREADY_EXISTS' as const
 export const ASSET_DEPRECIATION_REFUSED = 'ASSET_DEPRECIATION_REFUSED' as const
 export const INVALID_MAPPING_RESULT = 'INVALID_MAPPING_RESULT' as const
@@ -316,6 +319,49 @@ export class ReversalHookMissingError extends Error {
   constructor(public readonly sourceType: string) {
     super(`No reversal hook is registered for source type ${sourceType}; the storno was refused before anything was written`)
     this.name = 'ReversalHookMissingError'
+  }
+}
+
+/**
+ * Raised before anything is written when the registration verifikat of a
+ * supplier invoice (source_type supplier_invoice_registered) would be
+ * reversed while the invoice has payments: they clear 2440 against the
+ * registration, so they are undone first
+ * (lib/supplier-invoices/registration-reversal.ts).
+ */
+export class SupplierInvoiceRegistrationHasPaymentsError extends Error {
+  readonly code = SI_REGISTRATION_STORNO_HAS_PAYMENTS
+  constructor(public readonly supplierInvoiceId: string) {
+    super('The supplier invoice this voucher registers has payments. Undo the payments first, then reverse the voucher.')
+    this.name = 'SupplierInvoiceRegistrationHasPaymentsError'
+  }
+}
+
+/**
+ * Raised before anything is written when the verifikat of a customer invoice
+ * (source_type invoice_created) would be reversed after the invoice was sent
+ * or paid: such an invoice is withdrawn with Kreditera, never by a storno of
+ * its verifikat (lib/invoices/invoice-verifikat-reversal.ts).
+ */
+export class IssuedInvoiceStornoError extends Error {
+  readonly code = INVOICE_STORNO_ISSUED
+  constructor(public readonly invoiceId: string) {
+    super('The voucher books a customer invoice that has been sent or paid. Credit the invoice instead.')
+    this.name = 'IssuedInvoiceStornoError'
+  }
+}
+
+/**
+ * Raised before anything is written when a verifikat of a booked salary run
+ * (source_type salary_payment) would be reversed on its own: Korrigera
+ * lönekörning reverses all of the run's verifikat together
+ * (lib/salary/run-verifikat-reversal.ts, lib/salary/correct-run.ts).
+ */
+export class BookedSalaryRunStornoError extends Error {
+  readonly code = SALARY_RUN_STORNO_BOOKED
+  constructor(public readonly salaryRunId: string) {
+    super('The voucher belongs to a booked payroll run. Correct the payroll run instead.')
+    this.name = 'BookedSalaryRunStornoError'
   }
 }
 
@@ -1211,6 +1257,9 @@ export function isBookkeepingError(err: unknown): boolean {
     err instanceof EntryAlreadyReversedError ||
     err instanceof MigratedDeductionHeldByRequestError ||
     err instanceof ReversalHookMissingError ||
+    err instanceof SupplierInvoiceRegistrationHasPaymentsError ||
+    err instanceof IssuedInvoiceStornoError ||
+    err instanceof BookedSalaryRunStornoError ||
     err instanceof CurrencyRevaluationAlreadyExistsError ||
     err instanceof InvalidMappingResultError ||
     err instanceof TransactionMissingSekValueError ||
@@ -1447,6 +1496,27 @@ export function bookkeepingErrorResponse(err: unknown): NextResponse | null {
     return NextResponse.json(
       { error: { code: err.code, message: err.message, details: { sourceType: err.sourceType } } },
       { status: 500 }
+    )
+  }
+
+  if (err instanceof SupplierInvoiceRegistrationHasPaymentsError) {
+    return NextResponse.json(
+      { error: { code: err.code, message: err.message, details: { supplierInvoiceId: err.supplierInvoiceId } } },
+      { status: 409 }
+    )
+  }
+
+  if (err instanceof IssuedInvoiceStornoError) {
+    return NextResponse.json(
+      { error: { code: err.code, message: err.message, details: { invoiceId: err.invoiceId } } },
+      { status: 409 }
+    )
+  }
+
+  if (err instanceof BookedSalaryRunStornoError) {
+    return NextResponse.json(
+      { error: { code: err.code, message: err.message, details: { salaryRunId: err.salaryRunId } } },
+      { status: 409 }
     )
   }
 

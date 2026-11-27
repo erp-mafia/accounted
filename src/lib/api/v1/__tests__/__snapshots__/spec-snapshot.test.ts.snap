@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `478`;
+exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `479`;
 
 exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-keys 1`] = `
 [
@@ -474,6 +474,7 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "PUT /api/v1/companies/:companyId/assets/:id/tax-plan",
   "PUT /api/v1/companies/:companyId/assets/:id/transition-split",
   "PUT /api/v1/companies/:companyId/cash-accounts/payee-defaults",
+  "PUT /api/v1/companies/:companyId/documents/:id/type",
   "PUT /api/v1/companies/:companyId/employees/:id/absence",
   "PUT /api/v1/companies/:companyId/employees/:id/opening-balances",
   "PUT /api/v1/companies/:companyId/employees/:id/worked-days",
@@ -498,7 +499,7 @@ exports[`v1 spec snapshot > matches the recorded module catalogue > endpoint-mod
   "import": 8,
   "inbox": 13,
   "invoicing": 37,
-  "ledger": 140,
+  "ledger": 141,
   "payments": 20,
   "payroll": 58,
   "platform": 30,

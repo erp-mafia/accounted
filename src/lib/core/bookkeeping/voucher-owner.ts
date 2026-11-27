@@ -22,10 +22,12 @@ const log = createLogger('voucher-owner')
  * the dashboard and v1 reverse/correct routes, and the MCP staging of
  * gnubok_reverse_journal_entry and gnubok_correct_entry.
  *
- * It never refuses anything: the verifikat stays reversible on its own (an
- * agent or a bulk flow may mean exactly that). Payment vouchers have no
- * owner here: their Vänd runs a reversal hook that keeps the invoice in step
- * (lib/composition/reversal-hooks.ts).
+ * It never refuses anything itself. The reversal hooks do
+ * (lib/composition/reversal-hooks.ts): Vänd on a sent or paid customer
+ * invoice's verifikat or on a booked payroll run's is refused there, and
+ * Vänd on a supplier invoice's registration puts the invoice back to not
+ * booked. Payment vouchers have no owner here: their Vänd runs a reversal
+ * hook that keeps the invoice in step.
  *
  * A storno or correction belongs to whatever its chain root belongs to
  * (correctionChainRoot): reverseEntry books 'storno' and correctEntry

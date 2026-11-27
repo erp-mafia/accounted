@@ -27,6 +27,10 @@ const leaves = vi.hoisted(() => ({
   assertComponentReplacementReversible: vi.fn(async () => {}),
   assertValueAdjustmentReversible: vi.fn(async () => {}),
   releaseComponentsAfterReversal: vi.fn(async () => {}),
+  assertSupplierInvoiceRegistrationReversible: vi.fn(async () => {}),
+  releaseSupplierInvoiceRegistrationAfterReversal: vi.fn(async () => {}),
+  assertInvoiceVerifikatReversible: vi.fn(async () => {}),
+  assertSalaryRunVerifikatReversible: vi.fn(async () => {}),
 }))
 
 vi.mock('@/lib/bookkeeping/payment-sync', async (importOriginal) => ({
@@ -56,6 +60,16 @@ vi.mock('@/lib/bokslut/assets/component-reversal', () => ({
   assertValueAdjustmentReversible: leaves.assertValueAdjustmentReversible,
   releaseComponentsAfterReversal: leaves.releaseComponentsAfterReversal,
 }))
+vi.mock('@/lib/supplier-invoices/registration-reversal', () => ({
+  assertSupplierInvoiceRegistrationReversible: leaves.assertSupplierInvoiceRegistrationReversible,
+  releaseSupplierInvoiceRegistrationAfterReversal: leaves.releaseSupplierInvoiceRegistrationAfterReversal,
+}))
+vi.mock('@/lib/invoices/invoice-verifikat-reversal', () => ({
+  assertInvoiceVerifikatReversible: leaves.assertInvoiceVerifikatReversible,
+}))
+vi.mock('@/lib/salary/run-verifikat-reversal', () => ({
+  assertSalaryRunVerifikatReversible: leaves.assertSalaryRunVerifikatReversible,
+}))
 
 import { REVERSAL_HOOKS } from '../reversal-hooks'
 import { REVERSAL_MIRROR_REQUIRED, type ReversalHookAfterContext } from '@/lib/bookkeeping/reversal-hooks'
@@ -78,6 +92,9 @@ const HOOK_LEAVES: Record<string, string> = {
   'customer-loss': 'customer-loss/reversal',
   'counterparty-setoff': 'invoices/counterparty-setoff/reversal',
   'asset-component-replacement': 'bokslut/assets/component-reversal',
+  'supplier-invoice-registration': 'supplier-invoices/registration-reversal',
+  'customer-invoice-verifikat': 'invoices/invoice-verifikat-reversal',
+  'salary-run-verifikat': 'salary/run-verifikat-reversal',
 }
 
 /**
@@ -89,13 +106,10 @@ const HOOK_LEAVES: Record<string, string> = {
 const KNOWN_UNMIRRORED: Partial<Record<JournalEntrySourceType, string>> = {
   rot_rut_payout: 'rot_rut_payout_requests.settlement_journal_entry_id',
   expense_payout: 'expense_payout_batches.journal_entry_id, expense_claims.status paid',
-  salary_payment: 'salary_runs.status booked (vouchers found by source_id = run id)',
   pos_daily_sales: 'pos_sales_days.journal_entry_id',
   stripe_payout: 'stripe_payouts.journal_entry_id, status booked',
   webshop_order: 'webshop_orders.journal_entry_id',
-  invoice_created: 'invoices.journal_entry_id',
   credit_note: 'invoices.journal_entry_id (the credit note row)',
-  supplier_invoice_registered: 'supplier_invoices.registration_journal_entry_id',
   supplier_credit_note: 'supplier_invoices.registration_journal_entry_id (the credit note row)',
   expense_claim: 'expense_claims.journal_entry_id',
   accrual: 'accrual_schedule_installments.journal_entry_id, status posted',
@@ -244,6 +258,31 @@ describe('reversal hook list: each hook wraps its function unchanged', () => {
     expect(leaves.releaseComponentsAfterReversal).not.toHaveBeenCalled()
     await hook('asset-component-replacement').afterReversal!(ctx)
     expect(leaves.releaseComponentsAfterReversal).toHaveBeenCalledExactlyOnceWith(supabase, 'company-1', 'entry-1')
+  })
+
+  it('supplier-invoice-registration: the payments check before, the pointer release after, both by the voucher id', async () => {
+    await hook('supplier-invoice-registration').beforeReversal!(ctx)
+    expect(leaves.assertSupplierInvoiceRegistrationReversible).toHaveBeenCalledExactlyOnceWith(supabase, 'company-1', 'entry-1')
+    expect(leaves.releaseSupplierInvoiceRegistrationAfterReversal).not.toHaveBeenCalled()
+    await hook('supplier-invoice-registration').afterReversal!(ctx)
+    expect(leaves.releaseSupplierInvoiceRegistrationAfterReversal).toHaveBeenCalledExactlyOnceWith(supabase, 'company-1', 'entry-1')
+  })
+
+  it('customer-invoice-verifikat: before only, assertInvoiceVerifikatReversible(supabase, companyId, entry.id)', async () => {
+    expect(hook('customer-invoice-verifikat').afterReversal).toBeUndefined()
+    await hook('customer-invoice-verifikat').beforeReversal!(ctx)
+    expect(leaves.assertInvoiceVerifikatReversible).toHaveBeenCalledExactlyOnceWith(supabase, 'company-1', 'entry-1')
+  })
+
+  it('salary-run-verifikat: before only, assertSalaryRunVerifikatReversible(supabase, companyId, entry)', async () => {
+    expect(hook('salary-run-verifikat').afterReversal).toBeUndefined()
+    await hook('salary-run-verifikat').beforeReversal!(ctx)
+    expect(leaves.assertSalaryRunVerifikatReversible).toHaveBeenCalledExactlyOnceWith(supabase, 'company-1', entry)
+  })
+
+  it('salary-run-verifikat: the stornos of Korrigera lönekörning pass without the check', async () => {
+    await hook('salary-run-verifikat').beforeReversal!({ ...ctx, salaryRunCorrection: true })
+    expect(leaves.assertSalaryRunVerifikatReversible).not.toHaveBeenCalled()
   })
 
   it('passes a leaf refusal through untouched', async () => {
