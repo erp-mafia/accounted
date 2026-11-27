@@ -214,6 +214,51 @@ describe('match_batch_allocate on an invoice whose issue verifikat booked the ö
   })
 })
 
+describe('match_batch_allocate after a part payment that leaves whole kronor open (20261127121500)', () => {
+  it('rounded down: the last 7 500 clears the 7 499,75 1510 carries and gives the issue öre back on 3740', async () => {
+    const company = await seedCompany()
+    const { invoiceId, issueId } = await roundedDown(company)
+
+    const part = await settle(company, 5000.25, [{ kind: 'customer_invoice', invoice_id: invoiceId, amount: 5000.25 }])
+    expect(await invoiceState(invoiceId)).toMatchObject({ status: 'partially_paid', remaining: 7500 })
+
+    const rest = await settle(company, 7500, [{ kind: 'customer_invoice', invoice_id: invoiceId, amount: 7500 }])
+    // On main: Cr 1510 7 500, and -0,25 stayed on 1510 of a paid invoice.
+    expect(rest.posted).toEqual(['1510 D0 K7499.75', '3740 D0 K0.25', '1930 D7500 K0'])
+    const entries = [issueId, part.entryId, rest.entryId]
+    expect(await balance(entries, '1510')).toBe(0)
+    // The customer paid the exact total, so no rounding is left on 3740.
+    expect(await balance(entries, '3740')).toBe(0)
+    expect(await invoiceState(invoiceId)).toMatchObject({ status: 'paid', paid: 12500.25, remaining: 0 })
+  })
+
+  it('rounded up: the last 3 000 clears the 3 000,25 1510 carries', async () => {
+    const company = await seedCompany()
+    const { invoiceId, issueId } = await roundedUp(company)
+
+    const part = await settle(company, 1999.75, [{ kind: 'customer_invoice', invoice_id: invoiceId, amount: 1999.75 }])
+    expect(await invoiceState(invoiceId)).toMatchObject({ status: 'partially_paid', remaining: 3000 })
+
+    const rest = await settle(company, 3000, [{ kind: 'customer_invoice', invoice_id: invoiceId, amount: 3000 }])
+    expect(rest.posted).toEqual(['1510 D0 K3000.25', '3740 D0.25 K0', '1930 D3000 K0'])
+    const entries = [issueId, part.entryId, rest.entryId]
+    expect(await balance(entries, '1510')).toBe(0)
+    expect(await balance(entries, '3740')).toBe(0)
+    expect(await invoiceState(invoiceId)).toMatchObject({ status: 'paid', paid: 4999.75, remaining: 0 })
+  })
+
+  it('an invoice whose 1510 carries the remainder: the last whole kronor clear just those', async () => {
+    const company = await seedCompany()
+    const { invoiceId, issueId } = await plain(company)
+
+    const part = await settle(company, 400.4, [{ kind: 'customer_invoice', invoice_id: invoiceId, amount: 400.4 }])
+    const rest = await settle(company, 600, [{ kind: 'customer_invoice', invoice_id: invoiceId, amount: 600 }])
+    expect(rest.posted).toEqual(['1510 D0 K600', '1930 D600 K0'])
+    expect(await balance([issueId, part.entryId, rest.entryId], '1510')).toBe(0)
+    expect(await invoiceState(invoiceId)).toMatchObject({ status: 'paid', remaining: 0 })
+  })
+})
+
 describe('match_batch_allocate on an invoice whose 1510 carries the whole total: unchanged', () => {
   it('settled a few öre short: Cr 1510 the remainder, Dr 3740 the öre, 1510 ends at 0', async () => {
     const company = await seedCompany()

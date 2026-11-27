@@ -1,8 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { isKronorCurrency } from '@/lib/bookkeeping/currency-utils'
+import { hasOreToRound } from '@/lib/bookkeeping/invoice-rounding'
 import { creditNoteBookedOre, type CreditNoteVoucherLine } from '@/lib/invoices/credit-note-refund-plan'
 import { dbError } from '@/lib/errors/db-error'
-import { roundOre } from '@/lib/money'
 
 /**
  * The öresavrundning a kreditfaktura's own verifikat booked
@@ -26,9 +25,8 @@ export async function readCreditNoteBookedOre(
     journal_entry_id?: string | null
   },
 ): Promise<number> {
+  if (!creditNote.journal_entry_id || !hasOreToRound(creditNote)) return 0
   const total = Number(creditNote.total)
-  if (!creditNote.journal_entry_id || !isKronorCurrency(creditNote.currency)) return 0
-  if (!Number.isFinite(total) || Number.isInteger(roundOre(total))) return 0
 
   const { data: live, error } = await supabase.rpc('live_journal_entry', {
     p_company_id: companyId,
