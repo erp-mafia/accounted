@@ -11686,6 +11686,26 @@ const WEBSHOP_ORDERS: Record<string, StructuredErrorEntry> = {
     message_en:
       'The order is marked as booked outside the integration. Undo the mark first if you want to book or invoice it from here.',
   },
+  WEBSHOP_PAYOUT_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Utbetalningen hittades inte.',
+    message_en: 'The payout was not found.',
+  },
+  WEBSHOP_PAYOUT_ROW_MISMATCH: {
+    httpStatus: 409,
+    message_sv: 'Bankraden stämmer inte med utbetalningens belopp och datum.',
+    message_en: "The bank row does not match the payout's amount and date.",
+  },
+  WEBSHOP_PAYOUT_NOT_BOOKABLE: {
+    httpStatus: 422,
+    message_sv: 'Utbetalningen kan inte bokföras automatiskt. Bokför bankraden för hand mot rapporten.',
+    message_en: 'The payout cannot be booked automatically. Book the bank row by hand against the report.',
+  },
+  CLEARING_RECORD_TAKEN: {
+    httpStatus: 409,
+    message_sv: 'Utbetalningen är redan bokförd eller bokförs från en annan bankrad.',
+    message_en: 'The payout is already booked, or is being booked from another bank row.',
+  },
   WEBSHOP_ORDER_MARK_ENTRY_NOT_FOUND: {
     httpStatus: 404,
     message_sv: 'Verifikatet som ordern skulle kopplas till hittades inte.',

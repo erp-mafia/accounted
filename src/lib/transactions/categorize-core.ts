@@ -47,7 +47,7 @@ import { chartVatTreatmentsLoader, type ChartVatTreatmentsLoader } from '@/lib/b
 import { applySettlementAccount, saveUserMappingRule } from '@/lib/bookkeeping/mapping-engine'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { coveredDayMessage, coveredFeedRows } from '@/lib/bookkeeping/feed-row-coverage'
-import { learnableBankPair } from '@/lib/bookkeeping/bank-leg'
+import { BANK_LEG_PLACEHOLDER, learnableBankPair } from '@/lib/bookkeeping/bank-leg'
 import { loadCardLedgers, needsCardLedgers } from '@/lib/cash-accounts/load-card-ledgers'
 import { guardCounterLegs } from '@/lib/cash-accounts/service'
 import { buildTransactionEntryLines, createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
@@ -98,6 +98,8 @@ import {
 } from '@/lib/transactions/skattekonto-tax-double'
 import { assertTransactionBookable } from '@/lib/transactions/is-booked'
 import { OPEN_INVOICES } from '@/lib/composition/open-invoices'
+import { CLEARING_PROPOSERS } from '@/lib/composition/clearing-proposals'
+import type { ClearingBooking, ClearingRef } from '@/lib/transactions/clearing-proposals'
 import { invoiceMatchSide } from '@/lib/transactions/invoice-match-side'
 import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
 import { refuseWhenPairBooked } from '@/lib/operations/inbox-pair-guard'
@@ -201,6 +203,18 @@ export interface CategorizeInput {
   confirm_foreign_seller_vat?: boolean
   /** Audit text appended to the verifikat description (agent and bulk doors). */
   notes?: string
+  /**
+   * A clearing proposal's record (a payment provider's payout): the
+   * proposer states every line beside the bank leg, and the record is
+   * claimed and settled with the booking (ClearingBooking).
+   */
+  clearing_ref?: ClearingRef
+}
+
+/** The proposer that books a clearing proposal's record, when one does. */
+function clearingBookingFor(ref: ClearingRef | undefined): ClearingBooking | null {
+  if (!ref) return null
+  return CLEARING_PROPOSERS.find((p) => p.id === ref.proposer)?.booking ?? null
 }
 
 export interface CategorizeOptions {
@@ -710,7 +724,45 @@ export async function buildCategorizeMapping(
   // Set when a template decides the lines: which one, and the kind of moms it
   // books.
   let bookedByTemplate: { by: Record<string, string>; moms: MomsKind } | null = null
-  if (input.counterparty_template_id && isBusiness) {
+  if (input.clearing_ref) {
+    // A clearing proposal's record states every line beside the bank leg
+    // (a payout: the provider's fees and the clearing account gross); the
+    // bank leg is the row's own, as for any booking.
+    const booking = clearingBookingFor(input.clearing_ref)
+    if (!booking || !isBusiness || input.template_id || input.counterparty_template_id) {
+      return refuse('VALIDATION_ERROR', {
+        field: 'clearing_ref',
+        message: 'clearing_ref names no clearing booking, or is combined with a template or a private marking.',
+      })
+    }
+    if (!(transaction.amount > 0)) {
+      return refuse('VALIDATION_ERROR', { field: 'clearing_ref', message: 'A clearing booking books money in only.' })
+    }
+    const outcome = await booking.lines(
+      supabase,
+      companyId,
+      { id: transaction.id, date: transaction.date, amount: transaction.amount, currency: transaction.currency ?? null },
+      input.clearing_ref.ref,
+      // An unknown registration counts as registered, as the VAT legs do.
+      { vatRegistered: vatRegistered !== false },
+    )
+    if (!outcome.ok) return refuse(outcome.code, outcome.details)
+    mappingResult = {
+      rule: null,
+      // The bank leg's placeholder: applySettlementAccount below books the
+      // row's own ledger, as for every booking.
+      debit_account: BANK_LEG_PLACEHOLDER,
+      credit_account: outcome.lines.find((l) => l.credit_amount > 0)?.account_number ?? BANK_LEG_PLACEHOLDER,
+      risk_level: 'NONE',
+      confidence: 1,
+      requires_review: true,
+      default_private: false,
+      vat_lines: outcome.lines.map((l) => ({ ...l })),
+      all_lines_complete: true,
+      description: outcome.description,
+    }
+    bookedByTemplate = { by: { clearing_ref: input.clearing_ref.proposer }, moms: 'none' }
+  } else if (input.counterparty_template_id && isBusiness) {
     // Learned codes the registry no longer accepts are dropped on load; an
     // explicit input.dimensions (applied below) is never filtered.
     const match = await loadCounterpartyTemplateMatch(supabase, companyId, input.counterparty_template_id)
@@ -815,7 +867,7 @@ export async function buildCategorizeMapping(
   // The override replaces the business side of a category booking, never a
   // template's or a learned template's accounts. Re-validated at every
   // booking: the account can be deactivated between staging and approval.
-  const categoryBooking = !template && !(input.counterparty_template_id && isBusiness)
+  const categoryBooking = !template && !(input.counterparty_template_id && isBusiness) && !input.clearing_ref
   if (input.account_override && categoryBooking) {
     if (!isBusiness) {
       return refuse(
@@ -1401,6 +1453,21 @@ export async function categorizeTransaction(
 
   // What was on offer, taken before the booking and its learning.
   suggestionSnapshot ??= await snapshotSuggestions(supabase, companyId, [txId])
+  // A clearing proposal's record is claimed for this row before its
+  // verifikat is written, so two rows cannot both book one payout; a booking
+  // that writes no verifikat lets go of it below.
+  const clearingBooking = clearingBookingFor(input.clearing_ref)
+  if (clearingBooking && input.clearing_ref) {
+    const claimed = await clearingBooking.claim(supabase, companyId, input.clearing_ref.ref, txId)
+    if (!claimed) return refuseFor('CLEARING_RECORD_TAKEN', { clearing_ref: input.clearing_ref })
+  }
+  const releaseClearing = async () => {
+    if (clearingBooking && input.clearing_ref) {
+      await clearingBooking.release(supabase, companyId, input.clearing_ref.ref, txId).catch((err: unknown) =>
+        txLog.warn('failed to release the clearing record (it stays claimed)', { error: err instanceof Error ? err.message : String(err) }),
+      )
+    }
+  }
   let bookedEntry: JournalEntry | null
   // A booking the person did not review is never stamped as reviewed.
   const asBooked = <T>(fn: () => Promise<T>): Promise<T> =>
@@ -1425,6 +1492,7 @@ export async function categorizeTransaction(
       },
     }))
   } catch (err) {
+    await releaseClearing()
     // An account deactivated between the check above and the engine call.
     if (err instanceof AccountsNotInChartError) {
       return refuseFor('ACCOUNTS_NOT_IN_CHART', { account_numbers: err.accountNumbers }, {
@@ -1473,6 +1541,7 @@ export async function categorizeTransaction(
   // räkenskapsår there at all, or a closed one. checkPeriodLock tells the two
   // apart for an honest code.
   if (!bookedEntry) {
+    await releaseClearing()
     const verdict = await checkPeriodLock(supabase, companyId, transaction.date)
     if (verdict.locked) {
       return refuseFor(isBusiness ? 'PERIOD_LOCKED' : 'TX_CATEGORIZE_PRIVATE_PERIOD_LOCKED', {
@@ -1536,6 +1605,8 @@ export async function categorizeTransaction(
   )
   if (updateError || !updated || updated.length === 0) {
     await reverseOrphanedJournalEntry(supabase, companyId, userId, bookedEntry.id, ORPHAN_REVERSAL_NOTE)
+    // The verifikat is reversed: the clearing record is free for the row's next booking.
+    await releaseClearing()
     if (updateError) {
       // Still busy after the retries: the retryable 409 the person can act
       // on ("vänta en stund och försök igen"), not a failure of ours.
@@ -1573,10 +1644,18 @@ export async function categorizeTransaction(
   // posted, and re-running the step repairs a failed link.
   await propagateUnderlagForBookedTransaction(supabase, companyId, txId, bookedEntry.id)
 
+  // The clearing record (a payout) now points at its verifikat, which also
+  // gets the record's underlag. Never fails the booking: the verifikat stands.
+  if (clearingBooking && input.clearing_ref) {
+    await clearingBooking.settle(supabase, companyId, userId, input.clearing_ref.ref, txId, bookedEntry.id)
+  }
+
   // Learning runs only after the booking won its write, so it never learns
   // from a booking that did not happen. direction_mismatch = a mirrored
   // refund/repayment booking; learning it would store backwards accounts.
-  if (isBusiness && transaction.merchant_name && !mappingResult.direction_mismatch) {
+  // A clearing booking teaches nothing: its lines are one payout's, never a
+  // counterparty's habit.
+  if (isBusiness && transaction.merchant_name && !mappingResult.direction_mismatch && !clearingBooking) {
     try {
       // A card row teaches the 1930 placeholder, never its card ledger, so the
       // rule replays on a bank row too (bank-leg.ts learnableBankPair).
@@ -1595,14 +1674,16 @@ export async function categorizeTransaction(
       txLog.warn('failed to save mapping rule (non-critical)', err as Error)
     }
   }
-  try {
-    // Booked on a counterpart template: a text it does not carry yet becomes
-    // its alias instead of a second template (accounted#36).
-    await upsertCounterpartyTemplate(supabase, companyId, transaction, mappingResult, 'user_approved', {
-      bookedOnTemplateId: isBusiness ? input.counterparty_template_id : undefined,
-    })
-  } catch (err) {
-    txLog.warn('failed to upsert counterparty template (non-critical)', err as Error)
+  if (!clearingBooking) {
+    try {
+      // Booked on a counterpart template: a text it does not carry yet becomes
+      // its alias instead of a second template (accounted#36).
+      await upsertCounterpartyTemplate(supabase, companyId, transaction, mappingResult, 'user_approved', {
+        bookedOnTemplateId: isBusiness ? input.counterparty_template_id : undefined,
+      })
+    } catch (err) {
+      txLog.warn('failed to upsert counterparty template (non-critical)', err as Error)
+    }
   }
 
   try {

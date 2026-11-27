@@ -2862,6 +2862,14 @@ export const CategorizeTransactionSchema = z
     force: z.boolean().optional(),
     expected_duplicate_transaction_id: uuid.optional(),
     expected_duplicate_journal_entry_id: uuid.optional(),
+    // A clearing proposal's record (a payment provider's payout): its
+    // proposer states every line beside the bank leg, and the booking claims
+    // and settles the record (lib/transactions/clearing-proposals.ts). Sent
+    // back as the proposal names it.
+    clearing_ref: z
+      .object({ proposer: z.string().min(1).max(64), ref: uuid })
+      .strict()
+      .optional(),
   })
   .refine((v) => !v.force || !!v.expected_duplicate_transaction_id || !!v.expected_duplicate_journal_entry_id, {
     message: 'expected_duplicate_transaction_id or expected_duplicate_journal_entry_id is required when force=true',
@@ -2870,6 +2878,10 @@ export const CategorizeTransactionSchema = z
   .refine((v) => !v.reverse_charge_kind || v.vat_treatment === 'reverse_charge', {
     message: "reverse_charge_kind is only valid with vat_treatment 'reverse_charge'",
     path: ['reverse_charge_kind'],
+  })
+  .refine((v) => !v.clearing_ref || (!v.template_id && !v.counterparty_template_id && !v.account_override), {
+    message: 'clearing_ref books its own lines: send it without template_id, counterparty_template_id or account_override',
+    path: ['clearing_ref'],
   })
 
 /**

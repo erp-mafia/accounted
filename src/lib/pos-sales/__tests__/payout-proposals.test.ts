@@ -167,7 +167,8 @@ describe('posPayoutProposer', () => {
     const booked = row({ id: 'tx-booked-later', date: '2026-10-08', amount: 145.5, text: '+46700000001 1900 swish +' })
     const { supabase } = client({ pos_connections: [connection()], pos_sales_days: [swishDay, later] })
     const out = await posPayoutProposer.propose(supabase, COMPANY, [swishRow], bankRows([swishRow], [booked]))
-    expect(out.get('tx-swish')?.clearing?.receipt_number).toBe('1834')
+    const evidence = out.get('tx-swish')?.clearing
+    expect(evidence?.channel === 'pos' ? evidence.receipt_number : null).toBe('1834')
   })
 
   it('proposes nothing for a kind whose tender account is a cash ledger, or a row in another currency', async () => {

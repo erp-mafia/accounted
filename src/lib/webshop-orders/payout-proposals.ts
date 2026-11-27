@@ -1,0 +1,361 @@
+import type { SupabaseClient } from '@supabase/supabase-js'
+import { isCashLedger } from '@/lib/bookkeeping/bank-leg'
+import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
+import { accountProposal, clearingReasonSv, type BookingProposal, type WebshopPayoutEvidence } from '@/lib/bookkeeping/proposal'
+import { uploadDocument } from '@/lib/core/documents/document-service'
+import { addDaysIso, daysBetweenIso, todayIsoStockholm } from '@/lib/dates/iso'
+import { linkBasisColumns } from '@/lib/links/stamp'
+import { createLogger } from '@/lib/logger'
+import { equalOre } from '@/lib/money'
+import { createServiceClient } from '@/lib/supabase/server'
+import type {
+  ClearingBankRow,
+  ClearingBooking,
+  ClearingBookingRow,
+  ClearingLinesOutcome,
+  ClearingProposer,
+} from '@/lib/transactions/clearing-proposals'
+import type { WebshopPayout, WebshopStoreSettings } from '@/types'
+import { resolvePaymentAccount } from './booking-lines'
+import { payoutDescription, payoutProviderLabel, planPayoutVoucher, type PayoutVoucherPlan } from './payouts'
+
+/**
+ * A payment provider's payout as a bank-row proposal: for an open incoming
+ * row that is a stored payout to the öre (webshop_payouts, read from Kustom's
+ * settlement report or Shopify Payments), the proposal to book it as the
+ * payout's verifikat: the bank net, the provider's fees and the clearing
+ * account gross (planPayoutVoucher). Plugged into the bank rows' proposals
+ * through lib/composition/clearing-proposals.ts, and booked through the bank
+ * row's own booking, which asks `booking` below for the lines, claims the
+ * payout for the row and settles it on the verifikat.
+ *
+ * A clearing proposal is never booked without a review
+ * (lib/transactions/direct-booking.ts): the person sees the lines.
+ */
+
+const log = createLogger('webshop-orders/payout-proposals')
+
+export const WEBSHOP_PAYOUT_PROPOSER_ID = 'webshop-payouts'
+
+/**
+ * How far the bank row may be dated from the payout day: a day before (the
+ * provider's day can be the UTC one) to five days after (bank days, a weekend
+ * and a holiday).
+ */
+const DAYS_BEFORE = 1
+const DAYS_AFTER = 5
+
+/** The payment method each provider's orders carry, which the store maps to its clearing account. */
+const PAYMENT_METHOD: Record<WebshopPayout['platform'], string> = {
+  kustom: 'kustom',
+  shopify: 'shopify_payments',
+}
+
+const PAYOUT_COLUMNS =
+  'id, company_id, platform, store_scope, external_id, reference, payout_date, currency, amount, lines, transaction_id, journal_entry_id'
+
+type PayoutRow = Pick<
+  WebshopPayout,
+  | 'id'
+  | 'company_id'
+  | 'platform'
+  | 'store_scope'
+  | 'external_id'
+  | 'reference'
+  | 'payout_date'
+  | 'currency'
+  | 'amount'
+  | 'lines'
+  | 'transaction_id'
+  | 'journal_entry_id'
+>
+
+function normalize(row: PayoutRow): PayoutRow {
+  return { ...row, amount: Number(row.amount), lines: Array.isArray(row.lines) ? row.lines.map((l) => ({ ...l, amount: Number(l.amount) })) : [] }
+}
+
+/** Whether the bank row can be this payout: the ledger currency, the same amount to the öre, dated around the payout day. */
+export function rowFitsPayout(row: Pick<ClearingBankRow, 'amount' | 'currency' | 'date'>, payout: Pick<PayoutRow, 'amount' | 'currency' | 'payout_date'>): boolean {
+  if (!isLedgerCurrency(row.currency?.toUpperCase()) || !isLedgerCurrency(payout.currency.toUpperCase())) return false
+  if (!equalOre(row.amount, payout.amount)) return false
+  const lag = daysBetweenIso(payout.payout_date, row.date)
+  return lag >= -DAYS_BEFORE && lag <= DAYS_AFTER
+}
+
+/**
+ * Pairs rows and payouts one to one: each row its nearest payout by date,
+ * and a payout to the nearest row only. A row two payouts fit equally well is
+ * left alone, as is a payout two rows fit equally well: never a guess.
+ */
+export function pairRowsWithPayouts<R extends Pick<ClearingBankRow, 'id' | 'amount' | 'currency' | 'date'>, P extends Pick<PayoutRow, 'id' | 'amount' | 'currency' | 'payout_date'>>(
+  rows: readonly R[],
+  payouts: readonly P[],
+): Map<string, P> {
+  const distance = (row: R, payout: P) => Math.abs(daysBetweenIso(payout.payout_date, row.date))
+  const nearestPayout = new Map<string, P>()
+  for (const row of rows) {
+    const fits = payouts.filter((p) => rowFitsPayout(row, p))
+    if (fits.length === 0) continue
+    const best = Math.min(...fits.map((p) => distance(row, p)))
+    const nearest = fits.filter((p) => distance(row, p) === best)
+    if (nearest.length === 1) nearestPayout.set(row.id, nearest[0]!)
+  }
+  const out = new Map<string, P>()
+  for (const row of rows) {
+    const payout = nearestPayout.get(row.id)
+    if (!payout) continue
+    const rivals = rows.filter((r) => r.id !== row.id && nearestPayout.get(r.id)?.id === payout.id)
+    const mine = distance(row, payout)
+    if (rivals.some((r) => distance(r, payout) <= mine)) continue
+    out.set(row.id, payout)
+  }
+  return out
+}
+
+/** The store settings of each store the payouts belong to, keyed platform:store_scope. */
+async function loadSettings(
+  supabase: SupabaseClient,
+  companyId: string,
+  payouts: readonly PayoutRow[],
+): Promise<Map<string, WebshopStoreSettings>> {
+  const scopes = [...new Set(payouts.map((p) => p.store_scope))]
+  const { data, error } = await supabase
+    .from('webshop_store_settings')
+    .select('*')
+    .eq('company_id', companyId)
+    .in('store_scope', scopes)
+  if (error) throw new Error(`webshop store settings read failed: ${error.message}`)
+  return new Map(((data ?? []) as WebshopStoreSettings[]).map((s) => [`${s.platform}:${s.store_scope}`, s]))
+}
+
+/** The clearing account the payout's orders were booked against; null when it is a cash ledger (the row's own side). */
+function clearingAccountOf(payout: PayoutRow, settings: Map<string, WebshopStoreSettings>): string | null {
+  const store = settings.get(`${payout.platform}:${payout.store_scope}`) ?? null
+  const { account } = resolvePaymentAccount({ payment_method: PAYMENT_METHOD[payout.platform] }, store)
+  return isCashLedger(account) ? null : account
+}
+
+async function vatRegisteredOf(supabase: SupabaseClient, companyId: string): Promise<boolean> {
+  const { data } = await supabase.from('company_settings').select('vat_registered').eq('company_id', companyId).maybeSingle()
+  // A missing value counts as registered, as for the collections settlement.
+  return (data as { vat_registered?: boolean | null } | null)?.vat_registered !== false
+}
+
+function evidenceOf(payout: PayoutRow, account: string, plan: PayoutVoucherPlan): WebshopPayoutEvidence {
+  return {
+    channel: 'webshop',
+    kind: 'payout',
+    fit: 'payout',
+    provider: payoutProviderLabel(payout.platform),
+    reference: payout.reference,
+    account,
+    business_dates: [payout.payout_date],
+    expected_amount: payout.amount,
+    fees: plan.fees,
+    fee_vat: plan.feeVat,
+    clearing_amount: plan.clearing,
+  }
+}
+
+function proposalFor(row: ClearingBankRow, payout: PayoutRow, account: string, plan: PayoutVoucherPlan): BookingProposal {
+  const evidence = evidenceOf(payout, account, plan)
+  const label = `Utbetalning ${evidence.provider}`
+  const base = accountProposal({
+    id: `clearing:webshop-payout:${payout.id}`,
+    source: 'clearing',
+    account,
+    label,
+    // An income row against a balance-sheet account: the sales are the orders'.
+    category: 'income_other',
+    vat_treatment: 'exempt',
+    amount: row.amount,
+    confidence: 0.95,
+    description: clearingReasonSv(evidence),
+  })
+  return {
+    ...base,
+    booking: { ...(base.booking as Extract<BookingProposal['booking'], { kind: 'account' }>), clearing_ref: { proposer: WEBSHOP_PAYOUT_PROPOSER_ID, ref: payout.id } },
+    name_en: `Payout ${evidence.provider}`,
+    requires_review: true,
+    clearing: evidence,
+  }
+}
+
+async function propose(
+  supabase: SupabaseClient,
+  companyId: string,
+  asked: readonly ClearingBankRow[],
+): Promise<Map<string, BookingProposal>> {
+  const out = new Map<string, BookingProposal>()
+  if (asked.length === 0) return out
+  const dates = asked.map((r) => r.date).sort()
+  const { data, error } = await supabase
+    .from('webshop_payouts')
+    .select(PAYOUT_COLUMNS)
+    .eq('company_id', companyId)
+    .is('journal_entry_id', null)
+    .gte('payout_date', addDaysIso(dates[0]!, -DAYS_AFTER))
+    .lte('payout_date', addDaysIso(dates[dates.length - 1]!, DAYS_BEFORE))
+  if (error) throw new Error(`webshop payouts read failed: ${error.message}`)
+  const payouts = ((data ?? []) as PayoutRow[]).map(normalize)
+  if (payouts.length === 0) return out
+
+  // A payout another row has claimed is that row's.
+  const pairs = pairRowsWithPayouts(asked, payouts)
+  const free = [...pairs.entries()].filter(([rowId, payout]) => !payout.transaction_id || payout.transaction_id === rowId)
+  if (free.length === 0) return out
+
+  const [settings, vatRegistered] = await Promise.all([
+    loadSettings(supabase, companyId, free.map(([, p]) => p)),
+    vatRegisteredOf(supabase, companyId),
+  ])
+  for (const [rowId, payout] of free) {
+    const row = asked.find((r) => r.id === rowId)!
+    const account = clearingAccountOf(payout, settings)
+    if (!account) continue
+    const planned = planPayoutVoucher({ payout, clearingAccount: account, vatRegistered })
+    if (!planned.ok) continue
+    out.set(rowId, proposalFor(row, payout, account, planned.plan))
+  }
+  return out
+}
+
+async function loadPayout(supabase: SupabaseClient, companyId: string, id: string): Promise<PayoutRow | null> {
+  const { data, error } = await supabase.from('webshop_payouts').select(PAYOUT_COLUMNS).eq('company_id', companyId).eq('id', id).maybeSingle()
+  if (error) throw new Error(`webshop payout read failed: ${error.message}`)
+  return data ? normalize(data as PayoutRow) : null
+}
+
+async function lines(
+  supabase: SupabaseClient,
+  companyId: string,
+  row: ClearingBookingRow,
+  ref: string,
+  context: { vatRegistered: boolean },
+): Promise<ClearingLinesOutcome> {
+  const payout = await loadPayout(supabase, companyId, ref)
+  if (!payout) return { ok: false, code: 'WEBSHOP_PAYOUT_NOT_FOUND' }
+  if (payout.journal_entry_id || (payout.transaction_id && payout.transaction_id !== row.id)) {
+    return { ok: false, code: 'CLEARING_RECORD_TAKEN', details: { journal_entry_id: payout.journal_entry_id } }
+  }
+  if (!rowFitsPayout({ amount: row.amount, currency: row.currency, date: row.date }, payout)) {
+    return {
+      ok: false,
+      code: 'WEBSHOP_PAYOUT_ROW_MISMATCH',
+      details: { payout_amount: payout.amount, payout_date: payout.payout_date, row_amount: row.amount, row_date: row.date },
+    }
+  }
+  const settings = await loadSettings(supabase, companyId, [payout])
+  const account = clearingAccountOf(payout, settings)
+  if (!account) return { ok: false, code: 'WEBSHOP_PAYOUT_NOT_BOOKABLE', details: { reason: 'clearing_account' } }
+  const planned = planPayoutVoucher({ payout, clearingAccount: account, vatRegistered: context.vatRegistered })
+  if (!planned.ok) return { ok: false, code: 'WEBSHOP_PAYOUT_NOT_BOOKABLE', details: { reason: planned.reason } }
+  return { ok: true, lines: planned.plan.lines, description: payoutDescription(payout) }
+}
+
+async function claim(_supabase: SupabaseClient, companyId: string, ref: string, transactionId: string): Promise<boolean> {
+  // Payout rows have no member write policy: the claim is the service role's,
+  // scoped to the company the booking runs in.
+  const { data, error } = await createServiceClient()
+    .from('webshop_payouts')
+    .update({ transaction_id: transactionId })
+    .eq('company_id', companyId)
+    .eq('id', ref)
+    .is('journal_entry_id', null)
+    .or(`transaction_id.is.null,transaction_id.eq.${transactionId}`)
+    .select('id')
+  if (error) {
+    log.error('failed to claim the payout', error, { payoutId: ref, transactionId })
+    return false
+  }
+  return (data ?? []).length > 0
+}
+
+async function release(_supabase: SupabaseClient, companyId: string, ref: string, transactionId: string): Promise<void> {
+  const { error } = await createServiceClient()
+    .from('webshop_payouts')
+    .update({ transaction_id: null })
+    .eq('company_id', companyId)
+    .eq('id', ref)
+    .eq('transaction_id', transactionId)
+    .is('journal_entry_id', null)
+  if (error) throw new Error(`payout release failed: ${error.message}`)
+}
+
+/** The verifikat's lines as booked, for the underlag (the bank leg included). */
+async function bookedLines(supabase: SupabaseClient, journalEntryId: string) {
+  const { data } = await supabase
+    .from('journal_entry_lines')
+    .select('account_number, debit_amount, credit_amount, sort_order')
+    .eq('journal_entry_id', journalEntryId)
+    .order('sort_order', { ascending: true })
+  return ((data ?? []) as Array<{ account_number: string; debit_amount: number; credit_amount: number }>).map((l) => ({
+    account_number: l.account_number,
+    debit_amount: Number(l.debit_amount),
+    credit_amount: Number(l.credit_amount),
+  }))
+}
+
+async function settle(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  ref: string,
+  transactionId: string,
+  journalEntryId: string,
+): Promise<void> {
+  try {
+    const { data, error } = await createServiceClient()
+      .from('webshop_payouts')
+      .update({ journal_entry_id: journalEntryId })
+      .eq('company_id', companyId)
+      .eq('id', ref)
+      .eq('transaction_id', transactionId)
+      .is('journal_entry_id', null)
+      .select(PAYOUT_COLUMNS)
+    if (error || !data || data.length === 0) {
+      log.error('failed to settle the payout on its verifikat', error ?? new Error('no claimed payout matched'), { payoutId: ref, journalEntryId })
+      return
+    }
+    const payout = normalize(data[0] as PayoutRow)
+    const { buildPayoutUnderlagModel, renderWebshopPayoutUnderlagPdf } = await import('./payout-underlag')
+    const { data: company } = await supabase
+      .from('company_settings')
+      .select('company_name, org_number')
+      .eq('company_id', companyId)
+      .maybeSingle()
+    const model = buildPayoutUnderlagModel({ payout, lines: await bookedLines(supabase, journalEntryId) })
+    const { bytes, filename } = await renderWebshopPayoutUnderlagPdf({
+      model,
+      company: (company ?? {}) as { company_name?: string | null; org_number?: string | null },
+      generatedAt: todayIsoStockholm(),
+    })
+    await uploadDocument(
+      supabase,
+      userId,
+      companyId,
+      { name: filename, buffer: bytes.buffer, type: 'application/pdf' },
+      // The payout's own specification on the payout's own verifikat; the
+      // key keeps a retry from filing it twice.
+      {
+        upload_source: 'system',
+        journal_entry_id: journalEntryId,
+        linkBasis: linkBasisColumns('system_derived'),
+        idempotency_key: `webshop-payout:${payout.id}`,
+        extractionOwner: 'none',
+      },
+    )
+  } catch (err) {
+    // The verifikat stands; a missing specification shows as missing underlag.
+    log.error('failed to file the payout specification', err as Error, { payoutId: ref, journalEntryId })
+  }
+}
+
+const booking: ClearingBooking = Object.freeze<ClearingBooking>({ lines, claim, release, settle })
+
+export const webshopPayoutProposer: ClearingProposer = Object.freeze<ClearingProposer>({
+  id: WEBSHOP_PAYOUT_PROPOSER_ID,
+  module: 'webshop',
+  propose: (supabase, companyId, asked) => propose(supabase, companyId, asked),
+  booking,
+})

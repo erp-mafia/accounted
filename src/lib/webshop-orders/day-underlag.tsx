@@ -3,6 +3,7 @@ import { isLedgerCurrency, sekOfForeign } from '@/lib/bookkeeping/currency-utils
 import { roundOre } from '@/lib/money'
 import type { CreateJournalEntryLineInput, WebshopOrder } from '@/types'
 import { formatAmount, styles, type OrderUnderlagCompany } from './order-underlag'
+import { UnderlagFooter, UnderlagKontering } from './underlag-kontering'
 
 /**
  * Dagssammanställning: the underlag of a day booking (book-day.ts), one
@@ -201,34 +202,9 @@ export function WebshopDayUnderlagPDF({
           </View>
         </View>
 
-        <Text style={styles.sectionHeading}>Kontering (SEK)</Text>
-        <View>
-          <View style={styles.tableHeader}>
-            <Text style={[styles.colName, styles.headerCell]}>Konto</Text>
-            <Text style={[styles.colAmount, styles.headerCell]}>Debet</Text>
-            <Text style={[styles.colAmount, styles.headerCell]}>Kredit</Text>
-          </View>
-          {model.lines.map((line, i) => (
-            <View key={i} style={styles.row} wrap={false}>
-              <Text style={styles.colName}>{line.account}</Text>
-              <Text style={styles.colAmount}>{line.debit ? formatAmount(line.debit) : ''}</Text>
-              <Text style={styles.colAmount}>{line.credit ? formatAmount(line.credit) : ''}</Text>
-            </View>
-          ))}
-          <View style={styles.totalRow}>
-            <Text style={[styles.colName, styles.bold]}>Summa</Text>
-            <Text style={[styles.colAmount, styles.bold]}>{formatAmount(model.totalDebit)}</Text>
-            <Text style={[styles.colAmount, styles.bold]}>{formatAmount(model.totalCredit)}</Text>
-          </View>
-        </View>
+        <UnderlagKontering lines={model.lines} totalDebit={model.totalDebit} totalCredit={model.totalCredit} />
 
-        <View style={styles.footer} fixed>
-          <Text style={styles.footerText}>Underlag genererat ur butikens orderdata vid bokföring</Text>
-          <Text
-            style={styles.footerText}
-            render={({ pageNumber, totalPages }) => `Genererad ${generatedAt} · Sida ${pageNumber} av ${totalPages}`}
-          />
-        </View>
+        <UnderlagFooter source="Underlag genererat ur butikens orderdata vid bokföring" generatedAt={generatedAt} />
       </Page>
     </Document>
   )

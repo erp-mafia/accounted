@@ -37,16 +37,17 @@
  * its lines to a person) or, when the sale belongs to the till or the shop's
  * feed, left out.
  *
- * Left out on purpose: the payout itself and Kustom's fees. The payout lands
- * as a bank row and is booked from there against 1686, as for Zettle; the
- * summary this returns gives the user the numbers for it. Whether the VAT
- * Kustom charges on its fees is deductible is not decided here.
+ * The payout itself is not an order: kustomPayoutRecord gives the upload
+ * what it stores of it (webshop_payouts), and its bank row is then proposed
+ * as one verifikat, the bank net, Kustom's fees and the clearing account
+ * gross (lib/webshop-orders/payouts.ts, payout-proposals.ts).
  */
 import { equalOre, inferDecimalMark, parseSwedishAmount, roundOre, sumOre } from '@/lib/money'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { isSaneDateString } from '@/lib/invariants'
 import { splitCsvRecords } from '@/lib/csv-records'
-import type { WebshopVatBreakdownLine } from '@/types'
+import type { WebshopPayoutLine, WebshopVatBreakdownLine } from '@/types'
+import { payoutLines } from './payouts'
 import type { WebshopOrderUpsert } from './types'
 
 /** Consumer VAT per rate comes in up to this many column pairs. */
@@ -520,6 +521,56 @@ export function parseKustomSettlementReport(content: string): KustomSettlementOu
     settlement: settlementSigned,
   }
   return { ok: true, file: { payout, entries } }
+}
+
+/** What the upload stores of a report's payout (webshop_payouts), for its bank row's proposal. */
+export interface KustomPayoutRecord {
+  platform: 'kustom'
+  store_scope: string
+  external_id: string
+  reference: string | null
+  payout_date: string
+  currency: string
+  amount: number
+  lines: WebshopPayoutLine[]
+}
+
+/**
+ * ⚠️ STORED-KEY FORMAT, as kustomCaptureExternalId: the payout's identity,
+ * Kustom's payment reference, else the payout day and amount.
+ */
+export function kustomPayoutExternalId(payout: Pick<KustomPayout, 'merchantId' | 'reference' | 'payoutDate' | 'settlement'>): string {
+  const key = payout.reference ?? `${payout.payoutDate}_${roundOre(payout.settlement)}`
+  return `kustom_${payout.merchantId}_payout_${key}`
+}
+
+/**
+ * The report's payout as a payout record: its parts signed toward the payout
+ * (lib/webshop-orders/payouts.ts), which add up to what Kustom paid out
+ * (`other` is the report's own remainder). Null when nothing reached the
+ * bank, or the report gives no payout day: no bank row to propose it on.
+ */
+export function kustomPayoutRecord(payout: KustomPayout): KustomPayoutRecord | null {
+  if (!payout.payoutDate || !(payout.settlement > 0)) return null
+  return {
+    platform: 'kustom',
+    store_scope: payout.merchantId,
+    external_id: kustomPayoutExternalId(payout),
+    reference: payout.reference,
+    payout_date: payout.payoutDate,
+    currency: payout.currency,
+    amount: payout.settlement,
+    lines: payoutLines([
+      ['sale', payout.sales],
+      ['return', payout.returns],
+      ['reversal', payout.reversals],
+      ['fee', payout.fees],
+      ['fee_vat', payout.feeVat],
+      ['holdback', payout.holdback],
+      ['release', payout.release],
+      ['adjustment', payout.other],
+    ]),
+  }
 }
 
 /** The order numbers of a report's rows, to look up on the Orders page. */
