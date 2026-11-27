@@ -9341,7 +9341,7 @@
     "picker_sweep_attach": "{count, plural, one {Attach document} other {Attach to # verifikationer}}",
     "picker_sweep_progress": "Attaching {done} of {total}…",
     "picker_sweep_done": "{count, plural, one {Document attached.} other {Document attached to # verifikationer.}}",
-    "picker_sweep_partial": "Attached to {success} of {total} verifikationer",
+    "picker_sweep_partial": "Attached to {success} of {total, plural, one {# verifikation} other {# verifikationer}}",
     "download_failed": "Could not open the document",
     "load_failed": "Could not load the documents"
   },

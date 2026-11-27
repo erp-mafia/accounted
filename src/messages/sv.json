@@ -9341,7 +9341,7 @@
     "picker_sweep_attach": "{count, plural, one {Koppla underlag} other {Koppla till # verifikationer}}",
     "picker_sweep_progress": "Kopplar {done} av {total}…",
     "picker_sweep_done": "{count, plural, one {Underlaget är kopplat.} other {Underlaget är kopplat till # verifikationer.}}",
-    "picker_sweep_partial": "Kopplat till {success} av {total} verifikationer",
+    "picker_sweep_partial": "Kopplat till {success} av {total, plural, one {# verifikation} other {# verifikationer}}",
     "download_failed": "Kunde inte öppna dokumentet",
     "load_failed": "Kunde inte hämta underlagen"
   },
