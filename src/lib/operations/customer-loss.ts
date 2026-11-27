@@ -47,7 +47,7 @@ export const invoicesRecordCustomerLoss = defineOperation({
     pitfalls: [
       'confirmed needs evidence_document_id: upload the konkursbesked or the Kronofogden decision first.',
       'Only SEK invoices without a ROT/RUT share (422 CUSTOMER_LOSS_CURRENCY_UNSUPPORTED / CUSTOMER_LOSS_DEDUCTION_UNSUPPORTED).',
-      'recovered needs amount and is capped at what was written off (422 CUSTOMER_LOSS_RECOVERY_EXCEEDS); it is refused while the invoice has an open collection case (409 CUSTOMER_LOSS_RECOVERY_CASE_OPEN).',
+      'recovered needs amount and is capped at what was written off (422 CUSTOMER_LOSS_RECOVERY_EXCEEDS), except that a payment of what the invoice asked for (its rounded Att betala, or its exact total, less what was already paid and recovered) closes the claim with the öre on 3740; after a credit note only what is left closes it. It is refused while the invoice has an open collection case (409 CUSTOMER_LOSS_RECOVERY_CASE_OPEN).',
       'A mistake is undone by reversing (storno) the voucher, latest decision first.',
     ],
     example: {

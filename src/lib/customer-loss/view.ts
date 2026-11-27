@@ -3,8 +3,7 @@
  * whether the menu entry shows, what each kind would book right now, the
  * reserve held, and the decisions already made. Read-only.
  */
-import { roundOre } from '@/lib/money'
-import { liveRows, type VatShare } from './amounts'
+import { liveRows, recoveryClosingAmounts, recoveryLeft, type VatShare } from './amounts'
 import { planConfirmed } from './confirmed'
 import { planDoubtful } from './doubtful'
 import { customerLossMenuVisible, openClaimRefusal } from './eligibility'
@@ -45,11 +44,13 @@ export interface CustomerLossView {
       }
     | { available: false; refusal: CustomerLossErrorCode }
   /**
-   * On a written-off invoice: how much a recovery can still take. caseOpen:
-   * the collection case is still open, so a payment straight to the company
-   * is not booked here until the case is closed or withdrawn.
+   * On a written-off invoice: how much a recovery can still take, and the
+   * other amounts that close the claim (what the invoice asked for, a
+   * öresavrundning away: recoveryClosingAmounts). caseOpen: the collection
+   * case is still open, so a payment straight to the company is not booked
+   * here until the case is closed or withdrawn.
    */
-  recovery: { available: boolean; left: number; booked: boolean; caseOpen: boolean } | null
+  recovery: { available: boolean; left: number; closing: number[]; booked: boolean; caseOpen: boolean } | null
   decisions: Array<{
     id: string
     kind: string
@@ -72,9 +73,9 @@ export function buildCustomerLossView(state: CustomerLossState, opts: { enabled:
   const claimRefusal = openClaimRefusal(state)
   const confirmed = claimRefusal ? null : planConfirmed(state)
   const live = new Set(liveRows(state.rows).map((r) => r.id))
-  const recovered = liveRows(state.rows)
-    .filter((r) => r.kind === 'recovered')
-    .reduce((sum, r) => sum + Number(r.amount), 0)
+  const left = state.confirmed
+    ? Math.max(0, recoveryLeft(state.confirmed, liveRows(state.rows).filter((r) => r.kind === 'recovered')))
+    : 0
 
   return {
     enabled: opts.enabled,
@@ -103,7 +104,8 @@ export function buildCustomerLossView(state: CustomerLossState, opts: { enabled:
       state.invoice.status === 'written_off' && state.confirmed
         ? {
             booked: !!state.confirmed.journal_entry_id,
-            left: Math.max(0, roundOre(Number(state.confirmed.amount) - recovered)),
+            left,
+            closing: recoveryClosingAmounts({ left, total: state.invoice.total, basis: state.basis, toPayRounding: state.toPayRounding }),
             caseOpen: state.latestCase?.is_open === true,
             available: opts.enabled && !!state.confirmed.journal_entry_id && state.latestCase?.is_open !== true,
           }

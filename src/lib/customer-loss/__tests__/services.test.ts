@@ -50,7 +50,7 @@ import { planConfirmed, recordConfirmedLoss } from '../confirmed'
 import { recordDoubtfulLoss, releaseDoubtfulReserve } from '../doubtful'
 import { decisionId } from '../ids'
 import { recordRecoveredLoss } from '../recovered'
-import { loadCustomerLossState, type CustomerLossState, type WriteOffRow } from '../state'
+import { invoiceToPayRounding, loadCustomerLossState, type CustomerLossState, type WriteOffRow } from '../state'
 import { buildCustomerLossView } from '../view'
 
 const COMPANY = 'company-1'
@@ -80,6 +80,7 @@ function makeState(overrides: Omit<Partial<CustomerLossState>, 'invoice'> & { in
     openVat: new Map([['2611', 250]]),
     basis: 1250,
     oreRounding: 0,
+    toPayRounding: 0,
     rows,
     reserve: reserveOutstanding(rows),
     confirmed: null,
@@ -615,5 +616,232 @@ describe('an invoice whose issue verifikat booked its öresavrundning', () => {
       // The reskontra's 0.45 net of its 0.09 VAT stays reserved: 799.92 - 0.36.
       expect(released).toBe(799.56)
     })
+  })
+})
+
+// A recovery of an öre-rounded invoice: the customer, or the agency that was
+// handed the printed "Att betala", pays what the invoice asked for, while the
+// write-off took off what 151x carried. The difference is the invoice's own
+// öresavrundning, so the recovery closes the claim, every written-off VAT öre
+// is reported again, and the öre goes to 3740 like any payment's öre.
+describe('a recovery of an öre-rounded invoice', () => {
+  const params = { invoiceId: INVOICE, entryDate: '2026-07-01', paymentAccount: '1930', reason: 'Utdelning i konkursen', decidedBy: USER }
+  const writtenOff = (amount: number, net: number, vat: number) =>
+    ({
+      id: 'g',
+      kind: 'confirmed',
+      amount,
+      net_amount: net,
+      vat_amount: vat,
+      vat_by_rate: [{ account: '2611', rate: 25, vat, base: Math.round(vat * 400) / 100 }],
+      reserve_released: 0,
+      journal_entry_id: 'je-g',
+      reverses_id: null,
+      decided_at: '2026-06-01T00:00:00Z',
+    }) as unknown as WriteOffRow
+  const recoveryOf = (amount: number, net: number, vat: number) =>
+    ({
+      id: 'h',
+      kind: 'recovered',
+      amount,
+      net_amount: net,
+      vat_amount: vat,
+      vat_by_rate: [{ account: '2611', rate: 25, vat, base: Math.round(vat * 400) / 100 }],
+      reserve_released: 0,
+      journal_entry_id: 'je-h',
+      reverses_id: null,
+      decided_at: '2026-06-15T00:00:00Z',
+    }) as unknown as WriteOffRow
+  const stateOf = (
+    confirmed: WriteOffRow,
+    extra: Omit<Partial<CustomerLossState>, 'invoice'> & { invoice: Partial<CustomerLossState['invoice']> },
+    prior: WriteOffRow[] = [],
+  ) =>
+    makeState({
+      rows: [confirmed, ...prior],
+      confirmed,
+      ...extra,
+      invoice: { ...extra.invoice, status: 'written_off' },
+    })
+
+  // 999.75 to pay 1 000, its öre left for the payment: the write-off took 999.75 off 1510.
+  const roundedUp = stateOf(writtenOff(999.75, 799.8, 199.95), {
+    basis: 999.75,
+    oreRounding: 0,
+    toPayRounding: 0.25,
+    invoice: { total: 999.75, remaining_amount: 999.75 },
+  })
+  // 1 000.40 to pay 1 000, its öre left for the payment: the write-off took 1 000.40 off 1510.
+  const roundedDown = stateOf(writtenOff(1000.4, 800.32, 200.08), {
+    basis: 1000.4,
+    oreRounding: 0,
+    toPayRounding: -0.4,
+    invoice: { total: 1000.4, remaining_amount: 1000.4 },
+  })
+  // 999.75 to pay 1 000, the öre booked at issue: the write-off took 1 000 off 1510.
+  const bookedAtIssue = stateOf(writtenOff(1000, 800.05, 199.95), {
+    basis: 1000,
+    oreRounding: 0.25,
+    toPayRounding: 0.25,
+    invoice: { total: 999.75, remaining_amount: 999.75 },
+  })
+
+  it('a payment of "Att betala" closes a claim rounded up, the öre credited to 3740', async () => {
+    vi.mocked(loadCustomerLossState).mockResolvedValue({ ok: true, state: roundedUp })
+    const { supabase, rpc } = mockSupabase()
+    const outcome = await recordRecoveredLoss(supabase, COMPANY, USER, { ...params, amount: 1000 })
+    expect(outcome).toMatchObject({ ok: true, amount: 999.75 })
+    expect(lineTuples()).toEqual([
+      ['1930', 1000, 0],
+      ['3950', 0, 799.8],
+      ['2611', 0, 199.95],
+      ['3740', 0, 0.25],
+    ])
+    expect(rpc).toHaveBeenCalledWith(
+      'record_invoice_write_off',
+      expect.objectContaining({ p_kind: 'recovered', p_amount: 999.75, p_net_amount: 799.8, p_vat_amount: 199.95 }),
+    )
+  })
+
+  it('a payment of "Att betala" closes a claim rounded down, reporting every VAT öre again', async () => {
+    vi.mocked(loadCustomerLossState).mockResolvedValue({ ok: true, state: roundedDown })
+    const { supabase, rpc } = mockSupabase()
+    const outcome = await recordRecoveredLoss(supabase, COMPANY, USER, { ...params, amount: 1000 })
+    expect(outcome).toMatchObject({ ok: true, amount: 1000.4 })
+    expect(lineTuples()).toEqual([
+      ['1930', 1000, 0],
+      ['3950', 0, 800.32],
+      ['2611', 0, 200.08],
+      ['3740', 0.4, 0],
+    ])
+    expect(rpc).toHaveBeenCalledWith(
+      'record_invoice_write_off',
+      expect.objectContaining({ p_amount: 1000.4, p_net_amount: 800.32, p_vat_amount: 200.08 }),
+    )
+  })
+
+  it("the agency's last part payment of 'Att betala' closes the claim", async () => {
+    // 500 recovered first: 199.95 x 500 / 999.75 = 100 VAT. 499.75 left, the agency pays the last 500.
+    const state = stateOf(
+      writtenOff(999.75, 799.8, 199.95),
+      { basis: 999.75, oreRounding: 0, toPayRounding: 0.25, invoice: { total: 999.75, remaining_amount: 999.75 } },
+      [recoveryOf(500, 400, 100)],
+    )
+    vi.mocked(loadCustomerLossState).mockResolvedValue({ ok: true, state })
+    const { supabase } = mockSupabase()
+    const outcome = await recordRecoveredLoss(supabase, COMPANY, USER, { ...params, amount: 500, paymentAccount: '1689', fromCollectedPayment: true })
+    expect(outcome).toMatchObject({ ok: true, amount: 499.75 })
+    expect(lineTuples()).toEqual([
+      ['1689', 500, 0],
+      ['3950', 0, 399.8],
+      ['2611', 0, 99.95],
+      ['3740', 0, 0.25],
+    ])
+  })
+
+  it('with the öre booked at issue, "Att betala" closes as before and the exact total closes too', async () => {
+    vi.mocked(loadCustomerLossState).mockResolvedValue({ ok: true, state: bookedAtIssue })
+    const { supabase } = mockSupabase()
+    expect(await recordRecoveredLoss(supabase, COMPANY, USER, { ...params, amount: 1000 })).toMatchObject({ ok: true, amount: 1000 })
+    expect(lineTuples()).toEqual([
+      ['1930', 1000, 0],
+      ['3950', 0, 800.05],
+      ['2611', 0, 199.95],
+    ])
+    vi.mocked(createJournalEntry).mockClear()
+    expect(await recordRecoveredLoss(supabase, COMPANY, USER, { ...params, amount: 999.75 })).toMatchObject({ ok: true, amount: 1000 })
+    expect(lineTuples()).toEqual([
+      ['1930', 999.75, 0],
+      ['3950', 0, 800.05],
+      ['2611', 0, 199.95],
+      ['3740', 0.25, 0],
+    ])
+  })
+
+  it('any other gap is not rounding: above what is left is refused, below it is a part payment', async () => {
+    vi.mocked(loadCustomerLossState).mockResolvedValue({ ok: true, state: roundedUp })
+    const { supabase } = mockSupabase()
+    expect(await recordRecoveredLoss(supabase, COMPANY, USER, { ...params, amount: 1000.5 })).toMatchObject({
+      ok: false,
+      code: 'CUSTOMER_LOSS_RECOVERY_EXCEEDS',
+    })
+    expect(await recordRecoveredLoss(supabase, COMPANY, USER, { ...params, amount: 999.9 })).toMatchObject({
+      ok: false,
+      code: 'CUSTOMER_LOSS_RECOVERY_EXCEEDS',
+    })
+    expect(createJournalEntry).not.toHaveBeenCalled()
+    // 999.50 is 0.25 short of what is left, and the invoice asked for 1 000: a part payment, no 3740.
+    expect(await recordRecoveredLoss(supabase, COMPANY, USER, { ...params, amount: 999.5 })).toMatchObject({ ok: true, amount: 999.5 })
+    expect(lineTuples().map(([account]) => account)).toEqual(['1930', '3950', '2611'])
+  })
+
+  it('a claim already recovered in full takes nothing more, not even its öre', async () => {
+    const state = stateOf(
+      writtenOff(999.75, 799.8, 199.95),
+      { basis: 999.75, oreRounding: 0, toPayRounding: 0.25, invoice: { total: 999.75, remaining_amount: 999.75 } },
+      [recoveryOf(999.75, 799.8, 199.95)],
+    )
+    vi.mocked(loadCustomerLossState).mockResolvedValue({ ok: true, state })
+    const { supabase } = mockSupabase()
+    expect(await recordRecoveredLoss(supabase, COMPANY, USER, { ...params, amount: 0.25 })).toMatchObject({
+      ok: false,
+      code: 'CUSTOMER_LOSS_RECOVERY_EXCEEDS',
+    })
+    expect(createJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('once a credit note changed what the invoice asks for, only what is left closes the claim', async () => {
+    vi.mocked(loadCustomerLossState).mockResolvedValue({ ok: true, state: { ...roundedUp, toPayRounding: null } })
+    const { supabase } = mockSupabase()
+    expect(await recordRecoveredLoss(supabase, COMPANY, USER, { ...params, amount: 1000 })).toMatchObject({
+      ok: false,
+      code: 'CUSTOMER_LOSS_RECOVERY_EXCEEDS',
+    })
+    expect(buildCustomerLossView({ ...roundedUp, toPayRounding: null }, { enabled: true, today: '2026-07-01' }).recovery).toMatchObject({
+      left: 999.75,
+      closing: [],
+    })
+  })
+
+  it('an invoice whose total is whole kronor closes only on what is left, whatever 3740 holds', async () => {
+    // Imported: total 1 000 on 1510 with 0.25 on 3740 from the source system.
+    const imported = stateOf(writtenOff(1000, 800.05, 199.95), {
+      basis: 1000,
+      oreRounding: 0.25,
+      toPayRounding: 0,
+      invoice: { total: 1000, remaining_amount: 1000 },
+    })
+    expect(buildCustomerLossView(imported, { enabled: true, today: '2026-07-01' }).recovery).toMatchObject({ left: 1000, closing: [] })
+    vi.mocked(loadCustomerLossState).mockResolvedValue({ ok: true, state: imported })
+    const { supabase } = mockSupabase()
+    expect(await recordRecoveredLoss(supabase, COMPANY, USER, { ...params, amount: 999.75 })).toMatchObject({ ok: true, amount: 999.75 })
+    expect(lineTuples().map(([account]) => account)).toEqual(['1930', '3950', '2611'])
+  })
+
+  it('the dialog may send "Att betala" as well as what is left', () => {
+    const view = buildCustomerLossView(roundedUp, { enabled: true, today: '2026-07-01' })
+    expect(view.recovery).toMatchObject({ left: 999.75, closing: [1000] })
+    expect(buildCustomerLossView(bookedAtIssue, { enabled: true, today: '2026-07-01' }).recovery).toMatchObject({
+      left: 1000,
+      closing: [999.75],
+    })
+  })
+})
+
+describe("the invoice's own öresavrundning", () => {
+  const invoice = { total: 999.75, currency: 'SEK', ore_rounding: null }
+  it('is Att betala less the total, on by default', () => {
+    expect(invoiceToPayRounding({ invoice, companyOreRounding: null, credited: false })).toBe(0.25)
+    expect(invoiceToPayRounding({ invoice: { ...invoice, total: 1000.4 }, companyOreRounding: true, credited: false })).toBe(-0.4)
+  })
+  it("follows the invoice's own flag before the company's setting", () => {
+    expect(invoiceToPayRounding({ invoice, companyOreRounding: false, credited: false })).toBe(0)
+    expect(invoiceToPayRounding({ invoice: { ...invoice, ore_rounding: true }, companyOreRounding: false, credited: false })).toBe(0.25)
+    expect(invoiceToPayRounding({ invoice: { ...invoice, ore_rounding: false }, companyOreRounding: true, credited: false })).toBe(0)
+  })
+  it('is 0 in another currency or on whole kronor, and unknown once credited', () => {
+    expect(invoiceToPayRounding({ invoice: { ...invoice, currency: 'EUR' }, companyOreRounding: true, credited: false })).toBe(0)
+    expect(invoiceToPayRounding({ invoice: { ...invoice, total: 1000 }, companyOreRounding: true, credited: false })).toBe(0)
+    expect(invoiceToPayRounding({ invoice, companyOreRounding: true, credited: true })).toBeNull()
   })
 })

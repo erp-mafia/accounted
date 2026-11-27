@@ -86,6 +86,7 @@ describe('konstaterad kundförlust when the issue verifikat booked the öresavru
       openVat: openVatByAccount(issueLines, []),
       basis: receivableBasis(issueLines, []),
       oreRounding: bookedOreOnLedger(issueLines, []),
+      toPayRounding: 0.25,
       rows: [],
       reserve: 0,
       confirmed: null,

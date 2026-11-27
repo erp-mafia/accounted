@@ -26,12 +26,12 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
-import { liveRows, recoveryLines, recoveryShares, totalVat } from './amounts'
+import { liveRows, recoveryClosingAmounts, recoveryLeft, recoveryLines, recoveryShares, totalVat, type VatShare } from './amounts'
 import type { CustomerLossOutcome } from './errors'
 import { resolvePrimaryBankAccount } from '@/lib/bookkeeping/settlement-account'
 import { createLogger } from '@/lib/logger'
 import { bookDecision } from './record'
-import { loadCustomerLossState } from './state'
+import { loadCustomerLossState, type CustomerLossState, type WriteOffRow } from './state'
 import { decisionDescription, invoiceLabel } from './text'
 
 const log = createLogger('customer-loss/recovered')
@@ -48,6 +48,39 @@ export interface RecordRecoveredLossParams {
   fromCollectedPayment?: boolean
   /** The underlag the decision rests on: the payment record of a collected payment. */
   evidenceDocumentId?: string | null
+}
+
+export interface RecoveryPlan {
+  /** What the recovery takes off the written-off claim, VAT included. */
+  amount: number
+  /** The money that came in: `amount`, or a öresavrundning away from it. */
+  received: number
+  net: number
+  vat: number
+  shares: VatShare[]
+}
+
+/**
+ * What a recovery of `receivedAmount` books on a written-off claim, or the
+ * amount left when it is more than the claim has. A payment of what the
+ * invoice asked for closes the claim (recoveryClosingAmounts): it takes what
+ * is left, every written-off VAT öre is reported again, and the öre between
+ * the two goes to 3740 (recoveryLines).
+ */
+export function planRecovery(
+  confirmed: WriteOffRow,
+  state: Pick<CustomerLossState, 'rows' | 'basis' | 'toPayRounding'> & { invoice: Pick<CustomerLossState['invoice'], 'total'> },
+  receivedAmount: number,
+): { ok: true; plan: RecoveryPlan } | { ok: false; left: number } {
+  const received = roundOre(receivedAmount)
+  const prior = liveRows(state.rows).filter((r) => r.kind === 'recovered')
+  const left = recoveryLeft(confirmed, prior)
+  const closes = recoveryClosingAmounts({ left, total: state.invoice.total, basis: state.basis, toPayRounding: state.toPayRounding }).includes(received)
+  const amount = closes ? left : received
+  if (received <= 0 || roundOre(amount - left) > 0) return { ok: false, left }
+  const { shares } = recoveryShares(confirmed, prior, amount)
+  const vat = totalVat(shares)
+  return { ok: true, plan: { amount, received, net: roundOre(amount - vat), vat, shares } }
 }
 
 export async function recordRecoveredLoss(
@@ -67,13 +100,9 @@ export async function recordRecoveredLoss(
     return { ok: false, code: 'CUSTOMER_LOSS_RECOVERY_CASE_OPEN' }
   }
 
-  const amount = roundOre(params.amount)
-  const prior = liveRows(state.rows).filter((r) => r.kind === 'recovered')
-  const { shares, left } = recoveryShares(state.confirmed, prior, amount)
-  if (amount <= 0 || roundOre(amount - left) > 0) {
-    return { ok: false, code: 'CUSTOMER_LOSS_RECOVERY_EXCEEDS', details: { left } }
-  }
-  const vat = totalVat(shares)
+  const planned = planRecovery(state.confirmed, state, params.amount)
+  if (!planned.ok) return { ok: false, code: 'CUSTOMER_LOSS_RECOVERY_EXCEEDS', details: { left: planned.left } }
+  const { amount, received, shares, vat, net } = planned.plan
   const label = invoiceLabel(state.invoice)
   const paymentAccount = params.paymentAccount ?? (await resolvePrimaryBankAccount(supabase, companyId, log))
 
@@ -82,9 +111,9 @@ export async function recordRecoveredLoss(
     kind: 'recovered',
     entryDate: params.entryDate,
     description: decisionDescription('Återvunnen kundförlust', label, params.reason),
-    lines: recoveryLines({ amount, shares, paymentAccount, tag: label }),
+    lines: recoveryLines({ amount, received, shares, paymentAccount, tag: label }),
     amount,
-    net: roundOre(amount - vat),
+    net,
     vat,
     shares,
     reason: params.reason,

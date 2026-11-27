@@ -19183,6 +19183,8 @@
     "recovery_description": "Book a payment that arrived after the invoice was written off. The amount is booked as income and the VAT is reported again.",
     "recovery_amount": "Amount including VAT",
     "recovery_left": "At most {amount} can be booked as recovered.",
+    "recovery_closing": "If the customer paid {closing}, as the invoice asked, the claim closes and the öre is booked as öre rounding.",
+    "recovery_closing_or": "or",
     "recovery_account": "Account the money reached",
     "recovery_case_open": "The case with the collection agency is still open. If a payment comes straight to you, close or withdraw the case first, then book the payment as a recovered loss.",
     "recovery_not_booked": "The invoice was never booked as a receivable (cash method). Book the payment as an ordinary sale.",

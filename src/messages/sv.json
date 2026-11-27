@@ -19183,6 +19183,8 @@
     "recovery_description": "Bokför en betalning som kommit in efter att fakturan skrevs av. Beloppet bokförs som intäkt och momsen redovisas på nytt.",
     "recovery_amount": "Belopp inklusive moms",
     "recovery_left": "Högst {amount} kan bokföras som återvunnet.",
+    "recovery_closing": "Betalade kunden {closing}, som fakturan begärde, stängs fordran och öret bokförs som öresavrundning.",
+    "recovery_closing_or": "eller",
     "recovery_account": "Konto där pengarna kom in",
     "recovery_case_open": "Ärendet hos inkassobolaget är fortfarande öppet. Får du betalt direkt, avsluta eller återkalla ärendet först och bokför sedan betalningen som återvunnen kundförlust.",
     "recovery_not_booked": "Fakturan bokfördes aldrig som fordran (kontantmetoden). Bokför betalningen som en vanlig försäljning.",

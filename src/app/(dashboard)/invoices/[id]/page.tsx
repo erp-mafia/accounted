@@ -3636,6 +3636,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           invoiceId={invoice.id}
           invoiceNumber={invoice.invoice_number}
           left={customerLoss.view.recovery.left}
+          closing={customerLoss.view.recovery.closing}
           today={todayIsoStockholm()}
           open={showRecoveryDialog}
           onOpenChange={setShowRecoveryDialog}
