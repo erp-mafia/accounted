@@ -186,7 +186,7 @@ describe('GET /api/webshop-orders', () => {
     )
   })
 
-  it('booked filter includes manually marked rows (#1879)', async () => {
+  it('booked filter includes manually marked rows (#1879) but not voided ones', async () => {
     enqueue({ data: [], count: 0 })
     const response = await listOrders(
       createMockRequest('/api/webshop-orders?booked=booked'),
@@ -195,7 +195,7 @@ describe('GET /api/webshop-orders', () => {
     const orFilters = findCalls('webshop_orders', 'or')
     expect(orFilters).toEqual(
       expect.arrayContaining([
-        ['journal_entry_id.not.is.null,manually_booked_at.not.is.null'],
+        ['journal_entry_id.not.is.null,and(manually_booked_at.not.is.null,manually_voided.is.false)'],
       ]),
     )
   })

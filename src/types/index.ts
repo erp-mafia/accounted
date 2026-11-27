@@ -4893,7 +4893,11 @@ export interface WebshopOrder {
   external_id: string
   platform_order_id: string
   order_number: string
-  /** Raw platform status (pending/processing/completed/refunded/...). */
+  /**
+   * Raw platform status (pending/processing/completed/refunded/...);
+   * 'cancelled' when the store cancelled the order (WooCommerce's own status,
+   * Shopify's cancelledAt).
+   */
   status: string
   is_paid: boolean
   order_date: string
@@ -4953,6 +4957,11 @@ export interface WebshopOrder {
   manually_booked_by: string | null
   /** Optional informational reference to the existing verifikat. */
   manually_booked_journal_entry_id: string | null
+  /**
+   * The manual mark voids the row (makulerad): the store cancelled the order
+   * and nothing is booked. False when the mark says it was booked outside.
+   */
+  manually_voided: boolean
   created_at: string
   updated_at: string
 }

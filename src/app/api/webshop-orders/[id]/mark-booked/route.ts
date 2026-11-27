@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server'
-import { withRouteContext } from '@/lib/api/with-route-context'
+import { withRouteContext, type RouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { MarkWebshopOrderBookedSchema } from '@/lib/api/schemas'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { isCancelledInStore, isCancelledWithoutRefund } from '@/lib/webshop-orders/booking-status'
 
 /**
  * POST /api/webshop-orders/[id]/mark-booked
@@ -13,6 +14,11 @@ import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structure
  * journal_entry_id records which existing posted verifikat covers the order;
  * the link is informational (the entry was not produced by this row), so the
  * financial freeze deliberately does not apply.
+ *
+ * With voided: true the mark voids the row instead (Markera som makulerad):
+ * only an order the store reports cancelled, with nothing refunded through
+ * the store (isCancelledWithoutRefund), and nothing is booked. The same
+ * DELETE undoes it, and the row is never deleted.
  *
  * Mutually exclusive with the real exits: refuses rows that are booked or
  * invoiced through the integration, and the book/create-invoice routes
@@ -27,10 +33,11 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     const validation = await validateBody(request, MarkWebshopOrderBookedSchema)
     if (!validation.success) return validation.response
     const { journal_entry_id } = validation.data
+    const voided = validation.data.voided === true
 
     const { data: order, error: fetchError } = await supabase
       .from('webshop_orders')
-      .select('id, journal_entry_id, invoice_id, manually_booked_at, legacy_transaction_id')
+      .select('id, row_type, status, refunded_total, journal_entry_id, invoice_id, manually_booked_at, manually_voided, legacy_transaction_id')
       .eq('id', id)
       .eq('company_id', companyId)
       .single()
@@ -49,6 +56,15 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         requestId,
         details: { invoice_id: order.invoice_id },
       })
+    }
+
+    if (voided) {
+      return voidOrder(order, { supabase, user, companyId, log, requestId })
+    }
+    // A voided row is not booked outside: marking it booked, or linking a
+    // verifikat to it, waits until the void is undone.
+    if (order.manually_voided) {
+      return errorResponseFromCode('WEBSHOP_ORDER_VOIDED', log, { requestId })
     }
 
     // Same open-twin gate as the book/create-invoice routes (skeptic
@@ -153,9 +169,9 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
 /**
  * DELETE /api/webshop-orders/[id]/mark-booked
  *
- * Undo a manual mark. Reversible by design (soft-guard doctrine): the mark
- * created no accounting objects, so clearing it has no ledger side effects
- * and the row simply returns to the to-book list.
+ * Undo a manual mark, a void included. Reversible by design (soft-guard
+ * doctrine): the mark created no accounting objects, so clearing it has no
+ * ledger side effects and the row simply returns to the to-book list.
  */
 export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
   'webshop_order.unmark_booked',
@@ -168,6 +184,7 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
         manually_booked_at: null,
         manually_booked_by: null,
         manually_booked_journal_entry_id: null,
+        manually_voided: false,
       })
       .eq('id', id)
       .eq('company_id', companyId)
@@ -185,3 +202,72 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
   },
   { requireWrite: true },
 )
+
+type MarkContext = Pick<RouteContext, 'supabase' | 'user' | 'companyId' | 'log' | 'requestId'>
+
+interface VoidCandidate {
+  id: string
+  row_type: 'order' | 'refund'
+  status: string
+  refunded_total: number
+  manually_booked_at: string | null
+  manually_voided: boolean | null
+}
+
+/**
+ * Void an order the store cancelled (Markera som makulerad). The status
+ * comes from the store: a row it does not report cancelled is refused, and so
+ * is a cancelled order the store refunded money on, whose payment and refund
+ * are booked instead (isCancelledWithoutRefund). No verifikat is linked and
+ * nothing is booked; the same conditional claim as the booked mark keeps a
+ * concurrent booking out.
+ */
+async function voidOrder(
+  order: VoidCandidate,
+  { supabase, user, companyId, log, requestId }: MarkContext,
+): Promise<NextResponse> {
+  if (order.manually_booked_at) {
+    if (order.manually_voided) return NextResponse.json({ success: true, already_marked: true })
+    return errorResponseFromCode('WEBSHOP_ORDER_MANUALLY_BOOKED', log, {
+      requestId,
+      details: { manually_booked_at: order.manually_booked_at },
+    })
+  }
+  if (!isCancelledInStore(order)) {
+    return errorResponseFromCode('WEBSHOP_ORDER_NOT_CANCELLED', log, {
+      requestId,
+      details: { status: order.status },
+    })
+  }
+  if (!isCancelledWithoutRefund(order)) {
+    return errorResponseFromCode('WEBSHOP_ORDER_CANCELLED_WITH_REFUND', log, {
+      requestId,
+      details: { refunded_total: order.refunded_total },
+    })
+  }
+
+  const { data: marked, error: markError } = await supabase
+    .from('webshop_orders')
+    .update({
+      manually_booked_at: new Date().toISOString(),
+      manually_booked_by: user.id,
+      manually_booked_journal_entry_id: null,
+      manually_voided: true,
+    })
+    .eq('id', order.id)
+    .eq('company_id', companyId)
+    .is('journal_entry_id', null)
+    .is('invoice_id', null)
+    .is('manually_booked_at', null)
+    .select('id')
+
+  if (markError) {
+    log.error('failed to void webshop order', markError, { orderId: order.id })
+    return errorResponse(markError, log, { requestId })
+  }
+  if (!marked || marked.length === 0) {
+    // Raced: the row was booked, invoiced or marked concurrently.
+    return errorResponseFromCode('WEBSHOP_ORDER_ALREADY_BOOKED', log, { requestId })
+  }
+  return NextResponse.json({ success: true })
+}

@@ -11572,6 +11572,34 @@ const WEBSHOP_ORDERS: Record<string, StructuredErrorEntry> = {
     message_en:
       'The order is marked as booked outside the integration. Undo the mark first if you want to book or invoice it from here.',
   },
+  WEBSHOP_ORDER_VOIDED: {
+    httpStatus: 409,
+    message_sv:
+      'Ordern är markerad som makulerad. Ångra makuleringen först om du vill bokföra eller fakturera den härifrån.',
+    message_en:
+      'The order is marked as voided. Undo the void first if you want to book or invoice it from here.',
+  },
+  WEBSHOP_ORDER_NOT_CANCELLED: {
+    httpStatus: 409,
+    message_sv:
+      'Butiken rapporterar inte ordern som avbruten, så den kan inte makuleras. Bokför den, eller markera den som bokförd om den redan är bokförd.',
+    message_en:
+      'The store does not report the order as cancelled, so it cannot be voided. Book it, or mark it as booked if it is already booked.',
+  },
+  WEBSHOP_ORDER_CANCELLED_WITH_REFUND: {
+    httpStatus: 409,
+    message_sv:
+      'Butiken har betalat tillbaka pengar på ordern. Då har pengar rört sig, så ordern och återbetalningen bokförs i stället för att ordern makuleras.',
+    message_en:
+      'The store has refunded money on the order. Money has then moved, so the order and its refund are booked instead of voiding the order.',
+  },
+  WEBSHOP_ORDER_CANCELLED_IN_STORE: {
+    httpStatus: 422,
+    message_sv:
+      'Ordern är avbruten i butiken och bokförs inte automatiskt. Markera den som makulerad, eller bokför den enskilt om kunden har betalat.',
+    message_en:
+      'The order is cancelled in the store and is not booked automatically. Mark it as voided, or book it individually if the customer has paid.',
+  },
   WEBSHOP_ORDER_MARK_ENTRY_NOT_FOUND: {
     httpStatus: 404,
     message_sv: 'Verifikatet som ordern skulle kopplas till hittades inte.',

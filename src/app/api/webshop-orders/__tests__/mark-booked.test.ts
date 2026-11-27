@@ -37,12 +37,21 @@ const ENTRY_UUID = '550e8400-e29b-41d4-a716-446655440001'
 function makeOrderRow(overrides: Record<string, unknown> = {}) {
   return {
     id: 'order-1',
+    row_type: 'order',
+    status: 'completed',
+    refunded_total: 0,
     journal_entry_id: null,
     invoice_id: null,
     manually_booked_at: null,
+    manually_voided: false,
     legacy_transaction_id: null,
     ...overrides,
   }
+}
+
+/** An order the store cancelled, with nothing refunded. */
+function cancelledRow(overrides: Record<string, unknown> = {}) {
+  return makeOrderRow({ status: 'cancelled', ...overrides })
 }
 
 function postMark(body: unknown = {}, id = 'order-1') {
@@ -244,6 +253,163 @@ describe('POST /api/webshop-orders/[id]/mark-booked', () => {
   })
 })
 
+describe('POST /api/webshop-orders/[id]/mark-booked with voided: true', () => {
+  const mockUser = { id: 'user-1', email: 'test@test.se' }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    eventBus.clear()
+    requireAuthMock.mockResolvedValue({ user: mockUser, supabase: mockSupabase })
+    requireWriteMock.mockResolvedValue({ ok: true })
+  })
+
+  it('returns 401 when not authenticated', async () => {
+    requireAuthMock.mockResolvedValue({
+      user: null,
+      supabase: mockSupabase,
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+    })
+    const { status } = await parseJsonResponse(await postMark({ voided: true }))
+    expect(status).toBe(401)
+  })
+
+  it('returns 400 when a void also names a verifikat', async () => {
+    const { status } = await parseJsonResponse(
+      await postMark({ voided: true, journal_entry_id: ENTRY_UUID }),
+    )
+    expect(status).toBe(400)
+    expect(findCall('webshop_orders', 'select')).toBeUndefined()
+  })
+
+  it('returns 404 when the order does not exist for the company', async () => {
+    enqueue({ data: null, error: { message: 'not found' } })
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
+      await postMark({ voided: true }),
+    )
+    expect(status).toBe(404)
+    expect(body.error.code).toBe('WEBSHOP_ORDER_NOT_FOUND')
+  })
+
+  it('voids a cancelled order: who and when, no verifikat, through the conditional claim', async () => {
+    enqueue({ data: cancelledRow({ is_paid: true }) }) // fetch
+    enqueue({ data: [{ id: 'order-1' }] }) // claim
+    const { status, body } = await parseJsonResponse<{ success: boolean }>(
+      await postMark({ voided: true }),
+    )
+    expect(status).toBe(200)
+    expect(body.success).toBe(true)
+    const payload = findCall('webshop_orders', 'update')![0] as Record<string, unknown>
+    expect(typeof payload.manually_booked_at).toBe('string')
+    expect(payload.manually_booked_by).toBe('user-1')
+    expect(payload.manually_booked_journal_entry_id).toBeNull()
+    expect(payload.manually_voided).toBe(true)
+    expect(findCalls('webshop_orders', 'is')).toEqual(
+      expect.arrayContaining([
+        ['journal_entry_id', null],
+        ['invoice_id', null],
+        ['manually_booked_at', null],
+      ]),
+    )
+    // Never a delete: the row stays.
+    expect(findCall('webshop_orders', 'delete')).toBeUndefined()
+  })
+
+  it('voids a cancelled order whose money sits in the legacy feed too: a void books nothing twice', async () => {
+    enqueue({ data: cancelledRow({ legacy_transaction_id: 'txn-1' }) })
+    enqueue({ data: [{ id: 'order-1' }] }) // claim
+    const { status } = await parseJsonResponse(await postMark({ voided: true }))
+    expect(status).toBe(200)
+    expect(findCall('open_bank_rows', 'select')).toBeUndefined()
+  })
+
+  it('refuses an order the store does not report cancelled', async () => {
+    enqueue({ data: makeOrderRow({ status: 'processing' }) })
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
+      await postMark({ voided: true }),
+    )
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('WEBSHOP_ORDER_NOT_CANCELLED')
+    expect(findCall('webshop_orders', 'update')).toBeUndefined()
+  })
+
+  it('refuses a refund row: only the order itself is cancelled in the store', async () => {
+    enqueue({ data: cancelledRow({ row_type: 'refund', status: 'refund' }) })
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
+      await postMark({ voided: true }),
+    )
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('WEBSHOP_ORDER_NOT_CANCELLED')
+  })
+
+  it('refuses a cancelled order the store refunded money on: the payment and the refund are booked', async () => {
+    enqueue({ data: cancelledRow({ refunded_total: 499 }) })
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
+      await postMark({ voided: true }),
+    )
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('WEBSHOP_ORDER_CANCELLED_WITH_REFUND')
+    expect(findCall('webshop_orders', 'update')).toBeUndefined()
+  })
+
+  it('refuses a cancelled order that is booked or invoiced', async () => {
+    enqueue({ data: cancelledRow({ journal_entry_id: 'je-1' }) })
+    const booked = await parseJsonResponse<{ error: { code: string } }>(await postMark({ voided: true }))
+    expect(booked.status).toBe(409)
+    expect(booked.body.error.code).toBe('WEBSHOP_ORDER_ALREADY_BOOKED')
+
+    enqueue({ data: cancelledRow({ invoice_id: 'inv-1' }) })
+    const invoiced = await parseJsonResponse<{ error: { code: string } }>(await postMark({ voided: true }))
+    expect(invoiced.status).toBe(409)
+    expect(invoiced.body.error.code).toBe('WEBSHOP_ORDER_ALREADY_INVOICED')
+  })
+
+  it('refuses a cancelled order already marked as booked outside: undo that mark first', async () => {
+    enqueue({ data: cancelledRow({ manually_booked_at: '2026-08-01T00:00:00Z' }) })
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
+      await postMark({ voided: true }),
+    )
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('WEBSHOP_ORDER_MANUALLY_BOOKED')
+  })
+
+  it('is idempotent for an order already voided', async () => {
+    enqueue({ data: cancelledRow({ manually_booked_at: '2026-08-01T00:00:00Z', manually_voided: true }) })
+    const { status, body } = await parseJsonResponse<{ already_marked: boolean }>(
+      await postMark({ voided: true }),
+    )
+    expect(status).toBe(200)
+    expect(body.already_marked).toBe(true)
+    expect(findCall('webshop_orders', 'update')).toBeUndefined()
+  })
+
+  it('returns 409 when the claim matches zero rows (raced)', async () => {
+    enqueue({ data: cancelledRow() })
+    enqueue({ data: [] })
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
+      await postMark({ voided: true }),
+    )
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('WEBSHOP_ORDER_ALREADY_BOOKED')
+  })
+
+  it('refuses marking a voided order as booked, or linking a verifikat to it', async () => {
+    const voided = { manually_booked_at: '2026-08-01T00:00:00Z', manually_voided: true }
+    enqueue({ data: cancelledRow(voided) })
+    const bare = await parseJsonResponse<{ error: { code: string } }>(await postMark())
+    expect(bare.status).toBe(409)
+    expect(bare.body.error.code).toBe('WEBSHOP_ORDER_VOIDED')
+
+    enqueue({ data: cancelledRow(voided) })
+    const linked = await parseJsonResponse<{ error: { code: string } }>(
+      await postMark({ journal_entry_id: ENTRY_UUID }),
+    )
+    expect(linked.status).toBe(409)
+    expect(linked.body.error.code).toBe('WEBSHOP_ORDER_VOIDED')
+    expect(findCall('webshop_orders', 'update')).toBeUndefined()
+  })
+})
+
 describe('DELETE /api/webshop-orders/[id]/mark-booked', () => {
   const mockUser = { id: 'user-1', email: 'test@test.se' }
 
@@ -284,6 +450,7 @@ describe('DELETE /api/webshop-orders/[id]/mark-booked', () => {
       manually_booked_at: null,
       manually_booked_by: null,
       manually_booked_journal_entry_id: null,
+      manually_voided: false,
     })
   })
 })

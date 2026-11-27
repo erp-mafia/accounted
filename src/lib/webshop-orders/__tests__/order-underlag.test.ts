@@ -66,6 +66,7 @@ function makeOrder(overrides: Partial<WebshopOrder> = {}): WebshopOrder {
     manually_booked_at: null,
     manually_booked_by: null,
     manually_booked_journal_entry_id: null,
+    manually_voided: false,
     remote_changed_after_freeze: false,
     created_at: '2026-08-01T00:00:00Z',
     updated_at: '2026-08-01T00:00:00Z',

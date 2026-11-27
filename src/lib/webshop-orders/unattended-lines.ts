@@ -7,6 +7,7 @@ import type {
   WebshopStoreSettings,
 } from '@/types'
 import { assertOrderBookable, resolveOrderFx } from './book-order'
+import { isCancelledWithoutRefund } from './booking-status'
 import {
   buildOrderBooking,
   resolvePaymentAccount,
@@ -21,6 +22,9 @@ import { usesRevenueTemplate } from './country-routing'
  * (one verifikat per order) and the day booking (one verifikat per day and
  * payment method) both derive each order's lines here, so the two can never
  * disagree on which orders a machine may book.
+ *
+ * An order the store cancelled without a refund is refused too
+ * (WEBSHOP_ORDER_CANCELLED_IN_STORE): it is voided or booked by a person.
  *
  * Only DERIVED lines pass, never guessed ones: an empty vat_breakdown (the
  * ratio-inferred fallback), a destination outside Sweden the store's country
@@ -75,6 +79,14 @@ export async function deriveUnattendedOrderLines(
       code: guardFailure.code,
       ...(guardFailure.details ? { details: guardFailure.details } : {}),
     }
+  }
+
+  // The store cancelled the order and refunded nothing on it: a machine
+  // cannot tell a payment that was never taken from money the shop kept, so
+  // the order never books as a sale here. A person voids it on the Orders
+  // page or books it in the single-order dialog.
+  if (isCancelledWithoutRefund(order)) {
+    return { ok: false, code: 'WEBSHOP_ORDER_CANCELLED_IN_STORE' }
   }
 
   // No VAT breakdown from the store: buildOrderBookingLines would fall

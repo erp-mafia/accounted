@@ -28,7 +28,16 @@ const WEBSHOP_ORDER_ID = z
   .uuid()
   .describe('The order row id, from gnubok_list_webshop_orders (GET /webshop-orders).')
 
-const BOOKING_STATUSES = ['booked', 'marked_booked', 'invoiced', 'in_transactions', 'unpaid', 'to_book'] as const
+const BOOKING_STATUSES = [
+  'booked',
+  'marked_booked',
+  'voided',
+  'invoiced',
+  'in_transactions',
+  'cancelled',
+  'unpaid',
+  'to_book',
+] as const
 
 const VatBucket = z.object({ rate: z.number(), net: z.number(), tax: z.number() })
 const LineItem = z.object({
@@ -164,17 +173,18 @@ export const webshopOrdersList = defineOperation({
   docs: {
     summary: 'The order and refund rows synced from the company\'s webshops, newest first.',
     description:
-      'Lists the rows the Shopify, WooCommerce and Zettle syncs store: one per paid order and one per refund (a negative row under its order), with amounts, the VAT split per rate, the country, the payment method and where each row stands (booking_status: to_book, booked, marked_booked, invoiced, in_transactions, unpaid). Filter by booked or unbooked, platform, row type, order date and country. Paginated with limit and offset; total is the full count. Read-only.',
+      'Lists the rows the Shopify, WooCommerce and Zettle syncs store: one per paid order and one per refund (a negative row under its order), with amounts, the VAT split per rate, the country, the payment method and where each row stands (booking_status: to_book, booked, marked_booked, voided, invoiced, in_transactions, cancelled, unpaid). Filter by booked or unbooked, platform, row type, order date and country. Paginated with limit and offset; total is the full count. Read-only.',
     useWhen: 'To find the orders to book, or to see which orders a period holds per country.',
     doNotUseFor: 'One order with its line items and suggested booking (GET /webshop-orders/{orderId}).',
     pitfalls: [
       COUNTRY_PITFALL,
       'booked=unbooked also returns unpaid and invoiced rows: only booking_status to_book can be booked.',
+      'booking_status cancelled: the store cancelled the order (platform_status cancelled). With refunded_total 0 the day booking leaves it out; a person voids it or books it on its own. voided: marked makulerad on the Orders page, nothing is booked, and booked=booked leaves it out.',
     ],
     example: { request: { booked: 'unbooked', country: 'DK' }, response: { data: { orders: [EXAMPLE_ORDER], total: 1 }, meta: META } },
   },
   input: z.object({
-    booked: z.enum(['booked', 'unbooked']).optional().describe('booked: booked here or marked as booked outside; unbooked: the rest.'),
+    booked: z.enum(['booked', 'unbooked']).optional().describe('booked: booked here or marked as booked outside; unbooked: neither booked nor marked. A voided row is in neither.'),
     platform: z.enum(['woocommerce', 'shopify', 'zettle', 'kustom']).optional(),
     row_type: z.enum(['order', 'refund']).optional(),
     from: isoDateSchema.optional().describe('First order date, inclusive.'),
@@ -392,6 +402,7 @@ export const webshopOrdersBook = defineOperation({
     'WEBSHOP_ORDER_ALREADY_BOOKED',
     'WEBSHOP_ORDER_ALREADY_INVOICED',
     'WEBSHOP_ORDER_MANUALLY_BOOKED',
+    'WEBSHOP_ORDER_VOIDED',
     'WEBSHOP_ORDER_REFUND_PARENT_INVOICED',
     'WEBSHOP_ORDER_NOT_PAID',
     'WEBSHOP_ORDER_LEGACY_TRANSACTION_OPEN',
@@ -473,7 +484,7 @@ export const webshopOrdersBookDay = defineOperation({
   docs: {
     summary: 'Book a store\'s orders and refunds of one day and one payment method as one verifikat, with a day summary as underlag.',
     description:
-      'Posts one verifikat (source_type webshop_order, dated the day) for every unbooked, paid order and refund of the store whose paid date (else order date) is the day and whose payment method is the one given. The lines are the server\'s, never the caller\'s: each order\'s lines are derived exactly as the Orders page\'s bulk booking derives them (the store\'s payment-method mapping and country rules), then summed per account and side, so sales and refunds are separate lines. Every order is linked to the verifikat and stops showing as unbooked, and a dagssammanställning listing each order (number, date, country, amount, VAT) is archived on it. An order that cannot be booked without review (no VAT split, a country no store rule covers, an unknown destination, a non-Swedish rate on the Swedish accounts, an invoice-flow payment method, a rounding gap over 1 kr) is left out, listed in skipped with the reason, and stays unbooked. Dry-runnable.',
+      'Posts one verifikat (source_type webshop_order, dated the day) for every unbooked, paid order and refund of the store whose paid date (else order date) is the day and whose payment method is the one given. The lines are the server\'s, never the caller\'s: each order\'s lines are derived exactly as the Orders page\'s bulk booking derives them (the store\'s payment-method mapping and country rules), then summed per account and side, so sales and refunds are separate lines. Every order is linked to the verifikat and stops showing as unbooked, and a dagssammanställning listing each order (number, date, country, amount, VAT) is archived on it. An order that cannot be booked without review (no VAT split, a country no store rule covers, an unknown destination, a non-Swedish rate on the Swedish accounts, an invoice-flow payment method, a rounding gap over 1 kr, cancelled in the store with nothing refunded) is left out, listed in skipped with the reason, and stays unbooked. Dry-runnable.',
     useWhen: 'The company books its webshop sales per day and payment method (e.g. one verifikat for Shopify Payments and one for PayPal), not per order.',
     doNotUseFor: 'Payouts and fees from the payment provider (book those against the clearing account from the bank row), one order (POST /webshop-orders/{orderId}/book), or correcting a booked day (storno, then book the orders again).',
     pitfalls: [
