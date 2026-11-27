@@ -6201,6 +6201,17 @@ export const LinkDocumentSchema = z.object({
 })
 
 /**
+ * POST /api/documents/:id/strike: the document is on the wrong verifikat. Its
+ * link is struck with the reason, and `journal_entry_id`, the verifikat it
+ * belongs to, gets a byte-identical copy (lib/documents/strike-link.ts).
+ * 500 characters: document_attachments_link_strike_check.
+ */
+export const StrikeDocumentLinkSchema = z.object({
+  journal_entry_id: uuid,
+  reason: z.string().trim().min(1, 'Skriv varför kopplingen stryks').max(500, 'Högst 500 tecken'),
+})
+
+/**
  * Underlag import preview: filenames only, never file contents. The plan is
  * built from the voucher reference in each name, so the bytes stay in the
  * browser until the user has approved where each file will land.
