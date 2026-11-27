@@ -75,6 +75,7 @@ import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
 import { voucherLineViews } from '@/lib/bookkeeping/voucher-line-view'
 import { useBasReference } from '@/lib/bookkeeping/use-bas-reference'
 import JournalEntryAttachments from '@/components/bookkeeping/JournalEntryAttachments'
+import InboxDocumentPicker from '@/components/bookkeeping/InboxDocumentPicker'
 import JournalEntryTransactionLinks from '@/components/bookkeeping/JournalEntryTransactionLinks'
 import NoDocRequiredToggle from '@/components/bookkeeping/NoDocRequiredToggle'
 import CorrectionEntryDialog from '@/components/bookkeeping/CorrectionEntryDialog'
@@ -291,6 +292,11 @@ export default function JournalEntryList({
   const shiftHeld = useRef(false)
   const [batchReason, setBatchReason] = useState('')
   const [batchSubmitting, setBatchSubmitting] = useState(false)
+  // "Koppla underlag" in the bulk bar: one underlag onto every selected
+  // verifikat (a monthly invoice behind several fees), fixed at the moment
+  // the picker opened so a refetch cannot change what is linked.
+  const [sweepIds, setSweepIds] = useState<string[]>([])
+  const [sweepOpen, setSweepOpen] = useState(false)
   const [bulkOpen, setBulkOpen] = useState(false)
   const [bulkCount, setBulkCount] = useState<number | null>(null)
   const [bulkReason, setBulkReason] = useState('')
@@ -938,6 +944,19 @@ export default function JournalEntryList({
     } finally {
       setBatchSubmitting(false)
     }
+  }
+
+  // The verifikat that got the swept underlag now hold one: they leave the
+  // missing set (and the selection, which only keeps eligible rows), and with
+  // the saknade-underlag filter on they leave the list too.
+  const handleSweepLinked = (linkedIds: string[]) => {
+    setAttachmentCounts((prev) => {
+      const next = { ...prev }
+      for (const id of linkedIds) next[id] = (next[id] ?? 0) + 1
+      return next
+    })
+    selection.deselect(linkedIds)
+    if (showMissingOnly) void fetchEntries({ preserveSelection: true })
   }
 
   // Filter-scoped bulk mark: mark EVERY missing-doc verifikat matching the active
@@ -1592,6 +1611,19 @@ export default function JournalEntryList({
           clearLabel={t('batch_clear_selection')}
           busy={batchSubmitting}
         >
+          {/* One underlag for every selected verifikat (a monthly invoice or a
+              bank statement behind several fees), in list order: the first
+              takes the document, the rest a byte-identical copy each. */}
+          <Button
+            variant="outline"
+            onClick={() => {
+              setSweepIds(filteredEntries.filter((e) => selectedIds.has(e.id)).map((e) => e.id))
+              setSweepOpen(true)
+            }}
+            disabled={batchSubmitting}
+          >
+            {t('batch_link_document')}
+          </Button>
           <Input
             value={batchReason}
             onChange={(e) => setBatchReason(e.target.value)}
@@ -2062,6 +2094,13 @@ export default function JournalEntryList({
         </div>
       </div>
       )}
+
+      <InboxDocumentPicker
+        open={sweepOpen}
+        onClose={() => setSweepOpen(false)}
+        journalEntryIds={sweepIds}
+        onLinked={handleSweepLinked}
+      />
 
       {/* Filter-scoped bulk "Inget underlag krävs" confirmation */}
       <Dialog

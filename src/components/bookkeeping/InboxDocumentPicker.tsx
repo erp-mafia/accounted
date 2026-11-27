@@ -37,7 +37,7 @@ import type { AvailableInboxDoc } from '@/lib/documents/inbox-available'
 // invoice, no journal entry, not matched to a transaction, document not
 // already linked) so the user can attach one as underlag to a verifikat.
 //
-// Two modes:
+// Three modes:
 // - Link mode (JournalEntryAttachments, "Välj från inkorgen"): `journalEntryId`
 //   is set and picking a document immediately links it to the journal entry AND
 //   stamps the inbox item so it drops out of the active inbox: see
@@ -45,6 +45,14 @@ import type { AvailableInboxDoc } from '@/lib/documents/inbox-available'
 // - Select mode (TransactionBookingDialog, "Välj befintligt underlag"): the
 //   journal entry does not exist yet, so `onSelect` is provided instead and the
 //   pick is reported to the parent, which links after the entry is created.
+// - Sweep mode (JournalEntryList's bulk bar, "Koppla underlag"):
+//   `journalEntryIds` names the verifikat the user selected, and one pick
+//   links the document to all of them in one go: a monthly invoice or a bank
+//   statement that backs several verifikat. Each verifikat goes through the
+//   same POST link with copy: true, in the order given, so the first one
+//   takes a document nothing holds yet and every later one gets its own
+//   byte-identical copy. A document row holds one verifikat for good
+//   (enforce_document_journal_entry_immutability), and nothing moves.
 //
 // Each row carries a "Förhandsgranska" button that opens a quick dialog
 // rendering the document inline, so the user can confirm the right file before
@@ -65,8 +73,16 @@ interface Props {
   onClose: () => void
   /** Link mode: the journal entry to link the picked document to. */
   journalEntryId?: string
-  /** Link mode: called after a successful link so the parent can refresh its document list. */
-  onLinked?: () => void
+  /**
+   * Sweep mode: the journal entries, in order, to link the picked document
+   * to (the first takes the document, the rest a copy each).
+   */
+  journalEntryIds?: readonly string[]
+  /**
+   * Link and sweep mode: called after a link with the verifikat that got the
+   * document, so the parent can refresh its document list or counts.
+   */
+  onLinked?: (journalEntryIds: string[]) => void
   /** Select mode: report the picked document to the parent instead of linking. */
   onSelect?: (doc: AvailableInboxDoc) => void
 }
@@ -88,6 +104,18 @@ interface LinkedElsewhereDoc {
   voucher: string | null
 }
 
+/** Sweep mode: the document picked for every selected verifikat. */
+interface SweepDoc {
+  document_id: string
+  file_name: string
+  title: string
+  mime_type: string | null
+  /** The verifikat that already holds it (from "Andra verifikationer"); null for an inbox document. */
+  voucher: string | null
+  held: boolean
+  inbox_item_id?: string
+}
+
 function DocIcon({ mime, fileName }: { mime: string | null; fileName: string }) {
   if (documentPreviewKind(mime, fileName) === 'image') {
     return <PhotoIcon className="h-4 w-4 text-muted-foreground shrink-0" />
@@ -95,7 +123,7 @@ function DocIcon({ mime, fileName }: { mime: string | null; fileName: string }) 
   return <DocumentTextIcon className="h-4 w-4 text-muted-foreground shrink-0" />
 }
 
-export default function InboxDocumentPicker({ open, onClose, journalEntryId, onLinked, onSelect }: Props) {
+export default function InboxDocumentPicker({ open, onClose, journalEntryId, journalEntryIds, onLinked, onSelect }: Props) {
   const t = useTranslations('journal_attachments')
   const tCommon = useTranslations('common')
   const errorLocale = useLocale() as ErrorLocale
@@ -111,7 +139,16 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, onL
   const [linkedItems, setLinkedItems] = useState<LinkedElsewhereDoc[]>([])
   const [linkedLoading, setLinkedLoading] = useState(false)
   const [copyItem, setCopyItem] = useState<LinkedElsewhereDoc | null>(null)
+  // Sweep mode: the picked document waiting for its confirm, and how many of
+  // the selected verifikat have been answered while the links run.
+  const [sweepItem, setSweepItem] = useState<SweepDoc | null>(null)
+  const [sweepDone, setSweepDone] = useState<number | null>(null)
   const linkMode = Boolean(journalEntryId) && !onSelect
+  const sweepIds = useMemo(() => (journalEntryIds ? [...journalEntryIds] : []), [journalEntryIds])
+  const sweepMode = !journalEntryId && !onSelect && sweepIds.length > 0
+  // "Andra verifikationer" lists underlag the verifikat being linked do not
+  // hold already: the one in link mode, every selected one in sweep mode.
+  const excludedKey = (journalEntryId ? [journalEntryId] : sweepIds).join(',')
 
   // Reset + fetch each time the dialog opens.
   useEffect(() => {
@@ -121,6 +158,8 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, onL
     setPreviewItem(null)
     setSource('inbox')
     setCopyItem(null)
+    setSweepItem(null)
+    setSweepDone(null)
     setLoading(true)
     let cancelled = false
     ;(async () => {
@@ -144,7 +183,8 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, onL
   // text and file names) once two characters are typed, newest first.
   const serverQuery = search.trim().length >= 2 ? search.trim() : ''
   useEffect(() => {
-    if (!open || source !== 'linked' || !journalEntryId) return
+    if (!open || source !== 'linked' || !excludedKey) return
+    const excluded = new Set(excludedKey.split(','))
     let cancelled = false
     setLinkedLoading(true)
     const timer = setTimeout(() => {
@@ -157,7 +197,7 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, onL
           if (cancelled) return
           setLinkedItems(
             (json.data ?? [])
-              .filter((row) => row.linked.journal_entry_id && row.linked.journal_entry_id !== journalEntryId)
+              .filter((row) => row.linked.journal_entry_id && !excluded.has(row.linked.journal_entry_id))
               .map((row) => ({
                 document_id: row.document_id,
                 file_name: row.file_name,
@@ -177,7 +217,7 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, onL
       cancelled = true
       clearTimeout(timer)
     }
-  }, [open, source, journalEntryId, serverQuery])
+  }, [open, source, excludedKey, serverQuery])
 
   async function handleCopy(doc: LinkedElsewhereDoc) {
     if (!journalEntryId) return
@@ -196,7 +236,7 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, onL
       }
       toast({ title: t('picker_copy_linked') })
       setCopyItem(null)
-      onLinked?.()
+      onLinked?.([journalEntryId])
       onClose()
     } catch {
       toast({ title: t('picker_link_failed'), variant: 'destructive' })
@@ -225,6 +265,20 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, onL
       onClose()
       return
     }
+    // Sweep mode: one document for several verifikat is confirmed first.
+    if (sweepMode) {
+      setPreviewItem(null)
+      setSweepItem({
+        document_id: item.document_id,
+        file_name: item.file_name,
+        title: item.supplier_name ?? item.file_name,
+        mime_type: item.mime_type,
+        voucher: null,
+        held: false,
+        inbox_item_id: item.inbox_item_id,
+      })
+      return
+    }
     if (!journalEntryId) return
     setLinkingId(item.document_id)
     try {
@@ -246,13 +300,67 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, onL
       }
       toast({ title: t('picker_linked') })
       setPreviewItem(null)
-      onLinked?.()
+      onLinked?.([journalEntryId])
       onClose()
     } catch {
       toast({ title: t('picker_link_failed'), variant: 'destructive' })
     } finally {
       setLinkingId(null)
     }
+  }
+
+  // Sweep mode: the picked document onto every selected verifikat, one link
+  // per verifikat through the same route the single pick uses. copy: true on
+  // every call is safe: a document nothing holds is linked itself (the first
+  // verifikat), and one another verifikat holds is copied. One at a time, so
+  // the first link lands before the copies ask who holds the document.
+  async function handleSweep(doc: SweepDoc) {
+    if (sweepIds.length === 0) return
+    setLinkingId(doc.document_id)
+    setSweepDone(0)
+    const linked: string[] = []
+    let failed = 0
+    let reason: string | undefined
+    for (const [index, id] of sweepIds.entries()) {
+      try {
+        const res = await fetch(`/api/documents/${doc.document_id}/link`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            journal_entry_id: id,
+            copy: true,
+            ...(doc.inbox_item_id && linked.length === 0 ? { inbox_item_id: doc.inbox_item_id } : {}),
+          }),
+        })
+        if (res.ok) {
+          linked.push(id)
+        } else {
+          failed += 1
+          const json = (await res.json().catch(() => ({}))) as { error?: string | { message?: string } }
+          reason ??= json.error ? getErrorMessage(json, { locale: errorLocale }) : undefined
+        }
+      } catch {
+        // A network failure is one verifikat not linked: counted and said in
+        // the summary below, and the rest of the selection still gets its link.
+        failed += 1
+      }
+      setSweepDone(index + 1)
+    }
+    setLinkingId(null)
+    setSweepDone(null)
+    if (failed === 0) {
+      toast({ title: t('picker_sweep_done', { count: linked.length }) })
+    } else {
+      toast({
+        title: t('picker_sweep_partial', { success: linked.length, total: sweepIds.length }),
+        description: reason,
+        variant: linked.length === 0 ? 'destructive' : undefined,
+      })
+    }
+    if (linked.length === 0) return
+    setSweepItem(null)
+    onLinked?.(linked)
+    onClose()
   }
 
   const linkedFiltered = useMemo(() => {
@@ -266,7 +374,9 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, onL
   const hasSearch = search.trim().length > 0
   const previewSrc = previewItem ? `/api/documents/${previewItem.document_id}/inline` : null
   const copySrc = copyItem ? `/api/documents/${copyItem.document_id}/inline` : null
-  const showingLinked = linkMode && source === 'linked'
+  const sweepSrc = sweepItem ? `/api/documents/${sweepItem.document_id}/inline` : null
+  const offersLinked = linkMode || sweepMode
+  const showingLinked = offersLinked && source === 'linked'
   const listLoading = showingLinked ? linkedLoading : loading
   const listCount = showingLinked ? linkedFiltered.length : filtered.length
 
@@ -276,9 +386,12 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, onL
         <DialogContent size="wide">
           <DialogHeader>
             <DialogTitle>{showingLinked ? t('picker_linked_title') : t('picker_title')}</DialogTitle>
+            {sweepMode && (
+              <DialogDescription>{t('picker_sweep_description', { count: sweepIds.length })}</DialogDescription>
+            )}
           </DialogHeader>
 
-          {linkMode && (
+          {offersLinked && (
             <SegmentedControl<PickerSource>
               value={source}
               onChange={setSource}
@@ -330,7 +443,18 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, onL
                   <button
                     key={it.document_id}
                     type="button"
-                    onClick={() => setCopyItem(it)}
+                    onClick={() =>
+                      sweepMode
+                        ? setSweepItem({
+                            document_id: it.document_id,
+                            file_name: it.file_name,
+                            title: it.title,
+                            mime_type: null,
+                            voucher: it.voucher,
+                            held: true,
+                          })
+                        : setCopyItem(it)
+                    }
                     disabled={!!linkingId}
                     className="w-full text-left flex items-center gap-3 py-3 px-2 -ml-2 rounded-sm transition-colors hover:bg-secondary/60"
                   >
@@ -520,6 +644,66 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, onL
               loading={!!copyItem && linkingId === copyItem.document_id}
             >
               {t('picker_copy_attach')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={sweepItem !== null}
+        onOpenChange={(o) => {
+          if (!o && sweepDone === null) setSweepItem(null)
+        }}
+      >
+        <DialogContent size="wide">
+          <DialogHeader>
+            {/* data-ph-mask: the file name is user data */}
+            <DialogTitle data-ph-mask="" className="truncate pr-6">{sweepItem?.title}</DialogTitle>
+            <DialogDescription>
+              {!sweepItem?.held
+                ? t('picker_sweep_confirm', { count: sweepIds.length })
+                : sweepItem.voucher
+                  ? t('picker_sweep_confirm_held', { count: sweepIds.length, voucher: sweepItem.voucher })
+                  : t('picker_sweep_confirm_held_unnumbered', { count: sweepIds.length })}
+            </DialogDescription>
+          </DialogHeader>
+
+          {sweepItem && sweepSrc && (
+            <div className="py-1">
+              <DocumentPreview
+                src={sweepSrc}
+                kind={pickerPreviewKind(sweepItem.mime_type, sweepItem.file_name)}
+                label={sweepItem.file_name}
+                className="h-[60vh] w-full rounded-lg bg-control shadow-raised"
+                imageClassName="max-h-[60vh] w-full object-contain"
+                fallback={
+                  <a
+                    href={sweepSrc}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="block px-4 py-6 text-center text-sm text-muted-foreground underline"
+                  >
+                    {t('picker_preview_unavailable')}
+                  </a>
+                }
+              />
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSweepItem(null)} disabled={sweepDone !== null}>
+              {t('picker_close')}
+            </Button>
+            <Button
+              onClick={() => {
+                if (sweepItem) void handleSweep(sweepItem)
+              }}
+              disabled={!!linkingId}
+              loading={sweepDone !== null}
+            >
+              {sweepDone !== null
+                ? t('picker_sweep_progress', { done: sweepDone, total: sweepIds.length })
+                : t('picker_sweep_attach', { count: sweepIds.length })}
             </Button>
           </DialogFooter>
         </DialogContent>
