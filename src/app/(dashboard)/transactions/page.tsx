@@ -1497,7 +1497,9 @@ export default function TransactionsPage() {
             .select('journal_entry_id')
             .in('journal_entry_id', chunk)
             .eq('company_id', companyId)
-            .eq('is_current_version', true),
+            .eq('is_current_version', true)
+            // A struck link is not the verifikat's underlag (lib/documents/strike-link.ts).
+            .is('link_struck_at', null),
           supabase
             .from('supplier_invoices')
             .select(

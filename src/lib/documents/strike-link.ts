@@ -57,6 +57,8 @@ export type StrikeLinkRefusalCode =
   | 'DOC_STRIKE_TARGET_NOT_POSTED'
   | 'DOC_STRIKE_TARGET_PERIOD_LOCKED'
   | 'DOC_STRIKE_REASON_REQUIRED'
+  | 'DOC_STRIKE_ACTOR_REQUIRED'
+  | 'DOC_STRIKE_COPY_INVALID'
 
 export type StrikeLinkRefusal =
   | { ok: false; code: 'NOT_FOUND'; resource: 'document' | 'journal_entry' }
@@ -81,7 +83,7 @@ export type StrikeLinkResult =
     }
   | StrikeLinkRefusal
 
-/** The trigger's refusals the caller can act on, by the code its message starts with. */
+/** The trigger's refusals, by the code its message starts with: what changed since the checks above. */
 const TRIGGER_REFUSALS: Readonly<Record<string, StrikeLinkRefusalCode>> = {
   DOC_STRIKE_PERMANENT: 'DOC_STRIKE_ALREADY_STRUCK',
   DOC_STRIKE_NOT_LINKED: 'DOC_STRIKE_NOT_LINKED',
@@ -89,6 +91,19 @@ const TRIGGER_REFUSALS: Readonly<Record<string, StrikeLinkRefusalCode>> = {
   DOC_STRIKE_NOT_POSTED: 'DOC_STRIKE_NOT_POSTED',
   DOC_STRIKE_PERIOD_LOCKED: 'DOC_STRIKE_PERIOD_LOCKED',
   DOC_STRIKE_REASON_REQUIRED: 'DOC_STRIKE_REASON_REQUIRED',
+  DOC_STRIKE_ACTOR_REQUIRED: 'DOC_STRIKE_ACTOR_REQUIRED',
+  DOC_STRIKE_COPY_INVALID: 'DOC_STRIKE_COPY_INVALID',
+}
+
+/** The trigger's refusal of a strike, read from its message; null for any other failure. */
+function triggerRefusal(message: string): StrikeLinkRefusalCode | null {
+  const code = /\b(DOC_STRIKE_[A-Z_]+)\b/.exec(message)?.[1]
+  if (!code) return null
+  // One code for both registers; the message names which one holds it.
+  if (code === 'DOC_STRIKE_PINNED') {
+    return /supplier invoice/.test(message) ? 'DOC_STRIKE_PINNED_SUPPLIER_INVOICE' : 'DOC_STRIKE_PINNED_TRANSACTION'
+  }
+  return TRIGGER_REFUSALS[code] ?? null
 }
 
 /** `.maybeSingle()` found no row (PGRST116) or the id is no UUID (22P02): no row can match. */
@@ -192,8 +207,7 @@ export async function strikeDocumentLink(
     .select('id, file_name, journal_entry_id, link_struck_at, link_struck_by, link_struck_reason, link_struck_copy_id')
     .maybeSingle()
   if (strikeError) {
-    const triggerCode = /\b(DOC_STRIKE_[A-Z_]+)\b/.exec(strikeError.message ?? '')?.[1]
-    const refusal = triggerCode ? TRIGGER_REFUSALS[triggerCode] : undefined
+    const refusal = triggerRefusal(strikeError.message ?? '')
     if (refusal) return { ok: false, code: refusal }
     throw dbError(strikeError, 'document strike: update failed')
   }

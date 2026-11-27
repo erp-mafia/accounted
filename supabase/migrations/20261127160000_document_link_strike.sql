@@ -25,9 +25,13 @@ SELECT set_config('lock_timeout', '5s', true);
 -- 1. Four nullable columns on document_attachments and a CHECK that they are
 --    set together. NOT VALID here and validated in 20261127160100, in its own
 --    transaction, so this file never scans the table under the ALTER's lock.
--- 2. enforce_document_link_strike, the rules of a strike. A strike is
---    permanent, and a struck document keeps its place (no new version over
---    it). A new strike needs the current document on a posted verifikat in an
+-- 2. enforce_document_link_strike, the rules of a strike. A strike is made
+--    on a linked row, never inserted. It is permanent, and a struck document
+--    keeps its place: no new version over it, and its link never moves (a
+--    correction's relink leaves it on the original, item 3). Only a carve-out
+--    that takes the document off its verifikat altogether (delete_last_voucher,
+--    under gnubok.allow_delete) ends the strike with the link, the audit row
+--    keeping both. A new strike needs the current document on a posted verifikat in an
 --    open, unlocked period after the company's lock date (the window of every
 --    rättelse in the same verifikat), a reason, and a member of the company as
 --    the person: the session's own user, else the person a server-side caller
@@ -37,9 +41,12 @@ SELECT set_config('lock_timeout', '5s', true);
 --    bytes on another posted verifikat of the company.
 -- 3. A struck link is not the verifikat's underlag: the three readers of
 --    "verifikat without underlag" (verifikat_without_documents,
---    list_verifikat_missing_underlag, transactions_without_documents) and
---    detach_underlag_duplicate skip it. Each is restated from its current
---    definition with that one predicate; detach also refuses a struck document.
+--    list_verifikat_missing_underlag, transactions_without_documents),
+--    underlag_left_on_replaced_copies and detach_underlag_duplicate skip it,
+--    and relink_documents_to_correction leaves it on the corrected original
+--    while it carries the rest to the correction. Each is restated from its
+--    current definition with that predicate; detach also refuses a struck
+--    document.
 -- 4. erase_user_personal_data keeps the name of a person who struck a link,
 --    as it keeps the name of a person who corrected an entry
 --    (rattelse_actor_names, BFL 5 kap 9 § and 7 kap 2 §). Restated from
@@ -57,7 +64,8 @@ ALTER TABLE public.document_attachments
       AND link_struck_reason IS NULL AND link_struck_copy_id IS NULL)
     OR (link_struck_at IS NOT NULL AND link_struck_by IS NOT NULL
       AND btrim(coalesce(link_struck_reason, '')) <> ''
-      AND length(link_struck_reason) <= 500)
+      AND length(link_struck_reason) <= 500
+      AND journal_entry_id IS NOT NULL)
   ) NOT VALID;
 
 COMMENT ON COLUMN public.document_attachments.link_struck_at IS
@@ -87,8 +95,28 @@ DECLARE
   v_lock_date date;
   v_copy record;
 BEGIN
+  -- A strike is made on the row of a linked document, by the rules below,
+  -- never written with a new row: an inserted one would carry whatever who,
+  -- when and verifikat the writer chose.
+  IF TG_OP = 'INSERT' THEN
+    IF NEW.link_struck_at IS NOT NULL OR NEW.link_struck_by IS NOT NULL
+       OR NEW.link_struck_reason IS NOT NULL OR NEW.link_struck_copy_id IS NOT NULL THEN
+      RAISE EXCEPTION 'DOC_STRIKE_NOT_LINKED: a document is struck on its own row once it is linked, never inserted struck';
+    END IF;
+    RETURN NEW;
+  END IF;
+
   -- The carve-outs that own the whole row (delete_last_voucher, the resets).
+  -- One that takes the document off its verifikat ends the link the strike
+  -- was about, so the strike ends with it and the document is a plain one
+  -- again; the audit row of this update keeps both.
   IF current_setting('gnubok.allow_delete', true) = 'true' THEN
+    IF NEW.journal_entry_id IS NULL AND OLD.link_struck_at IS NOT NULL THEN
+      NEW.link_struck_at := NULL;
+      NEW.link_struck_by := NULL;
+      NEW.link_struck_reason := NULL;
+      NEW.link_struck_copy_id := NULL;
+    END IF;
     RETURN NEW;
   END IF;
 
@@ -104,6 +132,12 @@ BEGIN
     IF NEW.is_current_version IS DISTINCT FROM OLD.is_current_version
        OR NEW.superseded_by_id IS DISTINCT FROM OLD.superseded_by_id THEN
       RAISE EXCEPTION 'DOC_STRIKE_PERMANENT: document % has a struck link and keeps its place; attach the right underlag as a document of its own', OLD.id;
+    END IF;
+    -- The strike belongs to the verifikat it was made on: the link stays
+    -- there, even where a correction's relink could move it.
+    IF NEW.journal_entry_id IS DISTINCT FROM OLD.journal_entry_id
+       OR NEW.journal_entry_line_id IS DISTINCT FROM OLD.journal_entry_line_id THEN
+      RAISE EXCEPTION 'DOC_STRIKE_PERMANENT: document % has a struck link and stays on the verifikat it was struck from', OLD.id;
     END IF;
     RETURN NEW;
   END IF;
@@ -214,11 +248,12 @@ $$;
 
 REVOKE ALL ON FUNCTION public.enforce_document_link_strike() FROM PUBLIC, anon, authenticated;
 
--- Fires on the strike's own columns, and on the version columns so a struck
--- document cannot be superseded. Every other update of the row passes it by.
+-- Fires on an insert, on the strike's own columns, on the version columns
+-- (a struck document cannot be superseded) and on the link columns (a struck
+-- link never moves). Every other update of the row passes it by.
 CREATE TRIGGER enforce_document_link_strike
-  BEFORE UPDATE OF link_struck_at, link_struck_by, link_struck_reason, link_struck_copy_id,
-    is_current_version, superseded_by_id
+  BEFORE INSERT OR UPDATE OF link_struck_at, link_struck_by, link_struck_reason, link_struck_copy_id,
+    is_current_version, superseded_by_id, journal_entry_id, journal_entry_line_id
   ON public.document_attachments
   FOR EACH ROW
   EXECUTE FUNCTION public.enforce_document_link_strike();
@@ -814,6 +849,43 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION public.underlag_left_on_replaced_copies(p_company_id uuid)
+RETURNS integer
+LANGUAGE plpgsql STABLE SECURITY INVOKER
+SET search_path = public SET statement_timeout = '8s' SET plan_cache_mode = force_custom_plan
+AS $$
+BEGIN
+  RETURN (
+    SELECT count(*)::integer
+    FROM journal_entries live
+    JOIN fiscal_periods fp ON fp.id = live.fiscal_period_id AND fp.company_id = p_company_id
+    WHERE live.company_id = p_company_id
+      AND live.status = 'posted'
+      AND live.source_voucher_series IS NOT NULL
+      AND live.source_voucher_number IS NOT NULL
+      AND NOT fp.is_closed
+      AND fp.locked_at IS NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM document_attachments d
+        WHERE d.journal_entry_id = live.id AND d.company_id = p_company_id AND d.is_current_version
+          AND d.link_struck_at IS NULL
+      )
+      AND EXISTS (
+        SELECT 1
+        FROM journal_entries rev
+        JOIN document_attachments rd
+          ON rd.journal_entry_id = rev.id AND rd.company_id = p_company_id AND rd.is_current_version
+         AND rd.link_struck_at IS NULL
+        WHERE rev.company_id = p_company_id
+          AND rev.status = 'reversed'
+          AND rev.fiscal_period_id = live.fiscal_period_id
+          AND rev.source_voucher_series = live.source_voucher_series
+          AND rev.source_voucher_number = live.source_voucher_number
+      )
+  );
+END
+$$;
+
 CREATE OR REPLACE FUNCTION public.detach_underlag_duplicate(
   p_company_id  uuid,
   p_document_id uuid,
@@ -979,6 +1051,118 @@ BEGIN
     'journal_entry_id', v_doc.journal_entry_id,
     'remaining_documents', v_siblings
   );
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.relink_documents_to_correction(
+  p_user_id uuid,
+  p_from_entry_id uuid,
+  p_to_entry_id uuid
+)
+ RETURNS integer
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+DECLARE
+  v_caller uuid := auth.uid();
+  v_jwt_role text := coalesce(
+    nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role',
+    ''
+  );
+  v_from journal_entries%ROWTYPE;
+  v_to journal_entries%ROWTYPE;
+  v_is_member boolean;
+  v_moved integer;
+BEGIN
+  -- Caller identity. Two legitimate caller shapes:
+  --   - authenticated user session (role anon/authenticated): auth.uid() is
+  --     present and MUST match p_user_id (the route layer passes the user's
+  --     own id; a mismatch is always malicious).
+  --   - service-role / direct (pending-operations executor / MCP approve flow
+  --     / migrations / pg-harness): no user JWT subject; p_user_id is trusted
+  --     and still membership-checked below. See undo_sie_import's auth.uid()
+  --     regression for why service-role callers must not be keyed on
+  --     auth.uid().
+  IF v_jwt_role IN ('anon', 'authenticated') THEN
+    IF v_caller IS NULL THEN
+      RAISE EXCEPTION 'Authentication required to relink documents';
+    END IF;
+    IF p_user_id IS DISTINCT FROM v_caller THEN
+      RAISE EXCEPTION 'p_user_id does not match authenticated user';
+    END IF;
+  ELSE
+    IF p_user_id IS NULL THEN
+      RAISE EXCEPTION 'p_user_id is required';
+    END IF;
+  END IF;
+
+  SELECT * INTO v_from FROM public.journal_entries WHERE id = p_from_entry_id;
+  IF v_from.id IS NULL THEN
+    RAISE EXCEPTION 'Source entry % not found', p_from_entry_id;
+  END IF;
+
+  SELECT * INTO v_to FROM public.journal_entries WHERE id = p_to_entry_id;
+  IF v_to.id IS NULL THEN
+    RAISE EXCEPTION 'Target entry % not found', p_to_entry_id;
+  END IF;
+
+  -- Tenant boundary: both entries in one company, and the acting user must
+  -- be a member. SECURITY DEFINER bypasses RLS, so enforce it here.
+  IF v_from.company_id IS DISTINCT FROM v_to.company_id THEN
+    INSERT INTO public.audit_log (user_id, company_id, action, table_name, record_id, description)
+    VALUES (p_user_id, v_from.company_id, 'SECURITY_EVENT', 'document_attachments', p_from_entry_id,
+      'Blocked cross-company document relink attempt to entry ' || p_to_entry_id);
+    RAISE EXCEPTION 'Entries belong to different companies';
+  END IF;
+
+  SELECT EXISTS (
+    SELECT 1 FROM public.company_members cm
+    WHERE cm.company_id = v_from.company_id AND cm.user_id = p_user_id
+  ) INTO v_is_member;
+  IF NOT v_is_member THEN
+    INSERT INTO public.audit_log (user_id, company_id, action, table_name, record_id, description)
+    VALUES (p_user_id, v_from.company_id, 'SECURITY_EVENT', 'document_attachments', p_from_entry_id,
+      'Blocked document relink by non-member');
+    RAISE EXCEPTION 'User is not a member of the entries'' company';
+  END IF;
+
+  -- The move is only legal along a genuine correction chain: the target is
+  -- the posted correction of the reversed source. Anything else is an
+  -- arbitrary re-link, which BFL 5 kap 6 § forbids.
+  IF v_from.status <> 'reversed' THEN
+    RAISE EXCEPTION 'Source entry % is not reversed (status: %)', p_from_entry_id, v_from.status;
+  END IF;
+  IF v_to.status <> 'posted' THEN
+    RAISE EXCEPTION 'Target entry % is not posted (status: %)', p_to_entry_id, v_to.status;
+  END IF;
+  IF v_to.correction_of_id IS DISTINCT FROM p_from_entry_id THEN
+    RAISE EXCEPTION 'Target entry % is not the correction of source entry %', p_to_entry_id, p_from_entry_id;
+  END IF;
+
+  -- Transaction-local: resets automatically at COMMIT/ROLLBACK.
+  PERFORM set_config('gnubok.allow_correction_relink', 'true', true);
+
+  -- A struck link stays on the original it was struck from: it was never that
+  -- verifikat's underlag, so it is not the correction's either
+  -- (enforce_document_link_strike refuses to move it).
+  UPDATE public.document_attachments
+  SET journal_entry_id = p_to_entry_id,
+      journal_entry_line_id = NULL
+  WHERE company_id = v_from.company_id
+    AND journal_entry_id = p_from_entry_id
+    AND link_struck_at IS NULL;
+  GET DIAGNOSTICS v_moved = ROW_COUNT;
+
+  IF v_moved > 0 THEN
+    -- The row chain (correction_of_id) carries the legal traceability; this
+    -- audit row makes the underlag move visible without joining timelines.
+    INSERT INTO public.audit_log (user_id, company_id, action, table_name, record_id, actor_id, description)
+    VALUES (p_user_id, v_from.company_id, 'UPDATE', 'document_attachments', p_from_entry_id, p_user_id,
+      'Relinked ' || v_moved || ' document(s) from reversed entry ' || p_from_entry_id || ' to correction ' || p_to_entry_id);
+  END IF;
+
+  RETURN v_moved;
 END;
 $function$;
 

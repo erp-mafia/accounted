@@ -64,6 +64,7 @@ export default function StrikeUnderlagDialog({ open, onClose, document, journalE
     if (!open) return
     setSearch('')
     setCandidates([])
+    setLoading(false)
     setTarget(null)
     setReason('')
   }, [open])
@@ -74,6 +75,7 @@ export default function StrikeUnderlagDialog({ open, onClose, document, journalE
   useEffect(() => {
     if (!open || !needle) {
       setCandidates([])
+      setLoading(false)
       return
     }
     let cancelled = false
@@ -102,6 +104,9 @@ export default function StrikeUnderlagDialog({ open, onClose, document, journalE
     return () => {
       cancelled = true
       clearTimeout(timer)
+      // The next search (or none) decides what shows: never a spinner left
+      // by one that was cancelled.
+      setLoading(false)
     }
   }, [open, needle, journalEntryId])
 

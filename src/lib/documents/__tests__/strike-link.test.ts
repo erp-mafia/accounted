@@ -182,6 +182,16 @@ describe('strikeDocumentLink', () => {
     })
   })
 
+  it.each([
+    ['DOC_STRIKE_PINNED: document x is the original underlag of a supplier invoice', 'DOC_STRIKE_PINNED_SUPPLIER_INVOICE'],
+    ['DOC_STRIKE_PINNED: document x is the underlag of a bank transaction', 'DOC_STRIKE_PINNED_TRANSACTION'],
+    ['DOC_STRIKE_COPY_INVALID: the copy named for document x is not the same underlag on another posted verifikat', 'DOC_STRIKE_COPY_INVALID'],
+    ['DOC_STRIKE_ACTOR_REQUIRED: a strike names a member of the company as the person who made it', 'DOC_STRIKE_ACTOR_REQUIRED'],
+  ] as const)('reads a refusal that raced past the checks (%s)', async (message, code) => {
+    const { supabase } = setup({ update: { data: null, error: { code: 'P0001', message } } })
+    expect(await strikeDocumentLink(supabase as unknown as SupabaseClient, 'company-1', 'user-1', input)).toEqual({ ok: false, code })
+  })
+
   it('answers already struck when another strike of the same link won', async () => {
     const { supabase } = setup({ update: { data: null } })
     expect(await strikeDocumentLink(supabase as unknown as SupabaseClient, 'company-1', 'user-1', input)).toEqual({

@@ -161,6 +161,89 @@ describe('document link strike (pg)', () => {
     expect(rows).toEqual([{ struck: true, current: true }])
   })
 
+  it('never takes a strike from an inserted row, by a user or by anyone', async () => {
+    const a = await entry()
+    const insertStruck = (client: { query: (sql: string, params: unknown[]) => Promise<unknown> }) =>
+      client.query(
+        `INSERT INTO public.document_attachments
+           (id, user_id, company_id, journal_entry_id, file_name, mime_type, file_size_bytes, storage_path, sha256_hash,
+            upload_source, link_struck_at, link_struck_by, link_struck_reason)
+         VALUES ($1, $2, $3, $4, 'forged.pdf', 'application/pdf', 10, $5, $6, 'file_upload', '2020-01-01', $7, 'forged')`,
+        [randomUUID(), userId, companyId, a, `documents/${companyId}/forged.pdf`, makeHash(), randomUUID()],
+      )
+    await expect(withUserContext(userId, (client) => insertStruck(client))).rejects.toThrow(/DOC_STRIKE_NOT_LINKED/)
+    await expect(insertStruck(getPool())).rejects.toThrow(/DOC_STRIKE_NOT_LINKED/)
+  })
+
+  it('leaves a struck link on its verifikat through a correction, and ends it only with the link itself', async () => {
+    // A correction carries the original's underlag to the correction, never a
+    // struck one: it was not the original's underlag.
+    const original = await entry()
+    const correction = await entry()
+    const { b, copy, hash } = await wrongAndRight()
+    const struck = await attach({ userId, companyId, journalEntryId: original, sha256: hash })
+    const kept = await attach({ userId, companyId, journalEntryId: original })
+    await strikeAsServer(struck, userId, copy)
+    const client = await getPool().connect()
+    try {
+      await client.query('BEGIN')
+      await client.query(`SET LOCAL session_replication_role = replica`)
+      await client.query(`UPDATE public.journal_entries SET status = 'reversed' WHERE id = $1`, [original])
+      await client.query(`UPDATE public.journal_entries SET correction_of_id = $1 WHERE id = $2`, [original, correction])
+      await client.query('COMMIT')
+    } finally {
+      client.release()
+    }
+    const moved = await getPool().query<{ moved: number }>(
+      `SELECT public.relink_documents_to_correction($1, $2, $3) AS moved`,
+      [userId, original, correction],
+    )
+    expect(moved.rows[0].moved).toBe(1)
+    const where = await getPool().query<{ id: string; journal_entry_id: string; struck: boolean }>(
+      `SELECT id, journal_entry_id, link_struck_at IS NOT NULL AS struck FROM public.document_attachments WHERE id = ANY($1)`,
+      [[struck, kept]],
+    )
+    expect(Object.fromEntries(where.rows.map((r) => [r.id, [r.journal_entry_id, r.struck]]))).toEqual({
+      [struck]: [original, true],
+      [kept]: [correction, false],
+    })
+
+    // Not even the relink's own carve-out moves a struck link.
+    await expect(
+      (async () => {
+        const c = await getPool().connect()
+        try {
+          await c.query('BEGIN')
+          await c.query(`SELECT set_config('gnubok.allow_correction_relink', 'true', true)`)
+          await c.query(`UPDATE public.document_attachments SET journal_entry_id = $2, journal_entry_line_id = NULL WHERE id = $1`, [struck, b])
+          await c.query('COMMIT')
+        } catch (error) {
+          await c.query('ROLLBACK')
+          throw error
+        } finally {
+          c.release()
+        }
+      })(),
+    ).rejects.toThrow(/DOC_STRIKE_PERMANENT/)
+
+    // A carve-out that takes the document off its verifikat altogether
+    // (delete_last_voucher) ends the strike with the link.
+    const c = await getPool().connect()
+    try {
+      await c.query('BEGIN')
+      await c.query(`SELECT set_config('gnubok.allow_delete', 'true', true)`)
+      const { rows } = await c.query<{ entry: string | null; at: string | null; by: string | null; reason: string | null; copy: string | null }>(
+        `UPDATE public.document_attachments SET journal_entry_id = NULL, journal_entry_line_id = NULL WHERE id = $1
+         RETURNING journal_entry_id AS entry, link_struck_at AS at, link_struck_by AS by, link_struck_reason AS reason, link_struck_copy_id AS copy`,
+        [struck],
+      )
+      expect(rows).toEqual([{ entry: null, at: null, by: null, reason: null, copy: null }])
+    } finally {
+      await c.query('ROLLBACK')
+      c.release()
+    }
+  })
+
   it('refuses a strike outside its window, without a reason, or of a document a register holds', async () => {
     const strikeAsUser = (documentId: string, reason: string, copyId: string | null) =>
       withUserContext(userId, (client) =>

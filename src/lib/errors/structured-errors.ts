@@ -6942,6 +6942,16 @@ const DOCUMENT: Record<string, StructuredErrorEntry> = {
     message_sv: 'Skriv varför kopplingen stryks.',
     message_en: 'Say why the link is struck.',
   },
+  DOC_STRIKE_ACTOR_REQUIRED: {
+    httpStatus: 403,
+    message_sv: 'Bara den som är medlem i bolaget kan stryka en koppling.',
+    message_en: 'Only a member of the company can strike a link.',
+  },
+  DOC_STRIKE_COPY_INVALID: {
+    httpStatus: 409,
+    message_sv: 'Kopian på den rätta verifikationen kunde inte bekräftas, så kopplingen ströks inte. Försök igen.',
+    message_en: 'The copy on the right verifikat could not be confirmed, so the link was not struck. Try again.',
+  },
   DOC_STRIKE_FAILED: {
     httpStatus: 500,
     message_sv: 'Kopplingen kunde inte strykas. Försök igen.',
