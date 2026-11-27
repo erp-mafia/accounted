@@ -843,7 +843,7 @@ export async function linkInvoiceToVoucher(
   // kontantmetoden nothing else ever anchors it (there is no registration
   // verifikat), so without this the user re-uploads a file Accounted already
   // holds. Idempotent and never throws: the link has already committed.
-  await anchorCustomerInvoiceDocument(supabase, companyId, params.invoiceId)
+  await anchorCustomerInvoiceDocument(supabase, companyId, params.invoiceId, userId)
 
   // A befarad kundförlust reserve the payment made unnecessary comes back
   // (Dr 1519 / Cr 6352), as on every other payment path. Never throws.
