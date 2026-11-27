@@ -1,10 +1,14 @@
 import { describe, it, expect } from 'vitest'
 import { createQueuedMockSupabase, makeCategorizationTemplate, makeTransaction } from '@/tests/helpers'
 import {
+  buildMappingResultFromCounterpartyTemplate,
   calculateConfidence,
+  hasUnknownVat,
   insertOrUpdateTemplate,
+  learnedMoms,
   unlearnCounterpartyTemplate,
   upsertCounterpartyTemplate,
+  verifikatTemplateShape,
   type TemplateUpsertParams,
 } from '../counterparty-templates'
 import { buildMappingResultFromCategory } from '../category-mapping'
@@ -83,12 +87,54 @@ describe('insertOrUpdateTemplate: the moms of a booking on the template\'s own p
     expect(payload).not.toHaveProperty('vat_treatment')
   })
 
-  it('another rate is not compared: an underlag\'s moms amount states no rate and reads as 25 %', async () => {
+  it('another rate is a correction: the whole booking is compared, moms included', async () => {
     const payload = await learn(
       makeCategorizationTemplate({ debit_account: '5800', credit_account: '1930', vat_treatment: 'reduced_12', vat_account: '2641', occurrence_count: 6, corrections: 0 }),
       { debitAccount: '5800', vatTreatment: 'standard_25', vatAccount: '2641' },
     )
-    expect(payload.occurrence_count).toBe(7)
+    expect(payload).toMatchObject({ vat_treatment: 'standard_25', occurrence_count: 1, corrections: 1 })
+  })
+
+  it('unknown moms on a pair learned without moms is a correction, never one more approval of none', async () => {
+    const payload = await learn(
+      makeCategorizationTemplate({ debit_account: '5010', credit_account: '1930', vat_treatment: null, vat_account: null, occurrence_count: 7, corrections: 0 }),
+      { debitAccount: '5010', vatTreatment: 'unknown', vatAccount: '2641' },
+    )
+    expect(payload).toMatchObject({ vat_treatment: 'unknown', vat_account: '2641', occurrence_count: 1, corrections: 1 })
+  })
+
+  it('a booking without moms corrects a rated pair when the company is VAT-registered', async () => {
+    const payload = await learn(
+      makeCategorizationTemplate({ ...SAAS_PAIR, vat_treatment: 'standard_25', vat_account: '2641', occurrence_count: 8, corrections: 0 }),
+      { vatTreatment: null, vatAccount: null, vatRegistered: true },
+    )
+    expect(payload).toMatchObject({ vat_treatment: null, occurrence_count: 1, corrections: 1 })
+  })
+
+  it('a booking without moms corrects a pair whose moms is unknown', async () => {
+    const payload = await learn(
+      makeCategorizationTemplate({ ...SAAS_PAIR, vat_treatment: 'unknown', vat_account: '2641', occurrence_count: 2, corrections: 0 }),
+      { vatTreatment: null, vatAccount: null },
+    )
+    expect(payload).toMatchObject({ vat_treatment: null, occurrence_count: 1, corrections: 1 })
+  })
+
+  it('the template\'s own replay is no correction: a pair with unknown moms booked as it replays stays unknown', async () => {
+    const payload = await learn(
+      makeCategorizationTemplate({ ...SAAS_PAIR, vat_treatment: 'unknown', vat_account: '2641', occurrence_count: 2, corrections: 0 }),
+      { vatTreatment: null, vatAccount: null, momsAsTemplate: true },
+    )
+    expect(payload.occurrence_count).toBe(3)
+    expect(payload).not.toHaveProperty('vat_treatment')
+    expect(payload).not.toHaveProperty('corrections')
+  })
+
+  it('unknown moms again on a pair whose moms is unknown is a re-approval', async () => {
+    const payload = await learn(
+      makeCategorizationTemplate({ ...SAAS_PAIR, vat_treatment: 'unknown', vat_account: '2641', occurrence_count: 2, corrections: 0 }),
+      { vatTreatment: 'unknown', vatAccount: '2641' },
+    )
+    expect(payload.occurrence_count).toBe(3)
     expect(payload).not.toHaveProperty('vat_treatment')
   })
 
@@ -108,23 +154,167 @@ describe('insertOrUpdateTemplate: the moms of a booking on the template\'s own p
     expect(payload).not.toHaveProperty('vat_treatment')
   })
 
-  it('a pattern template replays the moms of its pattern, so its moms field is not compared', async () => {
+  const RATED_PATTERN = [
+    { account: '5420', side: 'debit', type: 'business', ratio: 1 },
+    { account: '2641', side: 'debit', type: 'vat', vat_rate: 0.25 },
+  ] as never
+
+  it('a pattern template is compared on the moms of its pattern, not its field', async () => {
     const payload = await learn(
-      makeCategorizationTemplate({
-        ...SAAS_PAIR,
-        vat_treatment: null,
-        vat_account: null,
-        occurrence_count: 3,
-        corrections: 0,
-        line_pattern: [
-          { account: '5420', side: 'debit', type: 'business', ratio: 0.8 },
-          { account: '2641', side: 'debit', type: 'vat', ratio: 0.2, vat_rate: 0.25 },
-          { account: '1930', side: 'credit', type: 'settlement', ratio: 1 },
-        ] as never,
-      }),
+      makeCategorizationTemplate({ ...SAAS_PAIR, vat_treatment: null, vat_account: null, occurrence_count: 3, corrections: 0, line_pattern: RATED_PATTERN }),
+      { vatTreatment: 'standard_25', vatAccount: '2641' },
     )
     expect(payload.occurrence_count).toBe(4)
     expect(payload).not.toHaveProperty('corrections')
+  })
+
+  it('other moms on a pattern template is a correction that replaces the pattern with the booked pair', async () => {
+    const payload = await learn(
+      makeCategorizationTemplate({ ...SAAS_PAIR, vat_treatment: null, vat_account: null, occurrence_count: 3, corrections: 0, line_pattern: RATED_PATTERN }),
+    )
+    expect(payload).toMatchObject({ vat_treatment: 'reverse_charge', occurrence_count: 1, corrections: 1, line_pattern: null })
+  })
+})
+
+describe('upsertCounterpartyTemplate: the moms is read off the booked amounts', () => {
+  /** A purchase booked with its underlag's moms: 2641 states no rate in its text. */
+  function statedMomsPurchase(merchant: string, amount: number, moms: number, account = '5010') {
+    const tx = makeTransaction({ merchant_name: merchant, amount: -amount, date: '2026-10-27' })
+    const booked = buildMappingResultFromCategory('expense_other', tx, true, 'aktiebolag', 'standard_25', moms, null)
+    booked.debit_account = account
+    return { tx, booked }
+  }
+
+  async function upsert(existing: ReturnType<typeof makeCategorizationTemplate> | null, tx: ReturnType<typeof makeTransaction>, booked: ReturnType<typeof buildMappingResultFromCategory>, options = {}) {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: existing }) // findTemplateByKey by name
+    if (!existing) enqueue({ data: null }) // by alias
+    enqueue({ data: null }) // write
+    await upsertCounterpartyTemplate(supabase as never, 'company-1', tx, booked, 'user_approved', options)
+    return { updates: findCalls('categorization_templates', 'update'), inserts: findCalls('categorization_templates', 'insert') }
+  }
+
+  it('a mixed invoice\'s moms (125 kr on 725 kr) is learned as unknown, not as 25 % and not as none', async () => {
+    const { tx, booked } = statedMomsPurchase('FORRADSHYRA AB', 725, 125)
+    expect(booked.vat_lines).toEqual([expect.objectContaining({ account_number: '2641', debit_amount: 125 })])
+    const { inserts } = await upsert(null, tx, booked)
+    expect(inserts[0][0]).toMatchObject({ vat_treatment: 'unknown', vat_account: '2641', debit_account: '5010' })
+  })
+
+  it('a booking with moms corrects a pair learned without it: the reported case, counted as a confirmation before', async () => {
+    const { tx, booked } = statedMomsPurchase('FORRADSHYRA AB', 725, 125)
+    const held = makeCategorizationTemplate({ counterparty_name: 'forradshyra', debit_account: '5010', credit_account: '1930', vat_treatment: null, vat_account: null, occurrence_count: 7 })
+    const { updates } = await upsert(held, tx, booked)
+    expect(updates[0][0]).toMatchObject({ vat_treatment: 'unknown', vat_account: '2641', occurrence_count: 1, corrections: 1 })
+  })
+
+  it('an underlag\'s moms at 12 % reads as 12 % off the amounts: a 12 % template is re-approved', async () => {
+    // 12 % of the net 647,32 kr is 77,68 kr; the line says "enligt underlag", not 12 %.
+    const { tx, booked } = statedMomsPurchase('RESTAURANG X', 725, 77.68, '5800')
+    expect(booked.vat_lines[0].description).toBe('Ingående moms (enligt underlag)')
+    const held = makeCategorizationTemplate({ counterparty_name: 'restaurang x', debit_account: '5800', credit_account: '1930', vat_treatment: 'reduced_12', vat_account: '2641', occurrence_count: 6 })
+    const { updates } = await upsert(held, tx, booked)
+    expect(updates[0][0]).toMatchObject({ occurrence_count: 7 })
+    expect(updates[0][0]).not.toHaveProperty('vat_treatment')
+  })
+
+  it('a 25 % booking on a pair whose moms is unknown is a correction to 25 %', async () => {
+    const { tx, booked } = statedMomsPurchase('FORRADSHYRA AB', 725, 145)
+    const held = makeCategorizationTemplate({ counterparty_name: 'forradshyra', debit_account: '5010', credit_account: '1930', vat_treatment: 'unknown', vat_account: '2641', occurrence_count: 2 })
+    const { updates } = await upsert(held, tx, booked)
+    expect(updates[0][0]).toMatchObject({ vat_treatment: 'standard_25', occurrence_count: 1, corrections: 1 })
+  })
+
+  it('booked on the template itself, a pair with unknown moms stays unknown: its replay books none, and that is no evidence of none', async () => {
+    const held = makeCategorizationTemplate({ id: 'tmpl-store', counterparty_name: 'forradshyra', debit_account: '5010', credit_account: '1930', vat_treatment: 'unknown', vat_account: '2641', occurrence_count: 2 })
+    const tx = makeTransaction({ merchant_name: 'FORRADSHYRA AB', amount: -725, date: '2026-11-26' })
+    const booked = buildMappingResultFromCounterpartyTemplate({ template: held, matchMethod: 'exact_alias', confidence: 0.6 }, tx, 'aktiebolag', true)
+    expect(booked.vat_lines).toEqual([])
+    const { updates } = await upsert(held, tx, booked, { bookedOnTemplateId: 'tmpl-store', vatRegistered: true })
+    expect(updates[0][0]).toMatchObject({ occurrence_count: 3 })
+    expect(updates[0][0]).not.toHaveProperty('vat_treatment')
+  })
+})
+
+describe('buildMappingResultFromCounterpartyTemplate: unknown moms is never booked as none on its own', () => {
+  it('a pair with unknown moms books no moms line and asks for a review', () => {
+    const template = makeCategorizationTemplate({ debit_account: '5010', credit_account: '1930', vat_treatment: 'unknown', vat_account: '2641', occurrence_count: 9 })
+    const tx = makeTransaction({ merchant_name: 'FORRADSHYRA AB', amount: -725 })
+    const result = buildMappingResultFromCounterpartyTemplate({ template, matchMethod: 'exact_alias', confidence: 0.9 }, tx, 'aktiebolag', true)
+    expect(result.vat_lines).toEqual([])
+    expect(result.requires_review).toBe(true)
+  })
+
+  it('a pattern with a moms line without a rate asks for a review', () => {
+    const template = makeCategorizationTemplate({
+      debit_account: '5010',
+      credit_account: '1930',
+      vat_treatment: 'unknown',
+      line_pattern: [
+        { account: '5010', type: 'business', side: 'debit', ratio: 0.6 },
+        { account: '5060', type: 'business', side: 'debit', ratio: 0.4 },
+        { account: '2641', type: 'vat', side: 'debit' },
+      ],
+    })
+    const tx = makeTransaction({ merchant_name: 'FORRADSHYRA AB', amount: -725 })
+    const result = buildMappingResultFromCounterpartyTemplate({ template, matchMethod: 'exact_alias', confidence: 0.9 }, tx, 'aktiebolag', true)
+    expect(result.requires_review).toBe(true)
+    expect(result.vat_lines.some((l) => l.account_number === '2641')).toBe(false)
+  })
+
+  it('a rated pair still books its moms without a review', () => {
+    const template = makeCategorizationTemplate({ debit_account: '5010', credit_account: '1930', vat_treatment: 'standard_25', vat_account: '2641', occurrence_count: 9 })
+    const tx = makeTransaction({ merchant_name: 'FORRADSHYRA AB', amount: -725 })
+    const result = buildMappingResultFromCounterpartyTemplate({ template, matchMethod: 'exact_alias', confidence: 0.9 }, tx, 'aktiebolag', true)
+    expect(result.vat_lines).toEqual([expect.objectContaining({ account_number: '2641', debit_amount: 145 })])
+    expect(result.requires_review).toBe(false)
+  })
+})
+
+describe('verifikatTemplateShape: a voucher\'s moms of no one rate', () => {
+  it('reads it as unknown on the moms account, never dropping the moms line', () => {
+    const shape = verifikatTemplateShape([
+      { account: '1930', amount: -725 },
+      { account: '5010', amount: 600 },
+      { account: '2641', amount: 125 },
+    ])
+    expect(shape).toMatchObject({ debitAccount: '5010', creditAccount: '1930', vatTreatment: 'unknown', vatAccount: '2641', accountSet: '2641+5010' })
+  })
+
+  it('still reads a clean 25 % voucher as 25 %', () => {
+    const shape = verifikatTemplateShape([
+      { account: '1930', amount: -725 },
+      { account: '5010', amount: 580 },
+      { account: '2641', amount: 145 },
+    ])
+    expect(shape).toMatchObject({ vatTreatment: 'standard_25', vatAccount: '2641' })
+  })
+
+  it('reads utgående moms that is not its account\'s rate of the net as unknown', () => {
+    const shape = verifikatTemplateShape([
+      { account: '1930', amount: 725 },
+      { account: '3001', amount: -600 },
+      { account: '2611', amount: -125 },
+    ])
+    expect(shape).toMatchObject({ vatTreatment: 'unknown', vatAccount: '2611' })
+  })
+})
+
+describe('learnedMoms and hasUnknownVat', () => {
+  it('reads a pair off its field and a pattern off its moms lines', () => {
+    expect(learnedMoms({ vat_treatment: null, line_pattern: null })).toBe('none')
+    expect(learnedMoms({ vat_treatment: 'exempt', line_pattern: null })).toBe('none')
+    expect(learnedMoms({ vat_treatment: 'reduced_12', line_pattern: null })).toBe('reduced_12')
+    expect(learnedMoms({ vat_treatment: 'reverse_charge_domestic', line_pattern: null })).toBe('reverse_charge')
+    expect(learnedMoms({ vat_treatment: 'unknown', line_pattern: null })).toBe('unknown')
+    expect(learnedMoms({ vat_treatment: null, line_pattern: [{ account: '2641', type: 'vat', side: 'debit', vat_rate: 0.06 }, { account: '4010', type: 'business', side: 'debit', ratio: 1 }] })).toBe('reduced_6')
+    expect(learnedMoms({ vat_treatment: 'standard_25', line_pattern: [{ account: '2641', type: 'vat', side: 'debit' }, { account: '4010', type: 'business', side: 'debit', ratio: 1 }] })).toBe('unknown')
+  })
+
+  it('a template is unknown-moms only when its moms could not be read', () => {
+    expect(hasUnknownVat({ vat_treatment: 'unknown', line_pattern: null })).toBe(true)
+    expect(hasUnknownVat({ vat_treatment: null, line_pattern: null })).toBe(false)
+    expect(hasUnknownVat({ vat_treatment: 'standard_25', line_pattern: null })).toBe(false)
   })
 })
 
@@ -264,6 +454,40 @@ describe('unlearnCounterpartyTemplate: only what the template holds now', () => 
     enqueue({ data: null }) // update
 
     expect(await unlearnCounterpartyTemplate(supabase as never, 'company-1', BANK_ROW, WITHOUT_MOMS)).toBe('decremented')
+  })
+
+  it('an old booking without moms does not switch off a template since corrected to unknown moms', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: makeCategorizationTemplate({ counterparty_name: 'github', ...SAAS_PAIR, vat_treatment: 'unknown', vat_account: '2641', occurrence_count: 1 }) })
+
+    expect(await unlearnCounterpartyTemplate(supabase as never, 'company-1', BANK_ROW, WITHOUT_MOMS)).toBeNull()
+    expect(findCalls('categorization_templates', 'update')).toHaveLength(0)
+  })
+
+  it('a booking at another rate does not switch off a template since corrected to it', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: makeCategorizationTemplate({ counterparty_name: 'github', ...SAAS_PAIR, vat_treatment: 'reduced_12', vat_account: '2641', occurrence_count: 1 }) })
+
+    const at25 = [
+      { account_number: '5420', debit_amount: 80, credit_amount: 0 },
+      { account_number: '2641', debit_amount: 20, credit_amount: 0 },
+      { account_number: '1930', debit_amount: 0, credit_amount: 100 },
+    ]
+    expect(await unlearnCounterpartyTemplate(supabase as never, 'company-1', BANK_ROW, at25)).toBeNull()
+    expect(findCalls('categorization_templates', 'update')).toHaveLength(0)
+  })
+
+  it('a booking with the template\'s own moms of no one rate takes its occurrence back', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: makeCategorizationTemplate({ counterparty_name: 'github', ...SAAS_PAIR, vat_treatment: 'unknown', vat_account: '2641', occurrence_count: 3 }) })
+    enqueue({ data: null }) // update
+
+    const mixed = [
+      { account_number: '5420', debit_amount: 600, credit_amount: 0 },
+      { account_number: '2641', debit_amount: 125, credit_amount: 0 },
+      { account_number: '1930', debit_amount: 0, credit_amount: 725 },
+    ]
+    expect(await unlearnCounterpartyTemplate(supabase as never, 'company-1', BANK_ROW, mixed)).toBe('decremented')
   })
 
   it('the pair\'s own accounts are not read as moms: a template booked on a moms account is still unlearned', async () => {

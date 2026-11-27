@@ -59,6 +59,21 @@ describe('buildCounterpartySuggestion', () => {
     expect(s.vat_treatment).toBe('standard_25')
   })
 
+  it('a template whose moms is unknown is never offered as momsfri: no treatment, flagged, reviewed', () => {
+    const s = buildCounterpartySuggestion(
+      makeTemplate({ debit_account: '5010', vat_treatment: 'unknown', vat_account: '2641', occurrence_count: 7 }),
+      0.75,
+    )
+    expect(s.vat_treatment).toBeNull()
+    expect(s.vat_unknown).toBe(true)
+    expect(s.requires_review).toBe(true)
+  })
+
+  it('a template without moms, or at a rate, carries no unknown flag', () => {
+    expect(buildCounterpartySuggestion(makeTemplate(), 0.9)).not.toHaveProperty('vat_unknown')
+    expect(buildCounterpartySuggestion(makeTemplate({ vat_treatment: 'standard_25', vat_account: '2641' }), 0.9)).not.toHaveProperty('vat_unknown')
+  })
+
   it('passes a multi-line pattern through untouched', () => {
     const pattern = [
       { account: '5010', side: 'debit' as const, type: 'business' as const, ratio: 1 },

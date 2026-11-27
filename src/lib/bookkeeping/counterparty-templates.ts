@@ -34,7 +34,8 @@ import {
 import { DimensionValidationError, type DimensionValidationIssue } from './dimension-errors'
 import { resolveSekAmount } from './currency-utils'
 import { roundOre } from '@/lib/money'
-import { grossVat, treatmentForRate } from '@/lib/bookkeeping/gross-split'
+import { grossVat, rateOfStatedVat, statedVatFitsRate, treatmentForRate } from '@/lib/bookkeeping/gross-split'
+import { bookingVatRole } from '@/lib/vat/moms-box-mapping'
 import { stripBankNoise as stripBankMethodPhrases } from './booking-templates'
 import { bankSideOf, isMoneyLedger, learnableBankPair, settleBankLeg, type BankSide } from './bank-leg'
 import { isCardLedgerAccount } from '@/lib/cash-accounts/card-ledger'
@@ -48,6 +49,7 @@ import type {
   EntityType,
   LinePatternEntry,
   MappingResult,
+  TemplateVatTreatment,
   Transaction,
   VatJournalLine,
   VatTreatment,
@@ -385,9 +387,13 @@ const REVERSE_CHARGE_VAT_ACCOUNTS = new Set([
   '2614', '2624', '2634', '2615', '2625', '2635', '2645', '2647',
 ])
 
-/** Legal Swedish VAT rates a learned pattern is allowed to carry. */
-const LEGAL_VAT_RATES = [0.25, 0.12, 0.06]
-
+/**
+ * What a template stores for moms its bookings carried that is no one
+ * Swedish rate of the net: part of the purchase without moms or at another
+ * rate (a mixed invoice). Never stored as none: the deductible moms would be
+ * dropped on every replay. See hasUnknownVat.
+ */
+export const UNKNOWN_VAT = 'unknown' as const satisfies TemplateVatTreatment
 
 /**
  * Livsmedel VAT dropped from 12% to 6% on 2026-04-01 (Prop. 2025/26:55);
@@ -1064,9 +1070,7 @@ export function buildMappingResultFromCounterpartyTemplate(
   // The learned treatment resolved for the company's VAT registration: a
   // pattern learned while the company booked 2641 it could never reclaim
   // must not keep doing so (lib/bookkeeping/vat-registration.ts).
-  const vatTreatment = vatTreatmentForRegistration(
-    tmpl.vat_treatment as VatTreatment | null, vatRegistered,
-  )
+  const vatTreatment = vatTreatmentForRegistration(tmpl.vat_treatment, vatRegistered)
 
   const vatLines = learnedPairVatLines(tmpl.vat_account, vatTreatment, absAmount, isExpense, mirror)
 
@@ -1083,7 +1087,9 @@ export function buildMappingResultFromCounterpartyTemplate(
     credit_account: tmpl.credit_account,
     risk_level: 'NONE',
     confidence: match.confidence,
-    requires_review: isStaleReduced12Match(
+    // Unknown moms books none of its own (bankRowVatLines has no rate for
+    // it): the underlag's moms is stated in the review (hasUnknownVat).
+    requires_review: hasUnknownVat(tmpl) || isStaleReduced12Match(
       tmpl.vat_treatment === 'reduced_12', transaction.date, tmpl.last_seen_date
     ),
     default_private: isPrivate,
@@ -1118,8 +1124,8 @@ export function buildMappingResultFromCounterpartyTemplate(
  */
 function learnedPairVatLines(
   vatAccount: string | null,
-  /** tmpl.vat_treatment resolved for the company's VAT registration. */
-  vatTreatment: VatTreatment | null,
+  /** tmpl.vat_treatment resolved for the company's VAT registration; unknown moms has no rate and books none. */
+  vatTreatment: TemplateVatTreatment | null,
   absAmount: number,
   isExpense: boolean,
   mirror: boolean,
@@ -1295,7 +1301,8 @@ function buildMultiLineMappingResult(
     credit_account: mirror ? tmpl.debit_account : tmpl.credit_account,
     risk_level: 'NONE',
     confidence: match.confidence,
-    requires_review: mirror || isStaleReduced12Match(
+    // A moms line without a rate is skipped above: the review states it.
+    requires_review: mirror || hasUnknownVat(tmpl) || isStaleReduced12Match(
       pattern.some(e => e.type === 'vat' && e.vat_rate === 0.12),
       transaction.date,
       tmpl.last_seen_date
@@ -1332,6 +1339,22 @@ export interface TemplateUpsertParams {
    * user stopped tagging this counterparty).
    */
   defaultDimensions?: Record<string, string> | null
+  /**
+   * company_settings.vat_registered as the caller read it. Only true lets a
+   * booking without moms correct a template at a rate: a company that is not
+   * registered books such a template without moms (vatTreatmentForRegistration),
+   * and a flag nobody read says nothing either way.
+   */
+  vatRegistered?: VatRegistration
+  /**
+   * The booking's moms are the template's own, as the caller established it:
+   * the categorize doors booked the template as it replays
+   * (counterparty_template_id), or the matcher's link found a verifikat with
+   * the template's moms (lib/transactions/link-learning.ts). A template whose
+   * moms is unknown replays none, and that replay, booked after a review, is
+   * no sign that the purchase carries no moms.
+   */
+  momsAsTemplate?: boolean
 }
 
 /**
@@ -1417,16 +1440,17 @@ export function samePairButBankLedger(
 }
 
 /**
- * The kind of moms a single pair replays or a booking carries, the rate
- * aside: none, a rate (input or output), or reverse charge. The rate is not
- * compared: a 2641 line whose text states no rate (an underlag's moms amount)
- * reads as 25 % (detectVatTreatment), so a 12 % template would flip on it.
+ * The kind of moms a template books or a booking carries, the rate aside:
+ * none, Swedish moms (at a rate, or unknown moms of no one rate), or reverse
+ * charge. What a stated reverse charge is checked against
+ * (lib/transactions/categorize-core.ts); learning compares the moms itself
+ * (learnedMoms).
  */
 export type MomsKind = 'none' | 'rated' | 'reverse_charge'
 
 export function momsKindOfTreatment(treatment: string | null | undefined): MomsKind {
   if (treatment === 'reverse_charge' || treatment === 'reverse_charge_domestic') return 'reverse_charge'
-  return isRateBearing(treatment) ? 'rated' : 'none'
+  return isRateBearing(treatment) || treatment === UNKNOWN_VAT ? 'rated' : 'none'
 }
 
 /**
@@ -1443,44 +1467,83 @@ export function momsKindOfTemplate(template: Pick<CategorizationTemplate, 'vat_t
   return patternReplayPlan(pattern).rcPair ? 'reverse_charge' : 'none'
 }
 
-function momsKindOfLines(lines: ReadonlyArray<{ account_number: string }>): MomsKind {
-  if (lines.some((l) => REVERSE_CHARGE_VAT_ACCOUNTS.has(l.account_number))) return 'reverse_charge'
-  return lines.some((l) => isVatAccount(l.account_number)) ? 'rated' : 'none'
+/**
+ * The moms a template replays, or a booking teaches, as one value: two that
+ * differ are two different bookings. none, a rate (standard_25, reduced_12,
+ * reduced_6), reverse_charge, 'unknown', or for a pattern with several moms
+ * lines their accounts and rates.
+ *
+ * A single pair replays its field; export and exempt book no moms line, so
+ * they are none. A pattern replays its own lines and never the field: a moms
+ * line without a rate is unknown moms (extractVoucherLinePattern), one moms
+ * line is its rate, and a pattern without one books reverse charge when it
+ * holds a basis pair (patternReplayPlan), else none.
+ */
+export function learnedMoms(template: Pick<CategorizationTemplate, 'vat_treatment' | 'line_pattern'>): string {
+  const pattern = template.line_pattern
+  if (!pattern || pattern.length === 0) {
+    const treatment = template.vat_treatment
+    if (treatment === 'reverse_charge' || treatment === 'reverse_charge_domestic') return 'reverse_charge'
+    if (treatment === UNKNOWN_VAT || isRateBearing(treatment)) return treatment
+    return 'none'
+  }
+  const vat = pattern.filter((e) => e.type === 'vat')
+  if (vat.length === 0) return patternReplayPlan(pattern).rcPair ? 'reverse_charge' : 'none'
+  if (vat.some((e) => !e.vat_rate)) return UNKNOWN_VAT
+  if (vat.length === 1) return treatmentForRate(vat[0].vat_rate!) ?? UNKNOWN_VAT
+  return vat.map((e) => `${e.account}@${e.vat_rate}`).sort().join('+')
 }
 
 /**
- * Whether moms of this kind on a booking contradicts the moms a single-pair
- * template replays. A booking without moms says nothing against a rate: a
- * company that is not VAT-registered replays a rated template without moms
- * (vatTreatmentForRegistration). A pattern template replays the moms in its
- * line_pattern, so its field is not compared.
+ * Whether a template's moms is unknown (learnedMoms): its bookings carried
+ * moms that is no one Swedish rate of the net. It books no moms of its own,
+ * and never without a review: replayed as none it drops the deductible moms,
+ * replayed at a rate it deducts the wrong amount (13 kap. 6 § ML 2023:200
+ * deducts the moms the invoice states, 17 kap. 24 § p. 11).
+ */
+export function hasUnknownVat(template: Pick<CategorizationTemplate, 'vat_treatment' | 'line_pattern'>): boolean {
+  return learnedMoms(template) === UNKNOWN_VAT
+}
+
+/**
+ * Whether moms booked contradicts the moms a template replays: another
+ * value of learnedMoms, the rate and unknown moms included. A booking without
+ * moms says nothing against a rate unless the company is known to be
+ * VAT-registered: one that is not replays a rated template without moms
+ * (vatTreatmentForRegistration).
  */
 function contradictsLearnedMoms(
   template: Pick<CategorizationTemplate, 'vat_treatment' | 'line_pattern'>,
-  booked: MomsKind,
+  booked: string,
+  vatRegistered: VatRegistration,
 ): boolean {
-  if (template.line_pattern && template.line_pattern.length > 0) return false
-  const held = momsKindOfTreatment(template.vat_treatment)
+  const held = learnedMoms(template)
   if (booked === held) return false
-  return !(booked === 'none' && held === 'rated')
+  return !(booked === 'none' && isRateBearing(held) && vatRegistered !== true)
 }
 
 /**
- * Whether a booking on a single-pair template's own accounts books another
- * kind of moms than the template replays (contradictsLearnedMoms): the person
- * correcting it, as another account is. Counted as a re-approval, a pair
- * learned without moms kept proposing none, and gained confidence from every
- * booking that added reverse charge to it. A pattern booking teaches its moms
- * through its pattern, and an SIE import is history, not a new decision, so
- * neither corrects the moms here.
+ * Whether a booking on a template's own accounts books other moms than the
+ * template replays (contradictsLearnedMoms): the person correcting it, as
+ * another account is. The whole booking is compared, moms included, so
+ * another rate, moms where the template has none, or moms of no one rate
+ * (unknown) is a correction, never one more approval of the old moms
+ * (a pair learned without moms counted every booking with moms as
+ * a confirmation, and proposed none forever). Neither is a correction:
+ *   - a booking whose moms are the template's own (momsAsTemplate), such
+ *     as the template's own replay;
+ *   - an SIE import: history, not a new decision.
  */
 export function learnsOtherMoms(
   existing: Pick<CategorizationTemplate, 'vat_treatment' | 'line_pattern'>,
-  params: Pick<TemplateUpsertParams, 'vatTreatment' | 'linePattern' | 'source'>,
+  params: Pick<TemplateUpsertParams, 'vatTreatment' | 'linePattern' | 'source' | 'vatRegistered' | 'momsAsTemplate'>,
 ): boolean {
-  if (params.linePattern && params.linePattern.length > 0) return false
-  if (params.source === 'sie_import') return false
-  return contradictsLearnedMoms(existing, momsKindOfTreatment(params.vatTreatment))
+  if (params.momsAsTemplate || params.source === 'sie_import') return false
+  const booked = learnedMoms({
+    vat_treatment: params.vatTreatment as TemplateVatTreatment | null,
+    line_pattern: params.linePattern ?? null,
+  })
+  return contradictsLearnedMoms(existing, booked, params.vatRegistered)
 }
 
 /**
@@ -1576,7 +1639,11 @@ export async function insertOrUpdateTemplate(
           // Rules ladder: a changed proposal is a correction the Regler page
           // shows next to the hit count (migration 20260907121500).
           corrections: (existing.corrections ?? 0) + 1,
-          line_pattern: params.linePattern !== undefined ? params.linePattern : existing.line_pattern,
+          // A booking that teaches a pair (no pattern) replaces a pattern too:
+          // kept, the pattern went on replaying the accounts and moms the
+          // booking had just corrected, since a pattern never reads the
+          // fields above.
+          line_pattern: params.linePattern ?? null,
           ...(params.defaultDimensions && Object.keys(params.defaultDimensions).length > 0
             ? { default_dimensions: params.defaultDimensions }
             : {}),
@@ -1653,6 +1720,8 @@ export async function insertOrUpdateTemplate(
  */
 export interface UpsertCounterpartyOptions {
   bookedOnTemplateId?: string | null
+  /** company_settings.vat_registered as the booking read it (TemplateUpsertParams.vatRegistered). */
+  vatRegistered?: VatRegistration
 }
 
 /**
@@ -1717,9 +1786,15 @@ export async function upsertCounterpartyTemplate(
   // at all had a cost account that reports ruta 20-24 itself
   // (reconcileRcBasisWithChart dropped the pair), and a replay on the same
   // account is settled the same way, so that one is learned.
+  // The moms the booking carried, read off its lines against the payment
+  // (SEK, as the lines are).
+  const bookedVat = detectVatTreatment(
+    mappingResult.vat_lines,
+    Math.abs(resolveSekAmount(transaction.amount, transaction.amount_sek, transaction.currency, transaction.exchange_rate)),
+  )
   const bookedBasis = rcBasisKey(mappingResult.vat_lines)
   const unreplayableBasis =
-    detectVatTreatment(mappingResult) === 'reverse_charge' &&
+    bookedVat === 'reverse_charge' &&
     bookedBasis !== '' &&
     bookedBasis !== rcBasisKey(learnedReverseChargeLines(100))
 
@@ -1777,9 +1852,7 @@ export async function upsertCounterpartyTemplate(
     aliases,
     debitAccount: learned.debit_account,
     creditAccount: learned.credit_account,
-    vatTreatment: mappingResult.vat_lines.length > 0
-      ? detectVatTreatment(mappingResult)
-      : null,
+    vatTreatment: bookedVat,
     vatAccount: mappingResult.vat_lines[0]?.account_number || null,
     category,
     occurrenceCount: 1,
@@ -1790,6 +1863,9 @@ export async function upsertCounterpartyTemplate(
     // Latest-explicit-wins inside insertOrUpdateTemplate: empty bags never
     // erase a learned one.
     defaultDimensions: mappingResult.dimensions ?? null,
+    vatRegistered: options.vatRegistered,
+    // Booked on this template: the lines are its replay, moms included.
+    momsAsTemplate: !!existing && existing.id === options.bookedOnTemplateId,
   }, existing, moneyLedgers)
 }
 
@@ -1844,11 +1920,35 @@ export async function unlearnCounterpartyTemplate(
   if (!template || !template.is_active || template.mode === 'auto') return null
   if (!verifikatCarriesPair(template, lines)) return null
   // A verifikat whose moms the template has since been corrected away from
-  // (no moms, where it now books reverse charge) is not what it holds now:
-  // taking its occurrence back would switch off the corrected template.
-  const momsLines = lines.filter((l) => l.account_number !== template.debit_account && l.account_number !== template.credit_account)
-  if (contradictsLearnedMoms(template, momsKindOfLines(momsLines))) return null
+  // (no moms, where it now books reverse charge or moms of no one rate) is
+  // not what it holds now: taking its occurrence back would switch off the
+  // corrected template. A pattern books its moms from its own lines, which a
+  // pair's verifikat does not repeat, so its moms is not compared.
+  const isPattern = !!template.line_pattern && template.line_pattern.length > 0
+  if (!isPattern && contradictsLearnedMoms(template, verifikatMoms(template, lines), undefined)) return null
   return takeOccurrenceBack(supabase, companyId, template)
+}
+
+/**
+ * The moms a posted verifikat carried, as learning reads it (learnedMoms):
+ * any fiktiv-moms account is reverse charge, else its moms lines off the
+ * template's own accounts read against its gross, the larger side of its
+ * lines off 26xx (the bank leg of a bank booking).
+ */
+function verifikatMoms(
+  template: Pick<CategorizationTemplate, 'debit_account' | 'credit_account'>,
+  lines: readonly MomsReadLine[],
+): string {
+  const momsLines = lines.filter((l) => l.account_number !== template.debit_account && l.account_number !== template.credit_account)
+  if (momsLines.some((l) => REVERSE_CHARGE_VAT_ACCOUNTS.has(l.account_number))) return 'reverse_charge'
+  let debit = 0
+  let credit = 0
+  for (const line of lines) {
+    if (line.account_number.startsWith('26')) continue
+    debit += Number(line.debit_amount) || 0
+    credit += Number(line.credit_amount) || 0
+  }
+  return detectVatTreatment(momsLines, Math.max(roundOre(debit), roundOre(credit))) ?? 'none'
 }
 
 /**
@@ -1898,41 +1998,49 @@ function verifikatCarriesPair(
   return debits(template.debit_account) && credits(template.credit_account)
 }
 
+/** A booked line as the moms reading takes it. */
+type MomsReadLine = { account_number: string; debit_amount: number | string; credit_amount: number | string }
+
 /**
- * Detect VAT treatment from a MappingResult's VAT lines.
+ * The moms a booking carried, read off its lines against the payment
+ * (absGross, in SEK as the lines are): what a learned template stores and
+ * what learning compares (learnsOtherMoms).
+ *   - reverse_charge: fiktiv ingående moms on 2645;
+ *   - a rate: the moms is that rate of the net (the gross less the moms),
+ *     within rounding (rateOfStatedVat), on ingående moms (264x, which
+ *     names no rate) or on utgående moms accounts of that rate (2611 is
+ *     25 %);
+ *   - unknown (UNKNOWN_VAT): moms of no one rate of the net, such as a mixed
+ *     invoice's, ingående and utgående moms in one booking, or utgående
+ *     moms of two rates;
+ *   - null: no moms.
+ * The rate is read off the amounts, never off a line's text: a line booked
+ * from an underlag's moms amount states none ("Ingående moms (enligt
+ * underlag)"). Read as 25 % by default, 125 kr of moms on a 725 kr
+ * payment became a 25 % template, and a 12 % one a 25 % one.
  */
-function detectVatTreatment(result: MappingResult): string | null {
-  if (result.vat_lines.length === 0) return null
+function detectVatTreatment(lines: readonly MomsReadLine[], absGross: number): TemplateVatTreatment | null {
+  if (lines.some((l) => l.account_number === '2645')) return 'reverse_charge'
 
-  // Check for reverse charge (2645 debit = fiktiv ingående)
-  const hasReverseCharge = result.vat_lines.some(
-    (l) => l.account_number === '2645'
-  )
-  if (hasReverseCharge) return 'reverse_charge'
-
-  // Utgående moms (26x1): the account names the rate. Missing here, every
-  // pair learned from a sale kept its 2611 as vat_account but no treatment,
-  // and replayed the next sale gross (crm#1632).
-  for (const line of result.vat_lines) {
+  let vat = 0
+  let input = false
+  const outputRates = new Set<VatTreatment>()
+  for (const line of lines) {
     const output = outputVatTreatmentOfAccount(line.account_number)
-    if (output) return output
+    if (output) outputRates.add(output)
+    else if (bookingVatRole(line.account_number) === 'input') input = true
+    else continue
+    vat += Math.abs((Number(line.debit_amount) || 0) - (Number(line.credit_amount) || 0))
   }
+  vat = roundOre(vat)
+  if (vat === 0) return null
+  if (outputRates.size > 1 || (input && outputRates.size > 0)) return UNKNOWN_VAT
 
-  // Check for input VAT (2641 debit)
-  const inputVat = result.vat_lines.find(
-    (l) => l.account_number === '2641' && l.debit_amount > 0
-  )
-  if (!inputVat) return null
-
-  // Derive rate from the line description (as bankRowVatLines writes it)
-  // Format: "Ingående moms 25%", "Ingående moms 12%", "Ingående moms 6%"
-  const rateMatch = inputVat.description?.match(/(\d+)%/)
-  if (rateMatch) {
-    const pct = parseInt(rateMatch[1], 10)
-    if (pct === 12) return 'reduced_12'
-    if (pct === 6) return 'reduced_6'
-  }
-  return 'standard_25'
+  const rate = rateOfStatedVat(vat, roundOre(absGross - vat))
+  const treatment = rate === null ? null : treatmentForRate(rate)
+  if (!treatment) return UNKNOWN_VAT
+  const [named] = outputRates
+  return named && named !== treatment ? UNKNOWN_VAT : treatment
 }
 
 // ── SIE Voucher Template Population ──────────────────────────
@@ -1995,6 +2103,12 @@ interface VoucherLinePattern {
   hasReverseCharge: boolean
   /** The voucher's fiktiv-moms accounts, sorted and joined; '' for none. */
   fiktivMoms: string
+  /**
+   * The voucher's moms lines as account@rate ('unknown' for a rate that could
+   * not be read), sorted and joined; '' for none. Vouchers with other moms on
+   * the same accounts are other bookings to the SIE learner.
+   */
+  vatKey: string
 }
 
 /**
@@ -2047,30 +2161,31 @@ function extractVoucherLinePattern(
 
   const entries: LinePatternEntry[] = []
 
-  // VAT lines: store vat_rate, not ratio
+  // VAT lines: store vat_rate, not ratio. A line whose rate cannot be read
+  // keeps no vat_rate: unknown moms (learnedMoms), never dropped and never a
+  // rate by default. Dropped, the voucher taught a pattern without moms, and
+  // every later booking with moms on the same accounts counted as one more
+  // approval of none.
   for (const v of vat) {
-    let rate: number
-    if (v.account === '2641' && vat.length === 1) {
+    let rate: number | undefined
+    if (v.account === '2641') {
       // 2641 (debiterad ingående moms) is rate-agnostic in BAS: the account
-      // alone says nothing about 25/12/6%. Infer the rate from the voucher's
-      // own amounts and snap it to a legal rate. If nothing snaps, drop the
-      // VAT leg rather than learn a wrong rate. Only safe with a single VAT
-      // line: with several, each line's base is unknowable.
-      const observed = Math.abs(v.amount) / nonVatTotal
-      const snapped = LEGAL_VAT_RATES.find(r => Math.abs(observed - r) <= 0.015)
-      if (snapped === undefined) continue
-      rate = snapped
+      // alone says nothing about 25/12/6%. The rate is read off the voucher's
+      // own amounts (rateOfStatedVat), and only with a single VAT line: with
+      // several, each line's base is unknowable.
+      rate = vat.length === 1 ? (rateOfStatedVat(Math.abs(v.amount), nonVatTotal) ?? undefined) : undefined
     } else {
-      const treatment = VAT_ACCOUNT_TREATMENT[v.account]
-      if (!treatment) continue
-      rate = vatTreatmentToRate(treatment)
-      if (rate === 0) continue
+      // An utgående moms account names its rate. Alone on the voucher, moms
+      // that is not that rate of the net is moms of no one rate.
+      const named = vatTreatmentToRate(VAT_ACCOUNT_TREATMENT[v.account])
+      if (named === 0) continue
+      rate = vat.length > 1 || statedVatFitsRate(Math.abs(v.amount), nonVatTotal, named) ? named : undefined
     }
     entries.push({
       account: v.account,
       type: 'vat',
       side: v.amount >= 0 ? 'debit' : 'credit',
-      vat_rate: rate,
+      ...(rate !== undefined ? { vat_rate: rate } : {}),
     })
   }
 
@@ -2096,6 +2211,11 @@ function extractVoucherLinePattern(
     settlementSide,
     hasReverseCharge: fiktivMoms.size > 0,
     fiktivMoms: [...fiktivMoms].sort().join(','),
+    vatKey: entries
+      .filter((e) => e.type === 'vat')
+      .map((e) => `${e.account}@${e.vat_rate ?? UNKNOWN_VAT}`)
+      .sort()
+      .join('+'),
   }
 }
 
@@ -2344,12 +2464,13 @@ function templateFieldsFromVoucherPatterns(
 
   // VAT info from first VAT entry (for legacy fields). The learned rate is
   // authoritative: for 2641 it was inferred from the voucher amounts, so
-  // mapping it back through the account table would re-hardcode 25%.
+  // mapping it back through the account table would re-hardcode 25%. A moms
+  // line whose rate could not be read makes the template's moms unknown.
   const firstVat = vatEntries[0]
   let vatAccount = firstVat?.account ?? null
-  let vatTreatment = firstVat?.vat_rate !== undefined
-    ? treatmentForRate(firstVat.vat_rate)
-    : (vatAccount ? (VAT_ACCOUNT_TREATMENT[vatAccount] ?? null) : null)
+  let vatTreatment: string | null = vatEntries.some((e) => e.vat_rate === undefined)
+    ? UNKNOWN_VAT
+    : firstVat?.vat_rate !== undefined ? treatmentForRate(firstVat.vat_rate) : null
 
   // Reverse-charge counterparty (fiktiv moms in every source voucher, no
   // deductible VAT): the simple builder regenerates the RC legs from the
@@ -2470,9 +2591,11 @@ export async function populateTemplatesFromSieVouchers(
     // Group key: sorted set of non-settlement accounts, and the fiktiv-moms
     // accounts, which the pattern leaves out: import VAT and EU reverse
     // charge on the same cost account are two shapes, and the dominant one
-    // decides (#997).
+    // decides (#997). So are other moms on the same accounts (another rate,
+    // or moms of no one rate): averaged together, the first voucher's rate
+    // stood for all of them.
     const accountSet = patternAccountSet(linePattern.entries)
-    const groupKey = `${normalized}|${accountSet}|${linePattern.fiktivMoms}`
+    const groupKey = `${normalized}|${accountSet}|${linePattern.fiktivMoms}|${linePattern.vatKey}`
 
     let group = groups.get(normalized)
     if (!group) {

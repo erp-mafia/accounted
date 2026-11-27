@@ -18,6 +18,30 @@ export function statedVatFitsRate(statedVat: number, net: number, rate: number):
   return roundOre(Math.abs(statedVat - netVat(net, rate))) <= STATED_VAT_TOLERANCE_SEK
 }
 
+/** The Swedish rates (ML 2023:200 9 kap.) a stated VAT can be read as. */
+const SWEDISH_RATES = [0.25, 0.12, 0.06] as const
+
+/**
+ * The Swedish rate a stated VAT is of its net, within rounding
+ * (statedVatFitsRate); of two that fit (a few kronor of VAT on a small
+ * amount), the nearer. Null when none fits: part of the purchase carries no
+ * VAT or another rate's, so no one rate gives this VAT.
+ */
+export function rateOfStatedVat(statedVat: number, net: number): (typeof SWEDISH_RATES)[number] | null {
+  if (!(statedVat > 0) || !(net > 0)) return null
+  let nearest: (typeof SWEDISH_RATES)[number] | null = null
+  let nearestGap = Infinity
+  for (const rate of SWEDISH_RATES) {
+    if (!statedVatFitsRate(statedVat, net, rate)) continue
+    const gap = Math.abs(statedVat - netVat(net, rate))
+    if (gap < nearestGap) {
+      nearest = rate
+      nearestGap = gap
+    }
+  }
+  return nearest
+}
+
 /**
  * The VAT on a net amount, a beskattningsunderlag: the one VAT-on-net rule
  * every invoice line, import, reverse-charge purchase and prefill uses.

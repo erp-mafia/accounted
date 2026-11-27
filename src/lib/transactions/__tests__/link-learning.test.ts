@@ -300,6 +300,79 @@ describe('automatic links teach only once the same text repeats', () => {
   })
 })
 
+describe('a verifikat with moms of no one rate', () => {
+  /** A storage rental: part of the invoice at 25 %, part without moms, 125 kr of moms on 725 kr. */
+  const MIXED_MOMS: Line[] = [['5010', 600, 0], ['2641', 125, 0], ['1930', 0, 725]]
+  const storageRow = (id: string, je: string, overrides: Row = {}) =>
+    bankRow(id, je, { amount: -725, original_description: 'FORRADSHYRA AB', description: 'FORRADSHYRA AB', ...overrides })
+  const heldWithoutMoms = {
+    id: 'tpl-1', company_id: COMPANY, counterparty_name: 'forradshyra', counterparty_aliases: ['forradshyra ab'], is_active: true,
+    debit_account: '5010', credit_account: '1930', vat_account: null, vat_treatment: null,
+    line_pattern: null, occurrence_count: 7, source: 'user_approved', corrections: 0,
+  }
+
+  it('the matcher\'s link never counts it as one more approval of a template without moms', async () => {
+    const supabase = world({
+      rows: [storageRow('tx-1', 'je-1', { reconciliation_method: 'auto_exact' })],
+      entries: [verifikat('je-1', MIXED_MOMS, { source_type: 'import' })],
+      templates: [heldWithoutMoms],
+    })
+
+    const result = await learnFromBankLink(supabase as never, COMPANY, { transactionId: 'tx-1', journalEntryId: 'je-1' }, 'automatic')
+
+    expect(result).toEqual({ outcome: 'conflicts_template' })
+    expect(templateWrites()).toEqual([])
+  })
+
+  it('a person\'s link corrects a template without moms to unknown moms', async () => {
+    const supabase = world({
+      rows: [storageRow('tx-1', 'je-1')],
+      entries: [verifikat('je-1', MIXED_MOMS, { source_type: 'import' })],
+      templates: [heldWithoutMoms],
+    })
+
+    await learnFromBankLink(supabase as never, COMPANY, { transactionId: 'tx-1', journalEntryId: 'je-1' }, 'explicit')
+
+    expect(templateWrites()).toHaveLength(1)
+    expect(templateWrites()[0]).toMatchObject({
+      method: 'update',
+      row: { vat_treatment: 'unknown', vat_account: '2641', occurrence_count: 1, corrections: 1 },
+    })
+  })
+
+  it('the matcher counts it on a template whose moms is unknown', async () => {
+    const supabase = world({
+      rows: [storageRow('tx-1', 'je-1', { reconciliation_method: 'auto_exact' })],
+      entries: [verifikat('je-1', MIXED_MOMS, { source_type: 'import' })],
+      templates: [{ ...heldWithoutMoms, vat_account: '2641', vat_treatment: 'unknown', occurrence_count: 2 }],
+    })
+
+    const result = await learnFromBankLink(supabase as never, COMPANY, { transactionId: 'tx-1', journalEntryId: 'je-1' }, 'automatic')
+
+    expect(result).toEqual({ outcome: 'reapproved' })
+    expect(templateWrites()[0].row).toMatchObject({ occurrence_count: 3 })
+    expect(templateWrites()[0].row).not.toHaveProperty('vat_treatment')
+  })
+
+  it('does not count an earlier link with other moms on the same accounts as the repetition', async () => {
+    const supabase = world({
+      rows: [
+        storageRow('tx-oct', 'je-oct', { date: '2026-10-03', reconciliation_method: 'auto_exact' }),
+        storageRow('tx-nov', 'je-nov', { date: '2026-11-03', reconciliation_method: 'auto_exact' }),
+      ],
+      entries: [
+        verifikat('je-oct', [['5010', 580, 0], ['2641', 145, 0], ['1930', 0, 725]], { source_type: 'import' }),
+        verifikat('je-nov', MIXED_MOMS, { source_type: 'import' }),
+      ],
+    })
+
+    const result = await learnFromBankLink(supabase as never, COMPANY, { transactionId: 'tx-nov', journalEntryId: 'je-nov' }, 'automatic')
+
+    expect(result).toEqual({ outcome: 'awaiting_repetition' })
+    expect(templateWrites()).toEqual([])
+  })
+})
+
 describe('never taught, whoever linked', () => {
   it.each<[string, Line[]]>([
     ['a payables clearing (2440 against the bank)', [['2440', 10000, 0], ['1930', 0, 10000]]],

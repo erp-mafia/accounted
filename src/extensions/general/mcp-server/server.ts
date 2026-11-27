@@ -14255,7 +14255,12 @@ export const tools: McpTool[] = [
                 p.booking.kind === 'template'
                   ? templateSkattekontoAccount(businessAccount(p), skattekontoAccount)
                   : businessAccount(p),
-              vat_treatment: p.booking.kind === 'account' ? p.booking.vat_treatment : (p.vat_treatment ?? null),
+              // A counterpart whose moms is no one rate says so, never
+              // 'exempt': categorize_args is then null, and the agent books
+              // the underlag's moms itself.
+              vat_treatment: p.vat_unknown
+                ? 'unknown'
+                : p.booking.kind === 'account' ? p.booking.vat_treatment : (p.vat_treatment ?? null),
               categorize_args: categorizeArgsFor(p, entityType, skattekontoAccount),
             }
           })

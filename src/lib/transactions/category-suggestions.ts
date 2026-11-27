@@ -1,6 +1,7 @@
 import { suggestCategory } from '@/lib/tax/expense-warnings'
 import { getExpenseAccountForCategory } from '@/lib/bookkeeping/category-mapping'
 import {
+  hasUnknownVat,
   namesCounterparty,
   normalizeCounterpartyName,
   formatCounterpartyName,
@@ -478,6 +479,9 @@ export function buildCounterpartySuggestion(
 }
 
 function counterpartyProposal(template: CategorizationTemplate, confidence: number): SuggestedTemplate {
+  // Moms of no one rate (hasUnknownVat): the template books none of its own,
+  // so the underlag's moms is stated in a review, never assumed to be none.
+  const vatUnknown = hasUnknownVat(template)
   return {
     template_id: toCounterpartyTemplateId(template.id),
     source: 'counterparty',
@@ -493,12 +497,13 @@ function counterpartyProposal(template: CategorizationTemplate, confidence: numb
     confidence,
     description_sv: `${template.occurrence_count} tidigare bokföringar`,
     risk_level: 'NONE',
-    requires_review: false,
+    requires_review: vatUnknown,
+    ...(vatUnknown ? { vat_unknown: true } : {}),
     line_pattern: template.line_pattern ?? null,
     // Single-line templates book net expense + input VAT from this treatment
     // (buildMappingResultFromCounterpartyTemplate); the review dialog needs it
     // to preview the same verifikation.
-    vat_treatment: template.vat_treatment ?? null,
+    vat_treatment: template.vat_treatment === 'unknown' ? null : (template.vat_treatment ?? null),
     default_dimensions:
       template.default_dimensions && Object.keys(template.default_dimensions).length > 0
         ? template.default_dimensions

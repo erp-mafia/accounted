@@ -2701,7 +2701,7 @@ describe('learning-loop repair (issue #865)', () => {
       expect(row.vat_account).toBe('2641')
     })
 
-    it('drops the VAT leg when the observed rate snaps to no legal rate', async () => {
+    it('learns the moms as unknown, never as none, when it is no Swedish rate of the net', async () => {
       const vouchers = Array.from({ length: 3 }, (_, i) =>
         makeSIEVoucher({
           description: 'Utlandet Ltd',
@@ -2723,8 +2723,8 @@ describe('learning-loop repair (issue #865)', () => {
       expect(count).toBe(1)
 
       const row = capturedTemplateRow(inserts)
-      expect(row.vat_treatment).toBeNull()
-      expect(row.vat_account).toBeNull()
+      expect(row.vat_treatment).toBe('unknown')
+      expect(row.vat_account).toBe('2641')
     })
 
     // #997: a replay regenerates the fiktiv moms (learnedReverseChargeLines,

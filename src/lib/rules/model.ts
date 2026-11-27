@@ -1,4 +1,4 @@
-import type { CategorizationTemplateSource, VatTreatment } from '@/types'
+import type { CategorizationTemplateSource, TemplateVatTreatment } from '@/types'
 import {
   COUNTERPART_SEEN_FOR_DIRECT,
   reviewReason,
@@ -32,7 +32,7 @@ export interface RuleRow {
   counterparty_aliases: string[] | null
   debit_account: string
   credit_account: string
-  vat_treatment: VatTreatment | null
+  vat_treatment: TemplateVatTreatment | null
   vat_account: string | null
   category: string | null
   occurrence_count: number
@@ -129,21 +129,32 @@ export function hitsUntilAuto(
  */
 export type RuleOneClick =
   | { kind: 'yes' }
-  | { kind: 'company_off' | 'always_review' | 'import' | 'paused' | 'proposed' }
+  | { kind: 'company_off' | 'always_review' | 'import' | 'paused' | 'proposed' | 'vat_unknown' }
   | { kind: 'hits'; remaining: number }
 
 export function ruleOneClick(
-  row: Pick<RuleRow, 'mode' | 'occurrence_count' | 'source' | 'always_review'>,
+  row: Pick<RuleRow, 'mode' | 'occurrence_count' | 'source' | 'always_review'> & Partial<Pick<RuleRow, 'vat_treatment'>>,
   settings: DirectBookingSettings,
 ): RuleOneClick {
+  // Moms of no one rate (stored 'unknown'): the rule books none of its own,
+  // and every hit is reviewed for the underlag's moms.
+  const vatUnknown = row.vat_treatment === 'unknown'
   const reason = reviewReason(
-    { source: 'counterparty', confidence: 1, seen_count: row.occurrence_count, rule_mode: row.mode, ...ruleReviewFlags(row) },
+    {
+      source: 'counterparty',
+      confidence: 1,
+      seen_count: row.occurrence_count,
+      rule_mode: row.mode,
+      ...ruleReviewFlags(row),
+      ...(vatUnknown ? { vat_unknown: true } : {}),
+    },
     settings,
   )
   if (reason === null) return { kind: 'yes' }
   if (reason === 'company_off') return { kind: 'company_off' }
   if (reason === 'rule_always_review') return { kind: 'always_review' }
   if (reason === 'rule_import_unconfirmed') return { kind: 'import' }
+  if (vatUnknown) return { kind: 'vat_unknown' }
   // The evidence: not yet on the ladder's propose step, or not booked enough times.
   if (row.mode === 'paused' || row.mode === 'proposed') return { kind: row.mode }
   return { kind: 'hits', remaining: Math.max(1, COUNTERPART_SEEN_FOR_DIRECT - row.occurrence_count) }

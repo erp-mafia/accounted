@@ -164,6 +164,14 @@ export interface BookingProposal {
    * never booked without a review.
    */
   reverse_charge_box_unconfirmed?: boolean
+  /**
+   * A learned counterpart whose bookings carried moms that is no one Swedish
+   * rate of the net, such as a mixed invoice's (hasUnknownVat in
+   * counterparty-templates.ts). It books no moms of its own, so the
+   * underlag's moms is stated in a review: it is never booked without one,
+   * and never offered as momsfri.
+   */
+  vat_unknown?: boolean
   /** Source 'clearing': the record behind it. Never booked without a review. */
   clearing?: ClearingEvidence
   /**
@@ -617,13 +625,17 @@ export function categoryForAccount(
  * categorize_transaction (category + account_override + vat_treatment):
  * the same booking the app makes, in the one shape that tool accepts.
  * Null for a counterpart pattern with several business lines, which only
- * the app's own booking can post as stored.
+ * the app's own booking can post as stored, and for a counterpart whose
+ * moms is unknown (vat_unknown): no vat_treatment states it, and 'exempt'
+ * would drop the moms the underlag states. The agent reads the underlag and
+ * books its moms itself (vat_amount).
  */
 export function agentBookingFor(
   p: BookingProposal,
   entityType?: EntityType,
   skattekontoAccount?: SkattekontoLedgerAccount,
 ): { category: TransactionCategory; account_override: string; vat_treatment: VatTreatment } | null {
+  if (p.vat_unknown) return null
   if (p.booking.kind === 'account') {
     return { category: p.booking.category, account_override: p.booking.account, vat_treatment: p.booking.vat_treatment }
   }
@@ -708,6 +720,9 @@ export function clearingReasonSv(e: ClearingEvidence): string {
 /** The why in Swedish, for surfaces without the UI's message catalog (the MCP tool). */
 export function whyTextSv(p: BookingProposal): string {
   const why = sourceWhySv(p)
+  if (p.vat_unknown) {
+    return `${why}, men momsen på motpartens bokningar är inte 25, 12 eller 6 % av beloppet och går inte att föreslå: bokför momsen som underlaget anger (vat_amount), inte som momsfri`
+  }
   const box = reverseChargeBoxDispute(p)
   if (!box) {
     return p.reverse_charge_box_unconfirmed

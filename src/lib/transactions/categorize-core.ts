@@ -1600,6 +1600,7 @@ export async function categorizeTransaction(
     // its alias instead of a second template (accounted#36).
     await upsertCounterpartyTemplate(supabase, companyId, transaction, mappingResult, 'user_approved', {
       bookedOnTemplateId: isBusiness ? input.counterparty_template_id : undefined,
+      vatRegistered: context.vatRegistered,
     })
   } catch (err) {
     txLog.warn('failed to upsert counterparty template (non-critical)', err as Error)

@@ -373,7 +373,9 @@ describe('categorizeTransaction: after the booking', () => {
       expect.objectContaining({ id: TX_ID }),
       expect.objectContaining({ debit_account: '5410' }),
       'user_approved',
-      { bookedOnTemplateId: 'tmpl-1' },
+      // The company's registration rides along: a booking without moms
+      // corrects a rated template only for a VAT-registered company.
+      { bookedOnTemplateId: 'tmpl-1', vatRegistered: true },
     )
   })
 
@@ -381,7 +383,7 @@ describe('categorizeTransaction: after the booking', () => {
     const booked = await categorizeTransaction(ledger().supabase as never, 'user-1', COMPANY_ID, TX_ID, business, live)
 
     expect(booked.ok).toBe(true)
-    expect(vi.mocked(upsertCounterpartyTemplate).mock.calls[0]?.[5]).toEqual({ bookedOnTemplateId: undefined })
+    expect(vi.mocked(upsertCounterpartyTemplate).mock.calls[0]?.[5]).toEqual({ bookedOnTemplateId: undefined, vatRegistered: true })
   })
 })
 
