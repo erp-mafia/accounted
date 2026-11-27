@@ -59,3 +59,52 @@ export async function fillTypeFromClassification<T extends { id: string; doc_typ
   for (const r of rows) if (r.doc_type == null && typeOf.has(r.id)) r.doc_type = typeOf.get(r.id) ?? null
   return rows
 }
+
+/**
+ * The join whereEffectiveType filters on, to append to a
+ * document_attachments select: the document's classifications, with no
+ * columns, so nothing of them is returned.
+ */
+export const EFFECTIVE_TYPE_JOIN = 'type_match:document_classifications()'
+
+/**
+ * The PostgREST filters whereEffectiveType needs. It takes any builder that
+ * has them and hands the same builder type back, as applyVerifikatSearch
+ * does (lib/bookkeeping/verifikat-search.ts).
+ */
+interface EffectiveTypeQuery {
+  eq(column: string, value: boolean): EffectiveTypeQuery
+  in(column: string, values: readonly string[]): EffectiveTypeQuery
+  is(column: string, value: null): EffectiveTypeQuery
+  or(filters: string): EffectiveTypeQuery
+}
+
+/**
+ * Narrows a document_attachments query whose select carries
+ * EFFECTIVE_TYPE_JOIN to the documents whose type is one of `types`, or, for
+ * null, to the ones with none. The type is the one readers show
+ * (fillTypeFromClassification above, arkiv_document_rows in SQL): the row's,
+ * else, for a booked document, its current classification's. A filter on the
+ * row alone would miss a booked document typed after its period closed, and
+ * list it as untyped while the same page shows its type.
+ *
+ * `type_match.not.is.null` is PostgREST's test that the filtered join found
+ * the document's current classification (as in verifikat-search.ts): one
+ * probe of idx_document_classifications_current per document the query's
+ * other filters leave.
+ */
+export function whereEffectiveType<Q extends { [K in keyof EffectiveTypeQuery]: unknown }>(
+  query: Q,
+  types: readonly string[] | null,
+): Q {
+  const q = (query as unknown as EffectiveTypeQuery).eq('type_match.is_current', true)
+  if (types === null) {
+    // No type on the row, and no current classification that types it as a booked document.
+    return q.is('doc_type', null).or('type_match.is.null,and(journal_entry_id.is.null,journal_entry_line_id.is.null)') as unknown as Q
+  }
+  return q
+    .in('type_match.doc_type', types)
+    .or(
+      `doc_type.in.(${types.join(',')}),and(doc_type.is.null,type_match.not.is.null,or(journal_entry_id.not.is.null,journal_entry_line_id.not.is.null))`,
+    ) as unknown as Q
+}

@@ -11,10 +11,13 @@
  * MCP: the reads have hand-written tools already (gnubok_list_records,
  * gnubok_get_record, gnubok_list_unmatched_documents,
  * gnubok_get_document_content), so those operations are v1 only. Attach,
- * delete and detach get generated staged tools. documents.set-type is the
- * MCP door to Dokument's "Ändra typ" (lib/documents/classify/set-type.ts,
- * which POST /api/documents/{id}/classification calls too) and has no http
- * binding: no v1 route sets a type. The opt-in parts of one
+ * delete and detach get generated staged tools. documents.set-type is
+ * Dokument's "Ändra typ" (lib/documents/classify/set-type.ts, which
+ * POST /api/documents/{id}/classification calls too) through both doors:
+ * PUT /documents/{id}/type and the staged gnubok_set_document_type. The list
+ * filters by the type the same as gnubok_list_records names it (a type, a
+ * folder of Dokument or untyped: lib/arkiv/list-records.ts typesFor), read
+ * the way Dokument reads it (lib/documents/locked-period.ts). The opt-in parts of one
  * document's read (text, reading, links, arrivals) are one service,
  * lib/documents/read/document-detail.ts, behind both GET /documents/{id} and
  * gnubok_get_document_content.
@@ -24,6 +27,8 @@ import { AttachDocumentSchema } from '@/lib/api/schemas'
 import { getDocumentMetadata, listDocumentsPage, removeDocument } from '@/lib/documents/document-actions'
 import { setDocumentTypeByPerson } from '@/lib/documents/classify/set-type'
 import { DOC_TYPES } from '@/lib/documents/classify/taxonomy'
+import { FOLDER_ORDER } from '@/lib/arkiv/folders'
+import { typesFor } from '@/lib/arkiv/list-records'
 import {
   DOCUMENT_ARRIVAL_TEXT_CHARS,
   DOCUMENT_DETAIL_PARTS,
@@ -59,7 +64,21 @@ const DocumentOut = z.object({
   journal_entry_id: z.string().uuid().nullable(),
   journal_entry_line_id: z.string().uuid().nullable(),
   created_at: z.string().describe('Upload time.'),
+  doc_type: z
+    .string()
+    .nullable()
+    .describe('What the document is, as Dokument shows it: supplier_invoice, receipt, credit_note, agreement.loan, minutes.board ... (the types the doc_type filter takes). Null while it has none: a verifikat\'s underlag often has none, the verifikat says what it is. Set it with PUT /documents/{id}/type.'),
 })
+
+/**
+ * What the list's doc_type filter takes, as gnubok_list_records' type does
+ * (typesFor): a type, a folder of Dokument, or untyped. The booked folder is
+ * left out: a booked document with no type is doc_type=untyped&linked=true.
+ */
+const DOC_TYPE_FILTERS = [...new Set<string>([...DOC_TYPES, ...FOLDER_ORDER.filter((folder) => folder !== 'booked')])] as [
+  string,
+  ...string[],
+]
 
 const EXAMPLE_DOCUMENT = {
   document_id: '4f1c…',
@@ -74,6 +93,7 @@ const EXAMPLE_DOCUMENT = {
   journal_entry_id: null,
   journal_entry_line_id: null,
   created_at: '2026-09-02T07:41:10Z',
+  doc_type: 'receipt',
 }
 
 const DOCUMENT_ID = z.string().uuid().describe('The document id (document_id from the list or an upload).')
@@ -88,19 +108,25 @@ export const documentsList = defineOperation({
   docs: {
     summary: 'List documents in the archive, linked or not, newest upload first.',
     description:
-      'Returns document metadata (file name, type, size, SHA-256, version, upload source and time) and whether each is the underlag of a verifikat (linked, journal_entry_id). Filter by linked, journal_entry_id or upload date range (uploaded_from/uploaded_to, YYYY-MM-DD, UTC). Current versions only unless current_only=false. Cursor pagination: pass next_cursor back as cursor; null on the last page. Never returns file bytes or extracted text.',
+      'Returns document metadata (file name, MIME type, size, SHA-256, version, upload source and time), what each document is (doc_type) and whether it is the underlag of a verifikat (linked, journal_entry_id). Filter by doc_type (a type such as supplier_invoice, a folder of Dokument such as agreements, or untyped), linked, journal_entry_id or upload date range (uploaded_from/uploaded_to, YYYY-MM-DD, UTC). Current versions only unless current_only=false. Cursor pagination: pass next_cursor back as cursor; null on the last page. Never returns file bytes or extracted text.',
     useWhen:
-      'You need the documents not yet attached to anything (linked=false) before matching receipts, the documents of one verifikat, or an inventory for a period.',
+      'You need the documents not yet attached to anything (linked=false) before matching receipts, the documents of one verifikat, every document of a kind (doc_type=agreements, doc_type=minutes.board), or an inventory for a period.',
     doNotUseFor:
       'Downloading a file (GET /documents/{id}/download), reading its text (the Arkiv tools), or the inbox work queue with its extracted totals (GET /inbox-items).',
     pitfalls: [
       'linked=false still includes documents pinned to a bank transaction or held by an inbox item: GET /documents/{id} shows what holds one.',
       'Dates filter the upload time in UTC, not the invoice date on the document.',
+      'doc_type is a type, a folder (agreements, authority, corporate, receipts, supplier_invoices, customer_invoices, bank_statements, other) or untyped; anything else is 400. A folder lists every type on its shelf: supplier_invoices is supplier_invoice and credit_note.',
+      'A type is a person\'s (PUT /documents/{id}/type, Dokument) or the reading\'s, which can be wrong: check the text (GET /documents/{id}?include=text) before acting on it.',
       'The page is in data.documents with data.next_cursor; a cursor that no longer decodes starts from the first page.',
     ],
     example: { response: { data: { documents: [EXAMPLE_DOCUMENT], next_cursor: null }, meta: META } },
   },
   input: z.object({
+    doc_type: z
+      .enum(DOC_TYPE_FILTERS)
+      .optional()
+      .describe('Only documents of this type (receipt, supplier_invoice, agreement.loan ...), of this folder (agreements, authority, corporate, receipts, supplier_invoices, customer_invoices, bank_statements, other), or with no type (untyped). Default: all.'),
     linked: z
       .enum(['true', 'false'])
       .optional()
@@ -117,7 +143,9 @@ export const documentsList = defineOperation({
   }),
   output: z.object({ documents: z.array(DocumentOut), next_cursor: z.string().nullable() }),
   http: { method: 'GET', path: '/api/v1/companies/:companyId/documents' },
-  run: (ctx, input) => listDocumentsPage(ctx, input),
+  // typesFor never refuses here: the input already holds the value to its list.
+  run: (ctx, { doc_type, ...filters }) =>
+    listDocumentsPage(ctx, doc_type ? { ...filters, types: typesFor(doc_type) ?? null } : filters),
 })
 
 const PARTS_PATTERN = new RegExp(`^(${DOCUMENT_DETAIL_PARTS.join('|')})(,(${DOCUMENT_DETAIL_PARTS.join('|')}))*$`)
@@ -405,10 +433,12 @@ export const documentsSetType = defineOperation({
     description:
       'A person\'s type, as "Ändra typ" in Dokument: it becomes the current classification, the model never overrides it, and the document moves to the folder of the type (minutes.board and minutes.agm to Bolagshandlingar). What an earlier agreement type derived (the agreement, its deadlines and facts) is withdrawn unless the new type is the same kind of agreement. A receipt, supplier invoice or credit note type can put a document nobody booked in Underlag. Dry-runnable.',
     useWhen: 'A document sits under Utan typ or under the wrong type, e.g. board or general meeting minutes uploaded through the API.',
-    doNotUseFor: 'Booking a document (that is the inbox and the verifikat), or linking it to a verifikat (gnubok_link_document_to_voucher).',
+    doNotUseFor:
+      'Booking a document (that is the inbox and the verifikat), or linking it to a verifikat (POST /documents/{id}/link, gnubok_link_document_to_voucher).',
     pitfalls: [
       'A document of another company returns 404 DOC_NOT_FOUND.',
-      'An upload can name the type at once: doc_type on gnubok_complete_document_upload and gnubok_upload_document.',
+      'An MCP upload can name the type at once (doc_type on gnubok_complete_document_upload and gnubok_upload_document); a v1 upload (POST /documents) cannot, so set it here after the upload.',
+      'Over v1, ?stage=true proposes the type for a person to approve instead of setting it (202, a pending operation).',
     ],
     example: {
       request: { document_id: '4f1c…', doc_type: 'minutes.board' },
@@ -425,6 +455,11 @@ export const documentsSetType = defineOperation({
     previous_doc_type: z.string().nullable().describe('The type before; null when it had none.'),
   }),
   errorCodes: ['DOC_NOT_FOUND', 'FORBIDDEN'],
+  http: {
+    method: 'PUT',
+    path: '/api/v1/companies/:companyId/documents/:id/type',
+    pathParams: { id: 'document_id' },
+  },
   mcp: {
     name: 'gnubok_set_document_type',
     title: 'Set Document Type',
