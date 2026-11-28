@@ -311,16 +311,33 @@ describe('POST /api/webshop-orders/[id]/mark-booked with voided: true', () => {
         ['manually_booked_at', null],
       ]),
     )
+    // The store's state is checked again at the write.
+    expect(findCalls('webshop_orders', 'eq')).toEqual(
+      expect.arrayContaining([
+        ['row_type', 'order'],
+        ['status', 'cancelled'],
+        ['refunded_total', 0],
+      ]),
+    )
     // Never a delete: the row stays.
     expect(findCall('webshop_orders', 'delete')).toBeUndefined()
   })
 
-  it('voids a cancelled order whose money sits in the legacy feed too: a void books nothing twice', async () => {
+  it('refuses to void while the same money is an open row in the legacy feed: book or ignore it first', async () => {
     enqueue({ data: cancelledRow({ legacy_transaction_id: 'txn-1' }) })
+    enqueue({ data: { id: 'txn-1' } }) // open_bank_rows answers it
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(await postMark({ voided: true }))
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('WEBSHOP_ORDER_LEGACY_TRANSACTION_OPEN')
+    expect(findCall('webshop_orders', 'update')).toBeUndefined()
+  })
+
+  it('voids once the legacy feed row is booked or ignored', async () => {
+    enqueue({ data: cancelledRow({ legacy_transaction_id: 'txn-1' }) })
+    enqueue({ data: null }) // open_bank_rows leaves it out
     enqueue({ data: [{ id: 'order-1' }] }) // claim
     const { status } = await parseJsonResponse(await postMark({ voided: true }))
     expect(status).toBe(200)
-    expect(findCall('open_bank_rows', 'select')).toBeUndefined()
   })
 
   it('refuses an order the store does not report cancelled', async () => {
@@ -383,14 +400,14 @@ describe('POST /api/webshop-orders/[id]/mark-booked with voided: true', () => {
     expect(findCall('webshop_orders', 'update')).toBeUndefined()
   })
 
-  it('returns 409 when the claim matches zero rows (raced)', async () => {
+  it('returns 409 when the claim matches zero rows: booked, marked, reopened or refunded meanwhile', async () => {
     enqueue({ data: cancelledRow() })
     enqueue({ data: [] })
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
       await postMark({ voided: true }),
     )
     expect(status).toBe(409)
-    expect(body.error.code).toBe('WEBSHOP_ORDER_ALREADY_BOOKED')
+    expect(body.error.code).toBe('WEBSHOP_ORDER_VOID_RACED')
   })
 
   it('refuses marking a voided order as booked, or linking a verifikat to it', async () => {

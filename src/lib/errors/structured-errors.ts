@@ -11692,6 +11692,11 @@ const WEBSHOP_ORDERS: Record<string, StructuredErrorEntry> = {
     message_en:
       'The store does not report the order as cancelled, so it cannot be voided.',
   },
+  WEBSHOP_ORDER_VOID_RACED: {
+    httpStatus: 409,
+    message_sv: 'Ordern ändrades medan den makulerades och makulerades inte. Ladda om sidan.',
+    message_en: 'The order changed while it was being voided and was not voided. Reload the page.',
+  },
   WEBSHOP_ORDER_CANCELLED_WITH_REFUND: {
     httpStatus: 409,
     message_sv:

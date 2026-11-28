@@ -3,7 +3,11 @@ import { withRouteContext, type RouteContext } from '@/lib/api/with-route-contex
 import { validateBody } from '@/lib/api/validate'
 import { MarkWebshopOrderBookedSchema } from '@/lib/api/schemas'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import { isCancelledInStore, isCancelledWithoutRefund } from '@/lib/webshop-orders/booking-status'
+import {
+  WEBSHOP_ORDER_CANCELLED_STATUS,
+  isCancelledInStore,
+  isCancelledWithoutRefund,
+} from '@/lib/webshop-orders/booking-status'
 
 /**
  * POST /api/webshop-orders/[id]/mark-booked
@@ -212,6 +216,7 @@ interface VoidCandidate {
   refunded_total: number
   manually_booked_at: string | null
   manually_voided: boolean | null
+  legacy_transaction_id: string | null
 }
 
 /**
@@ -245,7 +250,27 @@ async function voidOrder(
       details: { refunded_total: order.refunded_total },
     })
   }
+  // The booked mark's open-twin gate holds for a void too: while the same
+  // money sits as an open row in the legacy transactions inbox, the void
+  // would hide the order's pointer to it, and the row could still be booked
+  // there as a sale. Book or ignore that row first.
+  if (order.legacy_transaction_id) {
+    const { data: legacyTxn } = await supabase
+      .from('open_bank_rows')
+      .select('id')
+      .eq('id', order.legacy_transaction_id)
+      .eq('company_id', companyId)
+      .maybeSingle()
+    if (legacyTxn) {
+      return errorResponseFromCode('WEBSHOP_ORDER_LEGACY_TRANSACTION_OPEN', log, {
+        requestId,
+        details: { transaction_id: legacyTxn.id },
+      })
+    }
+  }
 
+  // The store's state is checked again at the write: a sync that reopens or
+  // refunds the order between the read and this claim leaves it unvoided.
   const { data: marked, error: markError } = await supabase
     .from('webshop_orders')
     .update({
@@ -259,6 +284,9 @@ async function voidOrder(
     .is('journal_entry_id', null)
     .is('invoice_id', null)
     .is('manually_booked_at', null)
+    .eq('row_type', 'order')
+    .eq('status', WEBSHOP_ORDER_CANCELLED_STATUS)
+    .eq('refunded_total', 0)
     .select('id')
 
   if (markError) {
@@ -266,8 +294,9 @@ async function voidOrder(
     return errorResponse(markError, log, { requestId })
   }
   if (!marked || marked.length === 0) {
-    // Raced: the row was booked, invoiced or marked concurrently.
-    return errorResponseFromCode('WEBSHOP_ORDER_ALREADY_BOOKED', log, { requestId })
+    // Raced: booked, invoiced or marked concurrently, or the store reopened
+    // or refunded the order since the read.
+    return errorResponseFromCode('WEBSHOP_ORDER_VOID_RACED', log, { requestId })
   }
   return NextResponse.json({ success: true })
 }
