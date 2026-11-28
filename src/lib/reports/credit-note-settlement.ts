@@ -65,21 +65,21 @@ export interface IssueOreFact {
   ore: number
   /** The invoice's total. */
   total: number
-  /** Its payment rows, oldest first. */
-  payments: ReadonlyArray<{ id: string; journal_entry_id: string | null; amount: number }>
+  /** Its payment rows, oldest first, with what earlier rows on the same verifikat took of it. */
+  payments: ReadonlyArray<{ id: string; journal_entry_id: string | null; amount: number; voucher_before?: number }>
 }
 
 /**
- * Whether `link` is the payment row that settled its invoice in full: its
- * amount is what was left of the invoice's total after the rows before it.
- * The row is found by its id, else by the verifikat it names.
+ * The payment row `link` is, when it settled its invoice in full: its amount
+ * is what was left of the invoice's total after the rows before it. The row
+ * is found by its id, else by the verifikat it names. Undefined otherwise.
  */
-function settledInFull(link: CreditNoteLink, invoice: IssueOreFact): boolean {
+function settlingRow(link: CreditNoteLink, invoice: IssueOreFact): IssueOreFact['payments'][number] | undefined {
   let index = link.id ? invoice.payments.findIndex((row) => row.id === link.id) : -1
   if (index < 0) index = invoice.payments.findIndex((row) => row.journal_entry_id === link.journal_entry_id)
-  if (index < 0) return false
+  if (index < 0) return undefined
   const before = invoice.payments.slice(0, index).reduce((sum, row) => roundOre(sum + row.amount), 0)
-  return equalOre(Number(link.amount) || 0, roundOre(invoice.total - before))
+  return equalOre(Number(link.amount) || 0, roundOre(invoice.total - before)) ? invoice.payments[index] : undefined
 }
 
 /**
@@ -101,9 +101,11 @@ function settledInFull(link: CreditNoteLink, invoice: IssueOreFact): boolean {
  * issue booked the öre, when the verifikat had exactly that left) wrote that
  * invoice's remainder on its row, 999,75, while it took everything the
  * verifikat had left, 1 000: the row plus that invoice's own issue öre. A
- * link that paid part of the invoice took what its row says. `usedBefore` is
- * what the earlier rows naming the verifikat took of it, as the function
- * counts its capacity.
+ * link that paid part of the invoice took what its row says. What the
+ * verifikat had left is read as the door read it when the row was made: its
+ * credit less what the rows made before it took (the row's voucher_before,
+ * in creation order); `usedBefore`, the rows before it in id order, only
+ * when the read does not carry it.
  */
 function creditUsedBy(
   link: CreditNoteLink,
@@ -117,9 +119,10 @@ function creditUsedBy(
   const linkCurrency = documentCurrency(link.currency)
   if (linkCurrency === documentCurrency(note.currency)) {
     const paid = isKronorCurrency(linkCurrency) ? issueOre?.get(link.invoice_id) : undefined
-    if (paid && settledInFull(link, paid)) {
+    const row = paid ? settlingRow(link, paid) : undefined
+    if (paid && row) {
       const carried = roundOre(amount + paid.ore)
-      if (equalOre(roundOre(credit - usedBefore), carried)) return carried
+      if (equalOre(roundOre(credit - (row.voucher_before ?? usedBefore)), carried)) return carried
     }
     return Math.min(credit, amount)
   }

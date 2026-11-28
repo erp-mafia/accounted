@@ -224,10 +224,6 @@ describe('kundreskontra and 1510 with the öresavrundning booked at issue', () =
     // An imported issue: 1510 1 401, 1513 600, Cr 3740 0,50 (rounded 2 000,50
     // up). The customer pays 1 401; Skatteverket refuses, 600 moves onto 1510.
     const books = emptyBooks()
-    const rot = source('F-rot', 1600.4, 400.1, {
-      deduction_total: 600,
-      items: [item(1600.4, 400.1, { deduction_type: 'rot', deduction_amount: 600 })],
-    })
     post(books, 'je-F-rot', [
       { account_number: '1510', debit_amount: 1401, credit_amount: 0 },
       { account_number: '1513', debit_amount: 600, credit_amount: 0 },
@@ -326,6 +322,25 @@ describe('a mirrored kreditfaktura used against another invoice (link_invoice_to
     const result = await reconcile(books)
     expect(result.account_1510_balance).toBe(250)
     expect(result.ar_ledger_total).toBe(250)
+  })
+
+  it('two links: what the verifikat had left is read in the order the links were made, not by id', async () => {
+    const books = emptyBooks()
+    creditOfPaid(books)
+    // First a share of 500 to X (whole kronor); then, with 500 left, B
+    // (499,75 issued as 500) is settled in full on what its 1510 carries.
+    // The row ids (the order the ledger read lists the links in) sort the
+    // other way round from when the rows were made.
+    issue(books, source('F-X', 400, 100), true, { status: 'paid', paid_amount: 500 })
+    issue(books, source('F-B2', 399.8, 99.95), true, { status: 'paid', paid_amount: 499.75 })
+    books.invoice_payments.push(
+      { id: 'p-1', invoice_id: 'F-B2', amount: 499.75, payment_date: '2026-03-25', journal_entry_id: 'je-KF-A', currency: 'SEK', created_at: '2026-03-25T11:00:00Z' },
+      { id: 'p-2', invoice_id: 'F-X', amount: 500, payment_date: '2026-03-25', journal_entry_id: 'je-KF-A', currency: 'SEK', created_at: '2026-03-25T10:00:00Z' },
+    )
+
+    const result = await reconcile(books)
+    expect(result.account_1510_balance).toBe(0)
+    expect(result.ar_ledger_total).toBe(0)
   })
 
   it('a share of 999,75 against an exact old invoice leaves 0,25 of credit, as 1510 does', async () => {

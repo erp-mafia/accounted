@@ -190,7 +190,12 @@ interface IssueReceivableRow {
   currency: string | null
   total: number | string | null
   deduction_total: number | string | null
-  payments?: Array<{ id: string; journal_entry_id: string | null; amount: number | string | null }> | null
+  payments?: Array<{
+    id: string
+    journal_entry_id: string | null
+    amount: number | string | null
+    voucher_before?: number | string | null
+  }> | null
 }
 
 /**
@@ -227,8 +232,11 @@ export interface IssueBookedFacts {
   ore: number
   /** The document's total: the customer's share, as a ROT/RUT document never books öre. */
   total: number
-  /** Its payment rows, oldest first: the verifikat each names and the amount it paid. */
-  payments: Array<{ id: string; journal_entry_id: string | null; amount: number }>
+  /**
+   * Its payment rows, oldest first: the verifikat each names, the amount it
+   * paid, and what the rows made before it on that verifikat took of it.
+   */
+  payments: Array<{ id: string; journal_entry_id: string | null; amount: number; voucher_before: number }>
 }
 
 /**
@@ -261,6 +269,7 @@ export async function fetchIssueBookedFacts(
           id: payment.id,
           journal_entry_id: payment.journal_entry_id,
           amount: roundOre(Number(payment.amount) || 0),
+          voucher_before: roundOre(Number(payment.voucher_before) || 0),
         })),
       })
     }

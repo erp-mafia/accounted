@@ -24,10 +24,13 @@
 -- carries the invoice's currency, total and deduction beside the figure.
 -- Invoices without a live issue verifikat with 151x lines are not returned.
 --
--- Each invoice also carries its payment rows, oldest first: a credit note's
--- verifikat linked as payment of an invoice whose issue booked the öre took
--- what 151x carried only when that link settled the invoice in full
--- (creditUsedBy in lib/reports/credit-note-settlement.ts).
+-- Each invoice also carries its payment rows, oldest first, each with what
+-- the rows made before it on the same verifikat took of it (voucher_before):
+-- a credit note's verifikat linked as payment of an invoice whose issue
+-- booked the öre took what 151x carried only when that link settled the
+-- invoice in full and the verifikat had exactly that left, as
+-- link_invoice_to_voucher judged it when the row was made (creditUsedBy in
+-- lib/reports/credit-note-settlement.ts).
 --
 -- One json array, one object per invoice, as get_ar_ledger_invoices answers:
 -- a scalar result, so PostgREST's max-rows cap does not apply.
@@ -55,7 +58,14 @@ AS $function$
                SELECT coalesce(json_agg(json_build_object(
                         'id', p.id,
                         'journal_entry_id', p.journal_entry_id,
-                        'amount', p.amount
+                        'amount', p.amount,
+                        'voucher_before', (
+                          SELECT coalesce(sum(q.amount), 0)
+                            FROM public.invoice_payments q
+                           WHERE q.company_id = p_company_id
+                             AND q.journal_entry_id = p.journal_entry_id
+                             AND (q.created_at, q.id) < (p.created_at, p.id)
+                        )
                       ) ORDER BY p.created_at, p.id), '[]'::json)
                  FROM public.invoice_payments p
                 WHERE p.company_id = p_company_id

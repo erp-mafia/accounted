@@ -7,7 +7,7 @@ import { fxDifferenceLine, oreRoundingLine, oreSettlementResidual } from './ore-
 import { getDisplayTotal, hasOreToRound } from './invoice-rounding'
 import { dbError } from '@/lib/errors/db-error'
 import { createLogger } from '@/lib/logger'
-import { ORE_TOLERANCE, equalOre, roundOre, sumOre } from '@/lib/money'
+import { ORE_ROUNDING_ACCOUNT, ORE_TOLERANCE, equalOre, roundOre, sumOre } from '@/lib/money'
 import { postingPort } from '@/lib/posting/port'
 import { assertAccruedIncomeLinesBookable } from './accruals/accrued-cost-guard'
 import {
@@ -220,7 +220,7 @@ async function issueOreRoundingOf(
     .from('chart_of_accounts')
     .select('is_active')
     .eq('company_id', companyId)
-    .eq('account_number', '3740')
+    .eq('account_number', ORE_ROUNDING_ACCOUNT)
     .maybeSingle()
   if (accountError) throw dbError(accountError, 'öresavrundning account')
   if (account && (account as { is_active?: boolean | null }).is_active === false) return undefined

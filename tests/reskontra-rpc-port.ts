@@ -333,7 +333,8 @@ export function portKpiSupplierInvoices(tables: ReskontraTables, args: Row): Row
  * 151x (1513 excluded), the verifikat followed through a storno to its one
  * posted correction (live_journal_entry). Invoices without a live one with
  * 151x lines are left out. Each row carries the invoice's currency, total,
- * deduction and payment rows (oldest first: created_at, then id).
+ * deduction and payment rows (oldest first: created_at, then id), each with
+ * what the earlier rows on its verifikat took (voucher_before).
  */
 export function portInvoiceIssueReceivableSek(tables: ReskontraTables, args: Row): Row[] {
   const companyId = args.p_company_id
@@ -366,12 +367,22 @@ export function portInvoiceIssueReceivableSek(tables: ReskontraTables, args: Row
       )
       if (own.length === 0) return []
       const sek = own.reduce((sum, l) => sum + (Number(l.debit_amount) || 0) - (Number(l.credit_amount) || 0), 0)
-      const payments = rowsOf(tables, 'invoice_payments')
-        .filter((p) => p.invoice_id === i.id && (p.company_id == null || p.company_id === companyId))
-        .sort((a, b) =>
-          String(a.created_at ?? '').localeCompare(String(b.created_at ?? '')) || String(a.id).localeCompare(String(b.id)),
-        )
-        .map((p) => ({ id: p.id, journal_entry_id: p.journal_entry_id ?? null, amount: p.amount }))
+      const allRows = rowsOf(tables, 'invoice_payments').filter((p) => p.company_id == null || p.company_id === companyId)
+      const created = (a: Row, b: Row) =>
+        String(a.created_at ?? '').localeCompare(String(b.created_at ?? '')) || String(a.id).localeCompare(String(b.id))
+      const payments = allRows
+        .filter((p) => p.invoice_id === i.id)
+        .sort(created)
+        .map((p) => ({
+          id: p.id,
+          journal_entry_id: p.journal_entry_id ?? null,
+          amount: p.amount,
+          voucher_before: roundOre(
+            allRows
+              .filter((q) => p.journal_entry_id != null && q.journal_entry_id === p.journal_entry_id && created(q, p) < 0)
+              .reduce((sum, q) => sum + (Number(q.amount) || 0), 0),
+          ),
+        }))
       return [{
         invoice_id: i.id,
         sek: roundOre(sek),
