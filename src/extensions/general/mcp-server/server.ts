@@ -14302,8 +14302,9 @@ export const tools: McpTool[] = [
         }
       }
 
-      // A Stripe sale carries neither moms nor the buyer's country: it leads
-      // with how Stripe sales are booked, the verifikat that booked the
+      // A Stripe sale carries no moms (the buyer's countries, when Stripe
+      // states them, ride on the row apart): it leads with how Stripe sales
+      // are booked, the verifikat that booked the
       // latest one, and where the moms comes from (./stripe-sales.ts). A
       // failed read of that verifikat is logged and only leaves it out.
       const stripeSales = (transactions as Transaction[]).filter(isStripeSaleRow)

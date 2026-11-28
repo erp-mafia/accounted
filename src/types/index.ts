@@ -1186,7 +1186,7 @@ export interface Transaction {
   is_enriched?: boolean | null
   enriched_at?: string | null
 
-  // The buyer's two countries on a Stripe sale (migration 20261127184200),
+  // The buyer's two countries on a Stripe sale (migration 20261128093000),
   // ISO 3166-1 alpha-2: the billing address's and the card's, kept apart
   // because they can differ. Null on every other row.
   billing_country?: string | null
