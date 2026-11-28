@@ -3,6 +3,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateQuery } from '@/lib/api/validate'
 import { WebshopOrdersListQuerySchema } from '@/lib/api/schemas'
 import { errorResponse } from '@/lib/errors/get-structured-error'
+import { BOOKED_EXITS_FILTER } from '@/lib/webshop-orders/booking-status'
 import { listWebshopStores, type WebshopStore } from '@/lib/webshop-orders/stores'
 
 const DEFAULT_LIMIT = 50
@@ -34,11 +35,12 @@ export const GET = withRouteContext(
     if (status) query = query.eq('status', status)
     if (row_type) query = query.eq('row_type', row_type)
     if (paid) query = query.eq('is_paid', paid === 'paid')
-    // "Booked" counts every closed exit: booked via the integration OR
-    // marked as manually booked outside it; "unbooked" is the open set the
-    // Att bokfora tab shows, so a manual mark removes the row from it.
+    // "Booked" counts the exits that book: booked via the integration OR
+    // marked as manually booked outside it, never a voided row (nothing was
+    // booked); "unbooked" is the open set the Att bokfora tab shows, so a
+    // manual mark, a void included, removes the row from it.
     if (booked === 'booked') {
-      query = query.or('journal_entry_id.not.is.null,manually_booked_at.not.is.null')
+      query = query.or(BOOKED_EXITS_FILTER)
     }
     if (booked === 'unbooked') {
       query = query.is('journal_entry_id', null).is('manually_booked_at', null)

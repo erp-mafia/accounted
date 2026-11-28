@@ -128,7 +128,7 @@ function positionOf(accounts: Record<'2650' | '1650', number>): number {
  * so a fixture may state it shaped.
  */
 function restEntry(lines: readonly VatSettlementProposalLine[]): FakeEntry {
-  expect(momsredovisningShapeOfLines(lines.map((l) => l.account_number), ['1630'])).toBe('net_account_shape')
+  expect(momsredovisningShapeOfLines(lines, ['1630'])).toBe('net_account_shape')
   return entry('2026-09-30', asLines(lines), { description: 'Moms kvar Q3' })
 }
 
@@ -1213,7 +1213,7 @@ describe('a supplier invoice dated in the period after the app booked its momsre
     // their 2650 line they have the momsredovisning shape the rutor skip.
     expect(proposal.entry_date).toBe('2026-09-30')
     expect(partlySettledRestBooksAlone(proposal)).toBe(true)
-    expect(momsredovisningShapeOfLines(proposal.lines.map((l) => l.account_number), ['1630'])).toBe('net_account_shape')
+    expect(momsredovisningShapeOfLines(proposal.lines, ['1630'])).toBe('net_account_shape')
     // Past a lock date they cannot be dated inside the period: only reversing is offered.
     expect(partlySettledRestBooksAlone({ ...proposal, entry_date_reason: 'company_lock_date' })).toBe(false)
   })
@@ -1258,7 +1258,7 @@ describe('a supplier invoice dated in the period after the app booked its momsre
       { account_number: '2614', debit_amount: 250, credit_amount: 0 },
       { account_number: '2645', debit_amount: 0, credit_amount: 250 },
     ])
-    expect(momsredovisningShapeOfLines(proposal.lines.map((l) => l.account_number), ['1630'])).toBeNull()
+    expect(momsredovisningShapeOfLines(proposal.lines, ['1630'])).toBeNull()
     expect(partlySettledRestBooksAlone(proposal)).toBe(false)
   })
 
@@ -1271,7 +1271,7 @@ describe('a supplier invoice dated in the period after the app booked its momsre
       { account_number: '2617', debit_amount: 250, credit_amount: 0 },
       { account_number: '2650', debit_amount: 0, credit_amount: 250 },
     ]
-    expect(momsredovisningShapeOfLines(lines.map((l) => l.account_number), ['1630'])).toBeNull()
+    expect(momsredovisningShapeOfLines(lines, ['1630'])).toBeNull()
     expect(partlySettledRestBooksAlone({ lines, entry_date_reason: null })).toBe(false)
     // With a line on a fixed declaration account as well, it has the shape.
     const withFixed = [
@@ -1279,8 +1279,22 @@ describe('a supplier invoice dated in the period after the app booked its momsre
       { account_number: '2617', debit_amount: 250, credit_amount: 0 },
       { account_number: '2650', debit_amount: 0, credit_amount: 350 },
     ]
-    expect(momsredovisningShapeOfLines(withFixed.map((l) => l.account_number), ['1630'])).toBe('net_account_shape')
+    expect(momsredovisningShapeOfLines(withFixed, ['1630'])).toBe('net_account_shape')
     expect(partlySettledRestBooksAlone({ lines: withFixed, entry_date_reason: null })).toBe(true)
+  })
+
+  it('reads a rest by its accounts alone: it has no sales or purchase base line, so the sides never matter', () => {
+    // The SQL reads the sides only for a verifikat with a declaration line
+    // outside 26xx. A rest is 26xx, 2650/1650 and 3740, so even with every
+    // line on one side it keeps the shape, and the page and the restatement
+    // agree.
+    const sameSide = [
+      { account_number: '2611', debit_amount: 0.4, credit_amount: 0 },
+      { account_number: '2650', debit_amount: 1, credit_amount: 0 },
+      { account_number: '3740', debit_amount: 0, credit_amount: 1.4 },
+    ]
+    expect(momsredovisningShapeOfLines(sameSide, ['1630'])).toBe('net_account_shape')
+    expect(partlySettledRestBooksAlone({ lines: sameSide, entry_date_reason: null })).toBe(true)
   })
 
   it('leaves nothing on 2650 or 1650 that the drift check would flag once the lines are booked (#3646)', async () => {

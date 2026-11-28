@@ -15,6 +15,8 @@ import {
 import { useReportData } from '@/lib/hooks/use-report-data'
 import { formatAmount } from '@/lib/utils'
 import { NET_RESULT_LABEL } from '@/lib/reports/income-definitions'
+import { incomeStatementLayout, type IncomeStatementClass8Block } from '@/lib/reports/financial-statement-pdf'
+import { RESULT_AFTER_FINANCIAL_LABEL } from '@/lib/reports/class-8-groups'
 import type { MonthlyDataPoint } from '@/components/reports/IncomeExpenseChart'
 import type { DateRangeValue } from '@/components/common/ReportDateRange'
 import type { DimensionFilterValue } from '@/components/reports/DimensionFilter'
@@ -63,6 +65,10 @@ export default function IncomeStatementView({ periodId, dateRange, dimensionFilt
     )
   }
 
+  const layout = incomeStatementLayout(data)
+  const aboveTheLine = layout.class8.filter((block) => block.group.aboveResultAfterFinancial)
+  const belowTheLine = layout.class8.filter((block) => !block.group.aboveResultAfterFinancial)
+
   return (
     <div className="space-y-4">
       <ReportExportMenu
@@ -110,41 +116,53 @@ export default function IncomeStatementView({ periodId, dateRange, dimensionFilt
         </CardContent>
       </Card>
 
-      {/* Operating result */}
-      <Card>
-        <CardContent className="flex items-baseline justify-between">
-          <span className="text-sm font-medium">Rörelseresultat</span>
-          <span className={`font-display text-xl tabular-nums ${data.total_revenue - data.total_expenses >= 0 ? 'text-success' : 'text-destructive'}`}>
-            {formatAmount(data.total_revenue - data.total_expenses)} kr
-          </span>
-        </CardContent>
-      </Card>
+      <ResultLine label="Rörelseresultat" amount={layout.operatingResult} />
 
-      {/* Financial items */}
-      {data.financial_sections.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Finansiella poster</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ReportSectionTable
-              sections={data.financial_sections}
-              drilldown={drilldown}
-              footer={{ label: 'Summa finansiella poster', amount: data.total_financial }}
-            />
-          </CardContent>
-        </Card>
+      {/* Class 8 in the uppställningsform's blocks, as the PDF prints it:
+          Finansiella poster, then Resultat efter finansiella poster, then
+          Bokslutsdispositioner and Skatter. */}
+      {aboveTheLine.map((block) => (
+        <Class8BlockCard key={block.group.key} block={block} drilldown={drilldown} />
+      ))}
+      {layout.resultAfterFinancial !== null && (
+        <ResultLine label={RESULT_AFTER_FINANCIAL_LABEL} amount={layout.resultAfterFinancial} />
       )}
+      {belowTheLine.map((block) => (
+        <Class8BlockCard key={block.group.key} block={block} drilldown={drilldown} />
+      ))}
 
-      {/* Net result */}
-      <Card>
-        <CardContent className="flex items-baseline justify-between">
-          <span className="text-sm font-medium">{NET_RESULT_LABEL}</span>
-          <span className={`font-display text-xl tabular-nums ${data.net_result >= 0 ? 'text-success' : 'text-destructive'}`}>
-            {formatAmount(data.net_result)} kr
-          </span>
-        </CardContent>
-      </Card>
+      <ResultLine label={NET_RESULT_LABEL} amount={data.net_result} />
     </div>
+  )
+}
+
+/** A result line between the statement's blocks: Rörelseresultat and the lines after it. */
+function ResultLine({ label, amount }: { label: string; amount: number }) {
+  return (
+    <Card>
+      <CardContent className="flex items-baseline justify-between">
+        <span className="text-sm font-medium">{label}</span>
+        <span className={`font-display text-xl tabular-nums ${amount >= 0 ? 'text-success' : 'text-destructive'}`}>
+          {formatAmount(amount)} kr
+        </span>
+      </CardContent>
+    </Card>
+  )
+}
+
+function Class8BlockCard({ block, drilldown }: { block: IncomeStatementClass8Block; drilldown: AccountDrilldown }) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">{block.group.heading}</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <ReportSectionTable
+          sections={block.sections}
+          drilldown={drilldown}
+          footer={{ label: block.group.totalLabel, amount: block.total }}
+        />
+      </CardContent>
+    </Card>
   )
 }

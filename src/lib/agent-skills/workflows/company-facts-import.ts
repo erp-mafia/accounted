@@ -1,4 +1,5 @@
 import type { Skill } from '../types'
+import { MEMORY_PLACE_IN_APP } from '@/lib/agent-context/wiki-views'
 
 /**
  * The onboarding import: the user's own AI (Claude, ChatGPT, Grok, a local
@@ -68,8 +69,9 @@ One \`gnubok_remember_fact\` per confirmed fact:
 - \`replaces\`: the \`fact_id\` when the fact updates one already in \`memory\`
 
 Then reply in two lines: how many facts were saved, and that every AI the user
-connects to Accounted now starts from them. Say they can ask any of them to
-forget a fact.
+connects to Accounted now starts from them. Say where they see them and that
+they can ask any of them to forget a fact. ${MEMORY_PLACE_IN_APP} They are
+not in Arkiv: its Fakta is a separate list.
 
 ## Tools
 

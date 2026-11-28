@@ -300,6 +300,7 @@ import { uiWidgets, findUiWidget, WIDGET_MIME_TYPE } from './widgets'
 import { dataResources, findCompanyScopedResource, findResource, parseResourceQuery } from './resources'
 import { buildLedgerContext, buildLedgerDigest } from '@/lib/agent-context/ledger-context'
 import { lastSessionSync, loadRememberedFacts } from '@/lib/agent-context/remembered-facts'
+import { MEMORY_PLACE_IN_APP } from '@/lib/agent-context/wiki-views'
 import {
   capabilityDigest,
   capabilitySurface,
@@ -4802,7 +4803,7 @@ const PURCHASE_NOTE_PLACE =
  * undeclared in outputSchema like the other briefing guidance (tools/list budget).
  */
 const WHERE_TO_FIND = [
-  `memory: every fact agents were told about this company, newest first; a later fact settles an earlier one. Save a new one with gnubok_remember_fact; pass replaces with the old fact_id when it updates one. ${PURCHASE_NOTE_PLACE}`,
+  `memory: every fact agents were told about this company, newest first; a later fact settles an earlier one. Save a new one with gnubok_remember_fact; pass replaces with the old fact_id when it updates one. ${PURCHASE_NOTE_PLACE} ${MEMORY_PLACE_IN_APP} arkiv.facts counts Arkiv's own registered facts, a separate list, not these.`,
   'ledger_context (all of it: Accounted://ledger/context): how this company has booked each counterparty and supplier.',
   'Documents: gnubok_search_records and gnubok_read_document (arkiv explains, when present).',
   'Workflows: gnubok_list_skills, then gnubok_load_skill; a curated workflow arrives with the company facts inline.',

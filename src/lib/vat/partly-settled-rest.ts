@@ -17,7 +17,9 @@ import { VAT_ACCOUNTS, VAT_SETTLEMENT_NET_ACCOUNTS } from '@/lib/reports/vat-dec
  *   rest lines are 26xx, 2650/1650 and 3740 and never a skattekonto line, so
  *   only the net-account shape applies, with the same two account lists the
  *   SQL is given: a 2650/1650 line (VAT_SETTLEMENT_NET_ACCOUNTS) and a line on
- *   a fixed declaration account (VAT_ACCOUNTS). Output and input VAT that net
+ *   a fixed declaration account (VAT_ACCOUNTS). The sides do not matter here:
+ *   the SQL reads them only for a verifikat with a sales or purchase base
+ *   line outside 26xx, and a rest never has one. Output and input VAT that net
  *   to zero (an EU purchase on 2614/2645) have no 2650/1650 line, and posted
  *   alone they would move ruta 30 and ruta 48. A rest only on the company's
  *   own 26xx accounts routed to a ruta (vat_box) has no fixed declaration

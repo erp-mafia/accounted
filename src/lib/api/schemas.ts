@@ -3052,11 +3052,19 @@ export const CreateInvoiceFromWebshopOrderSchema = z.object({
 
 /**
  * Mark a webshop order as booked/handled outside the integration, with an
- * optional reference to the existing (posted) verifikat that covers it.
+ * optional reference to the existing (posted) verifikat that covers it, or
+ * (voided: true) as voided: an order the store cancelled, which books
+ * nothing and so links no verifikat.
  */
-export const MarkWebshopOrderBookedSchema = z.object({
-  journal_entry_id: uuid.optional(),
-})
+export const MarkWebshopOrderBookedSchema = z
+  .object({
+    journal_entry_id: uuid.optional(),
+    voided: z.boolean().optional(),
+  })
+  .refine((body) => !(body.voided && body.journal_entry_id), {
+    message: 'A voided order links no journal entry',
+    path: ['journal_entry_id'],
+  })
 
 /** {"<payment_method>": {mode:'book', account:'1930'} | {mode:'invoice'}} */
 /**

@@ -11686,6 +11686,46 @@ const WEBSHOP_ORDERS: Record<string, StructuredErrorEntry> = {
     message_en:
       'The order is marked as booked outside the integration. Undo the mark first if you want to book or invoice it from here.',
   },
+  WEBSHOP_ORDER_VOIDED: {
+    httpStatus: 409,
+    message_sv:
+      'Ordern är makulerad. Ångra makuleringen först för att bokföra eller fakturera den.',
+    message_en:
+      'The order is voided. Undo the void first to book or invoice it.',
+  },
+  WEBSHOP_ORDER_REFUND_PARENT_VOIDED: {
+    httpStatus: 409,
+    message_sv:
+      'Återbetalningens order är makulerad. Ångra makuleringen och bokför ordern och återbetalningen.',
+    message_en:
+      "The refund's order is voided. Undo the void and book the order and its refund.",
+  },
+  WEBSHOP_ORDER_NOT_CANCELLED: {
+    httpStatus: 409,
+    message_sv:
+      'Butiken rapporterar inte ordern som avbruten, så den kan inte makuleras.',
+    message_en:
+      'The store does not report the order as cancelled, so it cannot be voided.',
+  },
+  WEBSHOP_ORDER_VOID_RACED: {
+    httpStatus: 409,
+    message_sv: 'Ordern ändrades medan den makulerades och makulerades inte. Ladda om sidan.',
+    message_en: 'The order changed while it was being voided and was not voided. Reload the page.',
+  },
+  WEBSHOP_ORDER_CANCELLED_WITH_REFUND: {
+    httpStatus: 409,
+    message_sv:
+      'Butiken har betalat tillbaka pengar på ordern, så den bokförs med sin återbetalning i stället för att makuleras.',
+    message_en:
+      'The store has refunded money on the order, so it is booked with its refund instead of voided.',
+  },
+  WEBSHOP_ORDER_CANCELLED_IN_STORE: {
+    httpStatus: 422,
+    message_sv:
+      'Ordern är avbruten i butiken och bokförs inte automatiskt. Makulera den, eller bokför den enskilt om kunden har betalat.',
+    message_en:
+      'The order is cancelled in the store and is not booked automatically. Void it, or book it individually if the customer paid.',
+  },
   WEBSHOP_ORDER_MARK_ENTRY_NOT_FOUND: {
     httpStatus: 404,
     message_sv: 'Verifikatet som ordern skulle kopplas till hittades inte.',

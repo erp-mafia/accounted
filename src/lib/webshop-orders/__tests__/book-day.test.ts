@@ -308,6 +308,32 @@ describe('bookWebshopDay', () => {
     expect(h.commitEntry).not.toHaveBeenCalled()
   })
 
+  it('loses the day to an order the store cancelled between its derivation and the claim', async () => {
+    const a = order()
+    const b = order()
+    seed([a, b])
+    h.createDraftEntry.mockImplementation(async () => {
+      h.db.tables.journal_entries.push({ id: 'je-1', status: 'draft' })
+      Object.assign(row(b.id), { status: 'cancelled', refunded_total: 0 })
+      return { id: 'je-1' }
+    })
+    const outcome = await bookWebshopDay(ctx(), INPUT)
+    expect(outcome).toMatchObject({ ok: false, code: 'WEBSHOP_DAY_CHANGED', details: { webshop_order_ids: [b.id] } })
+    expect(row(b.id).journal_entry_id).toBeNull()
+    expect(h.commitEntry).not.toHaveBeenCalled()
+  })
+
+  it('keeps the day when an order\'s status moves on without a cancel', async () => {
+    const a = order()
+    seed([a])
+    h.createDraftEntry.mockImplementation(async () => {
+      h.db.tables.journal_entries.push({ id: 'je-1', status: 'draft' })
+      Object.assign(row(a.id), { status: 'completed' })
+      return { id: 'je-1' }
+    })
+    expect(await bookWebshopDay(ctx(), INPUT)).toMatchObject({ ok: true })
+  })
+
   it('loses the whole day to a row booked between the read and the claim, and releases every claim', async () => {
     const a = order()
     const b = order()

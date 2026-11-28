@@ -19,7 +19,7 @@ import { formatAmount } from '@/lib/utils'
 import { formatLatestVouchers } from '@/lib/reports/latest-vouchers-format'
 import type { DateRangeValue } from '@/components/common/ReportDateRange'
 import type { DimensionFilterValue } from '@/components/reports/DimensionFilter'
-import type { BudgetComparison, ResultatrapportReport } from '@/types'
+import type { BudgetComparison, ResultatrapportReport, ResultatrapportRow, ResultatrapportSubgroup } from '@/types'
 
 /** A deviation's percent, one decimal ("12,5 %"); blank without a budget. */
 function formatPercent(percent: number | null): string {
@@ -36,6 +36,29 @@ function BudgetCells({ figures }: { figures: BudgetComparison | undefined }) {
       <td className={`px-4 py-1.5 text-right tabular-nums ${tone}`}>{figures ? formatAmount(figures.deviation) : ''}</td>
       <td className={`px-4 py-1.5 text-right tabular-nums ${tone}`}>{figures ? formatPercent(figures.deviation_percent) : ''}</td>
     </>
+  )
+}
+
+/** A sum line: a class's Summa, or one class-8 block's. */
+function SumRow({ label, current, prior, budget, hasBudget, hasPrior }: {
+  label: string
+  current: number
+  prior: number
+  budget: BudgetComparison | undefined
+  hasBudget: boolean
+  hasPrior: boolean
+}) {
+  return (
+    <tr className="border-b font-medium">
+      <td colSpan={2} className="px-4 py-1.5 text-right text-muted-foreground">
+        {label}
+      </td>
+      <td className="px-4 py-1.5 text-right tabular-nums">{formatAmount(current)}</td>
+      {hasBudget && <BudgetCells figures={budget} />}
+      <td className="px-4 py-1.5 text-right tabular-nums text-muted-foreground">
+        {hasPrior ? formatAmount(prior) : '-'}
+      </td>
+    </tr>
   )
 }
 
@@ -69,6 +92,43 @@ export default function ResultatrapportView({ periodId, dateRange, dimensionFilt
   const hasPrior = data.prior_period !== null
   const hasBudget = data.budget?.applied === true
   const colCount = hasBudget ? 7 : 4
+
+  const renderRow = (row: ResultatrapportRow) => (
+    <tr
+      key={row.account_number}
+      className="border-b last:border-0 cursor-pointer hover:bg-secondary/35 transition-colors"
+      onClick={accountDrilldownClick(drilldown, row.account_number)}
+    >
+      <td className="px-4 py-1.5">
+        <AccountNumber number={row.account_number} name={row.account_name} />
+      </td>
+      <td className="px-4 py-1.5"><Link href={drilldown.href(row.account_number)} className="block">{row.account_name}</Link></td>
+      <td className="px-4 py-1.5 text-right tabular-nums">{formatAmount(row.current_period)}</td>
+      {hasBudget && <BudgetCells figures={row.budget} />}
+      <td className="px-4 py-1.5 text-right tabular-nums text-muted-foreground">
+        {hasPrior ? formatAmount(row.prior_period) : '-'}
+      </td>
+    </tr>
+  )
+
+  const renderSubgroup = (sub: ResultatrapportSubgroup) => (
+    <React.Fragment key={sub.key}>
+      <tr>
+        <td colSpan={colCount} className="px-4 pt-3 pb-1 text-xs font-medium text-muted-foreground">
+          {sub.label}
+        </td>
+      </tr>
+      {sub.rows.map(renderRow)}
+      <SumRow
+        label={sub.total_label}
+        current={sub.subtotal_current}
+        prior={sub.subtotal_prior}
+        budget={sub.subtotal_budget}
+        hasBudget={hasBudget}
+        hasPrior={hasPrior}
+      />
+    </React.Fragment>
+  )
 
   return (
     <div className="space-y-4">
@@ -130,33 +190,36 @@ export default function ResultatrapportView({ periodId, dateRange, dimensionFilt
                         {group.class_label}
                       </td>
                     </tr>
-                    {group.rows.map((row) => (
-                      <tr
-                        key={row.account_number}
-                        className="border-b last:border-0 cursor-pointer hover:bg-secondary/35 transition-colors"
-                        onClick={accountDrilldownClick(drilldown, row.account_number)}
-                      >
-                        <td className="px-4 py-1.5">
-                          <AccountNumber number={row.account_number} name={row.account_name} />
-                        </td>
-                        <td className="px-4 py-1.5"><Link href={drilldown.href(row.account_number)} className="block">{row.account_name}</Link></td>
-                        <td className="px-4 py-1.5 text-right tabular-nums">{formatAmount(row.current_period)}</td>
-                        {hasBudget && <BudgetCells figures={row.budget} />}
-                        <td className="px-4 py-1.5 text-right tabular-nums text-muted-foreground">
-                          {hasPrior ? formatAmount(row.prior_period) : '-'}
-                        </td>
-                      </tr>
-                    ))}
-                    <tr className="border-b font-medium">
-                      <td colSpan={2} className="px-4 py-1.5 text-right text-muted-foreground">
-                        Summa
-                      </td>
-                      <td className="px-4 py-1.5 text-right tabular-nums">{formatAmount(group.subtotal_current)}</td>
-                      {hasBudget && <BudgetCells figures={group.subtotal_budget} />}
-                      <td className="px-4 py-1.5 text-right tabular-nums text-muted-foreground">
-                        {hasPrior ? formatAmount(group.subtotal_prior) : '-'}
-                      </td>
-                    </tr>
+                    {group.subgroups ? (
+                      // Class 8 in the resultaträkning's blocks: Resultat efter
+                      // finansiella poster after the blocks above that line.
+                      <>
+                        {group.subgroups.filter((sub) => sub.above_result_after_financial).map(renderSubgroup)}
+                        {data.result_after_financial && (
+                          <tr className="border-b font-semibold">
+                            <td colSpan={2} className="px-4 py-2">{data.result_after_financial.label}</td>
+                            <td className="px-4 py-2 text-right tabular-nums">{formatAmount(data.result_after_financial.current)}</td>
+                            {hasBudget && <BudgetCells figures={data.result_after_financial.budget} />}
+                            <td className="px-4 py-2 text-right tabular-nums text-muted-foreground">
+                              {hasPrior ? formatAmount(data.result_after_financial.prior) : '-'}
+                            </td>
+                          </tr>
+                        )}
+                        {group.subgroups.filter((sub) => !sub.above_result_after_financial).map(renderSubgroup)}
+                      </>
+                    ) : (
+                      <>
+                        {group.rows.map(renderRow)}
+                        <SumRow
+                          label="Summa"
+                          current={group.subtotal_current}
+                          prior={group.subtotal_prior}
+                          budget={group.subtotal_budget}
+                          hasBudget={hasBudget}
+                          hasPrior={hasPrior}
+                        />
+                      </>
+                    )}
                   </React.Fragment>
                 ))}
               </tbody>

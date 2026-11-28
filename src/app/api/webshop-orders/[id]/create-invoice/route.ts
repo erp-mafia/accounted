@@ -89,9 +89,10 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       })
     }
     // Marked as booked outside the integration: an invoice for the same sale
-    // would double-count the revenue. The mark is user-reversible.
+    // would double-count the revenue. Voided: the user said nothing is
+    // booked. Both marks are user-reversible.
     if (order.manually_booked_at) {
-      return errorResponseFromCode('WEBSHOP_ORDER_MANUALLY_BOOKED', log, {
+      return errorResponseFromCode(order.manually_voided ? 'WEBSHOP_ORDER_VOIDED' : 'WEBSHOP_ORDER_MANUALLY_BOOKED', log, {
         requestId,
         details: { manually_booked_at: order.manually_booked_at },
       })
