@@ -1,5 +1,5 @@
 import { isUnsafeUrlError, safeFetch } from '@/lib/http/safe-fetch'
-import type { ShopifyOrder, ShopifyShopInfo } from '../types'
+import type { ShopifyOrder, ShopifyPayout, ShopifyShopInfo } from '../types'
 import { sleep } from '@/lib/utils'
 
 /**
@@ -518,6 +518,86 @@ export async function listOrdersPage(
     if (!(error instanceof ShopifyApiError) || error.code !== ACCESS_DENIED_CODE) throw error
     const data = await shopifyGraphQL<OrdersData>(session, ORDERS_QUERY_WITHOUT_ADDRESSES, variables)
     return toOrdersPage(data, true)
+  }
+}
+
+/**
+ * Shopify Payments payouts issued on or after a day, newest first (the caller
+ * also stops at the first older one, so a store whose API ignored the date
+ * filter still reads its recent payouts, not its first ones). The
+ * payout object needs read_shopify_payments_payouts and the account it hangs
+ * on read_shopify_payments_accounts: scopes a store's app may not have, so a
+ * refusal is answered as `scopeMissing`, never as revoked credentials (the
+ * order feed goes on without payouts). A store that does not use Shopify
+ * Payments has no account: no payouts, no error.
+ */
+const PAYOUTS_QUERY = `
+query Payouts($first: Int!, $after: String, $query: String) {
+  shopifyPaymentsAccount {
+    payouts(first: $first, after: $after, query: $query, sortKey: ISSUED_AT, reverse: true) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        legacyResourceId
+        issuedAt
+        status
+        transactionType
+        net { amount currencyCode }
+        summary {
+          adjustmentsFee { amount }
+          adjustmentsGross { amount }
+          advanceFees { amount }
+          advanceGross { amount }
+          chargesFee { amount }
+          chargesGross { amount }
+          refundsFee { amount }
+          refundsFeeGross { amount }
+          reservedFundsFee { amount }
+          reservedFundsGross { amount }
+          retriedPayoutsFee { amount }
+          retriedPayoutsGross { amount }
+        }
+      }
+    }
+  }
+}`
+
+/** Payouts per page: one payout's summary is a dozen scalars, far under the cost ceiling. */
+export const SHOPIFY_PAYOUTS_PAGE_SIZE = 50
+
+export type PayoutsPageOutcome =
+  | { kind: 'page'; payouts: ShopifyPayout[]; hasNextPage: boolean; endCursor: string | null }
+  /** The store does not use Shopify Payments. */
+  | { kind: 'no_account' }
+  /** The app lacks the payout scopes: the order feed goes on without payouts. */
+  | { kind: 'scope_missing' }
+
+interface PayoutsData {
+  shopifyPaymentsAccount: {
+    payouts: { pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: ShopifyPayout[] }
+  } | null
+}
+
+export async function listPayoutsPage(
+  session: ShopifySession,
+  options: { issuedOnOrAfter: string; after: string | null },
+): Promise<PayoutsPageOutcome> {
+  try {
+    const data = await shopifyGraphQL<PayoutsData>(session, PAYOUTS_QUERY, {
+      first: SHOPIFY_PAYOUTS_PAGE_SIZE,
+      after: options.after,
+      query: `issued_at:>=${options.issuedOnOrAfter}`,
+    })
+    const account = data.shopifyPaymentsAccount
+    if (!account) return { kind: 'no_account' }
+    return {
+      kind: 'page',
+      payouts: account.payouts.nodes,
+      hasNextPage: account.payouts.pageInfo.hasNextPage,
+      endCursor: account.payouts.pageInfo.endCursor,
+    }
+  } catch (error) {
+    if (error instanceof ShopifyApiError && error.code === ACCESS_DENIED_CODE) return { kind: 'scope_missing' }
+    throw error
   }
 }
 

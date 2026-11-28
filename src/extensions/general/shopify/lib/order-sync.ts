@@ -13,6 +13,7 @@ import {
   listOrdersPage,
 } from './api-client'
 import { credentialsOf } from './credentials'
+import { syncShopifyPayouts, type ShopifyPayoutSyncSummary } from './payout-sync'
 import type {
   ShopifyConnection,
   ShopifyOrder,
@@ -132,6 +133,12 @@ export interface ShopifySyncSummary {
    * the billing fallback and stays: the panel reads it over the wire.
    */
   shippingCountryWithheld?: boolean
+  /**
+   * Shopify Payments payouts read this run (payout-sync.ts): stored, left
+   * out, and whether the app lacks the payout scopes. Absent when the run
+   * never reached them (deadline, revoked).
+   */
+  payouts?: ShopifyPayoutSyncSummary
 }
 
 /**
@@ -740,6 +747,25 @@ export async function syncShopifyOrders(
           .eq('id', connection.id)
         connection.last_order_synced_at = cursorIso
         prevCursorMs = watermarkMs
+      }
+    }
+
+    // The store's Shopify Payments payouts, for their bank rows' proposals.
+    // Best effort and apart from the order feed: a missing payout scope, or a
+    // payout that could not be read or stored, never fails or revokes it.
+    if (!summary.deadlineReached) {
+      try {
+        summary.payouts = await syncShopifyPayouts(
+          supabase,
+          session,
+          { companyId: connection.company_id, userId: connection.user_id, shopScope, connectionId: connection.id },
+          log,
+        )
+      } catch (payoutError) {
+        log.warn('shopify payouts not read this run; the order feed stands', {
+          connectionId: connection.id,
+          error: payoutError instanceof Error ? payoutError.message : String(payoutError),
+        })
       }
     }
   } catch (err) {

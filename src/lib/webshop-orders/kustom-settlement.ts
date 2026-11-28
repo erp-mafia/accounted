@@ -46,7 +46,8 @@ import { equalOre, inferDecimalMark, parseSwedishAmount, roundOre, sumOre } from
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { isSaneDateString } from '@/lib/invariants'
 import { splitCsvRecords } from '@/lib/csv-records'
-import type { WebshopPayoutLine, WebshopVatBreakdownLine } from '@/types'
+import type { WebshopVatBreakdownLine } from '@/types'
+import type { WebshopPayoutRecord } from './payout-store'
 import { payoutLines } from './payouts'
 import type { WebshopOrderUpsert } from './types'
 
@@ -524,16 +525,7 @@ export function parseKustomSettlementReport(content: string): KustomSettlementOu
 }
 
 /** What the upload stores of a report's payout (webshop_payouts), for its bank row's proposal. */
-export interface KustomPayoutRecord {
-  platform: 'kustom'
-  store_scope: string
-  external_id: string
-  reference: string | null
-  payout_date: string
-  currency: string
-  amount: number
-  lines: WebshopPayoutLine[]
-}
+export type KustomPayoutRecord = WebshopPayoutRecord & { platform: 'kustom' }
 
 /**
  * ⚠️ STORED-KEY FORMAT, as kustomCaptureExternalId: the payout's identity,

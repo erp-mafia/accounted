@@ -758,10 +758,11 @@ function clearingWhyKey(p: BookingProposal): { key: string; values?: Record<stri
   const e = p.clearing
   if (!e) return { key: 'rec_why_manual' }
   if (e.channel === 'webshop') {
-    return {
-      key: 'rec_why_clearing_payout',
-      values: { provider: e.provider, date: e.business_dates[0] ?? '', fees: formatCurrency(e.fees), vat: formatCurrency(e.fee_vat), account: e.account },
-    }
+    const values = { provider: e.provider, date: e.business_dates[0] ?? '', fees: formatCurrency(e.fees), account: e.account }
+    // A fee without VAT (Shopify Payments' payment processing) names none.
+    return e.fee_vat > 0
+      ? { key: 'rec_why_clearing_payout', values: { ...values, vat: formatCurrency(e.fee_vat) } }
+      : { key: 'rec_why_clearing_payout_no_vat', values }
   }
   const dates = e.business_dates
   const last = dates[dates.length - 1] ?? ''
