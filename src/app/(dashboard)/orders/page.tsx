@@ -639,15 +639,17 @@ function OrderRow({
           <span>{order.order_number}</span>
         )}
       </td>
+      {/* Cap on an inner block: Firefox ignores max-width on a td when sizing
+          columns. 144 = the old 160 minus the cell's px-2. */}
       {multiStore && (
-        <td className={cn(TD_CLASS, 'max-w-[160px] truncate text-muted-foreground')}>
-          {order.store_label || order.store_scope}
+        <td className={cn(TD_CLASS, 'text-muted-foreground')}>
+          <div className="max-w-[144px] truncate">{order.store_label || order.store_scope}</div>
         </td>
       )}
       {/* One-line rows (design convention 4): the full beställningsuppgifter
           (kontaktperson, orgnr, e-post) live in the native tooltip. */}
       <td
-        className={cn(TD_CLASS, 'max-w-[220px] truncate')}
+        className={TD_CLASS}
         title={
           [
             order.customer_company ? order.customer_name : null,
@@ -658,9 +660,12 @@ function OrderRow({
             .join(' · ') || undefined
         }
       >
-        {order.customer_company || order.customer_name || (
-          <span className="text-muted-foreground">{'–'}</span>
-        )}
+        {/* 204 = the old 220 cap minus the cell's px-2; see the store cell. */}
+        <div className="max-w-[204px] truncate">
+          {order.customer_company || order.customer_name || (
+            <span className="text-muted-foreground">{'–'}</span>
+          )}
+        </div>
       </td>
       {/* ISO code in the cell, the country name in the native tooltip. For
           Shopify this is where the goods go, which decides the VAT treatment
