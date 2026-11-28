@@ -542,6 +542,7 @@ function BankFileImportWizard({ onBack }: { onBack: () => void }) {
 
       {bankStep === 'upload' && !depositSpecFile && (
         <BankFileUploadStep
+          allowBankFetch={!cardTarget}
           onFileSelect={handleFileSelect}
           isLoading={bankIsLoading}
           error={bankError}
