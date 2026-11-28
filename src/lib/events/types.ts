@@ -113,6 +113,12 @@ export type CoreEvent =
   | { type: 'invoice.cancelled'; payload: { invoice: Invoice; userId: string; companyId: string } }
   | { type: 'invoice.paid'; payload: { invoice: Invoice; paymentAmount: number; paymentDate: string; userId: string; companyId: string } }
   | { type: 'credit_note.created'; payload: { creditNote: CreditNote; userId: string; companyId: string } }
+  // "Ångra kreditering" (lib/invoices/uncredit-invoice.ts): the original
+  // back from 'credited', its credit note kept as cancelled. The event log is
+  // the audit trail: who undid it, the storno (null when the credit note's
+  // verifikat was already stornoed or never posted), and on what the person
+  // relied that the credit note never reached the customer.
+  | { type: 'invoice.uncredited'; payload: { invoice: Invoice; creditNoteId: string; reversalEntryId: string | null; deliveryBasis: 'no_delivery' | 'attested_not_delivered'; userId: string; companyId: string } }
   // Recurring invoices: emitted by the daily cron after a schedule spawns
   // an invoice. `autoSent` tells observers whether the email also went out
   // (false means it was created as draft for manual review).

@@ -5,6 +5,7 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { sessionTimeoutClearCookieOptions } from '@/lib/auth/session-timeout'
 import { SESSION_TIMEOUT_COOKIE } from '@/lib/auth/session-timeout-shared'
 import type { UserUiState } from '@/types'
+import { storedStartPages } from '@/lib/company/start-page'
 
 // User-level UI preferences (not company-scoped), stored on user_preferences.
 // Mirrors the /api/user/locale pattern: requireAuth directly because these
@@ -37,6 +38,9 @@ export async function GET() {
       // Read here so the settings row has one place to ask; written through
       // /api/user/ui-state, where it is stored (lib/ui-state/fab-preference.ts).
       support_fab_hidden: (data?.ui_state as UserUiState | null | undefined)?.support_fab_hidden === true,
+      // Startsida per company, for the settings row: written through
+      // /api/user/ui-state like support_fab_hidden (lib/company/start-page.ts).
+      start_page: storedStartPages((data?.ui_state as UserUiState | null | undefined)?.start_page),
     },
   })
 }

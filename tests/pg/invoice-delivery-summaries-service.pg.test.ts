@@ -30,7 +30,7 @@
 import { describe, it, expect } from 'vitest'
 import { randomUUID } from 'node:crypto'
 import { getPool, runAsServiceRole, withUserContext } from './setup'
-import { insertAuthUser, insertCompanyMember, seedCompany } from './fixtures'
+import { insertAuthUser, insertCompanyMember, seedCompany, setActiveCompany } from './fixtures'
 
 const FN = `SELECT * FROM public.list_invoice_delivery_summaries_for_service($1, $2, $3)`
 
@@ -332,5 +332,40 @@ describe('the deferred Bokför step on the service role', () => {
     expect(res.rows).toEqual([
       expect.objectContaining({ status: 'sent', document_attachment_id: documentAttachmentId, sent_at: expect.anything() }),
     ])
+  })
+})
+
+// A linked payment verifikat takes the emailed PDF as underlag
+// (lib/core/documents/customer-invoice-underlag.ts). The member who links it
+// is often not the one who sent the invoice. invoice_deliveries' own SELECT
+// policy shows a member only the deliveries they sent, so a read of the table
+// in that member's session found no PDF and left it off the verifikat. The
+// session's delivery history serves every member. Both answers are pinned.
+describe("a colleague's send in a member's session", () => {
+  it('is hidden by the table policy and served by the session reader', async () => {
+    const a = await seedCompany()
+    const colleague = await insertAuthUser()
+    await insertCompanyMember({ companyId: a.companyId, userId: colleague, role: 'admin' })
+    await setActiveCompany(colleague, a.companyId)
+    const invoiceId = await insertInvoice({ userId: a.userId, companyId: a.companyId })
+    const documentAttachmentId = await insertDocumentAttachment({ userId: a.userId, companyId: a.companyId })
+    await insertSentEmailDelivery({ companyId: a.companyId, userId: a.userId, invoiceId, documentAttachmentId })
+
+    await withUserContext(colleague, async (client) => {
+      const table = await client.query(
+        `SELECT document_attachment_id FROM public.invoice_deliveries
+         WHERE company_id = $1 AND invoice_id = $2 AND status = 'sent'`,
+        [a.companyId, invoiceId],
+      )
+      expect(table.rows).toEqual([])
+
+      const history = await client.query(
+        `SELECT status, document_attachment_id, sent_at FROM public.list_invoice_delivery_summaries($1, $2)`,
+        [a.companyId, invoiceId],
+      )
+      expect(history.rows).toEqual([
+        expect.objectContaining({ status: 'sent', document_attachment_id: documentAttachmentId, sent_at: expect.anything() }),
+      ])
+    })
   })
 })

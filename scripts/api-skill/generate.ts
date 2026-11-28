@@ -57,9 +57,9 @@ const GROUPS: Array<{ file: string; title: string; members: string[]; blurb: str
   {
     file: 'core.md',
     title: 'Core',
-    members: ['health', 'api-key', 'companies', 'capabilities', 'packages', 'operations', 'settings', 'peppol', 'service-accounts'],
+    members: ['health', 'api-key', 'companies', 'company-lookup', 'capabilities', 'packages', 'operations', 'settings', 'peppol', 'service-accounts'],
     blurb:
-      'Connectivity, the calling key\'s own grant, company discovery, which modules a company can use (capabilities), its packages with their status and the staged switch (packages), async-operation polling, company settings, and service accounts (an integration\'s own principal, with a human sponsor). ' +
+      'Connectivity, the calling key\'s own grant, company discovery, a company in the public register by organisationsnummer (company-lookup), which modules a company can use (capabilities), its packages with their status and the staged switch (packages), async-operation polling, company settings, and service accounts (an integration\'s own principal, with a human sponsor). ' +
       'Every session starts with GET /companies to resolve the companyId that all other URLs need.',
   },
   {

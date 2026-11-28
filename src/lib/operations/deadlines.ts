@@ -11,8 +11,10 @@
  * touched, and nothing is sent anywhere.
  *
  * Both doors: the MCP tools (the tick stages for approval) and v1
- * (GET /deadlines, POST /deadlines/{id}/complete). Adding, editing and
- * removing a deadline is still the dashboard only (session-route-parity.ts).
+ * (GET /deadlines, POST /deadlines/{id}/complete). Removing a deadline
+ * (lib/deadlines/removal.ts, the service DELETE /api/deadlines/:id runs too)
+ * is an MCP tool that stages for approval. Adding and editing a deadline is
+ * still the dashboard only (session-route-parity.ts).
  */
 import { z } from 'zod'
 import { saneIsoDateSchema } from '@/lib/invariants/zod'
@@ -23,6 +25,7 @@ import {
   setDeadlineCompletion,
   summarizeDeadline,
 } from '@/lib/deadlines/completion'
+import { removeDeadline } from '@/lib/deadlines/removal'
 import { defineOperation } from './types'
 
 const META = { request_id: 'req_…', api_version: '2026-05-12' }
@@ -95,7 +98,7 @@ export const deadlinesList = defineOperation({
     name: 'gnubok_list_deadlines',
     title: 'List Deadlines',
     description:
-      "List the company's deadlines by due date: open ones by default, or completed/all. Each has a deadline_id, due_date and overdue. Use to see what is due or to find the deadline to tick off (gnubok_complete_deadline).",
+      "List the company's deadlines by due date: open ones by default, or completed/all. Each has a deadline_id, due_date and overdue. Use to see what is due or to find the deadline to tick off (gnubok_complete_deadline) or remove (gnubok_delete_deadline).",
     keywords: ['deadline', 'deadlines', 'viktiga datum', 'påminnelse', 'förfaller', 'försenad', 'skattekalender'],
   },
   run: (ctx, input) => listDeadlines(ctx, input),
@@ -114,7 +117,7 @@ export const deadlinesComplete = defineOperation({
       'Sets one deadline completed (is_completed true) or open again (false), as the checkbox under Deadlines in the app does. Only the tick changes: no verifikat, period or filing is touched and nothing is sent to Skatteverket. Asking for the state the deadline already has changes nothing (changed false). Dry-runnable.',
     useWhen: 'The work a deadline stands for is done (or was ticked off by mistake) and it should leave (or return to) the open list.',
     doNotUseFor:
-      'A moms or AGI filing made outside Accounted: record the filing instead (moms: POST /reports/vat-declaration/filings or gnubok_mark_vat_period_filed; AGI: gnubok_mark_agi_period_filed), which completes the deadline with the filing date.',
+      'A moms or AGI filing made outside Accounted: record the filing instead (moms: POST /reports/vat-declaration/filings or gnubok_mark_vat_period_filed; AGI: gnubok_mark_agi_period_filed), which completes the deadline with the filing date. A deadline for an obligation the company does not have: remove it (gnubok_delete_deadline).',
     pitfalls: [
       'DEADLINE_NOT_FOUND for an id that is not one of the company\'s listed deadlines (GET /deadlines, gnubok_list_deadlines), including one the company removed.',
       'DEADLINE_CONFIRMED_BY_SKATTEVERKET when is_completed false targets a deadline whose filing Skatteverket confirmed through the connection.',
@@ -170,4 +173,68 @@ export const deadlinesComplete = defineOperation({
     if (!outcome.ok || outcome.dryRun) return outcome
     return { ok: true, data: { deadline: summarizeDeadline(outcome.data.deadline), changed: outcome.data.changed } }
   },
+})
+
+export const deadlinesDelete = defineOperation({
+  id: 'deadlines.delete',
+  kind: 'write',
+  scope: 'bookkeeping:write',
+  risk: 'low',
+  // No door puts a removed deadline back: one added by hand is deleted, a
+  // generated one stays dismissed.
+  reversible: false,
+  docs: {
+    summary: "Remove a deadline from the company's list.",
+    description:
+      "Removes one deadline, as Ta bort under Deadlines in the app does. A deadline added by hand is deleted. A deadline generated from the tax settings is dismissed: hidden everywhere and never generated again for its period, which a plain delete would not achieve (the nightly repair recreates a missing one). Open or ticked off alike. No verifikat, period or filing is touched and nothing is sent to Skatteverket. Dry-runnable: the preview says which of the two happens.",
+    useWhen:
+      "A deadline stands for an obligation the company does not have, e.g. a preliminary-tax payment for a month before Skatteverket's first debitering, or a deadline added by mistake.",
+    doNotUseFor:
+      'Work that is done: tick it off (gnubok_complete_deadline). A kind of deadline that no longer applies: change the tax profile (gnubok_update_company_tax_profile, e.g. preliminary_tax_first_due_date), which regenerates the list.',
+    pitfalls: [
+      "DEADLINE_NOT_FOUND for an id that is not one of the company's listed deadlines (gnubok_list_deadlines), including one already removed.",
+      'A removed generated deadline does not come back when the tax settings change, and nothing here undoes the removal.',
+    ],
+    example: {
+      request: { deadline_id: EXAMPLE_DEADLINE.deadline_id },
+      response: {
+        data: {
+          deadline_id: EXAMPLE_DEADLINE.deadline_id,
+          title: 'Betala preliminärskatt december 2026',
+          source: 'system',
+          effect: 'dismissed',
+        },
+        meta: META,
+      },
+    },
+  },
+  input: z
+    .object({
+      deadline_id: z.string().uuid().describe('From the deadline list (gnubok_list_deadlines).'),
+    })
+    .strict(),
+  output: z.object({
+    deadline_id: z.string().uuid(),
+    title: z.string(),
+    source: z.enum(['system', 'user']).describe('system: generated from the tax settings; user: added by hand.'),
+    effect: z
+      .enum(['deleted', 'dismissed'])
+      .describe('deleted: a deadline added by hand is gone. dismissed: a generated one is hidden for good.'),
+  }),
+  errorCodes: ['DEADLINE_NOT_FOUND'],
+  mcp: {
+    name: 'gnubok_delete_deadline',
+    title: 'Delete Deadline',
+    description:
+      'Stage removing a deadline, by deadline_id from gnubok_list_deadlines: one added by hand is deleted, a generated one is dismissed for good. For work that is done use gnubok_complete_deadline. Books and files nothing.',
+    keywords: ['deadline', 'ta bort deadline', 'radera deadline', 'påminnelse', 'preliminärskatt', 'viktiga datum'],
+    stage: {
+      pendingType: 'delete_deadline',
+      title: (_input, preview) => {
+        const name = typeof preview?.title === 'string' ? `: ${preview.title}` : ''
+        return `Ta bort deadline${name}`
+      },
+    },
+  },
+  run: (ctx, { deadline_id }, { dryRun }) => removeDeadline(ctx, deadline_id, { dryRun }),
 })

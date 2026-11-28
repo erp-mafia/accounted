@@ -10,6 +10,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createTableMockSupabase } from '@/tests/helpers'
 import { getStructuredError } from '@/lib/errors/get-structured-error'
+import { sendingNotActiveRefusal } from '@/lib/digital-mailboxes/sending-not-active'
 
 const checkInvoiceMailboxSend = vi.hoisted(() => vi.fn())
 const getEmailService = vi.hoisted(() => vi.fn())
@@ -144,6 +145,24 @@ describe('gnubok_send_invoice: channel kivra or billo', () => {
     const error = await call({ invoice_id: INVOICE_ID, channel: 'kivra' }, supabase).catch((e: unknown) => e)
     expect(error).toMatchObject({ code: 'DIGITAL_MAILBOX_SENDING_NOT_ACTIVE' })
     expect(getStructuredError(error).remediation?.description).toMatch(/\/settings\/connections/)
+    expect(findCall('pending_operations', 'insert')).toBeUndefined()
+  })
+
+  it('says that sending waits for Kivra\'s approval, with that state\'s sentence and next step', async () => {
+    checkInvoiceMailboxSend.mockResolvedValue({
+      ok: false,
+      ...sendingNotActiveRefusal('kivra', {
+        send_state: 'off',
+        provider_meta: { sender_request: { ref: 'req-1', status: 'pending', requested_at: '2026-11-20T10:00:00Z', requested_by: 'user-1' } },
+      }),
+    })
+    const { supabase, findCall } = setup()
+
+    const error = await call({ invoice_id: INVOICE_ID, channel: 'kivra' }, supabase).catch((e: unknown) => e)
+    expect(error).toMatchObject({ code: 'DIGITAL_MAILBOX_SENDING_NOT_ACTIVE', details: { state: 'pending' } })
+    const structured = getStructuredError(error)
+    expect(structured.message_sv).toMatch(/^Utskick via Kivra är påslaget men väntar på att Kivra godkänner det/)
+    expect(structured.remediation?.description).toMatch(/Nothing to do but wait/)
     expect(findCall('pending_operations', 'insert')).toBeUndefined()
   })
 

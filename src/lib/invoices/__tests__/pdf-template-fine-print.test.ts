@@ -114,3 +114,26 @@ describe('invoice fine print language (crm#1735)', () => {
     expect(text).not.toContain(LATE_FEE_SV)
   })
 })
+
+describe('a räntefaktura prints no late-payment terms of its own', () => {
+  it('leaves out Dröjsmålsränta and keeps the payment terms, in both languages', () => {
+    for (const language of ['sv', 'en'] as const) {
+      const text = treeTextLeaves(
+        InvoicePDF({
+          invoice: makeInvoice({ ...invoice, is_late_interest_invoice: true }),
+          customer: makeCustomer({ language }),
+          items,
+          company: makeCompanySettings({
+            invoice_late_fee_text: LATE_FEE_SV,
+            invoice_late_fee_text_en: LATE_FEE_EN,
+            invoice_credit_terms_text: TERMS_SV,
+          }),
+          paymentQr: null,
+        }),
+      )
+      expect(text, language).not.toContain(LATE_FEE_SV)
+      expect(text, language).not.toContain(LATE_FEE_EN)
+      expect(text, language).toContain(TERMS_SV)
+    }
+  })
+})

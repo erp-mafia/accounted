@@ -109,7 +109,8 @@
       "lib/composition/reversal-hooks.ts -> lib/supplier-invoices/registration-reversal",
       "lib/composition/unbooked-bank-lines.ts -> lib/transactions/unbooked",
       "lib/composition/voucher-block-warnings.ts -> lib/invoices/voucher-open-invoice-warning",
-      "lib/composition/voucher-block-warnings.ts -> lib/vat/voucher-filed-period-warning"
+      "lib/composition/voucher-block-warnings.ts -> lib/vat/voucher-filed-period-warning",
+      "lib/composition/voucher-block-warnings.ts -> lib/vat/voucher-rc-basis-twice-warning"
     ]
   }
 }

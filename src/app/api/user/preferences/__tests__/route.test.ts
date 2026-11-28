@@ -63,24 +63,37 @@ describe('GET /api/user/preferences', () => {
     const res = await GET()
     const { status, body } = await parseJsonResponse<{ data: unknown }>(res)
     expect(status).toBe(200)
-    expect(body.data).toEqual({ hide_assistant_fab: true, auto_logout: true, support_fab_hidden: false })
+    expect(body.data).toEqual({ hide_assistant_fab: true, auto_logout: true, support_fab_hidden: false, start_page: {} })
   })
 
   it('defaults to false when no preferences row exists', async () => {
     authedForGet(null)
     const res = await GET()
     const { body } = await parseJsonResponse<{ data: unknown }>(res)
-    expect(body.data).toEqual({ hide_assistant_fab: false, auto_logout: false, support_fab_hidden: false })
+    expect(body.data).toEqual({ hide_assistant_fab: false, auto_logout: false, support_fab_hidden: false, start_page: {} })
   })
 
   it('reads the support button choice out of the ui state, apart from the assistant one', async () => {
     authedForGet({ hide_assistant_fab: true, auto_logout: false, ui_state: { support_fab_hidden: true } })
     const { body } = await parseJsonResponse<{ data: unknown }>(await GET())
-    expect(body.data).toEqual({ hide_assistant_fab: true, auto_logout: false, support_fab_hidden: true })
+    expect(body.data).toEqual({ hide_assistant_fab: true, auto_logout: false, support_fab_hidden: true, start_page: {} })
 
     authedForGet({ hide_assistant_fab: true, auto_logout: false, ui_state: {} })
     const second = await parseJsonResponse<{ data: { support_fab_hidden: boolean } }>(await GET())
     expect(second.body.data.support_fab_hidden).toBe(false)
+  })
+
+  it('reads the start page per company out of the ui state, dropping what it does not know', async () => {
+    authedForGet({
+      ui_state: {
+        start_page: {
+          '11111111-1111-4111-8111-111111111111': 'bookkeeping',
+          '22222222-2222-4222-8222-222222222222': 'payroll',
+        },
+      },
+    })
+    const { body } = await parseJsonResponse<{ data: { start_page: Record<string, string> } }>(await GET())
+    expect(body.data.start_page).toEqual({ '11111111-1111-4111-8111-111111111111': 'bookkeeping' })
   })
 })
 

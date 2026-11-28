@@ -305,8 +305,10 @@ export const OPERATION_DOORS: Readonly<Record<string, DoorSpec>> = Object.freeze
   'employees.worked-days.delete': PAYROLL_RECORD,
   // Filings and moms.
   'agi-filings.mark': TAX,
-  // A tick on a reminder changes no books, like the dashboard's /api/deadlines.
+  // A tick on a reminder, or its removal, changes no books, like the
+  // dashboard's /api/deadlines.
   'deadlines.complete': BOOK_HOUSE,
+  'deadlines.delete': BOOK_HOUSE,
   'vat-filings.mark': TAX,
   'vat-filings.unmark': TAX,
   'vat-check-reviews.mark': TAX_RECORD,

@@ -595,6 +595,91 @@ describe('signOffAccount: the bank balance on the through-date', () => {
     })
   })
 
+  describe('a stated balance on a bank account no bank connection feeds', () => {
+    // signOffAccount reads the fiscal period first, then the cash account.
+    function supabaseFor(cashAccount: { bank_connection_id: string | null } | null) {
+      const mock = createQueuedMockSupabase()
+      mock.enqueueMany([{ data: null }, { data: cashAccount }])
+      return mock
+    }
+    const unconnected = () => supabaseFor({ bank_connection_id: null })
+    const noBankBalance = (overrides: Record<string, unknown> = {}) =>
+      bankStatus(
+        { balance_check: null, balance_check_refusal: 'NO_BANK_BALANCE' },
+        { account_number: '1940', unexplained_difference: 640, is_reconciled: false, ...overrides },
+      )
+
+    it('signs against the booked balance at the end of the date, as a manual account does, and records both', async () => {
+      const { supabase, findCalls } = unconnected()
+      statusMock.mockResolvedValue(noBankBalance())
+      bookedOnDayMock.mockResolvedValue(8150.5)
+      const result = await sign(supabase, false, { external_balance: 8150.5 })
+      if (!result || result.dry_run) throw new Error('expected a sign-off')
+      expect(findCalls('cash_accounts', 'eq')).toEqual([
+        ['company_id', COMPANY],
+        ['id', '11111111-1111-4111-8111-111111111111'],
+      ])
+      expect(bookedOnDayMock).toHaveBeenCalledWith(supabase, COMPANY, '1940', '2026-10-31')
+      // The bridge's 640 is not what is judged: the stated balance is.
+      expect(insertMock).toHaveBeenCalledWith(
+        supabase,
+        COMPANY,
+        expect.objectContaining({ through_date: '2026-10-31', external_balance: 8150.5, ledger_balance: 8150.5, unexplained_difference: 0 }),
+      )
+      // The statement's balance answers the bank having none.
+      expect(result.warning).toBeNull()
+    })
+
+    it('refuses a stated balance that differs from the books unless forced, and then records the difference', async () => {
+      statusMock.mockResolvedValue(noBankBalance())
+      bookedOnDayMock.mockResolvedValue(8150.5)
+      await expect(sign(unconnected().supabase, true, { external_balance: 8000 })).rejects.toMatchObject({
+        code: 'NOT_RECONCILED',
+        details: { unexplained_difference: 150.5 },
+      })
+      const result = await sign(unconnected().supabase, true, { external_balance: 8000, force: true, note: 'Kortköp som bokförs i november.' })
+      expect(result).toMatchObject({
+        dry_run: true,
+        would_sign: { external_balance: 8000, ledger_balance: 8150.5, unexplained_difference: 150.5, forced: true, warning: null },
+      })
+    })
+
+    it('still refuses it on a bank account a bank connection feeds', async () => {
+      const { supabase } = supabaseFor({ bank_connection_id: '33333333-3333-4333-8333-333333333333' })
+      statusMock.mockResolvedValue(noBankBalance())
+      await expect(sign(supabase, false, { external_balance: 8150.5 })).rejects.toMatchObject({ code: 'EXTERNAL_BALANCE_NOT_ALLOWED' })
+      expect(insertMock).not.toHaveBeenCalled()
+    })
+
+    it('takes none for an account whose row is gone by the time it is read', async () => {
+      statusMock.mockResolvedValue(noBankBalance())
+      await expect(sign(supabaseFor(null).supabase, false, { external_balance: 8150.5 })).rejects.toMatchObject({
+        code: 'EXTERNAL_BALANCE_NOT_ALLOWED',
+      })
+      expect(insertMock).not.toHaveBeenCalled()
+    })
+
+    it('refuses it on an account kept in another currency than the books', async () => {
+      statusMock.mockResolvedValue(
+        bankStatus({ balance_check: null, balance_check_refusal: 'FOREIGN_CURRENCY_ACCOUNT' }, { account_number: '1932', currency: 'EUR' }),
+      )
+      await expect(sign(unconnected().supabase, false, { external_balance: 700 })).rejects.toMatchObject({
+        code: 'EXTERNAL_BALANCE_NOT_ALLOWED',
+        message: expect.stringMatching(/annan valuta än bokföringen/),
+      })
+      expect(insertMock).not.toHaveBeenCalled()
+    })
+
+    it('without a stated balance judges the bridge as before and reads no cash account', async () => {
+      const { supabase, findCall } = createQueuedMockSupabase()
+      statusMock.mockResolvedValue(noBankBalance({ unexplained_difference: 0, is_reconciled: true }))
+      bookedOnDayMock.mockResolvedValue(8150.5)
+      const result = await sign(supabase, true)
+      expect(result).toMatchObject({ would_sign: { external_balance: null, unexplained_difference: 0, warning: { code: 'NO_BANK_BALANCE' } } })
+      expect(findCall('cash_accounts', 'select')).toBeUndefined()
+    })
+  })
+
   it('carries no bank comparison for the skattekonto or a manual account', async () => {
     const { supabase } = createQueuedMockSupabase()
     statusMock.mockResolvedValue(status())

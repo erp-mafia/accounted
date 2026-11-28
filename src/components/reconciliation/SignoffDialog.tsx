@@ -39,7 +39,9 @@ import type { SignoffBankBalance, SignoffWarningCode } from '@/lib/reconciliatio
  * On a bank account the preview also carries the bank's own balance against
  * the books on the date, and the server's warning when they differ or the
  * bank has none for the date. The dialog shows it before Signera and never
- * blocks on it.
+ * blocks on it. A bank account no bank connection feeds may also take the
+ * statement's balance, held against the booked balance on the date that the
+ * preview reads, as a manual account's underlag is.
  */
 export interface SignoffSubmitInput {
   through_date: string
@@ -77,6 +79,8 @@ interface SignoffDialogProps {
   currency: string
   /** Ask for the balance per underlag (manual accounts without a system specification). */
   askExternalBalance?: boolean
+  /** Offer the statement's balance (bank accounts without a bank connection); optional. */
+  askStatementBalance?: boolean
   /** The booked balance the stated one is compared with. */
   ledgerBalance?: number | null
   /** Dry-run the sign-off for a date; the verdict decides whether the override is asked for. */
@@ -95,6 +99,7 @@ export function SignoffDialog({
   unexplained,
   currency,
   askExternalBalance = false,
+  askStatementBalance = false,
   ledgerBalance = null,
   onPreview,
   onSubmit,
@@ -153,12 +158,24 @@ export function SignoffDialog({
   // With a stated balance the difference is against the booked balance;
   // otherwise the server's preview decides, and until it has answered the
   // engine's number from the page tile (or "unknown") stands in.
-  const stated = askExternalBalance ? parseAmountInput(external) : null
+  const asksBalance = askExternalBalance || askStatementBalance
+  const stated = asksBalance ? parseAmountInput(external) : null
+  // Typed but not a number: never signed as if nothing were typed.
+  const statedUnreadable = asksBalance && external.trim() !== '' && stated == null
   const blocked = preview?.kind === 'blocked' ? preview.message : null
   const previewUnexplained = preview && preview.kind !== 'blocked' ? preview.unexplained : unexplained
+  const previewBank = !previewing && preview && preview.kind !== 'blocked' ? (preview.bank ?? null) : null
+  // A bank account's booked balance at the end of the date is the preview's
+  // (its page figure is the period's movement); unknown until it answers.
+  const bookedForStated = askStatementBalance ? (previewBank?.balance.booked_balance ?? null) : ledgerBalance
   const effectiveUnexplained =
-    stated != null && ledgerBalance != null ? roundOre(ledgerBalance - stated) : previewUnexplained
-  const bank = !previewing && preview && preview.kind !== 'blocked' ? (preview.bank ?? null) : null
+    stated != null && bookedForStated != null
+      ? roundOre(bookedForStated - stated)
+      : stated != null && askStatementBalance
+        ? null
+        : previewUnexplained
+  // A stated statement balance is the one the bank had none of.
+  const bank = stated != null && previewBank?.warning === 'NO_BANK_BALANCE' ? null : previewBank
   // The parts of a difference, named as on the account page; they sum to it.
   const bankParts =
     bank?.warning === 'BANK_BALANCE_DIFFERS'
@@ -189,6 +206,7 @@ export function SignoffDialog({
     !busy &&
     !previewing &&
     blocked === null &&
+    !statedUnreadable &&
     date.length === 10 &&
     (!needsForce || (force && note.trim().length > 0))
 
@@ -200,7 +218,7 @@ export function SignoffDialog({
         through_date: date,
         note: note.trim() || null,
         force: needsForce && force,
-        ...(askExternalBalance ? { external_balance: stated } : {}),
+        ...(asksBalance ? { external_balance: stated } : {}),
       })
       if (message) setError(message)
     } finally {
@@ -274,9 +292,11 @@ export function SignoffDialog({
               {bank.warning !== null && <p className="text-muted-foreground">{t('signoff_bank_balance_hint')}</p>}
             </div>
           )}
-          {askExternalBalance && (
+          {asksBalance && (
             <div className="space-y-1.5">
-              <Label htmlFor="signoff-external">{t('signoff_external_balance')}</Label>
+              <Label htmlFor="signoff-external">
+                {askStatementBalance ? t('signoff_statement_balance') : t('signoff_external_balance')}
+              </Label>
               <Input
                 id="signoff-external"
                 inputMode="decimal"
@@ -285,10 +305,22 @@ export function SignoffDialog({
                 placeholder="0,00"
                 className="tabular-nums"
               />
+              {statedUnreadable && (
+                <p role="alert" className="text-xs text-destructive">
+                  {t('signoff_balance_unreadable')}
+                </p>
+              )}
               <p className="text-xs text-muted-foreground">
-                {ledgerBalance != null
-                  ? t('signoff_external_balance_help', { amount: formatCurrency(ledgerBalance, currency) })
-                  : t('signoff_external_balance_optional')}
+                {askStatementBalance
+                  ? bookedForStated != null
+                    ? t('signoff_statement_balance_help', {
+                        account: accountNumber,
+                        amount: formatCurrency(bookedForStated, currency),
+                      })
+                    : t('signoff_statement_balance_optional')
+                  : ledgerBalance != null
+                    ? t('signoff_external_balance_help', { amount: formatCurrency(ledgerBalance, currency) })
+                    : t('signoff_external_balance_optional')}
               </p>
             </div>
           )}
