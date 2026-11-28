@@ -1786,6 +1786,20 @@ describe('reverseEntry: storno guard', () => {
     let jeCall = 0
     const jeResults = [
       { data: original, error: null },
+      // The verifikat the correction corrects (correctedOriginalOf): a
+      // manual one, whose storno runs no rule of its own.
+      {
+        data: {
+          id: 'entry-0',
+          correction_of_id: null,
+          reverses_id: null,
+          voucher_series: 'A',
+          voucher_number: 1,
+          source_type: 'manual',
+          source_id: null,
+        },
+        error: null,
+      },
       // Chain-depth walker: follows correction_of_id to the chain root
       // (depth 1, well under the guard threshold).
       { data: { id: 'entry-0', correction_of_id: null, reverses_id: null, voucher_series: 'A', voucher_number: 1 }, error: null },

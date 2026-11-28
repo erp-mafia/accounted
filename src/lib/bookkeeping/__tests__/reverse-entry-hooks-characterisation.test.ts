@@ -28,6 +28,14 @@
  * catches a hook's throw: it propagates, the storno stands and the emits are
  * skipped.
  *
+ * The storno of a correction reads the verifikat it corrects (one read per
+ * correction generation, before anything else) and runs, for that
+ * verifikat's source type, only the hooks marked followsCorrection, with the
+ * correction's own id: the payment, supplier invoice registration, customer
+ * invoice and expense claim hooks. Every other hook and the engine's own
+ * source-typed releases (the IB link, the depreciation row, the tax account
+ * row) stay off for a correction.
+ *
  * correctEntry (storno plus rättelse) runs none of the hooks: pinned here so
  * that choice changes only on purpose.
  */
@@ -57,6 +65,7 @@ const h = vi.hoisted(() => {
     releaseSupplierInvoiceRegistrationAfterReversal: hook('releaseSupplierInvoiceRegistrationAfterReversal'),
     assertInvoiceVerifikatReversible: hook('assertInvoiceVerifikatReversible'),
     assertSalaryRunVerifikatReversible: hook('assertSalaryRunVerifikatReversible'),
+    assertCorrectedSalaryRunVerifikatReversible: hook('assertCorrectedSalaryRunVerifikatReversible'),
     assertExpenseClaimVerifikatReversible: hook('assertExpenseClaimVerifikatReversible'),
     emit: vi.fn(async (event: { type: string }) => {
       trace.push(`emit ${event.type}`)
@@ -94,6 +103,7 @@ vi.mock('@/lib/invoices/invoice-verifikat-reversal', () => ({
 }))
 vi.mock('@/lib/salary/run-verifikat-reversal', () => ({
   assertSalaryRunVerifikatReversible: h.assertSalaryRunVerifikatReversible,
+  assertCorrectedSalaryRunVerifikatReversible: h.assertCorrectedSalaryRunVerifikatReversible,
 }))
 vi.mock('@/lib/expenses/claim-verifikat-reversal', () => ({
   assertExpenseClaimVerifikatReversible: h.assertExpenseClaimVerifikatReversible,
@@ -152,6 +162,7 @@ const HOOK_FUNCTIONS = [
   'releaseSupplierInvoiceRegistrationAfterReversal',
   'assertInvoiceVerifikatReversible',
   'assertSalaryRunVerifikatReversible',
+  'assertCorrectedSalaryRunVerifikatReversible',
   'assertExpenseClaimVerifikatReversible',
 ] as const
 
@@ -204,9 +215,10 @@ function describeWrite(table: string, op: string, payload: unknown): string {
 /**
  * A client that walks the storno paths and appends every write and RPC to
  * the trace. Reads answer what the happy path needs: the original on the
- * first journal_entries read, the chart, and empty sets elsewhere.
+ * first journal_entries read, a verifikat of `chain` read by its id, the
+ * chart, and empty sets elsewhere.
  */
-function recordingClient(original: ReturnType<typeof originalOf>) {
+function recordingClient(original: ReturnType<typeof originalOf>, chain: Record<string, object> = {}) {
   let journalReads = 0
   let journalInserts = 0
   const insertedIds = ['reversal-1', 'corrected-1']
@@ -214,6 +226,7 @@ function recordingClient(original: ReturnType<typeof originalOf>) {
   function builder(table: string) {
     let op: 'select' | 'insert' | 'update' | 'delete' = 'select'
     let payload: unknown
+    let idFilter: string | undefined
     const b: Record<string, unknown> = {}
     const write = (kind: 'insert' | 'update' | 'delete') => (p?: unknown) => {
       op = kind
@@ -231,7 +244,11 @@ function recordingClient(original: ReturnType<typeof originalOf>) {
       if (table === 'journal_entries' && op === 'select') h.trace.push(`read journal_entries (${columns ?? '*'})`)
       return b
     }
-    for (const m of ['eq', 'neq', 'in', 'is', 'not', 'or', 'gte', 'lte', 'order', 'limit']) b[m] = () => b
+    for (const m of ['neq', 'in', 'is', 'not', 'or', 'gte', 'lte', 'order', 'limit']) b[m] = () => b
+    b.eq = (column: string, value: unknown) => {
+      if (column === 'id') idFilter = String(value)
+      return b
+    }
     const resolve = () => {
       if (table === 'journal_entries') {
         if (op === 'insert') {
@@ -244,6 +261,7 @@ function recordingClient(original: ReturnType<typeof originalOf>) {
         }
         journalReads++
         if (journalReads === 1) return { data: original, error: null }
+        if (idFilter && chain[idFilter]) return { data: chain[idFilter], error: null }
         return { data: { id: `read-${journalReads}`, status: 'posted', lines: [] }, error: null }
       }
       if (table === 'chart_of_accounts') return { data: CHART, error: null }
@@ -271,9 +289,10 @@ async function runReverse(
   sourceType: JournalEntrySourceType,
   overrides: Partial<ReturnType<typeof originalOf>> = {},
   options?: Parameters<typeof reverseEntry>[5],
+  chain: Record<string, object> = {},
 ) {
   const original = { ...originalOf(sourceType), ...overrides }
-  const client = recordingClient(original)
+  const client = recordingClient(original, chain)
   h.subject.client = client
   h.subject.original = original
   let error: string | undefined
@@ -393,6 +412,123 @@ describe('reverseEntry: reversal hooks per source type (characterisation)', () =
       expect(result.trace.filter((s) => s.startsWith('emit '))).toEqual([])
     },
   )
+})
+
+/**
+ * The storno of entry-1 as a correction (source_type 'correction', no
+ * source_id) of orig-1, a reversed verifikat of `rootType` booked from
+ * source-1. A storno root also names what it reversed, which the walk to the
+ * corrected verifikat does not follow.
+ */
+function runReverseCorrection(rootType: JournalEntrySourceType, options?: Parameters<typeof reverseEntry>[5]) {
+  const root = {
+    id: 'orig-1',
+    correction_of_id: null,
+    reverses_id: rootType === 'storno' ? 'orig-0' : null,
+    voucher_series: 'A',
+    voucher_number: 3,
+    source_type: rootType,
+    source_id: 'source-1',
+    status: 'reversed',
+  }
+  return runReverse('correction', { source_id: null as unknown as string, correction_of_id: 'orig-1' }, options, { 'orig-1': root })
+}
+
+describe('reverseEntry: the storno of a correction runs the rules of the verifikat it corrects (characterisation)', () => {
+  it.each(SOURCE_TYPES.filter((type) => type !== 'correction'))('a correction of %s', async (rootType) => {
+    const result = await runReverseCorrection(rootType)
+    expect(result).toMatchSnapshot()
+  })
+
+  it('reads the corrected verifikat first, then runs the before-hooks by the correction\'s own id, before any write', async () => {
+    const { trace } = await runReverseCorrection('supplier_invoice_registered')
+    expect(trace.slice(0, 4)).toEqual([
+      'read journal_entries (*, lines:journal_entry_lines(*))',
+      'read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number, source_type, source_id)',
+      'read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number)',
+      'assertSupplierInvoiceRegistrationReversible(<client>, "company-1", "entry-1")',
+    ])
+    expect(trace[4]).toBe('assertStornoTarget')
+  })
+
+  it('hands the payment hook the correction\'s id with the corrected verifikat\'s source columns, acting only on rows that name the correction', async () => {
+    await runReverseCorrection('invoice_paid')
+    expect(h.syncInvoiceStatusFromPaymentEntry).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      'company-1',
+      { id: 'entry-1', source_type: 'invoice_paid', source_id: 'source-1' },
+      undefined,
+      { requirePaymentRow: true },
+    )
+  })
+
+  it('runs the hooks that follow a correction, and no other', async () => {
+    const ran = new Map<string, string[]>()
+    for (const rootType of SOURCE_TYPES.filter((type) => type !== 'correction')) {
+      h.trace.length = 0
+      const { trace } = await runReverseCorrection(rootType)
+      const calls = hookCalls(trace).map((step) => step.slice(0, step.indexOf('(')))
+      if (calls.length > 0) ran.set(rootType, calls)
+    }
+    expect(Object.fromEntries(ran)).toEqual({
+      invoice_paid: ['syncInvoiceStatusFromPaymentEntry'],
+      invoice_cash_payment: ['syncInvoiceStatusFromPaymentEntry'],
+      supplier_invoice_paid: ['syncInvoiceStatusFromPaymentEntry'],
+      supplier_invoice_cash_payment: ['syncInvoiceStatusFromPaymentEntry'],
+      invoice_created: ['assertInvoiceVerifikatReversible'],
+      supplier_invoice_registered: [
+        'assertSupplierInvoiceRegistrationReversible',
+        'releaseSupplierInvoiceRegistrationAfterReversal',
+      ],
+      // The run stays on the verifikat the correction corrects, so the check
+      // reads it by that verifikat.
+      salary_payment: ['assertCorrectedSalaryRunVerifikatReversible'],
+      expense_claim: ['assertExpenseClaimVerifikatReversible'],
+    })
+  })
+
+  it('hands the salary run check the corrected verifikat, and skips it on the stornos of Korrigera lönekörning', async () => {
+    await runReverseCorrection('salary_payment')
+    expect(h.assertCorrectedSalaryRunVerifikatReversible).toHaveBeenCalledExactlyOnceWith(expect.anything(), 'company-1', {
+      id: 'orig-1',
+      source_type: 'salary_payment',
+      source_id: 'source-1',
+    })
+    expect(h.assertSalaryRunVerifikatReversible).not.toHaveBeenCalled()
+  })
+
+  it('leaves the engine\'s own source-typed releases off: the IB link, the depreciation row and the tax account row', async () => {
+    for (const rootType of ['opening_balance', 'year_end', 'tax_account', 'system'] as const) {
+      h.trace.length = 0
+      const { trace, error } = await runReverseCorrection(rootType)
+      expect(error, rootType).toBeUndefined()
+      expect(
+        trace.filter((s) => /^update (fiscal_periods|depreciation_schedules|skattekonto_transactions)/.test(s)),
+        rootType,
+      ).toEqual([])
+    }
+  })
+
+  it('skips the expense claim check on Ta bort\'s storno of a corrected claim verifikat (expenseClaimRemoval)', async () => {
+    const removed = await runReverseCorrection('expense_claim', { expenseClaimRemoval: true })
+    expect(removed.error).toBeUndefined()
+    expect(h.assertExpenseClaimVerifikatReversible).not.toHaveBeenCalled()
+    expect(removed.trace).toContain('rpc commit_journal_entry')
+  })
+
+  it('runs no hook on Korrigera lönekörning\'s storno of a posted rättelse (salaryRunCorrection)', async () => {
+    const corrected = await runReverseCorrection('salary_payment', { salaryRunCorrection: true })
+    expect(corrected.error).toBeUndefined()
+    expect(hookCalls(corrected.trace)).toEqual([])
+    expect(corrected.trace).toContain('rpc commit_journal_entry')
+  })
+
+  it('refuses before any write when a followed before-hook refuses', async () => {
+    h.assertInvoiceVerifikatReversible.mockRejectedValueOnce(new Error('refused'))
+    const result = await runReverseCorrection('invoice_created')
+    expect(result.error).toBe('Error: refused')
+    expect(result.trace.filter((s) => !s.startsWith('read journal_entries') && !s.startsWith('assertInvoiceVerifikatReversible('))).toEqual([])
+  })
 })
 
 describe('correctEntry: runs no reversal hook (characterisation)', () => {

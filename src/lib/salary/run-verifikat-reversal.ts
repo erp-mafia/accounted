@@ -19,6 +19,13 @@
  * the semesterår and semesterlöneskuld verifikat that share the source type
  * name no run.
  *
+ * A rättelse of a run verifikat leaves the run naming the verifikat it
+ * corrected: the run's pointers do not move. The storno of that correction is
+ * refused the same way, found by the verifikat it corrects, and only when
+ * that verifikat is reversed. A correction moved out of a locked year leaves
+ * it posted, and its storno passes: Korrigera lönekörning cannot reverse a
+ * verifikat there.
+ *
  * Kept free of engine imports so the engine can reach it through the
  * composition seam without a cycle.
  */
@@ -52,4 +59,26 @@ export async function assertSalaryRunVerifikatReversible(
   if (!run || run.status !== 'booked') return
   const runEntries = [run.salary_entry_id, run.avgifter_entry_id, run.vacation_entry_id, run.pension_entry_id]
   if (runEntries.includes(entry.id)) throw new BookedSalaryRunStornoError(run.id)
+}
+
+/**
+ * The refusal for the storno of a correction of a run verifikat. `original` is
+ * the verifikat the correction corrects (ReversalHookContext.correctedOriginal),
+ * which the run still names.
+ */
+export async function assertCorrectedSalaryRunVerifikatReversible(
+  supabase: SupabaseClient,
+  companyId: string,
+  original: { id: string; source_id?: string | null },
+): Promise<void> {
+  if (!original.source_id) return
+  const { data, error } = await supabase
+    .from('journal_entries')
+    .select('status')
+    .eq('company_id', companyId)
+    .eq('id', original.id)
+    .maybeSingle()
+  if (error) throw new Error(`salary run verifikat: corrected verifikat lookup failed: ${error.message}`)
+  if ((data as { status: string } | null)?.status !== 'reversed') return
+  await assertSalaryRunVerifikatReversible(supabase, companyId, original)
 }

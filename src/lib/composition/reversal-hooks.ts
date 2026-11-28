@@ -6,7 +6,9 @@
  *
  * Each entry wraps a function that already existed, unchanged, with the
  * same arguments engine.ts passed before the list existed. The source types
- * do not overlap, so at most one hook runs per storno.
+ * do not overlap, so at most one hook runs per storno. The storno of a
+ * correction runs only the hooks marked followsCorrection, for the source
+ * type of the verifikat it corrects; each says what it reads there.
  *
  * This folder is a composition seam: only allowlisted files may import it,
  * and it may import only hook leaf modules, which never reach engine.ts
@@ -36,7 +38,10 @@ import {
   releaseSupplierInvoiceRegistrationAfterReversal,
 } from '@/lib/supplier-invoices/registration-reversal'
 import { assertInvoiceVerifikatReversible } from '@/lib/invoices/invoice-verifikat-reversal'
-import { assertSalaryRunVerifikatReversible } from '@/lib/salary/run-verifikat-reversal'
+import {
+  assertCorrectedSalaryRunVerifikatReversible,
+  assertSalaryRunVerifikatReversible,
+} from '@/lib/salary/run-verifikat-reversal'
 import { assertExpenseClaimVerifikatReversible } from '@/lib/expenses/claim-verifikat-reversal'
 
 export const REVERSAL_HOOKS: readonly ReversalHook[] = Object.freeze<ReversalHook[]>([
@@ -48,12 +53,24 @@ export const REVERSAL_HOOKS: readonly ReversalHook[] = Object.freeze<ReversalHoo
     id: 'invoice-payment-status',
     module: 'ledger',
     sourceTypes: PAYMENT_SOURCE_TYPES,
+    // A correction of a payment verifikat carries its payment rows
+    // (relinkPaymentRowsToEntry): they are read by the correction's id, for
+    // the invoice its original paid, and without one nothing is reverted.
+    followsCorrection: true,
     // The collections rebook's storno leaves the collected payment rows
     // for the rebook to remove (ReversalHookContext.leaveCollectedPaymentRows).
-    afterReversal: ({ supabase, companyId, entry, leaveCollectedPaymentRows }) =>
-      leaveCollectedPaymentRows
-        ? syncInvoiceStatusFromPaymentEntry(supabase, companyId, entry, undefined, { leaveCollectedPaymentRows })
-        : syncInvoiceStatusFromPaymentEntry(supabase, companyId, entry),
+    afterReversal: ({ supabase, companyId, entry, leaveCollectedPaymentRows, correctedOriginal }) =>
+      correctedOriginal
+        ? syncInvoiceStatusFromPaymentEntry(
+            supabase,
+            companyId,
+            { id: entry.id, source_type: correctedOriginal.source_type, source_id: correctedOriginal.source_id },
+            undefined,
+            { requirePaymentRow: true },
+          )
+        : leaveCollectedPaymentRows
+          ? syncInvoiceStatusFromPaymentEntry(supabase, companyId, entry, undefined, { leaveCollectedPaymentRows })
+          : syncInvoiceStatusFromPaymentEntry(supabase, companyId, entry),
   },
   // A reversed rot_rut_reclaim voucher hands the refused share back to
   // Skatteverket's side: the invoices it reopened close again and the
@@ -142,11 +159,14 @@ export const REVERSAL_HOOKS: readonly ReversalHook[] = Object.freeze<ReversalHoo
   // is credited or has payments (checked before a voucher number is spent);
   // once reversed, the invoice no longer points at it, so it reads not booked
   // and Bokför books it again (lib/supplier-invoices/registration-reversal.ts).
-  // A registration no invoice points at passes untouched.
+  // A registration no invoice points at passes untouched. A correction of a
+  // registration carries the invoice's pointer (relinkBookedRecordsToEntry),
+  // so its storno is checked and released by its own id.
   {
     id: 'supplier-invoice-registration',
     module: 'supplier-invoices',
     sourceTypes: ['supplier_invoice_registered'],
+    followsCorrection: true,
     beforeReversal: ({ supabase, companyId, entry }) =>
       assertSupplierInvoiceRegistrationReversible(supabase, companyId, entry.id),
     afterReversal: ({ supabase, companyId, entry }) =>
@@ -155,34 +175,44 @@ export const REVERSAL_HOOKS: readonly ReversalHook[] = Object.freeze<ReversalHoo
   // A customer invoice's verifikat: refused once the invoice is sent or
   // paid, which is withdrawn with Kreditera instead, and once it is credited
   // or written off, whose sale is out of the ledger already
-  // (lib/invoices/invoice-verifikat-reversal.ts).
+  // (lib/invoices/invoice-verifikat-reversal.ts). A correction of it carries
+  // the invoice's pointer (relinkBookedRecordsToEntry) and is checked by its
+  // own id.
   {
     id: 'customer-invoice-verifikat',
     module: 'invoicing',
     sourceTypes: ['invoice_created'],
+    followsCorrection: true,
     beforeReversal: ({ supabase, companyId, entry }) => assertInvoiceVerifikatReversible(supabase, companyId, entry.id),
   },
   // A booked salary run's verifikat: refused on its own, since Korrigera
   // lönekörning reverses all of them together
   // (lib/salary/run-verifikat-reversal.ts). Its own stornos carry
-  // salaryRunCorrection and pass.
+  // salaryRunCorrection and pass. A correction of one is refused the same
+  // way: the run keeps naming the verifikat it corrected, so the run is read
+  // by that verifikat, not by the correction.
   {
     id: 'salary-run-verifikat',
     module: 'payroll',
     sourceTypes: ['salary_payment'],
-    beforeReversal: async ({ supabase, companyId, entry, salaryRunCorrection }) => {
+    followsCorrection: true,
+    beforeReversal: async ({ supabase, companyId, entry, salaryRunCorrection, correctedOriginal }) => {
       if (salaryRunCorrection) return
-      await assertSalaryRunVerifikatReversible(supabase, companyId, entry)
+      if (correctedOriginal) await assertCorrectedSalaryRunVerifikatReversible(supabase, companyId, correctedOriginal)
+      else await assertSalaryRunVerifikatReversible(supabase, companyId, entry)
     },
   },
   // An expense claim's verifikat: refused while the claim stands, since Ta
   // bort on the claim reverses it and removes the claim together, and a paid
   // claim's is corrected instead (lib/expenses/claim-verifikat-reversal.ts).
-  // Ta bort's own storno carries expenseClaimRemoval and passes.
+  // Ta bort's own storno carries expenseClaimRemoval and passes. A correction
+  // of it carries the claim's pointer (relinkBookedRecordsToEntry) and is
+  // checked by its own id.
   {
     id: 'expense-claim-verifikat',
     module: 'expenses',
     sourceTypes: ['expense_claim'],
+    followsCorrection: true,
     beforeReversal: async ({ supabase, companyId, entry, expenseClaimRemoval }) => {
       if (expenseClaimRemoval) return
       await assertExpenseClaimVerifikatReversible(supabase, companyId, entry.id)

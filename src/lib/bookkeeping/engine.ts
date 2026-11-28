@@ -44,6 +44,7 @@ import {
   type BookkeepingOperation,
 } from '@/lib/bookkeeping/errors'
 import {
+  correctedOriginalOf,
   correctionChainDepth,
   CORRECTION_CHAIN_GUARD_DEPTH,
 } from '@/lib/core/bookkeeping/correction-chain'
@@ -61,7 +62,12 @@ import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-l
 import { buildStornoLines } from '@/lib/bookkeeping/line-side'
 import { backfillStandardBASAccounts } from '@/lib/bookkeeping/account-backfill'
 import { isPaymentSourceType } from '@/lib/bookkeeping/payment-sync'
-import { selectReversalHooks, type ReversalHookAfterContext, type ReversalHookContext } from '@/lib/bookkeeping/reversal-hooks'
+import {
+  selectCorrectionReversalHooks,
+  selectReversalHooks,
+  type ReversalHookAfterContext,
+  type ReversalHookContext,
+} from '@/lib/bookkeeping/reversal-hooks'
 import { REVERSAL_HOOKS } from '@/lib/composition/reversal-hooks'
 import { defaultCommitMethod, getActor } from '@/lib/bookkeeping/actor-context'
 import { rpcWithActor } from '@/lib/bookkeeping/actor-rpc'
@@ -3054,6 +3060,29 @@ export async function reverseEntry(
     throw new CannotReverseStornoError(original.source_type)
   }
 
+  // A correction (correctEntry) is booked as source_type 'correction' with no
+  // source_id, while the records the verifikat it corrects booked now name it
+  // (correction-payment-relink.ts). The storno rules follow it back to that
+  // verifikat (correctedOriginalOf, over correction_of_id): the collected
+  // payment refusal below and the reversal hooks marked followsCorrection
+  // apply as for its source type, to the records that name the correction.
+  // One read per correction generation; a storno of anything else reads
+  // nothing here. A chain that ends before its root (a parent not found,
+  // MAX_CHAIN_WALK) runs no hook, as before; a failed read refuses the storno
+  // before anything is written.
+  const correctedRoot =
+    original.source_type === 'correction' && original.correction_of_id
+      ? await correctedOriginalOf(supabase, companyId, original)
+      : null
+  const correctedOriginal: ReversalHookContext['correctedOriginal'] =
+    correctedRoot?.source_type
+      ? {
+          id: correctedRoot.id,
+          source_type: correctedRoot.source_type as JournalEntrySourceType,
+          source_id: correctedRoot.source_id,
+        }
+      : undefined
+
   // A payment the collections provider collected (invoice_payments.source
   // 'collections', step C in lib/collections/collected-payments.ts) is
   // corrected only through the collections rebook, which reopens and
@@ -3061,9 +3090,10 @@ export async function reverseEntry(
   // reverse the voucher while block_delete_collected_payment keeps the
   // payment row: the invoice would stay paid against a reopened receivable,
   // and the provider's payout would still clear the reversed capital.
-  // Checked before any voucher number is drawn.
+  // Checked before any voucher number is drawn. A correction of a payment
+  // verifikat carries its payment rows, so it is checked by its own id.
   let collectionsRebook = false
-  if (isPaymentSourceType(original.source_type)) {
+  if (isPaymentSourceType(correctedOriginal?.source_type ?? original.source_type)) {
     const { data: collected, error: collectedError } = await supabase
       .from('invoice_payments')
       .select('id')
@@ -3141,13 +3171,17 @@ export async function reverseEntry(
   // voucher number: a source type that needs a mirror with none registered
   // throws ReversalHookMissingError, and a beforeReversal may refuse (a
   // migrated invoice's deduction reclassification while a begäran holds the
-  // invoice).
-  const reversalHooks = selectReversalHooks(REVERSAL_HOOKS, original.source_type)
+  // invoice). The storno of a correction runs the hooks that follow one, for
+  // the source type of the verifikat it corrects.
+  const reversalHooks = correctedOriginal
+    ? selectCorrectionReversalHooks(REVERSAL_HOOKS, correctedOriginal.source_type)
+    : selectReversalHooks(REVERSAL_HOOKS, original.source_type)
   const reversalHookContext: ReversalHookContext = {
     supabase,
     companyId,
     userId,
     entry: original as JournalEntry,
+    ...(correctedOriginal ? { correctedOriginal } : {}),
     // The rebook removes the collections payment row itself, inside its window.
     ...(collectionsRebook ? { leaveCollectedPaymentRows: true } : {}),
     // Korrigera lönekörning reverses all of the run's verifikat together.

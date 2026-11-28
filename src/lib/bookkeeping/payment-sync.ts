@@ -127,6 +127,14 @@ export async function syncInvoiceStatusFromPaymentEntry(
      * window block_delete_collected_payment opens for it.
      */
     leaveCollectedPaymentRows?: boolean
+    /**
+     * Change nothing unless a payment row of the invoice names the entry: the
+     * storno of a correction, whose payment rows followed it from the
+     * original (lib/core/bookkeeping/correction-payment-relink.ts). A row
+     * left on the reversed original means the payment did not follow, and
+     * the full paid amount a voucher without a row reverts is not this one's.
+     */
+    requirePaymentRow?: boolean
   } = {},
 ): Promise<void> {
   if (!isPaymentSourceType(entry.source_type) || !entry.source_id) return
@@ -147,6 +155,7 @@ export async function syncInvoiceStatusFromPaymentEntry(
     }
   }
   if (!resolved) return
+  if (options.requirePaymentRow && resolved.paymentRows.length === 0) return
   const paymentRowIds = resolved.paymentRows.map((r) => r.id)
   // null when the entry has no payment row: cash entries book none.
   const reversedAmount = resolved.paymentRows.length > 0
