@@ -9407,6 +9407,7 @@
     "strike_target_label": "Verifikationen underlaget hör till",
     "strike_target_placeholder": "Sök verifikationsnummer eller text…",
     "strike_target_none": "Ingen bokförd verifikation matchar.",
+    "strike_target_failed": "Sökningen gick inte att göra. Skriv igen för att söka på nytt.",
     "strike_reason_label": "Varför",
     "strike_reason_placeholder": "Till exempel: återbetalningskvittot hör till A12",
     "strike_submit": "Stryk och koppla kopia till {voucher}",

@@ -56,6 +56,8 @@ export default function StrikeUnderlagDialog({ open, onClose, document, journalE
   const [search, setSearch] = useState('')
   const [candidates, setCandidates] = useState<Candidate[]>([])
   const [loading, setLoading] = useState(false)
+  // The last search failed: said as such, never as "no verifikat matches".
+  const [searchFailed, setSearchFailed] = useState(false)
   const [target, setTarget] = useState<Candidate | null>(null)
   const [reason, setReason] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -65,6 +67,7 @@ export default function StrikeUnderlagDialog({ open, onClose, document, journalE
     setSearch('')
     setCandidates([])
     setLoading(false)
+    setSearchFailed(false)
     setTarget(null)
     setReason('')
   }, [open])
@@ -76,10 +79,12 @@ export default function StrikeUnderlagDialog({ open, onClose, document, journalE
     if (!open || !needle) {
       setCandidates([])
       setLoading(false)
+      setSearchFailed(false)
       return
     }
     let cancelled = false
     setLoading(true)
+    setSearchFailed(false)
     const timer = setTimeout(() => {
       void (async () => {
         try {
@@ -90,12 +95,16 @@ export default function StrikeUnderlagDialog({ open, onClose, document, journalE
             include_related: 'false',
           })
           const res = await fetch(`/api/bookkeeping/journal-entries?${params.toString()}`)
-          const json = (await res.json().catch(() => ({}))) as { data?: Candidate[] }
+          const json = res.ok ? ((await res.json()) as { data?: Candidate[] }) : null
           if (cancelled) return
-          setCandidates((json.data ?? []).filter((entry) => entry.id !== journalEntryId))
+          setSearchFailed(!json?.data)
+          setCandidates((json?.data ?? []).filter((entry) => entry.id !== journalEntryId))
         } catch {
-          // A failed search shows no candidates; typing again searches again.
-          if (!cancelled) setCandidates([])
+          // Said in the list below; typing again searches again.
+          if (!cancelled) {
+            setCandidates([])
+            setSearchFailed(true)
+          }
         } finally {
           if (!cancelled) setLoading(false)
         }
@@ -170,6 +179,8 @@ export default function StrikeUnderlagDialog({ open, onClose, document, journalE
                 <Skeleton className="h-10 w-full" />
                 <Skeleton className="h-10 w-full" />
               </LateReveal>
+            ) : searchFailed ? (
+              <p className="py-2 text-[13px] text-muted-foreground">{t('strike_target_failed')}</p>
             ) : needle && candidates.length === 0 ? (
               <p className="py-2 text-[13px] text-muted-foreground">{t('strike_target_none')}</p>
             ) : (

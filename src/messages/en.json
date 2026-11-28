@@ -9407,6 +9407,7 @@
     "strike_target_label": "The verifikation the document belongs to",
     "strike_target_placeholder": "Search voucher number or text…",
     "strike_target_none": "No posted verifikation matches.",
+    "strike_target_failed": "The search failed. Type again to search again.",
     "strike_reason_label": "Why",
     "strike_reason_placeholder": "For example: the refund receipt belongs to A12",
     "strike_submit": "Strike and attach a copy to {voucher}",
