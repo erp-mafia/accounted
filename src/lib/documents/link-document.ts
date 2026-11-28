@@ -58,6 +58,7 @@ import type { DocumentLinkHolder } from '@/lib/documents/link-holder'
 import { stampInboxItemsForLinkedDocument } from '@/lib/transactions/inbox-underlag'
 import type { DocumentAttachment, DocumentUploadSource } from '@/types'
 import { linkBasisColumns } from '@/lib/links/stamp'
+import type { LinkBasisColumns } from '@/lib/links/link-basis'
 
 export interface LinkDocumentInput {
   document_id: string
@@ -345,34 +346,14 @@ export async function linkDocumentCopyToVoucher(
   companyId: string,
   userId: string,
   input: LinkDocumentInput,
+  /** Why the copy is the verifikat's underlag. Defaults to the caller having named the verifikat. */
+  options: { linkBasis?: LinkBasisColumns } = {},
 ): Promise<LinkDocumentCopyResult> {
   const check = await checkDocumentLink(supabase, companyId, input, { asCopy: true })
   if (!check.ok) return check
 
-  const { data: sourceRow, error: sourceError } = await supabase
-    .from('document_attachments')
-    .select('id, storage_path, sha256_hash, file_name, mime_type, upload_source, doc_type, journal_entry_id, journal_entry_line_id')
-    .eq('id', input.document_id)
-    .eq('company_id', companyId)
-    .maybeSingle()
-  if (!isLookupMiss(sourceError)) throw dbError(sourceError, 'document copy: source lookup failed')
-  const source = (sourceError ? null : sourceRow) as {
-    id: string
-    storage_path: string
-    sha256_hash: string
-    file_name: string
-    mime_type: string | null
-    upload_source: DocumentUploadSource | null
-    doc_type: string | null
-    journal_entry_id: string | null
-    journal_entry_line_id: string | null
-  } | null
+  const source = await readCopySource(supabase, companyId, input.document_id)
   if (!source) return { ok: false, code: 'NOT_FOUND', details: { resource: 'document' } }
-  // The copy is the same document, so it takes the type the source has: on
-  // its row, or on its classification when a period lock kept it off the row.
-  // Nothing types it later: the classifier skips a booked document until
-  // someone opens it.
-  await fillTypeFromClassification(supabase, [source])
 
   const { data: present, error: presentError } = await supabase
     .from('document_attachments')
@@ -386,6 +367,81 @@ export async function linkDocumentCopyToVoucher(
   const already = (present as DocumentAttachment[] | null)?.[0]
   if (already) return { ok: true, document: already, source_document_id: source.id, target: check.target, reused: true }
 
+  const document = await storeCopy(supabase, companyId, userId, source, {
+    journal_entry_id: input.journal_entry_id,
+    // A copy onto the verifikat the caller named.
+    linkBasis: options.linkBasis ?? linkBasisColumns('user_confirmed'),
+    ...(input.journal_entry_line_id ? { journal_entry_line_id: input.journal_entry_line_id } : {}),
+    idempotency_key: `document-copy:${source.id}:${input.journal_entry_id}`,
+  })
+  return { ok: true, document, source_document_id: source.id, target: check.target, reused: false }
+}
+
+/**
+ * A byte-identical copy of a document on no verifikat yet: the underlag of a
+ * supplier invoice registered again from a document another verifikat holds
+ * for good, when the new registration posts no verifikat of its own now (a
+ * deferring company, kontantmetoden). The invoice names the copy, and its
+ * booking anchors it later as it anchors any invoice's document
+ * (anchorSupplierInvoiceDocument). The copy's id is derived from (source,
+ * `scope`), so a retry converges on one row. Null when the source is not the
+ * company's. Throws when the bytes cannot be read or fail their check.
+ */
+export async function archiveDocumentCopy(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  documentId: string,
+  scope: string,
+): Promise<DocumentAttachment | null> {
+  const source = await readCopySource(supabase, companyId, documentId)
+  if (!source) return null
+  return storeCopy(supabase, companyId, userId, source, { idempotency_key: `document-copy:${source.id}:${scope}` })
+}
+
+interface CopySource {
+  id: string
+  storage_path: string
+  sha256_hash: string
+  file_name: string
+  mime_type: string | null
+  upload_source: DocumentUploadSource | null
+  doc_type: string | null
+  journal_entry_id: string | null
+  journal_entry_line_id: string | null
+}
+
+/** The document a copy is made of, typed as the copy will be; null when it is not the company's. */
+async function readCopySource(supabase: SupabaseClient, companyId: string, documentId: string): Promise<CopySource | null> {
+  const { data: sourceRow, error: sourceError } = await supabase
+    .from('document_attachments')
+    .select('id, storage_path, sha256_hash, file_name, mime_type, upload_source, doc_type, journal_entry_id, journal_entry_line_id')
+    .eq('id', documentId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (!isLookupMiss(sourceError)) throw dbError(sourceError, 'document copy: source lookup failed')
+  const source = (sourceError ? null : sourceRow) as CopySource | null
+  if (!source) return null
+  // The copy is the same document, so it takes the type the source has: on
+  // its row, or on its classification when a period lock kept it off the row.
+  // Nothing types it later: the classifier skips a booked document until
+  // someone opens it.
+  await fillTypeFromClassification(supabase, [source])
+  return source
+}
+
+/**
+ * Archive the source's bytes as a row of their own, checked against the
+ * source's SHA-256 before anything is written. No inbox item and no model
+ * pass: the booking is known, and the type is the source's.
+ */
+async function storeCopy(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  source: CopySource,
+  link: { journal_entry_id?: string; journal_entry_line_id?: string; linkBasis?: LinkBasisColumns; idempotency_key: string },
+): Promise<DocumentAttachment> {
   // The row was read through the caller's client, company-scoped; the
   // service role only fetches the bytes that row names (as the upload
   // completion does), and only from a key inside the company (storage-key.ts).
@@ -398,21 +454,18 @@ export async function linkDocumentCopyToVoucher(
     throw new Error('document copy: the source file failed its integrity check')
   }
 
-  const document = await uploadDocument(
+  return uploadDocument(
     supabase,
     userId,
     companyId,
     { name: source.file_name, buffer, type: source.mime_type ?? undefined },
     {
       upload_source: source.upload_source ?? 'api',
-      journal_entry_id: input.journal_entry_id,
-      // A copy onto the verifikat the caller named.
-      linkBasis: linkBasisColumns('user_confirmed'),
-      ...(input.journal_entry_line_id ? { journal_entry_line_id: input.journal_entry_line_id } : {}),
-      idempotency_key: `document-copy:${source.id}:${input.journal_entry_id}`,
+      ...(link.journal_entry_id ? { journal_entry_id: link.journal_entry_id, linkBasis: link.linkBasis } : {}),
+      ...(link.journal_entry_line_id ? { journal_entry_line_id: link.journal_entry_line_id } : {}),
+      idempotency_key: link.idempotency_key,
       extractionOwner: 'none',
       ...(source.doc_type ? { doc_type: source.doc_type } : {}),
     },
   )
-  return { ok: true, document, source_document_id: source.id, target: check.target, reused: false }
 }

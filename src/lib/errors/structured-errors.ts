@@ -8067,6 +8067,21 @@ const SUPPLIER_INVOICE_WAVE4: Record<string, StructuredErrorEntry> = {
       tool: 'gnubok_uncredit_supplier_invoice',
     },
   },
+  // The credit released the invoice's underlag and it was registered again
+  // (lib/supplier-invoices/released-underlag.ts): undone, the credit would
+  // bring the invoice back beside the new one, the purchase booked twice.
+  SI_UNCREDIT_REGISTERED_AGAIN: {
+    httpStatus: 409,
+    message_sv:
+      'Krediteringen går inte att ångra: underlaget har bokförts igen, på en annan leverantörsfaktura eller verifikation. Ta bort den bokföringen först om den ska bort.',
+    message_en:
+      'The credit cannot be undone: its underlag is booked again, as another supplier invoice (details.supplier_invoice_id) or on another verifikat (details.journal_entry_id). Undone, the credit would book the purchase twice. Take that booking out first if it is the one to go.',
+    remediation: {
+      description:
+        'Do not retry. details names what books this underlag now: credit that invoice (gnubok_credit_supplier_invoice) or reverse that verifikat, and only if the person says it is the wrong one.',
+      tool: 'gnubok_credit_supplier_invoice',
+    },
+  },
   SI_ITEM_NOT_FOUND: {
     httpStatus: 404,
     message_sv: 'Fakturaraden kunde inte hittas.',

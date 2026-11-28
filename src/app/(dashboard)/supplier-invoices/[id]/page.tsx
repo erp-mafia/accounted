@@ -20,6 +20,7 @@ import {
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import {
+  ArrowPathIcon,
   ArrowUturnLeftIcon,
   BuildingLibraryIcon,
   CalendarDaysIcon,
@@ -818,6 +819,10 @@ export default function SupplierInvoiceDetailPage() {
     isCreditableSupplierInvoiceStatus(invoice.status) ||
     (invoice.status === 'registered' && !attests)
   const canUncredit = invoice.status === 'credited' && !invoice.is_credit_note
+  // A credited invoice's underlag can be registered again, on the right
+  // supplier: the registration form, filled from the inbox item it came from.
+  const registerAgainItemId =
+    (invoice as SupplierInvoice & { register_again_inbox_item_id?: string | null }).register_again_inbox_item_id ?? null
   // Delete is allowed while nothing would be orphaned: no booking, no
   // payments (server re-checks). 'approved'/'overdue' are included because
   // the overdue cron flips unbooked invoices there and a registered-only gate
@@ -980,6 +985,14 @@ export default function SupplierInvoiceDetailPage() {
                 <LockClosedIcon className="h-4 w-4" />
               )}
               {t('uncredit_button')}
+            </Button>
+          )}
+          {registerAgainItemId && canWrite && (
+            <Button size="toolbar" variant="outline" asChild>
+              <Link href={`/supplier-invoices/new?inbox_item_id=${registerAgainItemId}`}>
+                <ArrowPathIcon className="h-4 w-4" />
+                {t('register_again_button')}
+              </Link>
             </Button>
           )}
 

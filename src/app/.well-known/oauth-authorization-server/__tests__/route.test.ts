@@ -72,4 +72,13 @@ describe('GET /.well-known/oauth-authorization-server', () => {
     const body = await res.json()
     expect(body.scopes_supported).toEqual(['mcp'])
   })
+
+  it('lists exactly the client authentication methods the token endpoint checks', async () => {
+    // 'none' first: public clients (Claude, ChatGPT, Gemini) send no
+    // credentials. A partner client with a secret authenticates by either of
+    // the other two (lib/auth/oauth-client-auth.ts, token route tests).
+    const res = await GET(new Request('https://app.example.test/.well-known/oauth-authorization-server'))
+    const body = await res.json()
+    expect(body.token_endpoint_auth_methods_supported).toEqual(['none', 'client_secret_basic', 'client_secret_post'])
+  })
 })
