@@ -24,7 +24,7 @@
  */
 export const TRANSACTION_DETAIL_COLUMNS =
   'id, date, value_date, description, original_description, amount, currency, amount_sek, reference, merchant_name, ' +
-  'counterparty_account, counterparty_iban, counterparty_org_number, instructed_amount, instructed_currency, ' +
+  'counterparty_account, counterparty_iban, counterparty_org_number, billing_country, card_country, instructed_amount, instructed_currency, ' +
   'balance_after, is_enriched, journal_entry_id, invoice_id, supplier_invoice_id, ' +
   'potential_invoice_id, potential_supplier_invoice_id, potential_journal_entry_id, potential_match_confidence, ' +
   'is_business, category, receipt_id, document_id, exchange_rate, exchange_rate_date, transaction_method, title_edited_at, ' +

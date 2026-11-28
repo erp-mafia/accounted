@@ -490,6 +490,17 @@ export default function TransactionInboxCard({
                 {t('parts_hint', { count: partsCount })}
               </span>
             )}
+            {/* A Stripe sale's two countries, kept apart: they can differ. */}
+            {(transaction.billing_country || transaction.card_country) && (
+              <span className="hidden shrink-0 text-xs text-muted-foreground md:inline" title={t('buyer_countries_title')}>
+                {[
+                  transaction.billing_country ? t('buyer_country_billing', { code: transaction.billing_country }) : null,
+                  transaction.card_country ? t('buyer_country_card', { code: transaction.card_country }) : null,
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
+              </span>
+            )}
           </span>
         </td>
         {columns.has('category') && (
