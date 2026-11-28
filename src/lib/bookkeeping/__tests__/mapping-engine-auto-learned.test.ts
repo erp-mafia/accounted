@@ -18,10 +18,12 @@ import {
   AUTO_LEARNED_MAPPING_SOURCE,
   evaluateMappingRules,
   isAutoLearnedMappingRule,
+  mappingRulesBesideSwitchedOff,
   mappingRulesRead,
   readsAutoLearnedMappingRules,
   saveUserMappingRule,
 } from '../mapping-engine'
+import { readSwitchedOffRulesByName, upsertCounterpartyTemplate, type SwitchedOffCounterpartyRule } from '../counterparty-templates'
 
 const COMPANY = 'company-1'
 const OTHER = 'company-2'
@@ -78,10 +80,25 @@ const expense = makeTransaction({ amount: -299, merchant_name: 'Clas Ohlson', co
 
 const switchOn = (company = COMPANY) => vi.stubEnv('BOOKING_PRECEDENT_COMPANY_IDS', company)
 
-async function evaluate(rules: unknown[]) {
-  const { supabase } = createTableMockSupabase({ mapping_rules: { data: rules } })
-  return evaluateMappingRules(supabase as never, COMPANY, expense, 'aktiebolag')
+/** switchedOff: the counterparty rules the company switched off (categorization_templates, is_active false). */
+async function evaluate(rules: unknown[], switchedOff: unknown[] = []) {
+  const { supabase, findCalls, tables } = createTableMockSupabase({
+    mapping_rules: { data: rules },
+    categorization_templates: { data: switchedOff, error: null },
+  })
+  return Object.assign(await evaluateMappingRules(supabase as never, COMPANY, expense, 'aktiebolag'), { findCalls, tables })
 }
+
+/** The counterparty rule the booking learned beside the auto-learned row, paused in Regler after it. */
+const pausedRule = (counterparty = 'clas ohlson') =>
+  makeCategorizationTemplate({
+    counterparty_name: counterparty,
+    counterparty_aliases: [counterparty],
+    debit_account: '5410',
+    mode: 'paused',
+    is_active: false,
+    paused_at: '2026-06-01T00:00:00+00:00',
+  })
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -201,5 +218,84 @@ describe('evaluateMappingRules: its first step', () => {
     const result = await evaluate([systemDefault()])
     expect(result.rule?.id).toBe('rule-system')
     expect(result.debit_account).toBe('5460')
+  })
+})
+
+describe('mappingRulesBesideSwitchedOff', () => {
+  const stored = () => [described(), learned(), systemDefault()]
+  const ids = (rules: MappingRule[]) => rules.map((r) => r.id)
+  /** Switched-off rules by name; by default money out (D 5410 / K 1930), as the learned row. */
+  const off = (names: string[], over: Partial<SwitchedOffCounterpartyRule> = {}) =>
+    new Map(names.map((name) => [name, [{ debit_account: '5410', credit_account: '1930', ...over }]]))
+
+  it('no switched-off rule: every rule it was handed, in order', () => {
+    expect(ids(mappingRulesBesideSwitchedOff(stored(), new Map()))).toEqual(['rule-described', 'rule-learned', 'rule-system'])
+  })
+
+  it('a switched-off rule named by the learned text silences the learned row, and nothing else', () => {
+    expect(ids(mappingRulesBesideSwitchedOff(stored(), off(['clas ohlson'])))).toEqual(['rule-described', 'rule-system'])
+  })
+
+  it('reads the learned pattern back as the text it was learned from, and normalizes it as a key', () => {
+    const card = rule({ id: 'rule-card', merchant_pattern: 'KORT             FACEBK \\*27MAE32 71' })
+    expect(ids(mappingRulesBesideSwitchedOff([card], off(['kort             facebk *27mae32 71'])))).toEqual([])
+    const shop = rule({ id: 'rule-shop', merchant_pattern: 'Shop payout AB' })
+    expect(ids(mappingRulesBesideSwitchedOff([shop], off(['shop payout'])))).toEqual([])
+  })
+
+  it('a switched-off rule of a near name silences nothing: the link is the name, never a fuzzy match', () => {
+    const telia = rule({ id: 'rule-telia', merchant_pattern: 'TELIA' })
+    expect(ids(mappingRulesBesideSwitchedOff([telia], off(['tele2'])))).toEqual(['rule-telia'])
+  })
+
+  it('a row learned from a booking by hand after the pause is silenced too, while the rule shows as paused', () => {
+    const rebooked = rule({ id: 'rule-rebooked', created_at: '2026-07-01T00:00:00+00:00' })
+    expect(ids(mappingRulesBesideSwitchedOff([learned(), rebooked], off(['clas ohlson'])))).toEqual([])
+  })
+
+  it('a rule switched off on one direction leaves the row learned the other way round', () => {
+    const payout = rule({ id: 'rule-payout', debit_account: '1930', credit_account: '3001' })
+    expect(ids(mappingRulesBesideSwitchedOff([learned(), payout], off(['clas ohlson'])))).toEqual(['rule-payout'])
+    expect(ids(mappingRulesBesideSwitchedOff([learned(), payout], off(['clas ohlson'], { debit_account: '1930', credit_account: '3001' })))).toEqual(['rule-learned'])
+  })
+})
+
+describe('the link, from what the two writers store for one booking', () => {
+  it('the counterparty rule and the learned row of one booking are linked, and a pause silences the row', async () => {
+    const payout = makeTransaction({ amount: 8180.1, merchant_name: 'Shop payout', description: 'Shop payout 000123', original_description: 'Shop payout 000123' })
+    const written = createTableMockSupabase({ categorization_templates: { data: null, error: null } })
+    await saveUserMappingRule(written.supabase as never, COMPANY, 'Shop payout', '1930', '3001', false)
+    await upsertCounterpartyTemplate(written.supabase as never, COMPANY, payout, { debit_account: '1930', credit_account: '3001', vat_lines: [], confidence: 1, requires_review: false } as never, 'user_approved')
+    const [learnedRow] = written.payloads('mapping_rules', 'insert') as Record<string, unknown>[]
+    const [template] = written.payloads('categorization_templates', 'insert') as Record<string, unknown>[]
+    expect(template).toBeDefined()
+
+    // The rule as the table holds it once paused, read back by name.
+    const read = createTableMockSupabase({
+      categorization_templates: { data: [{ id: 'tpl-1', ...template, is_active: false, paused_at: '2026-06-01T00:00:00+00:00' }], error: null },
+    })
+    const byName = await readSwitchedOffRulesByName(read.supabase as never, COMPANY)
+    const row = rule({ ...(learnedRow as Partial<MappingRule>), id: 'rule-learned' })
+    expect(mappingRulesBesideSwitchedOff([row], byName)).toEqual([])
+  })
+})
+
+describe('evaluateMappingRules: a counterparty rule the company paused', () => {
+  it('silences the auto-learned row, and the row falls through to the later steps', async () => {
+    const result = await evaluate([learned()], [pausedRule()])
+    expect(result.rule).toBeNull()
+    expect(result.requires_review).toBe(true)
+    expect(result.findCalls('categorization_templates', 'eq')).toEqual([['company_id', COMPANY], ['is_active', false]])
+  })
+
+  it('a paused rule of another counterparty silences nothing', async () => {
+    const result = await evaluate([learned()], [pausedRule('sydkraft')])
+    expect(result.rule?.id).toBe('rule-learned')
+  })
+
+  it('a described row still answers, and the switched-off rules are not read for it', async () => {
+    const result = await evaluate([described(), learned()], [pausedRule()])
+    expect(result.rule?.id).toBe('rule-described')
+    expect(result.tables()).not.toContain('categorization_templates')
   })
 })

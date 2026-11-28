@@ -12,6 +12,12 @@ vi.mock('@/lib/branding/team-brands', () => ({
   resolveBrandsForTeams: (...args: unknown[]) => resolveBrandsForTeamsMock(...args),
 }))
 
+// The start page half has its own tests (start-page-server.test.ts).
+const resolveStartPathMock = vi.fn()
+vi.mock('@/lib/company/start-page-server', () => ({
+  resolveStartPath: (...args: unknown[]) => resolveStartPathMock(...args),
+}))
+
 import { resolveLandingDestination } from '../landing-server'
 
 const { supabase, enqueue, reset, findCall } = createQueuedMockSupabase()
@@ -28,6 +34,7 @@ beforeEach(() => {
   reset()
   resolveBrandByHostMock.mockResolvedValue(null)
   resolveBrandsForTeamsMock.mockResolvedValue(new Map())
+  resolveStartPathMock.mockResolvedValue('/')
 })
 
 describe('resolveLandingDestination', () => {
@@ -144,5 +151,51 @@ describe('resolveLandingDestination', () => {
     expect(dest).toBe('/clients')
     // Only the qualifying team reaches the brand lookup.
     expect(resolveBrandsForTeamsMock).toHaveBeenCalledWith(['byra-2'])
+  })
+
+  // Startsida (lib/company/start-page.ts): wherever the cockpit does not apply.
+  it("lands a regular user on their start page in the active company", async () => {
+    resolveStartPathMock.mockResolvedValue('/bookkeeping')
+    enqueue({ data: [] })
+
+    const dest = await resolveLandingDestination(client, 'user-1', 'app.accounted.se')
+
+    expect(dest).toBe('/bookkeeping')
+    expect(resolveStartPathMock).toHaveBeenCalledWith(client, 'user-1')
+  })
+
+  it('lands a plain byrå member on their start page too', async () => {
+    resolveStartPathMock.mockResolvedValue('/supplier-invoices')
+    enqueue({ data: [membership('member')] })
+
+    expect(await resolveLandingDestination(client, 'user-1', 'app.accounted.se')).toBe('/supplier-invoices')
+  })
+
+  it('keeps / for byrå owners and admins away from their home domain, without asking for a start page', async () => {
+    resolveStartPathMock.mockResolvedValue('/bookkeeping')
+    resolveBrandByHostMock.mockResolvedValue({ teamId: 'team-other' })
+    resolveBrandsForTeamsMock.mockResolvedValue(
+      new Map([['team-1', { domain: 'app.brand-f.se', appName: 'Brand F' }]]),
+    )
+    enqueue({ data: [byraMembership] })
+
+    expect(await resolveLandingDestination(client, 'user-1', 'app.brand-g.se')).toBe('/')
+    expect(resolveStartPathMock).not.toHaveBeenCalled()
+  })
+
+  it('keeps / when the membership read fails, without asking for a start page', async () => {
+    resolveStartPathMock.mockResolvedValue('/bookkeeping')
+    enqueue({ data: null, error: { message: 'boom' } })
+
+    expect(await resolveLandingDestination(client, 'user-1', 'app.accounted.se')).toBe('/')
+    expect(resolveStartPathMock).not.toHaveBeenCalled()
+  })
+
+  it('keeps the cockpit landing for byrå staff on their home domain, without asking for a start page', async () => {
+    resolveStartPathMock.mockResolvedValue('/bookkeeping')
+    enqueue({ data: [byraMembership] })
+
+    expect(await resolveLandingDestination(client, 'user-1', 'app.accounted.se')).toBe('/clients')
+    expect(resolveStartPathMock).not.toHaveBeenCalled()
   })
 })

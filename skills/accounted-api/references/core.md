@@ -2,7 +2,7 @@
 
 # Core endpoints
 
-Connectivity, the calling key's own grant, company discovery, which modules a company can use (capabilities), its packages with their status and the staged switch (packages), async-operation polling, company settings, and service accounts (an integration's own principal, with a human sponsor). Every session starts with GET /companies to resolve the companyId that all other URLs need.
+Connectivity, the calling key's own grant, company discovery, a company in the public register by organisationsnummer (company-lookup), which modules a company can use (capabilities), its packages with their status and the staged switch (packages), async-operation polling, company settings, and service accounts (an integration's own principal, with a human sponsor). Every session starts with GET /companies to resolve the companyId that all other URLs need.
 
 Conventions (auth, envelope, pagination, dry-run, idempotency, standard errors)
 are in SKILL.md and are not repeated per endpoint.
@@ -257,7 +257,7 @@ Example response `200`:
 **Which building blocks this company can use, and why not.**
 `scope:companies:read · risk:low · idempotent`
 
-Lists every module (the OpenAPI tags) for the company with a status, the reasons behind it and a resolution sentence, like Stripe account capabilities. Statuses: active (usable now); needs_plan (the paid plan does not include it: upgrade, or on a self-hosted instance add a connector key); off (turned off for this company); unsupported (not offered for this company: its country, or its legal form, such as payroll for an enskild firma that has not said it pays salaries). Reasons, the deciding one first: unsupported_country, unsupported_legal_form, needs_plan, disabled_by_company, dependency_unavailable (a module it needs is unsupported or off; it then takes that status). Kernels (platform, ledger) are always active. profile names the company profile (sole-trader, limited-company-no-employees, limited-company-with-employees, retail, association, or standard, every package on): the starting point for which packages the app menu and the MCP tool list show. A module in a package the profile leaves off is hidden there but keeps its status and still answers when called. A company without a stored profile has standard (source implicit). This is a read-only report: nothing here changes a profile or a module.
+Lists every module (the OpenAPI tags) for the company with a status, the reasons behind it and a resolution sentence, like Stripe account capabilities. Statuses: active (usable now); needs_plan (the paid plan does not include it: upgrade, or on a self-hosted instance add a connector key); off (turned off for this company); unsupported (not offered for this company: its country, or its legal form, such as payroll for an enskild firma that has not said it pays salaries). Reasons, the deciding one first: unsupported_country, unsupported_legal_form, needs_plan, disabled_by_company, dependency_unavailable (a module it needs is unsupported or off; it then takes that status). Kernels (platform, ledger) are always active. parts lists a part of a module that is switched on company by company (Avtal och åtaganden in year-end: agreements, securities and group links): active for a company the rollout names; for any other its status is off, with the reason switched_on_per_company and a resolution, while the module itself stays active. profile names the company profile (sole-trader, limited-company-no-employees, limited-company-with-employees, retail, association, or standard, every package on): the starting point for which packages the app menu and the MCP tool list show. A module in a package the profile leaves off is hidden there but keeps its status and still answers when called. A company without a stored profile has standard (source implicit). This is a read-only report: nothing here changes a profile or a module.
 
 **Use when:** At the start of an integration or agent session, before calling endpoints of an optional module (bank feed, payroll, Skatteverket filing, collections, the AI agent), or to explain to a user why something is unavailable.
 **Do not use for:** Turning a module on or off, or changing the profile: nothing here writes. API key scopes are a separate axis (GET /api/v1/api-key); a module can be active while the key lacks the scope for its endpoints.
@@ -278,7 +278,7 @@ Response `200`:
     jurisdiction: string,
     ledger_currency: string,
     profile: { id: "sole-trader" | "limited-company-no-employees" | "limited-company-with-employees" | "retail" | "association" | "standard", version: number, name: string, name_sv: string, source: "stored" | "implicit" },
-    modules: { id: string, kind: "kernel" | "block", name: string, name_sv: string, summary: string, depends_on: string[], status: "active" | "off" | "needs_plan" | "unsupported", reasons: ("unsupported_country" | "unsupported_legal_form" | "needs_plan" | "disabled_by_company" | "dependency_unavailable")[], resolution: string | null }[]
+    modules: { id: string, kind: "kernel" | "block", name: string, name_sv: string, summary: string, depends_on: string[], status: "active" | "off" | "needs_plan" | "unsupported", reasons: ("unsupported_country" | "unsupported_legal_form" | "needs_plan" | "disabled_by_company" | "dependency_unavailable")[], resolution: string | null, parts: { id: "commitments", name: string, name_sv: string, status: "active" | "off", reasons: "switched_on_per_company"[], resolution: string | null }[] }[]
   },
   meta: {
     request_id: string,
@@ -317,7 +317,33 @@ Example response `200`:
         ],
         "status": "active",
         "reasons": [],
-        "resolution": null
+        "resolution": null,
+        "parts": []
+      },
+      {
+        "id": "year-end",
+        "kind": "block",
+        "name": "Year-end and annual report",
+        "name_sv": "Bokslut och årsredovisning",
+        "summary": "The bokslut workspace (accruals, reserves, tax provision, readiness) and the årsredovisning, ...",
+        "depends_on": [
+          "assets"
+        ],
+        "status": "active",
+        "reasons": [],
+        "resolution": null,
+        "parts": [
+          {
+            "id": "commitments",
+            "name": "Agreements and commitments",
+            "name_sv": "Avtal och åtaganden",
+            "status": "off",
+            "reasons": [
+              "switched_on_per_company"
+            ],
+            "resolution": "Agreements and commitments is switched on company by company and is not on for this company: write to support@accounted.se to have it switched on."
+          }
+        ]
       },
       {
         "id": "bank-feed",
@@ -332,7 +358,8 @@ Example response `200`:
         "reasons": [
           "needs_plan"
         ],
-        "resolution": "Upgrade the plan to use Bank feed."
+        "resolution": "Upgrade the plan to use Bank feed.",
+        "parts": []
       },
       {
         "id": "payroll",
@@ -345,12 +372,107 @@ Example response `200`:
         "reasons": [
           "unsupported_legal_form"
         ],
-        "resolution": "Payroll is on for every legal person; an enskild firma turns it on by setting pays_salaries in the company tax profile."
+        "resolution": "Payroll is on for every legal person; an enskild firma turns it on by setting pays_salaries in the company tax profile.",
+        "parts": []
       }
     ]
   },
   "meta": {
     "request_id": "req_...",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/company-lookup`
+
+**Look up a Swedish company in the public register by organisationsnummer.**
+`scope:companies:read · risk:low · idempotent`
+
+Asks the public company register for the company behind an organisationsnummer: its registered name, address, legal form, F-skatt and VAT registration, fiscal year, registration date and SNI codes, and whether it has ceased. status found answers the company; not_found means the register knows no such number; unavailable means the register gave no usable answer (reason). The same register answer accounted_lookup_company gives over MCP. A read sent as POST, so the number (a sole trader's is a personnummer) stays out of the URL, which request logs and error telemetry copy; keep it out of your own logs too.
+
+**Use when:** Before creating a customer or supplier from an organisationsnummer, or to check a counterparty's name, address, F-skatt or VAT registration.
+**Do not use for:** The company's own settings (GET /settings), Bankgirot's name for a giro number (GET /payments/creditor-lookup), or searching the register by name.
+
+**Pitfalls:**
+- Every lookup the register is asked spends from a shared monthly budget, with a daily cap per API key that counts its MCP lookups too: past either the answer is unavailable, reason rate_limited (the daily cap resets the next day, the monthly budget at its next cycle). Keep the answer instead of asking again.
+- Send no Idempotency-Key: this is a read, and with a key the answer, an unavailable one too, is replayed for 24 hours.
+- A viewer's key, a key with read-only access to the company and a test key are refused (403), as on every POST; over MCP accounted_lookup_company serves them.
+- A newly registered company can take days to appear: not_found is the register's answer today, not proof the number is wrong.
+- vat_registered false also covers a register that says nothing: confirm VAT with the company before invoicing without it.
+- A sole trader's number is the owner's personnummer, and the register answers the owner's name: treat the answer as personal data.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+
+Request body:
+```ts
+{ org_number: string }
+```
+
+Example request:
+```json
+{
+  "org_number": "556677-8899"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    status: "found" | "not_found" | "unavailable",
+    company: { name: string, org_number: string, legal_entity_type: string | null, is_ceased: boolean, address: { street: string | null, postal_code: string | null, city: string | null } | null, f_skatt: boolean, vat_registered: boolean, fiscal_year: { start_month_day: string | null, end_month_day: string | null } | null, registration_date: string | null, sni_codes: { code: string, name: string }[] } | null,
+    reason: "not_configured" | "rate_limited" | "timeout" | "registry_error" | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string }, payment_order_id?: string, supplier_invoice_id?: string }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "status": "found",
+    "company": {
+      "name": "Exempelbolaget AB",
+      "org_number": "5566778899",
+      "legal_entity_type": "AB",
+      "is_ceased": false,
+      "address": {
+        "street": "Storgatan 1",
+        "postal_code": "111 22",
+        "city": "Stockholm"
+      },
+      "f_skatt": true,
+      "vat_registered": true,
+      "fiscal_year": {
+        "start_month_day": "01-01",
+        "end_month_day": "12-31"
+      },
+      "registration_date": "2018-03-01",
+      "sni_codes": [
+        {
+          "code": "62010",
+          "name": "Dataprogrammering"
+        }
+      ]
+    },
+    "reason": null
+  },
+  "meta": {
+    "request_id": "req_…",
     "api_version": "2026-05-12"
   }
 }
@@ -1358,6 +1480,7 @@ Response `200`:
     periodisk_sammanstallning_filing_method: string | null,
     accounting_method: string | null,
     bookkeeping_locked_through: string | null,
+    preliminary_tax_first_due_date: string | null,
     ore_rounding: boolean | null,
     invoice_show_ocr: boolean | null,
     invoice_ocr_length_digit: boolean | null,
@@ -1643,6 +1766,7 @@ Response `200`:
     periodisk_sammanstallning_filing_method: string | null,
     accounting_method: string | null,
     bookkeeping_locked_through: string | null,
+    preliminary_tax_first_due_date: string | null,
     ore_rounding: boolean | null,
     invoice_show_ocr: boolean | null,
     invoice_ocr_length_digit: boolean | null,
@@ -1830,6 +1954,7 @@ Response `200`:
     periodisk_sammanstallning_filing_method: string | null,
     accounting_method: string | null,
     bookkeeping_locked_through: string | null,
+    preliminary_tax_first_due_date: string | null,
     ore_rounding: boolean | null,
     invoice_show_ocr: boolean | null,
     invoice_ocr_length_digit: boolean | null,
@@ -2096,6 +2221,7 @@ Patches the settings that decide how the books are kept and declared: VAT regist
 **Pitfalls:**
 - Only an owner or admin of the company may change settings: other members get 403 FORBIDDEN.
 - Saving regenerates the system tax deadlines for this year and next; completed deadlines keep their status.
+- preliminary_tax_first_due_date removes the open F-skatt deadlines due from today until its month; one already past due stays: remove it under Deadlines in the app or with accounted_delete_deadline.
 - vat_registered=true needs vat_number (SE + 12 digits) and moms_period, stored or sent.
 - vat_registered=false also turns off vat_taxable_base_over_40m, vat_has_eu_trade and periodisk_sammanstallning_enabled.
 - vat_taxable_base_over_40m requires moms_period=monthly; periodisk sammanställning requires VAT registration and EU trade.
@@ -2133,6 +2259,7 @@ Request body:
   fyllnadsinbetalning_enabled?: boolean,
   fiscal_year_start_month?: number,
   preliminary_tax_monthly?: number | null,
+  preliminary_tax_first_due_date?: string | null,
   pays_salaries?: boolean,
   employer_registered?: boolean | null,
   employer_seasonal?: boolean,
@@ -2213,6 +2340,7 @@ Response `200`:
     periodisk_sammanstallning_filing_method: string | null,
     accounting_method: string | null,
     bookkeeping_locked_through: string | null,
+    preliminary_tax_first_due_date: string | null,
     ore_rounding: boolean | null,
     invoice_show_ocr: boolean | null,
     invoice_ocr_length_digit: boolean | null,

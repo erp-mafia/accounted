@@ -18,10 +18,10 @@ import {
   readBankIdFlow,
   setBankIdFlowCookies,
 } from './lib/bankid-flow-cookie'
-import { lookupCompanyByOrgNumber, searchCompaniesForLookup } from './lib/lookup'
+import { lookupCompanyByOrgNumber, lookupCompanyOutcome, searchCompaniesForLookup } from './lib/lookup'
 import { buildCompanyProfile } from './lib/profile'
 import { toTicCallPurpose } from '@/lib/tic-budget/budget'
-import { COMPANY_SEARCH_MIN_CHARS } from '@/lib/company-lookup/types'
+import { COMPANY_SEARCH_MIN_CHARS, LOOKUP_COMPANY_SERVICE } from '@/lib/company-lookup/types'
 import type { RegistryHint } from '@/lib/company-lookup/types'
 import { createScbClient } from '@/lib/parties/scb/client'
 import { isScbConfigured, scbConfigFromEnv } from '@/lib/parties/scb/config'
@@ -524,13 +524,16 @@ export const ticExtension: Extension = {
   // imports extension code). The company snapshot
   // (lib/agent/composer/tic-fetch) reads the company profile here. The BankID
   // signing ceremony (lib/signing/bankid-provider) starts and polls sign
-  // sessions here.
+  // sessions here. The organisationsnummer lookup the v1 API serves
+  // (lib/company-lookup/registry-lookup.ts) asks here.
   services: {
     // opts.purpose: what the Lens calls are charged to (lib/tic-budget).
     fetchCompanyProfile: (orgNumber: string, opts?: { purpose?: unknown }) =>
       buildCompanyProfile(orgNumber, console, {
         purpose: opts?.purpose === undefined ? undefined : toTicCallPurpose(opts.purpose),
       }),
+    [LOOKUP_COMPANY_SERVICE]: (orgNumber: string, charge?: { purpose?: unknown; subject?: unknown }) =>
+      lookupCompanyOutcome(orgNumber, charge),
     ...bankIdSigningServices,
   },
 

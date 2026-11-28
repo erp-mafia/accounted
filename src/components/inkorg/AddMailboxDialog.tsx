@@ -21,13 +21,12 @@ import { RequestGmailAccessButton } from '@/components/extensions/general/Reques
 import { useMailConnections } from '@/components/extensions/general/use-mail-connections'
 import type { ConnectionSummary } from '@/lib/digital-mailboxes/connections'
 import { phoneToE164 } from '@/lib/digital-mailboxes/identifiers'
-import type { DigitalMailboxAvailability } from '@/lib/digital-mailboxes/providers'
 import type { SyncResult } from '@/lib/digital-mailboxes/receive'
 import type { DigitalMailboxProviderId } from '@/lib/digital-mailboxes/types'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { getErrorMessage, getResponseErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { digitalMailboxRowView, type DigitalMailboxRowView, type DigitalMailboxSending } from '@/lib/inkorg/digital-mailbox-row'
-import { billoLeftOutForKivra, mailboxEntries, type MailboxDoor } from '@/lib/inkorg/mailboxes'
+import { billoLeftOutForKivra, mailboxEntries, type DigitalMailboxAnswer, type MailboxDoor } from '@/lib/inkorg/mailboxes'
 import { formatDateTime } from '@/lib/utils'
 import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 import { DoorMark } from './door-icon'
@@ -93,12 +92,7 @@ export function MailboxList({
   const receives = (provider: DigitalMailboxProviderId) =>
     digital.state.status !== 'ready' || digital.state.providers[provider].available.receive
   const kivraCompanyMailbox = digital.state.status === 'ready' ? (digital.state.providers.kivra.company_mailbox ?? null) : null
-  const billoLeftOut = oneDigitalMailbox && billoLeftOutForKivra({
-    read: digital.state.status,
-    kivraCompanyMailbox,
-    kivraConnected: digital.state.status === 'ready' && digital.state.providers.kivra.connection !== null,
-    billoConnected: digital.state.status === 'ready' && digital.state.providers.billo.connection !== null,
-  })
+  const billoLeftOut = oneDigitalMailbox && billoLeftOutForKivra(digital.state)
   const entries = mailboxEntries(
     {
       whatsapp: ENABLED_EXTENSION_IDS.has('whatsapp-inbox'),
@@ -414,12 +408,7 @@ function GmailRow() {
 // Kivra and Billo: the company's digital mailbox, connected in the row
 // ---------------------------------------------------------------------------
 
-interface DigitalProviderAnswer {
-  available: DigitalMailboxAvailability
-  connection: ConnectionSummary | null
-  /** Kivra, while it is not connected for receiving: whether the company already has a company mailbox there. */
-  company_mailbox?: 'has' | 'none' | 'unknown'
-}
+type DigitalProviderAnswer = DigitalMailboxAnswer
 
 type DigitalState =
   | { status: 'loading' }

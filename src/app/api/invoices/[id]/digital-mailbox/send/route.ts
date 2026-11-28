@@ -47,6 +47,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         requestId,
         ...(outcome.details ? { details: outcome.details } : {}),
         ...(outcome.messageSv ? { messageSv: outcome.messageSv, messageEn: outcome.messageEn } : {}),
+        ...(outcome.remediation ? { remediation: outcome.remediation } : {}),
       })
     }
     return privateNoStore(NextResponse.json({ data: outcome.data }))

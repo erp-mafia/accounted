@@ -31,6 +31,7 @@ import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/l
 import { readV1JsonBody } from '@/lib/api/v1/body'
 import { stornoTargetLockedResponse } from '@/lib/api/v1/storno-target-refusal'
 import { correctionLanding } from '@/lib/vat/moved-correction-vat'
+import { rcBasisTwiceVoucherWarning } from '@/lib/vat/voucher-rc-basis-twice-warning'
 import { CorrectJournalEntrySchema } from '@/lib/api/schemas'
 import { validateBalance } from '@/lib/bookkeeping/engine'
 import { assertCorrectedImportVatBase } from '@/lib/bookkeeping/import-vat-base'
@@ -78,6 +79,7 @@ registerEndpoint({
     'A chain 3+ corrections deep returns CORRECTION_CHAIN_TOO_DEEP (409). Compute the net effect of the whole chain and book ONE correction, or pass allow_deep_chain=true to override.',
     'Lines that are the original with debit and credit swapped return MEANINGLESS_CORRECTION (400, details.reason negates_original): the storno already reverses the original. To only cancel an entry use /reverse; pass sides_swapped=true only when the original itself was booked with the sides swapped.',
     'Lines crediting import VAT (2615/2625/2635, boxes 60-62) need the taxable amount in box 50 (4545-4547) in the same lines, else 400 IMPORT_VAT_WITHOUT_BASE; reverse charge books its output VAT on 2614/2624/2634.',
+    'Lines with a 45xx/4598 basis pair beside an account that reports boxes 20-24 itself (a cost account with a reverse-charge momskod, or a basis account booked as the cost) count the purchase twice: warnings[] carries REVERSE_CHARGE_BASIS_TWICE. The correction still posts; remove the pair unless it is meant.',
     OWNED_BY_PITFALL,
     'An entry linked to a bank transaction keeps its amount on that transaction\'s bank ledger account (the account the bank says the money moved on): lines that move it to another bank account (19xx or a cash account ledger) return 409 CORRECTION_BANK_ACCOUNT_CHANGED (details.bank_account, details.moved_to). If the transaction does not belong to the entry, reverse the entry instead.',
   ],
@@ -231,17 +233,28 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // The object the verifikat books, if any (advice, never a refusal): the
     // correction is a new verifikat it does not point at, so name it.
     const ownedBy = await voucherOwnerOrNull(ctx.supabase, ctx.companyId!, typed)
-    const vatWarnings = landing.vatWarning
-      ? {
-          warnings: [
-            {
-              code: landing.vatWarning.code,
-              message_sv: landing.vatWarning.message_sv,
-              message_en: landing.vatWarning.message_en,
-            },
-          ],
-        }
-      : {}
+    // A basis pair beside an account that reports ruta 20-24 itself counts
+    // the purchase twice (lib/vat/voucher-rc-basis-twice-warning.ts): advice,
+    // never a refusal, and a failed read never stops the rättelse.
+    const basisTwice = await rcBasisTwiceVoucherWarning(ctx.supabase, ctx.companyId!, {
+      lines,
+      replaces: {
+        entry_date: typed.entry_date,
+        lines: (typed.lines ?? []).map((l) => ({
+          account_number: l.account_number,
+          debit_amount: Number(l.debit_amount) || 0,
+          credit_amount: Number(l.credit_amount) || 0,
+        })),
+      },
+      ...(typed.source_type === 'opening_balance' ? { opening_balance: true } : {}),
+    }).catch((err: unknown) => {
+      ctx.log.warn('reverse-charge basis check failed (continuing)', err as Error)
+      return null
+    })
+    const warningList = [landing.vatWarning, basisTwice]
+      .filter((w): w is NonNullable<typeof w> => w != null)
+      .map((w) => ({ code: w.code, message_sv: w.message_sv, message_en: w.message_en }))
+    const vatWarnings = warningList.length > 0 ? { warnings: warningList } : {}
 
     if (ctx.dryRun) {
       return dryRunPreview(

@@ -160,6 +160,13 @@ describe('recordateEntry', () => {
       { data: [{ id: 'orig-1' }], error: null },                                                    // 9 CAS
       { data: null, error: null },                                                                  // 10 relink transactions
       { data: null, error: null },                                                                  // 10b relink voucher links (#2364)
+      { data: null, error: null },                                                                  // 10b' relink customer payment rows
+      { data: null, error: null },                                                                  // 10b'' relink supplier payment rows
+      { data: null, error: null },                                                                  // 10b''' relink supplier invoice payment pointer
+      { data: null, error: null },                                                                  // 10c relink invoice pointer
+      { data: null, error: null },                                                                  // 10d relink supplier invoice pointer
+      { data: null, error: null },                                                                  // 10e relink inbox item pointer
+      { data: null, error: null },                                                                  // 10f relink utlägg pointer
       { data: null, error: null },                                                                  // 11 relink documents
       { data: { ...reversalEntry, lines: [] }, error: null },                                       // 12 final reversal
       { data: { ...correctedEntry, lines: [] }, error: null },                                      // 13 final corrected
@@ -201,6 +208,13 @@ describe('recordateEntry', () => {
       { data: [{ id: 'orig-1' }], error: null },
       { data: null, error: null },
       { data: null, error: null },
+      { data: null, error: null }, // relink customer payment rows
+      { data: null, error: null }, // relink supplier payment rows
+      { data: null, error: null }, // relink supplier invoice payment pointer
+      { data: null, error: null }, // relink invoice pointer
+      { data: null, error: null }, // relink supplier invoice pointer
+      { data: null, error: null }, // relink inbox item pointer
+      { data: null, error: null }, // relink utlägg pointer
       { data: null, error: null },
       { data: { ...reversalEntry, lines: [] }, error: null },
       { data: { ...correctedEntry, lines: [] }, error: null },

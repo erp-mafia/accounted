@@ -15,6 +15,7 @@ import type { ReactNode } from 'react'
 import type { Invoice, InvoiceItem, Customer, CompanySettings, InvoiceDocumentType } from '@/types'
 import type { InvoicePdfPaymentQr } from '@/lib/invoices/payment-qr'
 import { getAmountToPay } from '@/lib/bookkeeping/invoice-rounding'
+import { computeLineVat } from '@/lib/bookkeeping/invoice-line-amounts'
 import { isTextLikeLine } from '@/lib/invoices/display'
 import { maskedDeductionPersonnummer } from '@/lib/invoices/deduction-personnummer'
 import { GRON_TEKNIK_WORK_TYPES, workTypeLabel } from '@/lib/bookkeeping/rot-rut-rules'
@@ -104,6 +105,35 @@ export function articleNumberColumnShown(
 ): boolean {
   if (company.invoice_show_article_number !== true) return false
   return items.some((item) => !isTextLikeLine(item) && Boolean(item.article_number?.trim()))
+}
+
+/**
+ * Whether the line table prints the prices including moms after the ex-VAT
+ * columns: on a document with prices to a private person, when a row carries
+ * VAT. The ex-VAT unit price and amount (ML 17 kap 24 § p.9) stay as they
+ * are; these two columns come in addition. A document without VAT on any row
+ * (a seller that is not VAT-registered, an export) would print the same
+ * figures twice, so it gets none.
+ */
+export function inclVatColumnsShown(
+  customer: Pick<Customer, 'customer_type'>,
+  documentType: InvoiceDocumentType,
+  items: InvoiceItem[],
+): boolean {
+  if (customer.customer_type !== 'individual') return false
+  if (documentType === 'delivery_note') return false
+  return items.some((item) => !isTextLikeLine(item) && (item.vat_rate ?? 0) > 0)
+}
+
+/**
+ * A row's unit price including moms: the unit price plus its VAT at the
+ * row's own rate (computeLineVat, the one per-line VAT rule), to the öre. A
+ * row that carries no VAT prints its unit price unchanged, like its amount.
+ */
+export function unitPriceInclVat(item: Pick<InvoiceItem, 'unit_price' | 'vat_rate' | 'vat_amount'>): number {
+  const unitPrice = item.unit_price ?? 0
+  const rate = (item.vat_amount ?? 0) === 0 ? 0 : (item.vat_rate ?? 0)
+  return roundOre(unitPrice + computeLineVat(unitPrice, rate))
 }
 
 export function buildPdfVatBreakdown(items: InvoiceItem[]): Map<number, { base: number; vat: number }> {
@@ -244,7 +274,7 @@ function renderPaymentArea(area: PdfPaymentArea, styles: PdfStyles, lang: PdfLan
  */
 export type InvoicePdfInvoice = Invoice & { deduction_personnummer_masked?: string | null }
 
-interface InvoicePDFProps {
+export interface InvoicePDFProps {
   invoice: InvoicePdfInvoice
   customer: Customer
   items: InvoiceItem[]
@@ -263,6 +293,29 @@ interface InvoicePDFProps {
    * or a vector path (bank app), with its caption. null/omitted prints none.
    */
   paymentQr?: InvoicePdfPaymentQr | null
+  /**
+   * Draw the payment area on this page, the one the summary ends on, and
+   * start a long fine print on the page after it instead of above it. Set by
+   * the render entry point when a first render showed the fine print pushing
+   * the payment area off that page. Ignored without a long fine print.
+   */
+  paymentAreaPage?: number
+  /** Filled in while react-pdf lays the document out: where the summary and the payment area landed. */
+  placement?: InvoicePdfPlacement
+}
+
+/**
+ * Where a rendered invoice put its summary and its payment area, as react-pdf
+ * laid it out: each page is recorded by a `render` callback on the page it is
+ * drawn on, in the final pass, when the page count is known.
+ */
+export interface InvoicePdfPlacement {
+  /** A long fine print and a payment area: a second render may move the fine print after the payment area. */
+  finePrintCanFollow?: boolean
+  /** The page the summary (Delsumma to Att betala) is on. */
+  summaryPage?: number
+  /** The page the payment area's reservation is on: where the payment area is drawn. */
+  paymentAreaPage?: number
 }
 
 /**
@@ -272,7 +325,7 @@ interface InvoicePDFProps {
  * breaks depend only on the rows and the note, never on the status, the
  * payment settings or the QR code.
  */
-export function InvoicePDF({ invoice, customer, items, company, originalInvoiceNumber, isPreview, language, branding, paymentQr }: InvoicePDFProps) {
+export function InvoicePDF({ invoice, customer, items, company, originalInvoiceNumber, isPreview, language, branding, paymentQr, paymentAreaPage, placement }: InvoicePDFProps) {
   const lang: PdfLang = language ?? customer.language ?? 'sv'
   const L = LABELS[lang]
   // Build the stylesheet per-render so each invoice picks up its company's
@@ -351,6 +404,10 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
   // no QR code (lib/invoices/payment-qr resolves none for anything but a
   // payable faktura), no payment link. Its expiry replaces the due date.
   const isQuote = docType === 'quote'
+
+  // À-pris and belopp including moms for a private person, after the ex-VAT
+  // columns (inclVatColumnsShown).
+  const showInclVatColumns = inclVatColumnsShown(customer, docType, items)
 
   // Shared with the invoice email (lib/email/invoice-templates.ts) so the
   // mail and the PDF always state the same "Att betala".
@@ -443,11 +500,35 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
   // document that asks for a payment: never on a quote, a kreditfaktura or a
   // följesedel. In the invoice's language: the English texts on an English
   // invoice, each falling back to the Swedish one (crm#1735).
-  const { lateFee, creditTerms } = invoiceFinePrint(company, lang)
+  const { lateFee, creditTerms } = invoiceFinePrint(company, lang, {
+    lateInterestInvoice: invoice.is_late_interest_invoice === true,
+  })
   const finePrint = isQuote || isDeliveryNote || isCreditNote
     ? []
     : [lateFee, creditTerms].filter((t): t is string => t !== null)
   const finePrintTravelsWhole = fitsOnOnePage(finePrint.join('\n'), FULL_WIDTH_BOX_PT, FINE_PRINT_KEEP_TOGETHER_LINES)
+  // A long fine print may follow the payment area instead: the payment area
+  // then stays on the page the summary ends on, and the fine print starts on
+  // the next page. renderInvoiceDocument asks for it only when the fine print
+  // pushed the payment area off that page.
+  const finePrintCanFollow = hasPaymentArea && finePrint.length > 0 && !finePrintTravelsWhole
+  const finePrintFollows = finePrintCanFollow && paymentAreaPage !== undefined
+  // A zero-height mark that records, for renderInvoiceDocument, the page it is
+  // drawn on and whether the fine print may follow the payment area. Only the
+  // final layout pass knows the page count, and only its page numbers are kept.
+  const pageMark = (key: 'summaryPage' | 'paymentAreaPage') =>
+    placement ? (
+      <View
+        render={(context) => {
+          const { pageNumber, totalPages } = context as PdfPageContext
+          if (totalPages !== undefined) {
+            placement[key] = pageNumber
+            placement.finePrintCanFollow = finePrintCanFollow
+          }
+          return null
+        }}
+      />
+    ) : null
   const finePrintBlock = finePrint.length > 0 ? (
     <View style={styles.finePrint}>
       {finePrint.map((text, index) => (
@@ -763,6 +844,13 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
             {!isDeliveryNote && (
               <Text style={[styles.colTotal, styles.tableHeaderText]}>{L.colTotal}</Text>
             )}
+            {/* Two lines each: the figure, then "inkl. moms". */}
+            {showInclVatColumns && (
+              <Text style={[styles.colPrice, styles.tableHeaderText]}>{L.colUnitPriceInclVat}</Text>
+            )}
+            {showInclVatColumns && (
+              <Text style={[styles.colTotal, styles.tableHeaderText]}>{L.colTotalInclVat}</Text>
+            )}
           </View>
 
           {items.map((item, index) =>
@@ -808,6 +896,14 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                 {!isDeliveryNote && (
                   <Text style={styles.colTotal}>{formatPdfAmount(item.line_total, lang)}</Text>
                 )}
+                {/* The row's own figures with its VAT; the totals below are
+                    the stored ones, never a sum of these. */}
+                {showInclVatColumns && (
+                  <Text style={styles.colPrice}>{formatPdfAmount(unitPriceInclVat(item), lang)}</Text>
+                )}
+                {showInclVatColumns && (
+                  <Text style={styles.colTotal}>{formatPdfAmount(lineInclVat(item), lang)}</Text>
+                )}
               </View>
             )
           )}
@@ -840,11 +936,15 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
             may move to the next page on their own (a long fine print is its
             own unit and may break, crm#1787); the page the spacer lands
             on is the last one, where the payment area, which states the
-            amount again, is drawn over it. A ROT/RUT breakdown too long to
-            keep whole comes first instead and may split. */}
+            amount again, is drawn over it. A long fine print may instead
+            come after the spacer, from the next page on, so the payment area
+            stays on the summary's page (paymentAreaPage). A ROT/RUT
+            breakdown too long to keep whole comes first instead and may
+            split. */}
         <View style={styles.totalsBlock}>
           {!deductionFits && deductionBox}
           <View style={deductionFits ? undefined : styles.totalsAfterDeduction} wrap={false}>
+            {pageMark('summaryPage')}
             {!isDeliveryNote && (
               <View style={styles.totals} wrap={false}>
                 <View style={styles.totalRow}>
@@ -874,7 +974,10 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                   // A non-registered seller who states VAT (warned at create time
                   // per ML 16 kap. 23 §) still gets the totals row so the printed
                   // invoice matches what the customer is being asked to pay.
-                  !(company.vat_registered === false && invoice.vat_amount === 0) && (
+                  // Nor on an outside_scope invoice without VAT: not a supply,
+                  // so no rate, not even 0 %; its notice says why.
+                  !(company.vat_registered === false && invoice.vat_amount === 0) &&
+                  !(invoice.vat_treatment === 'outside_scope' && invoice.vat_amount === 0) && (
                     <View style={styles.totalRow}>
                       <Text style={styles.totalLabel}>{bareLabel(L.vatRow(invoice.vat_rate ?? (vatByRate.size === 1 ? (vatByRate.keys().next().value ?? 0) : 0)))}</Text>
                       <Text style={styles.totalValue}>{formatPdfAmount(invoice.vat_amount, lang)}</Text>
@@ -956,28 +1059,37 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
           {/* A long fine print follows the summary as ordinary text and may
               break across pages, so it never drags a unit kept whole to a
               fresh page and leaves the page above mostly empty (crm#1787). */}
-          {!finePrintTravelsWhole && finePrintBlock}
+          {!finePrintTravelsWhole && !finePrintFollows && finePrintBlock}
 
-          {/* The payment area's reservation, one unit so the last page always
-              has room for the payment area. A short fine print travels with
-              it, so it is never stranded without it. */}
+          {/* The payment area's reservation, one unit so the page it is drawn
+              on always has room for it. A short fine print travels with it,
+              so it is never stranded without it. */}
           {hasPaymentArea && (
             <View wrap={false}>
+              {pageMark('paymentAreaPage')}
               {finePrintTravelsWhole && finePrintBlock}
               <View style={{ height: PAYMENT_AREA_HEIGHT_PT + PAYMENT_AREA_GAP_PT }} />
             </View>
           )}
+
+          {/* Or the long fine print starts on the page after the payment
+              area, which stays on the page the summary ends on. */}
+          {finePrintFollows && <View break>{finePrintBlock}</View>}
         </View>
 
         {/* Zone E: the payment area, drawn over the spacer at the bottom of
-            the last page. Fixed height for every status (R8). */}
+            the last page, or of the summary's page when the long fine print
+            follows it. Fixed height for every status (R8). */}
         {paymentArea && (
           <View
             fixed
             style={styles.paymentAreaFrame}
             render={(context) => {
               const { pageNumber, totalPages } = context as PdfPageContext
-              return pageNumber === totalPages ? renderPaymentArea(paymentArea, styles, lang) : null
+              const drawnHere = finePrintFollows
+                ? totalPages !== undefined && pageNumber === paymentAreaPage
+                : pageNumber === totalPages
+              return drawnHere ? renderPaymentArea(paymentArea, styles, lang) : null
             }}
           />
         )}

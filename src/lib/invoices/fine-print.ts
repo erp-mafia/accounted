@@ -28,15 +28,23 @@ function storedText(value: unknown): string | null {
  * one would. A Swedish invoice prints the Swedish texts, as before. `lang`
  * is the invoice's document language (InvoicePDF's lang, the editor's
  * documentLanguage).
+ *
+ * A räntefaktura (`lateInterestInvoice`) states no dröjsmålsränta of its own:
+ * it charges the interest, and on a claim without a due date agreed in
+ * advance that statement is what would start new interest (räntelagen 4 §).
  */
-export function invoiceFinePrint(settings: FinePrintSettings | null | undefined, lang: PdfLang): InvoiceFinePrint {
+export function invoiceFinePrint(
+  settings: FinePrintSettings | null | undefined,
+  lang: PdfLang,
+  options: { lateInterestInvoice?: boolean } = {},
+): InvoiceFinePrint {
   const swedish: InvoiceFinePrint = {
-    lateFee: storedText(settings?.invoice_late_fee_text),
+    lateFee: options.lateInterestInvoice ? null : storedText(settings?.invoice_late_fee_text),
     creditTerms: storedText(settings?.invoice_credit_terms_text),
   }
   if (lang !== 'en') return swedish
   return {
-    lateFee: storedText(settings?.invoice_late_fee_text_en) ?? swedish.lateFee,
+    lateFee: options.lateInterestInvoice ? null : (storedText(settings?.invoice_late_fee_text_en) ?? swedish.lateFee),
     creditTerms: storedText(settings?.invoice_credit_terms_text_en) ?? swedish.creditTerms,
   }
 }

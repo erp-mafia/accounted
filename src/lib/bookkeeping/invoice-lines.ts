@@ -23,7 +23,7 @@ import {
 } from './dimension-resolver'
 import { splitGrossVat, statedVatFitsRate, treatmentForRate } from './gross-split'
 import { getVatRate } from './vat-entries'
-import { isZeroRatedInvoiceTreatment, resolveLineVatTreatment } from './invoice-line-vat-treatment'
+import { isOutsideScopeInvoiceTreatment, isZeroRatedInvoiceTreatment, resolveLineVatTreatment } from './invoice-line-vat-treatment'
 import { computeLineDeductions, DEDUCTION_TYPE_LABELS } from '@/lib/bookkeeping/rot-rut-rules'
 import { creditNatural } from './line-side'
 import { InvoiceFxRateMissingError, getOutputVatAccount, getRevenueAccount } from './invoice-accounts'
@@ -140,6 +140,15 @@ function booksStatedVat(
 }
 
 /**
+ * The text of a revenue line: a sale, or under outside_scope the
+ * dröjsmålsränta a räntefaktura charges, which is no sale (the builder holds
+ * those lines to interest-income accounts).
+ */
+function revenueLineText(treatment: VatTreatment | null | undefined, tag: string): string {
+  return isOutsideScopeInvoiceTreatment(treatment) ? `Dröjsmålsränta faktura ${tag}` : `Försäljning faktura ${tag}`
+}
+
+/**
  * Group invoice items by VAT rate and generate per-rate revenue + VAT lines.
  * Returns credit lines only (revenue + VAT). The caller adds the debit side.
  *
@@ -197,7 +206,7 @@ export function generatePerRateLines(
       account_number: revenueAccount,
       debit_amount: 0,
       credit_amount: subtotalSek,
-      line_description: `Försäljning faktura ${invoiceTagText}`,
+      line_description: revenueLineText(invoiceVatTreatment, invoiceTagText),
       dimensions: options?.defaultDimensions,
     })
 
@@ -290,7 +299,7 @@ export function generatePerRateLines(
       lines.push({
         account_number: bucket.account,
         ...creditNatural(credit),
-        line_description: `Försäljning faktura ${invoiceTagText}`,
+        line_description: revenueLineText(treatment, invoiceTagText),
         dimensions: bucket.dimensions,
       })
     })
@@ -929,7 +938,7 @@ function headerRecognitionLines(
     account_number: getRevenueAccount(invoice.vat_treatment, entityType, { goods: !!invoice.delivery_country }),
     debit_amount: 0,
     credit_amount: headerToSekOrThrow(invoice.subtotal, invoice.subtotal_sek, invoice.currency, invoice.exchange_rate),
-    line_description: `Försäljning faktura ${tag}`,
+    line_description: revenueLineText(invoice.vat_treatment, tag),
     dimensions: defaultDimensions,
   }]
 

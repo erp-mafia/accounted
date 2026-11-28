@@ -12,7 +12,7 @@ import { documentAppUrl } from './file-links'
 import { isArkivBrainEnabled } from '@/lib/arkiv/flag'
 import { factHistory, listLiveFacts, type FactRow } from '@/lib/arkiv/facts/store'
 import { PREDICATES, predicateDef, type FactSubjectKind } from '@/lib/arkiv/facts/predicates'
-import { isSearchKind, searchRecords, SEARCH_LIMIT_DEFAULT } from '@/lib/arkiv/search'
+import { isSearchKind, searchArchive, SEARCH_LIMIT_DEFAULT } from '@/lib/arkiv/search'
 import { ArkivProposeFactParamsSchema } from '@/lib/pending-operations/schemas/arkiv-propose-fact'
 import type { McpTool, McpToolAnnotations, ActorContext } from './server'
 import { annotationsForEffect } from './tool-effects'
@@ -22,7 +22,6 @@ import { getCompanyGraph } from '@/lib/arkiv/graph/snapshot'
 import { neighbourhoodOf } from '@/lib/arkiv/graph/neighbourhood'
 import { ensureDocumentRead } from '@/lib/documents/read/on-demand'
 import { listRecords, LIST_LIMIT_DEFAULT, LIST_LIMIT_MAX, originalsOf, typesFor } from '@/lib/arkiv/list-records'
-import { NOT_STRUCTURED_MIME_FILTER } from '@/lib/documents/read/types'
 import { getDecisionReceipts, toCompactDecision } from '@/lib/suggestion-log/receipts'
 import { createLogger } from '@/lib/logger'
 import { getVoucherLinks, toCompactLinks } from '@/lib/links/voucher-links'
@@ -219,18 +218,6 @@ async function resolveRecordRef(
 /** The brain (facts, agreements, findings, the graph) rolls out per company; the shelf tools (search, get_record, get_source) work for everyone. */
 function assertBrain(companyId: string): void {
   if (!isArkivBrainEnabled(companyId)) throw coded('ARKIV_NOT_ENABLED', 'The company brain is not switched on for this company yet. The archive tools work as usual: gnubok_list_records and gnubok_search_records find documents, gnubok_read_document and gnubok_get_source read their pages, and gnubok_ask_document answers one question with page and quote.')
-}
-
-async function countUnreadDocuments(supabase: SupabaseClient, companyId: string): Promise<number> {
-  const { count, error } = await supabase
-    .from('document_attachments')
-    .select('id', { count: 'exact', head: true })
-    .eq('company_id', companyId)
-    .in('admission_state', ['admitted', 'held'])
-    .is('pages_read_at', null)
-    .or(NOT_STRUCTURED_MIME_FILTER)
-  if (error) throw dbError(error)
-  return count ?? 0
 }
 
 interface Deps {
@@ -747,21 +734,10 @@ export function createArkivTools(deps: Deps): McpTool[] {
       async execute(args, companyId, _userId, supabase) {
         if (String(args.query ?? '').trim().length < 2) throw invalid('query must be at least two characters')
         const asked = Array.isArray(args.kinds) ? (args.kinds as unknown[]).filter(isSearchKind) : []
-        // Agreements and facts are the brain's interpretations: outside it the documents are the archive.
-        const kinds = isArkivBrainEnabled(companyId) ? asked : (['document'] as const).slice()
-        const items = await searchRecords(supabase, companyId, String(args.query ?? ''), { kinds, limit: Number(args.limit ?? SEARCH_LIMIT_DEFAULT) })
+        // The same answer GET /documents/search gives (lib/arkiv/search.ts); the hints name this server's tools.
         // An empty answer from an archive nobody has read yet is not "no such document" (seen 2026-09-25: a
         // company with 10 unread invoices searched "faktura" and got nothing, with nothing saying why).
-        // A later copy of the same file or text says so, as in list_records, so hits are counted once.
-        const hitIds = [...new Set(items.map((i) => i.document_id).filter((id): id is string => !!id))]
-        let originals = new Map<string, string>()
-        if (hitIds.length) {
-          const { data: hitDocs, error: hitError } = await supabase.from('document_attachments').select('id, created_at, sha256_hash').eq('company_id', companyId).in('id', hitIds)
-          if (hitError) throw dbError(hitError)
-          originals = await originalsOf(supabase, companyId, (hitDocs ?? []) as Array<{ id: string; created_at: string; sha256_hash: string | null }>)
-        }
-        const marked = items.map((i) => ({ ...i, duplicate_of: i.document_id && originals.has(i.document_id) ? `document:${originals.get(i.document_id)}` : null }))
-        const unread = await countUnreadDocuments(supabase, companyId)
+        const { items: marked, unread } = await searchArchive(supabase, companyId, String(args.query ?? ''), { kinds: asked, limit: Number(args.limit ?? SEARCH_LIMIT_DEFAULT) })
         const unreadHint = unread > 0
           ? `${unread} document${unread === 1 ? ' is' : 's are'} not read yet and not in this search. Page through gnubok_list_records (read: false) and open one with gnubok_read_document: it is read on the spot.`
           : null

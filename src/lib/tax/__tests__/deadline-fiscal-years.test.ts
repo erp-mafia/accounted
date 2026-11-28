@@ -3,6 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import {
   fiscalYearEndMonthIn,
   fiscalYearEndMonthOn,
+  fiscalYearForDeadlines,
   fiscalYearsEndingIn,
   type CompanySettingsForDeadlines,
   type FiscalYearForDeadlines,
@@ -119,6 +120,16 @@ describe('fiscalYearsEndingIn', () => {
     expect(fiscalYearsEndingIn([2026, 2027], broken)).toEqual([
       { endYear: 2026, endMonth: 4, start: '2025-05-01' },
       { endYear: 2027, endMonth: 4, start: '2026-05-01' },
+    ])
+  })
+
+  it('has no year before a first räkenskapsår the company declared, even one starting on the 1st', () => {
+    const settings = makeSettings({
+      fiscal_year_start_month: 1,
+      fiscal_years: [{ start: '2026-04-01', end: '2026-12-31', declaredFirst: true }],
+    })
+    expect(fiscalYearsEndingIn([2025, 2026], settings)).toEqual([
+      { endYear: 2026, endMonth: 12, start: '2026-04-01' },
     ])
   })
 
@@ -444,6 +455,20 @@ describe('findSettingsWithStaleUpcomingDeadlines', () => {
     expect(findSettingsWithStaleUpcomingDeadlines([company], rows, years, from)).toEqual([])
   })
 
+  it('does not flag a declared first year once its rows match the schedule', () => {
+    const declared = {
+      company_id: 'company-3',
+      ...makeSettings({
+        employer_registered: true,
+        fiscal_years: [{ start: '2026-04-01', end: '2026-12-31', declaredFirst: true }],
+      }),
+    }
+    const rows = rowsFor('company-3', getExpectedUpcomingDeadlineKeys(toDeadlineSettings(declared), years, from))
+    expect(rows.length).toBeGreaterThan(0)
+    expect(findSettingsWithStaleUpcomingDeadlines([declared], rows, years, from)).toEqual([])
+    expect(findSettingsMissingUpcomingDeadlines([declared], rows, years, from)).toEqual([])
+  })
+
   it('does not flag an ordinary calendar-year company whose rows match the schedule', () => {
     const ordinary = {
       company_id: 'company-2',
@@ -464,13 +489,17 @@ describe('backfillMissingTaxDeadlines: rows for obligations that never existed',
    */
   function makeSupabase(tables: Record<string, unknown[]>) {
     const inserts: Array<Array<Record<string, unknown>>> = []
+    const selects: Array<[string, string]> = []
     const from = vi.fn((table: string) => {
       const chain: Record<string, unknown> = {}
       let deleting = false
       for (const method of ['eq', 'is', 'gte', 'lte', 'or', 'not', 'order']) {
         chain[method] = vi.fn(() => chain)
       }
-      chain.select = vi.fn(() => (deleting ? Promise.resolve({ data: [], error: null }) : chain))
+      chain.select = vi.fn((columns?: string) => {
+        if (!deleting) selects.push([table, columns ?? ''])
+        return deleting ? Promise.resolve({ data: [], error: null }) : chain
+      })
       chain.range = vi.fn(async () => ({ data: tables[table] ?? [], error: null }))
       chain.insert = vi.fn((rows: Array<Record<string, unknown>>) => {
         inserts.push(rows)
@@ -489,7 +518,7 @@ describe('backfillMissingTaxDeadlines: rows for obligations that never existed',
       if (args.p_rows.length > 0) inserts.push(args.p_rows)
       return { data: [{ created: args.p_rows.length, deleted: 0 }], error: null }
     })
-    return { supabase: { from, rpc } as unknown as SupabaseClient, inserts }
+    return { supabase: { from, rpc } as unknown as SupabaseClient, inserts, selects }
   }
 
   beforeEach(() => {
@@ -536,5 +565,87 @@ describe('backfillMissingTaxDeadlines: rows for obligations that never existed',
     expect(inserts).toHaveLength(1)
     expect(inserts[0].map((row) => `${row.company_id}:${row.tax_deadline_type}:${row.tax_period}`))
       .toEqual(['company-1:moms_quarterly:2026-Q4'])
+  })
+
+  it('regenerates a declared first year holding the inkomstdeklaration of a year before it', async () => {
+    vi.setSystemTime(new Date(2026, 10, 10, 12))
+    const { fiscal_years: _fy, tax_assessment_notices: _tan, ...rawSettings } = makeSettings()
+    // The rows the schedule wrote while it assumed a year April-March before.
+    const heldKeys = getExpectedUpcomingDeadlineKeys(
+      makeSettings({ fiscal_years: [{ start: '2026-04-01', end: '2026-12-31' }] }),
+      [2026, 2027],
+      new Date(2026, 10, 10, 12),
+    )
+    expect(heldKeys).toContain('inkomstdeklaration_ab:2025/2026:2026-12-01')
+    const { supabase, inserts, selects } = makeSupabase({
+      company_settings: [{ company_id: 'company-1', ...rawSettings }],
+      fiscal_periods: [
+        { company_id: 'company-1', name: 'Första räkenskapsåret 2026', period_start: '2026-04-01', period_end: '2026-12-31' },
+      ],
+      deadlines: rowsFor('company-1', heldKeys),
+      tax_assessment_notices: [],
+    })
+
+    const result = await backfillMissingTaxDeadlines(supabase)
+
+    expect(result).toMatchObject({ companiesScanned: 1, companiesRepaired: 1 })
+    expect(inserts).toHaveLength(1)
+    const written = inserts[0].map((row) => `${row.tax_deadline_type}:${row.tax_period}`)
+    expect(written).not.toContain('inkomstdeklaration_ab:2025/2026')
+    expect(written).toContain('inkomstdeklaration_ab:2026')
+    // The name is what carries the declaration, so the read must ask for it.
+    const periodReads = selects.filter(([table]) => table === 'fiscal_periods')
+    expect(periodReads.length).toBeGreaterThan(0)
+    for (const [, columns] of periodReads) expect(columns.split(/,\s*/)).toContain('name')
+  })
+})
+
+describe('fiscalYearForDeadlines', () => {
+  const row = (name: string | null) => ({ name, period_start: '2026-04-01', period_end: '2026-12-31' })
+
+  it('reads the name a first räkenskapsår gets at company creation as declared first', () => {
+    expect(fiscalYearForDeadlines(row('Första räkenskapsåret 2026'))).toEqual({
+      start: '2026-04-01',
+      end: '2026-12-31',
+      declaredFirst: true,
+    })
+    expect(fiscalYearForDeadlines(row('Första räkenskapsåret 2026/2027')).declaredFirst).toBe(true)
+  })
+
+  it('reads every other name, a renamed first year included, as an ordinary year', () => {
+    for (const name of ['Räkenskapsår 2026', 'FY 2026', 'Mitt första år', null]) {
+      expect(fiscalYearForDeadlines(row(name))).toEqual({ start: '2026-04-01', end: '2026-12-31' })
+    }
+  })
+})
+
+describe('deadline schedule: a first räkenskapsår declared at creation that starts on the 1st', () => {
+  // An AB whose creator said it is in its first year, April to December,
+  // quarterly moms: no räkenskapsår ended in March before it.
+  const declared = makeSettings({
+    fiscal_years: [{ start: '2026-04-01', end: '2026-12-31', declaredFirst: true }],
+  })
+  const undeclared = makeSettings({ fiscal_years: [{ start: '2026-04-01', end: '2026-12-31' }] })
+
+  it('has no inkomstdeklaration for a räkenskapsår before the first one', () => {
+    const from = new Date(2026, 10, 10)
+    expect(keys(undeclared, [2026, 2027], from)).toContain('inkomstdeklaration_ab:2025/2026:2026-12-01')
+
+    const result = keys(declared, [2026, 2027], from)
+    expect(result.some((key) => key.includes(':2025/2026:'))).toBe(false)
+    expect(result).toEqual(expect.arrayContaining([
+      'inkomstdeklaration_ab:2026:2027-08-02',
+      'arsredovisning:2026:2027-08-02',
+      'arsstamma:2026:2027-06-30',
+    ]))
+  })
+
+  it('has no momsdeklaration for the quarter before the first year began', () => {
+    const from = new Date(2026, 3, 2)
+    expect(keys(undeclared, [2026, 2027], from)).toContain('moms_quarterly:2026-Q1:2026-05-12')
+
+    const result = keys(declared, [2026, 2027], from)
+    expect(result.some((key) => key.startsWith('moms_quarterly:2026-Q1:'))).toBe(false)
+    expect(result).toContain('moms_quarterly:2026-Q2:2026-08-17')
   })
 })

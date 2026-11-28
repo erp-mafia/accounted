@@ -8,6 +8,7 @@
  */
 import type { ConnectionSummary } from '@/lib/digital-mailboxes/connections'
 import type { DigitalMailboxAvailability } from '@/lib/digital-mailboxes/providers'
+import { sendingStateOf, type DigitalMailboxSendingState } from '@/lib/digital-mailboxes/sending-status'
 
 /**
  * off: nothing reads the mailbox (never connected, or disconnected), so the
@@ -16,7 +17,7 @@ import type { DigitalMailboxAvailability } from '@/lib/digital-mailboxes/provide
  */
 export type DigitalMailboxReceive = 'off' | 'pending' | 'active'
 
-export type DigitalMailboxSending = 'off' | 'pending' | 'rejected' | 'active'
+export type DigitalMailboxSending = DigitalMailboxSendingState
 
 export interface DigitalMailboxRowView {
   receive: DigitalMailboxReceive
@@ -49,14 +50,9 @@ export function digitalMailboxRowView(
     receive,
     lastSyncedAt: receive === 'active' ? (connection?.last_synced_at ?? null) : null,
     postalAddress: receive === 'active' ? billoPostalAddress(connection?.postal_address) : null,
-    sending: available.send ? sendingOf(connection) : null,
+    sending: available.send ? sendingStateOf(connection) : null,
     error: receive !== 'off' && connection?.last_error ? { at: connection.last_error_at } : null,
   }
-}
-
-function sendingOf(connection: ConnectionSummary | null): DigitalMailboxSending {
-  if (connection?.send_state === 'active') return 'active'
-  return connection?.send_request ?? 'off'
 }
 
 function text(value: unknown): string | null {

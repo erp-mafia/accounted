@@ -38,9 +38,10 @@ type NudgeTarget = { kind: 'one'; row: ClientOverviewRow } | { kind: 'all'; coun
 /**
  * The cockpit client list (WL-14): dry-table, urgency-sorted server-side,
  * free-text filter client-side. Entering a client is the WL-09 soft switch:
- * sets the active company and lands DIRECTLY on that company's overview via
- * performCompanySwitch (one full-page load to the target, no start-page
- * bounce). The way back is the Klienter nav entry, which needs no switch.
+ * sets the active company and lands DIRECTLY on the person's start page in
+ * that company (Att göra unless they chose another) via performCompanySwitch
+ * (one full-page load to the target, no bounce). The way back is the
+ * Klienter nav entry, which needs no switch.
  *
  * Each row also opens that client's own settings (Företag, where Radera
  * företag lives for owners) through the same switch: the user menu's
@@ -95,7 +96,8 @@ export default function ClientsTable({ clients, bankSwitchCampaign = null, canEd
     [clients],
   )
 
-  const handleEnter = async (companyId: string, destination: string = '/') => {
+  // Without a destination the client opens on the byrå person's start page there (lib/company/start-page.ts).
+  const handleEnter = async (companyId: string, destination?: string) => {
     if (pendingId) return
     setPendingId(companyId)
     const result = await performCompanySwitch(companyId, { destination })

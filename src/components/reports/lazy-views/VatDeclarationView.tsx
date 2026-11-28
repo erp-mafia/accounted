@@ -49,7 +49,7 @@ import { partlySettledRestBooksAlone } from '@/lib/vat/partly-settled-rest'
 import { postedVatSettlements } from '@/lib/reports/vat-settlement'
 import { resolveInitialVatPeriodSelection } from '@/lib/vat/period-selection'
 import { fiscalPeriodForVatYear } from '@/lib/reports/period-dates'
-import { fiscalYearEndMonthIn, fiscalYearEndMonthOn } from '@/lib/tax/deadline-config'
+import { fiscalYearEndMonthIn, fiscalYearEndMonthOn, fiscalYearForDeadlines } from '@/lib/tax/deadline-config'
 import {
   indexVatFilings,
   vatFilingKey,
@@ -900,7 +900,7 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
   const fiscalCalendar = {
     entity_type: settings?.entity_type,
     fiscal_year_start_month: settings?.fiscal_year_start_month,
-    fiscal_years: fiscalPeriods.map((p) => ({ start: p.period_start, end: p.period_end })),
+    fiscal_years: fiscalPeriods.map(fiscalYearForDeadlines),
   }
   const fiscalYearEndMonth = fiscalYearEndMonthIn(year, fiscalCalendar)
   const runningYearEndMonth = fiscalYearEndMonthOn(todayIsoStockholm(), fiscalCalendar)

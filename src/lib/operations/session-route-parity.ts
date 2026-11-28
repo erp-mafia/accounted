@@ -139,7 +139,9 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'DELETE /api/calendar/feed': uiOnly('revokes the secret calendar feed URL (credential)'),
   'POST /api/company/members/invite': uiOnly(PRIVILEGE),
   'POST /api/company/members/invite/:id': uiOnly(PRIVILEGE),
+  'PATCH /api/company/members/invite/:id': uiOnly(PRIVILEGE),
   'DELETE /api/company/members/invite/:id': uiOnly(PRIVILEGE),
+  'PATCH /api/company/members/:id': uiOnly(PRIVILEGE),
   'DELETE /api/company/members/:id': uiOnly(PRIVILEGE),
   'POST /api/team/invite': uiOnly(PRIVILEGE),
   'POST /api/team/invite/:id': uiOnly(PRIVILEGE),
@@ -457,7 +459,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/documents/:id/detach': gap('P3', 'detach a duplicate underlag from a posted verifikat'),
   'POST /api/documents/:id/versions': gap('P3', 'new version of a document'),
   'POST /api/documents/:id/admission': gap('P3', 'admit or discard a held document'),
-  'POST /api/documents/:id/classification': covered(['gnubok_set_document_type']),
+  'POST /api/documents/:id/classification': covered([`PUT ${V}/documents/:id/type`, 'gnubok_set_document_type']),
   'POST /api/documents/:id/extraction/fields': gap('P3', 'settle extracted fields on an archive document'),
   'POST /api/arkiv/facts/:id/revert': gap('P3', 'revert a company fact (gnubok_propose_fact stages new ones)'),
   'POST /api/arkiv/findings/:id': gap('P3', 'close an Arkiv finding'),
@@ -600,7 +602,12 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/invoices/:id/refresh-exchange-rate': gap('P3'),
   'POST /api/invoices/:id/send-payment-confirmation': gap('P3', 'email a betalningsbekräftelse'),
   'POST /api/invoices/:id/resend': gap('P3', 'email an already emailed invoice again as a copy (crm#1339)'),
+  'POST /api/invoices/:id/uncredit': gap('P2', 'undo the credit of an invoice whose credit note never reached the customer (Ångra kreditering); dashboard first, the supplier side has v1 supplier-invoices/:id/uncredit and gnubok_uncredit_supplier_invoice'),
   'POST /api/invoices/self-billed': covered([`POST ${V}/invoices`], 'is_self_billed: true runs the same service (createSelfBilledSaleInvoice); gnubok_create_invoice has no such argument'),
+  'POST /api/invoices/late-payment-interest/invoices': gap(
+    'P2',
+    'create räntefakturor that mark the invoices they charge; POST /invoices makes the same draft (lines on 8313, vat_treatment outside_scope) but leaves the interest chargeable on the report',
+  ),
   'POST /api/invoices/preview-pdf': uiOnly(PREVIEW),
   'POST /api/invoices/preview-email': uiOnly(PREVIEW),
   'POST /api/invoices/recurring': covered(['gnubok_create_recurring_schedule']),
@@ -780,7 +787,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/skatteverket/tax-payments/:period/mark-paid': gap('P3', 'mark AGI period tax paid'),
   'POST /api/deadlines': gap('P3', 'custom deadline'),
   'PUT /api/deadlines/:id': gap('P3'),
-  'DELETE /api/deadlines/:id': gap('P3'),
+  'DELETE /api/deadlines/:id': covered(['gnubok_delete_deadline'], 'one added by hand is deleted, a generated one dismissed, through the same service (lib/deadlines/removal.ts); no v1 route yet'),
   'POST /api/deadlines/:id/complete': covered([`POST ${V}/deadlines/:id/complete`, `POST ${V}/reports/vat-declaration/filings`, 'gnubok_complete_deadline', 'gnubok_mark_vat_period_filed', 'gnubok_mark_agi_period_filed'], 'any deadline by its id, either way (crm#1848); the moms and AGI deadlines also by period, with the filing date'),
   'POST /api/rot-rut/payout-file': covered(['gnubok_generate_rot_rut_file']),
   'POST /api/rot-rut/beslut/import': covered(['gnubok_import_rot_rut_beslut']),
@@ -976,7 +983,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/extensions/ext/tic/bankid/cancel': uiOnly('BankID flow'),
   'POST /api/extensions/ext/tic/bankid/link': uiOnly('links a BankID identity to the logged-in person'),
   'POST /api/extensions/ext/tic/bankid/unlink': uiOnly('unlinks a BankID identity from the logged-in person'),
-  'POST /api/extensions/ext/tic/lookup': covered(['gnubok_lookup_company'], 'read-only registry lookup, a POST so the org number stays out of the URL'),
+  'POST /api/extensions/ext/tic/lookup': covered([`POST ${V}/company-lookup`, 'gnubok_lookup_company'], 'read-only registry lookup, a POST so the org number stays out of the URL'),
 
   // mcp-server
   'POST /api/extensions/ext/mcp-server/mcp': machine('machine endpoint: the MCP door itself'),
@@ -1182,5 +1189,14 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * 159 -> 160 (2026-11-25): the switch of the nightly top-up from Fortnox
  * on a Fortnox connection (PUT .../arcim-migration/fortnox-topup), new and
  * dashboard-only, as the nightly syncs of the webshop integrations.
+ * 160 -> 161 (2026-11-27): Ångra kreditering of a customer invoice
+ * (POST /api/invoices/:id/uncredit), dashboard first; a v1 route and an MCP
+ * tool are a follow-up.
+ * 161 -> 162 (2026-11-27): Skapa räntefaktura on the Dröjsmålsränta page
+ * (POST /api/invoices/late-payment-interest/invoices), dashboard first; its
+ * pull request raised 160 -> 161 beside the one above, and the two merged as
+ * one raise.
+ * 162 -> 161 (2026-11-28): removing a deadline (DELETE /api/deadlines/:id),
+ * through the staged gnubok_delete_deadline.
  */
-export const GAP_CEILING = 160
+export const GAP_CEILING = 161

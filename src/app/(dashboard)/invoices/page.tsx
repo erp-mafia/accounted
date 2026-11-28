@@ -577,7 +577,7 @@ export default function InvoicesPage() {
         const query = supabase
           .from('invoices')
           .select(
-            'id, customer_id, invoice_number, external_invoice_number, is_self_billed, document_type, status, quote_status, invoice_date, due_date, valid_until, subtotal, total, total_sek, currency, ore_rounding, credited_invoice_id, remaining_amount, paid_at, deduction_total, journal_entry_id, customer:customers(name)',
+            'id, customer_id, invoice_number, external_invoice_number, is_self_billed, document_type, status, quote_status, invoice_date, due_date, valid_until, subtotal, total, total_sek, currency, ore_rounding, credited_invoice_id, credit_undone_at, remaining_amount, paid_at, deduction_total, journal_entry_id, customer:customers(name)',
           )
           .eq('company_id', company.id)
         // /quotes asks the database for quotes only instead of paging

@@ -174,7 +174,7 @@ function MfaVerifyContent() {
       // code screen; re-entering the same code is then rejected as reuse and
       // bumps the lockout counter (#2056, the shape #1984 fixed on enroll).
       // returnTo went through safeReturnTo and the helper only ever returns
-      // '/clients' or '/', so the navigation stays same-origin.
+      // '/clients' or a known start page, so the navigation stays same-origin.
       window.location.assign(returnTo === '/' ? await resolvePostLoginDestination() : returnTo)
     } catch {
       setPanelError(t('unexpected_error'))

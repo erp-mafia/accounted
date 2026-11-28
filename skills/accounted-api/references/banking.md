@@ -1023,14 +1023,14 @@ Example response `200`:
 **Import a bank-file (CSV / Excel / XML / CAMT053).**
 `scope:transactions:write · risk:medium · idempotent`
 
-Accepts a bank statement file (CSV in UTF-8 / UTF-16 / Windows-1252, an Excel workbook .xls / .xlsx, or camt.053 XML; up to 10 MB) as multipart/form-data. Auto-detects the bank format (SEB, Swedbank, Handelsbanken, Nordea, Nordea Business, Lansforsakringar, Lunar, ICA Banken, Skandia, Wise transaction history, Wise balance statement, CAMT053, generic CSV) or honors a `format` override. Parses transactions, ingests them into the `transactions` table (NOT into journal entries: see BFL note in pitfalls), and emits `transaction.synced` events. Returns operation_id for polling.
+Accepts a bank statement file (CSV in UTF-8 / UTF-16 / Windows-1252, an Excel workbook .xls / .xlsx, or camt.053 XML; up to 10 MB) as multipart/form-data. Auto-detects the bank format (SEB, Swedbank, Handelsbanken, Nordea, Nordea Business, Lansforsakringar, Lunar, ICA Banken, Skandia, Wise transaction history, Wise balance statement, the Mynt card export, CAMT053, generic CSV) or honors a `format` override. Parses transactions, ingests them into the `transactions` table (NOT into journal entries: see BFL note in pitfalls), and emits `transaction.synced` events. Returns operation_id for polling.
 
 **Use when:** Importing a bank statement export for a period. Common with PSD2 bank connections that don't auto-sync, or for legacy bank accounts.
 **Do not use for:** SIE bookkeeping import (use /imports/sie). Auto-bank sync (use the enable-banking extension). Single-transaction creation (use POST /transactions/ingest with a 1-element array).
 
 **Pitfalls:**
 - File size cap: 10 MB. Larger files require splitting client-side.
-- `format` query parameter is optional; auto-detection works for all supported banks. Pass `format` only to force a specific format. Accepted values: seb, swedbank, handelsbanken, nordea, nordea_business, lansforsakringar, ica_banken, skandia, lunar, northmill, wise, wise_statement, generic_csv, camt053.
+- `format` query parameter is optional; auto-detection works for all supported banks. Pass `format` only to force a specific format. Accepted values: seb, swedbank, handelsbanken, nordea, nordea_business, lansforsakringar, ica_banken, skandia, lunar, northmill, wise, wise_statement, mynt, generic_csv, camt053.
 - Wise transaction-history rows with refunded or unknown statuses, unknown directions, or different source and target currencies are rejected instead of guessed. Import the matching per-currency Wise balance statements.
 - Duplicate detection is by external_id (composed from format + date + description + amount + row index, or the camt.053 entry reference / Wise transfer id where the file carries one); a re-import of the same file typically deduplicates rather than creating doubles.
 - Rows bind to the cash account the file names when the company already has it. A file covering a period a completed SIE import booked is matched against the imported vouchers and never auto-categorized.
@@ -1042,7 +1042,7 @@ Accepts a bank statement file (CSV in UTF-8 / UTF-16 / Windows-1252, an Excel wo
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
-| `format` | query | `"nordea" \| "nordea_business" \| "seb" \| "swedbank" \| "handelsbanken" \| "lansforsakringar" \| "ica_banken" \| "skandia" \| "lunar" \| "northmill" \| "wise" \| "wise_statement" \| "generic_csv" \| "camt053"` | no | Force this bank file format instead of auto-detection. Omit to auto-detect. |
+| `format` | query | `"nordea" \| "nordea_business" \| "seb" \| "swedbank" \| "handelsbanken" \| "lansforsakringar" \| "ica_banken" \| "skandia" \| "lunar" \| "northmill" \| "wise" \| "wise_statement" \| "mynt" \| "generic_csv" \| "camt053"` | no | Force this bank file format instead of auto-detection. Omit to auto-detect. |
 
 Response `200`:
 ```ts
@@ -3220,7 +3220,7 @@ Example response `200`:
 **Mark an account reconciled through a date (sign-off).**
 `scope:reconciliation:signoff · risk:medium · idempotent · dry-run · reversible`
 
-Body: { through_date: "YYYY-MM-DD", note?, force?, external_balance? }. Recomputes the bridge through the date and refuses unless unexplained_difference is zero; with force: true and a note it signs anyway and records the difference. Refuses dates in the future, dates past the skattekonto snapshot (NOT_FETCHED_THROUGH), and dates at or before an existing active sign-off (ALREADY_SIGNED_OFF: reopen that one first). For a manual:NNNN account without a system specification (anything but 1510/2440/2920/2940), external_balance is the balance per the signer's underlag in ledger sign (liabilities negative); the difference against the booked balance is recorded, and a non-zero one still needs force + note. On bank, skattekonto and specification accounts external_balance is refused (EXTERNAL_BALANCE_NOT_ALLOWED). ?dry_run=true returns would_sign without writing. Undo with POST .../signoff/{signoffId}/reopen.
+Body: { through_date: "YYYY-MM-DD", note?, force?, external_balance? }. Recomputes the bridge through the date and refuses unless unexplained_difference is zero; with force: true and a note it signs anyway and records the difference. Refuses dates in the future, dates past the skattekonto snapshot (NOT_FETCHED_THROUGH), and dates at or before an existing active sign-off (ALREADY_SIGNED_OFF: reopen that one first). For a manual:NNNN account without a system specification (anything but 1510/2440/2920/2940), external_balance is the balance per the signer's underlag in ledger sign (liabilities negative); the difference against the booked balance is recorded, and a non-zero one still needs force + note. A bank:<id> account without a bank connection (a card or cash account kept by hand or from files) takes the statement's balance at the end of through_date the same way: it is judged against the booked balance that day (ledger_balance) instead of the bridge, and refused on an account kept in another currency than the books. On a bank account with a bank connection, the skattekonto and specification accounts external_balance is refused (EXTERNAL_BALANCE_NOT_ALLOWED). ?dry_run=true returns would_sign without writing. Undo with POST .../signoff/{signoffId}/reopen.
 
 **Use when:** The month (or period) is explained and you want the account marked as reconciled through its last day, as a human would in the Avstämning page.
 **Do not use for:** Linking rows or booking anything: a sign-off changes no data in the ledger. Use .../links and the booking endpoints first.

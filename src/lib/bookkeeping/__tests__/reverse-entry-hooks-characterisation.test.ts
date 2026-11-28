@@ -397,4 +397,28 @@ describe('correctEntry: runs no reversal hook (characterisation)', () => {
     expect(hookCalls(h.trace)).toEqual([])
     expect(h.trace).toMatchSnapshot()
   })
+
+  // The payment rows follow the rättelse whatever booked the payment
+  // (correction-payment-relink.ts). A privately paid supplier invoice is paid
+  // by the verifikat of its utlägg, source_type 'expense_claim', which is not
+  // one of the payment source types: its rows used to stay on the reversed
+  // original.
+  it('moves the payment rows of an original that no payment source type names (expense_claim)', async () => {
+    const original = originalOf('expense_claim')
+    const client = recordingClient(original)
+    h.subject.client = client
+    h.subject.original = original
+
+    await correctEntry(client as never, 'company-1', 'user-1', 'entry-1', [
+      { account_number: '1930', debit_amount: 100, credit_amount: 0 },
+      { account_number: '3002', debit_amount: 0, credit_amount: 100 },
+    ])
+
+    const paymentRowMoves = h.trace.filter((step) => /^update (invoice_payments|supplier_invoice_payments) |payment_journal_entry_id=/.test(step))
+    expect(paymentRowMoves).toEqual([
+      'update invoice_payments journal_entry_id=corrected-1',
+      'update supplier_invoice_payments journal_entry_id=corrected-1',
+      'update supplier_invoices payment_journal_entry_id=corrected-1',
+    ])
+  })
 })

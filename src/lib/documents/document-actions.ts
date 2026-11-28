@@ -29,6 +29,7 @@ import { canDeleteDocument, documentDeleteRefusal, inboxItemsLeftEmpty, readDocu
 import { UUID_RE } from '@/lib/invariants/uuid'
 import { toSameOriginStorageRequest } from '@/lib/core/documents/storage-proxy'
 import type { DocumentDetail, DocumentDetailPart, readDocumentDetail } from '@/lib/documents/read/document-detail'
+import { EFFECTIVE_TYPE_JOIN, fillTypeFromClassification, whereEffectiveType } from '@/lib/documents/locked-period'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
@@ -50,7 +51,12 @@ interface DocumentRow {
   journal_entry_id: string | null
   journal_entry_line_id: string | null
   created_at: string
+  doc_type: string | null
 }
+
+/** The columns of DocumentRow. */
+const DOCUMENT_COLUMNS =
+  'id, file_name, mime_type, file_size_bytes, sha256_hash, version, is_current_version, upload_source, journal_entry_id, journal_entry_line_id, created_at, doc_type'
 
 interface DocumentDetailRow extends DocumentRow {
   original_id: string | null
@@ -59,7 +65,6 @@ interface DocumentDetailRow extends DocumentRow {
   page_count: number | null
   pages_read_at: string | null
   read_error: string | null
-  doc_type: string | null
   admission_state: string | null
   extracted_data: unknown
   extracted_at: string | null
@@ -79,6 +84,8 @@ export interface DocumentPublic {
   journal_entry_id: string | null
   journal_entry_line_id: string | null
   created_at: string
+  /** The type readers show (lib/documents/locked-period.ts); null while it has none. */
+  doc_type: string | null
 }
 
 export interface DocumentDetailPublic extends DocumentPublic, DocumentDetail {
@@ -116,6 +123,7 @@ function toPublic(row: DocumentRow): DocumentPublic {
     journal_entry_id: row.journal_entry_id ?? null,
     journal_entry_line_id: row.journal_entry_line_id ?? null,
     created_at: row.created_at,
+    doc_type: row.doc_type ?? null,
   }
 }
 
@@ -125,6 +133,11 @@ export interface ListDocumentsFilters {
   uploaded_from?: string
   uploaded_to?: string
   current_only?: 'true' | 'false'
+  /**
+   * Only the documents of these types, by the type readers show
+   * (whereEffectiveType); null: only the ones with none. Undefined: all.
+   */
+  types?: readonly string[] | null
   cursor?: string
   limit?: number
 }
@@ -147,9 +160,10 @@ export async function listDocumentsPage(
 ): Promise<OperationOutcome<{ documents: DocumentPublic[]; next_cursor: string | null }>> {
   const limit = filters.limit ?? 50
   const decoded = decodeDefaultCursor(filters.cursor)
+  const byType = filters.types !== undefined
   let query = ctx.supabase
     .from('document_attachments')
-    .select('id, file_name, mime_type, file_size_bytes, sha256_hash, version, is_current_version, upload_source, journal_entry_id, journal_entry_line_id, created_at')
+    .select(byType ? `${DOCUMENT_COLUMNS}, ${EFFECTIVE_TYPE_JOIN}` : DOCUMENT_COLUMNS)
     .eq('company_id', ctx.companyId)
     .order('created_at', { ascending: false })
     .order('id', { ascending: false })
@@ -160,6 +174,7 @@ export async function listDocumentsPage(
   if (filters.journal_entry_id) query = query.eq('journal_entry_id', filters.journal_entry_id)
   if (filters.uploaded_from) query = query.gte('created_at', `${filters.uploaded_from}T00:00:00Z`)
   if (filters.uploaded_to) query = query.lt('created_at', `${nextDay(filters.uploaded_to)}T00:00:00Z`)
+  if (filters.types !== undefined) query = whereEffectiveType(query, filters.types)
   if (decoded) {
     query = query.or(`created_at.lt.${decoded.ts},and(created_at.eq.${decoded.ts},id.lt.${decoded.id})`)
   }
@@ -168,6 +183,14 @@ export async function listDocumentsPage(
   const rows = (data ?? []) as unknown as DocumentRow[]
   const page = rows.slice(0, limit)
   const last = page[page.length - 1]
+  // A booked document typed after its period closed keeps the type on its
+  // classification. Strict: a page whose type failed to read would contradict
+  // its own doc_type filter.
+  try {
+    await fillTypeFromClassification(ctx.supabase, page, { strict: true })
+  } catch (err) {
+    return failed(err)
+  }
   return {
     ok: true,
     data: {
@@ -190,13 +213,19 @@ export async function getDocumentMetadata(
   if (!UUID_RE.test(documentId)) return NOT_FOUND
   const { data, error } = await ctx.supabase
     .from('document_attachments')
-    .select('id, file_name, mime_type, file_size_bytes, sha256_hash, version, is_current_version, upload_source, journal_entry_id, journal_entry_line_id, created_at, original_id, superseded_by_id, digitization_date, page_count, pages_read_at, read_error, doc_type, admission_state, extracted_data, extracted_at, extraction_model')
+    .select(`${DOCUMENT_COLUMNS}, original_id, superseded_by_id, digitization_date, page_count, pages_read_at, read_error, admission_state, extracted_data, extracted_at, extraction_model`)
     .eq('id', documentId)
     .eq('company_id', ctx.companyId)
     .maybeSingle()
   if (error) return failed(error)
   if (!data) return NOT_FOUND
   const row = data as unknown as DocumentDetailRow
+  // The type the list shows, read the same way (the reading below names it too).
+  try {
+    await fillTypeFromClassification(ctx.supabase, [row], { strict: true })
+  } catch (err) {
+    return failed(err)
+  }
 
   const [{ data: txs, error: txError }, { data: inbox, error: inboxError }] = await Promise.all([
     ctx.supabase
