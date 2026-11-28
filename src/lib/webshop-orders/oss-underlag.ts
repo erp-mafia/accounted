@@ -13,6 +13,7 @@ import { EU_COUNTRIES, isOtherEuCountry } from '@/lib/vat/eu-countries'
 import { OSS_ALL_EU_COUNTRIES, suggestOssAccount, type OssAccountKind } from '@/lib/vat/oss-accounts'
 import type { WebshopCountryAccountRule, WebshopOrder } from '@/types'
 import { OSS_VAT_ACCOUNT, SWEDISH_RULE_RATES, isOssRule, sameVatRate } from './country-routing'
+import { readReleasedWebshopBookings } from './released-booking'
 
 /**
  * Underlag for the OSS declaration (unionsordningen): per quarter, the sales
@@ -286,6 +287,12 @@ export interface OssClassifyInput {
    * booked or not, for the warnings about orders missing from the underlag.
    */
   quarterOrders: readonly OssOrder[]
+  /**
+   * The verifikat of `quarterOrders` that a storno released them from
+   * (isWebshopBookingReleased): such an order is unbooked unless the
+   * verifikat still books it in this quarter.
+   */
+  releasedEntryIds?: ReadonlySet<string>
 }
 
 /** Sums in one currency, before the conversion to euro. */
@@ -747,7 +754,9 @@ export function classifyOssBookings(input: OssClassifyInput): OssClassification 
     if (!destinationOf(order)) continue
     const linked = linkedEntryId(order)
     const vatBuckets = order.vat_breakdown.filter((bucket) => bucket.tax !== 0)
-    if (!linked) {
+    // A verifikat reversed in a later quarter still books the order here.
+    const released = !!linked && !!input.releasedEntryIds?.has(linked) && !booked.has(order.id)
+    if (!linked || released) {
       const handledElsewhere = !!order.manually_booked_at || !!order.invoice_id || !!order.legacy_transaction_id
       if (order.is_paid && !handledElsewhere && vatBuckets.length > 0) unbooked.push(order.order_number)
     } else if (!byId.has(linked) && vatBuckets.some((bucket) => !isSwedishRate(bucket.rate))) {
@@ -1270,6 +1279,11 @@ export async function generateOssUnderlag(
     loadQuarterOrders(supabase, companyId, start, end),
   ])
   const orders = await loadLinkedOrders(supabase, companyId, entries.map((entry) => entry.id))
+  const released = await readReleasedWebshopBookings(
+    supabase,
+    companyId,
+    quarterOrders.map((order) => order.journal_entry_id),
+  )
   const orderIds = new Set(orders.map((order) => order.id))
   const parentIds = Array.from(
     new Set(
@@ -1302,6 +1316,7 @@ export async function generateOssUnderlag(
     accountCountries,
     linkedEntryDates,
     quarterOrders,
+    releasedEntryIds: new Set(released.keys()),
   })
 
   const needs = ossRateNeeds(classification, ref)

@@ -410,4 +410,105 @@ describe('POST /api/webshop-orders/[id]/book', () => {
     expect(status).toBe(409)
     expect(body.error.code).toBe('WEBSHOP_ORDER_REFUND_PARENT_INVOICED')
   })
+
+  describe('an order a storno released from its verifikat', () => {
+    // je-rev: the order's verifikat, reversed by a plain storno in series L
+    // of the period the body books in.
+    const reversedEntry = (overrides: Record<string, unknown> = {}) => ({
+      data: [{ id: 'je-rev', status: 'reversed', voucher_series: 'L', fiscal_period_id: PERIOD_UUID, ...overrides }],
+    })
+    // The guard and the placement each read the verifikat and its rättelser.
+    const releasedReads = (entry = reversedEntry()) => {
+      enqueue(entry) // guard: the verifikat
+      enqueue({ data: [] }) // guard: no rättelse replaced it
+      enqueue(entry) // placement: the verifikat
+      enqueue({ data: [] }) // placement: no rättelse
+    }
+
+    it('books it again in the reversed verifikat\'s series, claimed from that verifikat', async () => {
+      enqueue({ data: makeOrderRow({ journal_entry_id: 'je-rev' }) }) // fetch
+      releasedReads()
+      enqueue({ data: [{ id: 'order-1' }] }) // claim
+      const { status, body } = await parseJsonResponse<{ journal_entry_id: string }>(await postBook())
+      expect(status).toBe(200)
+      expect(body.journal_entry_id).toBe('je-1')
+      expect(mockCreateDraftEntry).toHaveBeenCalledWith(
+        expect.anything(),
+        'company-1',
+        'user-1',
+        expect.objectContaining({ source_id: 'order-1', voucher_series: 'L', fiscal_period_id: PERIOD_UUID }),
+      )
+      expect(findCalls('webshop_orders', 'eq')).toEqual(expect.arrayContaining([['journal_entry_id', 'je-rev']]))
+      expect(findCalls('webshop_orders', 'is')).not.toEqual(expect.arrayContaining([['journal_entry_id', null]]))
+      expect(findCall('webshop_orders', 'update')).toEqual([{ journal_entry_id: 'draft-1' }])
+    })
+
+    it('gives the order its reversed verifikat back, never nothing, when the commit fails', async () => {
+      mockCommitEntry.mockRejectedValueOnce(new Error('period locked'))
+      enqueue({ data: makeOrderRow({ journal_entry_id: 'je-rev' }) }) // fetch
+      releasedReads()
+      enqueue({ data: [{ id: 'order-1' }] }) // claim
+      enqueue({ data: null }) // unlink
+      enqueue({ data: null }) // cancel draft
+      const { status } = await parseJsonResponse(await postBook())
+      expect(status).toBeGreaterThanOrEqual(400)
+      const unlinks = findCalls('webshop_orders', 'update').map((args) => args[0])
+      expect(unlinks).toEqual([{ journal_entry_id: 'draft-1' }, { journal_entry_id: 'je-rev' }])
+    })
+
+    it('refuses to book it in another fiscal year than the reversed verifikat, before drafting', async () => {
+      enqueue({ data: makeOrderRow({ journal_entry_id: 'je-rev' }) })
+      releasedReads(reversedEntry({ fiscal_period_id: 'fp-2025' }))
+      const { status, body } = await parseJsonResponse<{ error: { code: string; details?: Record<string, unknown> } }>(
+        await postBook(),
+      )
+      expect(status).toBe(409)
+      expect(body.error.code).toBe('WEBSHOP_ORDER_REBOOK_OTHER_SERIES_OR_YEAR')
+      expect(mockCreateDraftEntry).not.toHaveBeenCalled()
+    })
+
+    it('refuses another series than the reversed verifikat\'s', async () => {
+      enqueue({ data: makeOrderRow({ journal_entry_id: 'je-rev' }) })
+      releasedReads()
+      const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
+        await postBook({ ...validBody, voucher_series: 'A' }),
+      )
+      expect(status).toBe(409)
+      expect(body.error.code).toBe('WEBSHOP_ORDER_REBOOK_OTHER_SERIES_OR_YEAR')
+      expect(mockCreateDraftEntry).not.toHaveBeenCalled()
+    })
+
+    it('stays booked when a rättelse replaced the reversed verifikat', async () => {
+      enqueue({ data: makeOrderRow({ journal_entry_id: 'je-rev' }) })
+      enqueue(reversedEntry())
+      enqueue({ data: [{ correction_of_id: 'je-rev' }] })
+      const { status, body } = await parseJsonResponse<{ error: { code: string } }>(await postBook())
+      expect(status).toBe(409)
+      expect(body.error.code).toBe('WEBSHOP_ORDER_ALREADY_BOOKED')
+      expect(mockCreateDraftEntry).not.toHaveBeenCalled()
+    })
+
+    it('stays booked once the storno is deleted and the verifikat is posted again', async () => {
+      enqueue({ data: makeOrderRow({ journal_entry_id: 'je-rev' }) })
+      enqueue(reversedEntry({ status: 'posted' }))
+      const { status, body } = await parseJsonResponse<{ error: { code: string } }>(await postBook())
+      expect(status).toBe(409)
+      expect(body.error.code).toBe('WEBSHOP_ORDER_ALREADY_BOOKED')
+      expect(mockCreateDraftEntry).not.toHaveBeenCalled()
+    })
+
+    it('cancels the draft when the freeze trigger refuses the claim (the storno deleted after the read)', async () => {
+      enqueue({ data: makeOrderRow({ journal_entry_id: 'je-rev' }) })
+      releasedReads()
+      enqueue({
+        data: null,
+        error: { code: 'P0001', message: 'webshop_orders row order-1 is booked; the journal link is immutable (use storno)' },
+      }) // claim
+      enqueue({ data: null }) // cancel draft
+      const { status } = await parseJsonResponse(await postBook())
+      expect(status).toBe(500)
+      expect(mockCommitEntry).not.toHaveBeenCalled()
+      expect(findCall('journal_entries', 'update')).toEqual([{ status: 'cancelled' }])
+    })
+  })
 })

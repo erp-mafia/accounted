@@ -402,7 +402,9 @@ export const POST = withRouteContext(
           error:
             outcome.kind === 'claimed_elsewhere'
               ? failureFromCode('WEBSHOP_ORDER_ALREADY_BOOKED')
-              : failureFromError(outcome.error),
+              : outcome.kind === 'not_bookable'
+                ? failureFromCode(outcome.failure.code, outcome.failure.details)
+                : failureFromError(outcome.error),
         })
         continue
       }

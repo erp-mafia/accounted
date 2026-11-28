@@ -344,6 +344,25 @@ describe('classifyOssBookings + finalizeOssUnderlag', () => {
     expect(result.nil_return).toBe(false)
   })
 
+  it('warns about an order a storno released in the quarter, and counts one whose verifikat is reversed only later', () => {
+    // r1: e1 and its storno s1 in the quarter cancel; the order waits to be
+    // booked again. r2: e2 is reversed after the quarter, which held it.
+    const released = order('r1', { journal_entry_id: 'e1' })
+    const reversedLater = order('r2', { journal_entry_id: 'e2' })
+    const result = underlag(input({
+      entries: [
+        entry('e1', { status: 'reversed' }),
+        entry('s1', { reverses_id: 'e1', net: -1000, vat: -190 }),
+        entry('e2', { status: 'reversed' }),
+      ],
+      orders: [released, reversedLater],
+      quarterOrders: [released, reversedLater],
+      releasedEntryIds: new Set(['e1', 'e2']),
+    }))
+    expect(result.warnings.map((w) => [w.code, w.order_numbers])).toEqual([['unbooked_orders', ['#r1']]])
+    expect(result.rows).toEqual([expect.objectContaining({ country: 'DE', vat_sek: 190, order_count: 1 })])
+  })
+
   it('keeps the kronor and leaves the euro empty while the ECB rate is missing', () => {
     const result = underlag(
       input({ entries: [entry('e1')], orders: [order('o1', { journal_entry_id: 'e1' })] }),

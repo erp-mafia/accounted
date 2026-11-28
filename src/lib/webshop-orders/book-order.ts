@@ -9,6 +9,7 @@ import { mappingVersion } from '@/lib/posting/mapping-version'
 import type { BusinessEventDraft } from '@/lib/posting/types'
 import { ensureWebshopPrefillAccounts } from '@/lib/webshop-orders/ensure-accounts'
 import { checkOrderBankRow, linkOrderBankRow, type OrderBankRowLink } from '@/lib/webshop-orders/order-bank-row'
+import { readReleasedWebshopBookings } from '@/lib/webshop-orders/released-booking'
 import type {
   CreateJournalEntryLineInput,
   Currency,
@@ -50,6 +51,8 @@ export interface OrderBookableFailure {
     | 'WEBSHOP_ORDER_NOT_PAID'
     | 'WEBSHOP_ORDER_LEGACY_TRANSACTION_BOOKED'
     | 'WEBSHOP_ORDER_LEGACY_TRANSACTION_OPEN'
+    | 'WEBSHOP_ORDER_REBOOK_OTHER_SERIES_OR_YEAR'
+    | 'WEBSHOP_ORDER_READ_FAILED'
   details?: Record<string, unknown>
 }
 
@@ -63,10 +66,22 @@ export async function assertOrderBookable(
   companyId: string,
   order: WebshopOrder,
 ): Promise<OrderBookableFailure | null> {
+  // An order whose verifikat a plain storno reversed is released and books
+  // again (isWebshopBookingReleased); every other verifikat it names books it.
   if (order.journal_entry_id) {
-    return {
-      code: 'WEBSHOP_ORDER_ALREADY_BOOKED',
-      details: { journal_entry_id: order.journal_entry_id },
+    let released: boolean
+    try {
+      released = (await readReleasedWebshopBookings(supabase, companyId, [order.journal_entry_id])).has(
+        order.journal_entry_id,
+      )
+    } catch {
+      return { code: 'WEBSHOP_ORDER_READ_FAILED' }
+    }
+    if (!released) {
+      return {
+        code: 'WEBSHOP_ORDER_ALREADY_BOOKED',
+        details: { journal_entry_id: order.journal_entry_id },
+      }
     }
   }
   if (order.invoice_id) {
@@ -209,6 +224,8 @@ export type BookOrderEngineOutcome =
     }
   /** Another request booked/invoiced the row between our read and the claim. */
   | { ok: false; kind: 'claimed_elsewhere' }
+  /** A released order asked to book outside its reversed verifikat's series or year (placeOrderBooking). */
+  | { ok: false; kind: 'not_bookable'; failure: OrderBookableFailure }
   /** The conditional claim update itself errored (DB failure). */
   | { ok: false; kind: 'claim_error'; error: unknown }
   /** createDraftEntry/commitEntry threw; usually a typed bookkeeping error. */
@@ -243,6 +260,62 @@ export function webshopOrderBusinessEvent(order: WebshopOrder, linkBasis: LinkBa
   }
 }
 
+export type OrderBookingPlacement =
+  /**
+   * claimFrom: the pointer the claim moves (null for an order never booked,
+   * the reversed verifikat for a released one). voucherSeries: the series
+   * the verifikat is drafted in, unset to take the default.
+   */
+  | { ok: true; claimFrom: string | null; voucherSeries: string | undefined }
+  | { ok: false; failure: OrderBookableFailure }
+
+/**
+ * Where the order's verifikat may be booked. An order never booked takes the
+ * caller's series and period. A released order books again in the series and
+ * fiscal year of the verifikat its storno reversed, which the storno shares:
+ * the new verifikat is numbered after the storno, so Radera senaste verifikat
+ * can never delete the storno and post the old verifikat again beside the new
+ * one, and the new verifikat cannot be deleted while the order names it (the
+ * pointer's foreign key has no delete action). A caller asking for another
+ * series or year is refused. Throws when the verifikat cannot be read.
+ */
+export async function placeOrderBooking(
+  supabase: SupabaseClient,
+  companyId: string,
+  order: Pick<WebshopOrder, 'journal_entry_id'>,
+  placement: { fiscal_period_id: string; voucher_series?: string },
+): Promise<OrderBookingPlacement> {
+  if (!order.journal_entry_id) {
+    return { ok: true, claimFrom: null, voucherSeries: placement.voucher_series }
+  }
+  const released = (await readReleasedWebshopBookings(supabase, companyId, [order.journal_entry_id])).get(
+    order.journal_entry_id,
+  )
+  if (!released) {
+    return {
+      ok: false,
+      failure: { code: 'WEBSHOP_ORDER_ALREADY_BOOKED', details: { journal_entry_id: order.journal_entry_id } },
+    }
+  }
+  if (
+    placement.fiscal_period_id !== released.fiscal_period_id ||
+    (placement.voucher_series !== undefined && placement.voucher_series !== released.voucher_series)
+  ) {
+    return {
+      ok: false,
+      failure: {
+        code: 'WEBSHOP_ORDER_REBOOK_OTHER_SERIES_OR_YEAR',
+        details: {
+          journal_entry_id: released.id,
+          voucher_series: released.voucher_series,
+          fiscal_period_id: released.fiscal_period_id,
+        },
+      },
+    }
+  }
+  return { ok: true, claimFrom: released.id, voucherSeries: released.voucher_series }
+}
+
 /**
  * Race-free booking: draft -> atomic claim -> commit. The read-then-book
  * pattern let two concurrent requests each post an immutable verifikat
@@ -250,6 +323,12 @@ export function webshopOrderBusinessEvent(order: WebshopOrder, linkBasis: LinkBa
  * with a conditional update BEFORE anything gets a voucher number: the
  * loser's claim matches zero rows and its draft (no voucher yet, so no
  * series gap) is cancelled.
+ *
+ * A released order is claimed from the reversed verifikat it names, and gets
+ * that pointer back when the commit fails, so it never names nothing while
+ * the reversed verifikat could be posted again (placeOrderBooking). Should
+ * the storno be deleted between the read and the claim, the verifikat is
+ * posted again and the freeze trigger refuses the claim.
  */
 export async function bookOrderThroughEngine(
   supabase: SupabaseClient,
@@ -264,6 +343,19 @@ export async function bookOrderThroughEngine(
   log: Logger,
 ): Promise<BookOrderEngineOutcome> {
   const orderId = order.id
+  let placed: OrderBookingPlacement
+  try {
+    placed = await placeOrderBooking(supabase, companyId, order, {
+      fiscal_period_id: input.fiscal_period_id,
+      voucher_series: input.voucher_series,
+    })
+  } catch (err) {
+    log.error('webshop order placement read failed', err as Error, { orderId })
+    return { ok: false, kind: 'claim_error', error: err }
+  }
+  if (!placed.ok) return { ok: false, kind: 'not_bookable', failure: placed.failure }
+  const { claimFrom } = placed
+
   // The prefill can legitimately reach 3004, 3740 and the 1686 clearing
   // account, none of which seed_chart_of_accounts() seeds. Without this the
   // first Bokför on a fresh company died on AccountsNotInChartError for an
@@ -295,7 +387,7 @@ export async function bookOrderThroughEngine(
         description: input.description,
         source_type: 'webshop_order',
         source_id: orderId,
-        voucher_series: input.voucher_series,
+        voucher_series: placed.voucherSeries,
         notes: input.notes,
         lines: input.lines,
       },
@@ -319,13 +411,18 @@ export async function bookOrderThroughEngine(
 
   // The claim guards BOTH links plus the manual mark: a concurrent
   // create-invoice or mark-booked between our read and this update must
-  // lose too (mutual exclusivity, not just no-double-booking).
-  const { data: claimed, error: claimError } = await supabase
+  // lose too (mutual exclusivity, not just no-double-booking). A released
+  // order is claimed from the verifikat it names: a concurrent booking that
+  // moved the pointer first wins.
+  const claim = supabase
     .from('webshop_orders')
     .update({ journal_entry_id: draft.id })
     .eq('id', orderId)
     .eq('company_id', companyId)
-    .is('journal_entry_id', null)
+  const { data: claimed, error: claimError } = await (claimFrom
+    ? claim.eq('journal_entry_id', claimFrom)
+    : claim.is('journal_entry_id', null)
+  )
     .is('invoice_id', null)
     .is('manually_booked_at', null)
     .select('id')
@@ -346,10 +443,11 @@ export async function bookOrderThroughEngine(
     // Unlink so the row does not point at a cancelled draft, then cancel.
     // Order matters: the financial-freeze trigger keys on journal_entry_id
     // being set, but journal_entry_id itself is not in its protected list,
-    // so the unlink passes.
+    // so the unlink passes. A released order gets its reversed verifikat
+    // back, never nothing.
     await supabase
       .from('webshop_orders')
-      .update({ journal_entry_id: null })
+      .update({ journal_entry_id: claimFrom })
       .eq('id', orderId)
       .eq('company_id', companyId)
       .eq('journal_entry_id', draft.id)

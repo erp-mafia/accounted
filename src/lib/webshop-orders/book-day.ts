@@ -25,8 +25,9 @@ import type {
   WebshopStoreSettings,
 } from '@/types'
 import { WEBSHOP_PREFILL_ACCOUNTS } from './booking-lines'
-import { isCancelledWithoutRefund } from './booking-status'
+import { isCancelledWithoutRefund, whereWebshopOrderBooked } from './booking-status'
 import { ensureWebshopPrefillAccounts } from './ensure-accounts'
+import { readCompanyReleasedWebshopBookings, type ReleasedWebshopBooking } from './released-booking'
 import { deriveUnattendedOrderLines } from './unattended-lines'
 
 /**
@@ -53,6 +54,13 @@ import { deriveUnattendedOrderLines } from './unattended-lines'
  * number. Each claimed row freezes like a single booking
  * (enforce_webshop_order_financial_freeze), and many rows may name the same
  * verifikat (the journal_entry_id index is not unique).
+ *
+ * An order a storno released (isWebshopBookingReleased) books with the day
+ * when the day's verifikat lands in the series and fiscal year of the
+ * reversed one (placeOrderBooking): the day takes the series of its first
+ * released order, and one released elsewhere is left out for the
+ * single-order dialog. Its claim moves its pointer from the reversed
+ * verifikat, and a lost day gives that pointer back.
  */
 
 /** Rows per day booking; prod's largest day and payment method held 20 (2026-10). */
@@ -234,25 +242,32 @@ export function webshopDayBusinessEvent(
   }
 }
 
-/** The unbooked, paid rows of the day and payment method, oldest first. */
+/**
+ * The unbooked, paid rows of the day and payment method, oldest first:
+ * unbooked as the lists read it (whereWebshopOrderBooked), so a row a storno
+ * released is among them.
+ */
 async function loadDayRows(
   ctx: OperationContext,
   input: BookWebshopDayInput,
+  releasedEntryIds: readonly string[],
 ): Promise<WebshopOrder[] | null> {
   // Two reads instead of one OR: a row belongs to its paid date, and to its
   // order date only when it has none.
   const base = () =>
-    ctx.supabase
-      .from('webshop_orders')
-      .select('*')
-      .eq('company_id', ctx.companyId)
-      .eq('platform', input.platform)
-      .eq('store_scope', input.store_scope)
-      .eq('payment_method', input.payment_method)
-      .eq('is_paid', true)
-      .is('journal_entry_id', null)
-      .is('invoice_id', null)
-      .is('manually_booked_at', null)
+    whereWebshopOrderBooked(
+      ctx.supabase
+        .from('webshop_orders')
+        .select('*')
+        .eq('company_id', ctx.companyId)
+        .eq('platform', input.platform)
+        .eq('store_scope', input.store_scope)
+        .eq('payment_method', input.payment_method)
+        .eq('is_paid', true)
+        .is('invoice_id', null),
+      'unbooked',
+      releasedEntryIds,
+    )
   const [byPaid, byOrder] = await Promise.all([
     base().eq('paid_date', input.date).limit(MAX_DAY_ROWS + 1),
     base().is('paid_date', null).eq('order_date', input.date).limit(MAX_DAY_ROWS + 1),
@@ -354,7 +369,14 @@ export async function bookWebshopDay(
   const { supabase, companyId, userId, log } = ctx
   const dryRun = options.dryRun === true
 
-  const rows = await loadDayRows(ctx, input)
+  let released: Map<string, ReleasedWebshopBooking>
+  try {
+    released = await readCompanyReleasedWebshopBookings(supabase, companyId)
+  } catch (err) {
+    log.error('failed to read the released webshop bookings', err as Error)
+    return { ok: false, code: 'WEBSHOP_ORDER_READ_FAILED' }
+  }
+  const rows = await loadDayRows(ctx, input, Array.from(released.keys()))
   if (!rows) return { ok: false, code: 'WEBSHOP_ORDER_READ_FAILED' }
   if (rows.length > MAX_DAY_ROWS) {
     return { ok: false, code: 'WEBSHOP_DAY_TOO_MANY_ROWS', details: { max: MAX_DAY_ROWS } }
@@ -382,9 +404,32 @@ export async function bookWebshopDay(
   }
   const settings = (settingsData as WebshopStoreSettings | null) ?? null
 
+  // Read here for the released rows' placement; a day without a period is
+  // refused below, after its rows are known.
+  const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, input.date)
+
   const included: Array<{ order: WebshopOrder; lines: CreateJournalEntryLineInput[] }> = []
   const skipped: SkippedOrderOut[] = []
+  // The series of the day's first released row, which the day is booked in.
+  let releasedSeries: string | undefined
   for (const order of rows) {
+    // A released row books again in its reversed verifikat's series and
+    // fiscal year (placeOrderBooking); one released elsewhere waits for the
+    // single-order dialog.
+    const from = order.journal_entry_id ? released.get(order.journal_entry_id) : undefined
+    if (from && fiscalPeriodId) {
+      const series = releasedSeries ?? from.voucher_series
+      if (from.fiscal_period_id !== fiscalPeriodId || from.voucher_series !== series) {
+        skipped.push(
+          skippedOut(order, 'WEBSHOP_ORDER_REBOOK_OTHER_SERIES_OR_YEAR', {
+            journal_entry_id: from.id,
+            voucher_series: from.voucher_series,
+            fiscal_period_id: from.fiscal_period_id,
+          }),
+        )
+        continue
+      }
+    }
     const derived = await deriveUnattendedOrderLines({
       supabase,
       companyId,
@@ -393,8 +438,12 @@ export async function bookWebshopDay(
       log,
       persistFx: !dryRun,
     })
-    if (derived.ok) included.push({ order: derived.order, lines: derived.lines })
-    else skipped.push(skippedOut(order, derived.code ?? 'WEBSHOP_ORDER_BOOKING_FAILED'))
+    if (!derived.ok) {
+      skipped.push(skippedOut(order, derived.code ?? 'WEBSHOP_ORDER_BOOKING_FAILED'))
+      continue
+    }
+    if (from) releasedSeries ??= from.voucher_series
+    included.push({ order: derived.order, lines: derived.lines })
   }
 
   // The approver saw these rows and no others: every one must still book.
@@ -420,7 +469,6 @@ export async function bookWebshopDay(
     return { ok: false, code: 'WEBSHOP_DAY_CHANGED', details: { lines_sha256: linesSha256 } }
   }
 
-  const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, input.date)
   if (!fiscalPeriodId) return typedFailure(new FiscalPeriodNotFoundError())
   const lock = await checkPeriodLock(supabase, companyId, input.date)
   if (lock.locked) {
@@ -444,6 +492,8 @@ export async function bookWebshopDay(
     entry_date: input.date,
     description,
     source_type: 'webshop_order',
+    // A released row's series; otherwise the default for webshop orders.
+    ...(releasedSeries ? { voucher_series: releasedSeries } : {}),
     notes: `${included.length - refundCount} ordrar och ${refundCount} återbetalningar. Underlag: dagssammanställning med varje order.`,
     lines,
   }
@@ -514,39 +564,57 @@ export async function bookWebshopDay(
     const { error } = await supabase.from('journal_entries').update({ status: 'cancelled' }).eq('id', draft.id).eq('status', 'draft')
     if (error) log.error('webshop day draft cleanup failed', error, { entryId: draft.id })
   }
-  // Release every row this booking claimed. journal_entry_id is not in the
-  // freeze trigger's protected list, and the draft is not posted, so the
-  // unlink passes.
+  // A row never booked is claimed from no verifikat, a released row from the
+  // reversed verifikat it names.
+  const claimGroups = new Map<string | null, string[]>()
+  for (const { order } of included) {
+    const from = order.journal_entry_id ?? null
+    claimGroups.set(from, [...(claimGroups.get(from) ?? []), order.id])
+  }
+  // Release every row this booking claimed: a released row gets its reversed
+  // verifikat back, never nothing, the rest no verifikat. journal_entry_id is
+  // not in the freeze trigger's protected list, and the draft is not posted,
+  // so the unlink passes.
   const releaseClaims = async () => {
-    const { error } = await supabase
-      .from('webshop_orders')
-      .update({ journal_entry_id: null })
-      .eq('company_id', companyId)
-      .eq('journal_entry_id', draft.id)
-    if (error) log.error('webshop day claim release failed', error, { entryId: draft.id })
+    for (const [from, groupIds] of claimGroups) {
+      for (let i = 0; i < groupIds.length; i += CLAIM_CHUNK) {
+        const { error } = await supabase
+          .from('webshop_orders')
+          .update({ journal_entry_id: from })
+          .in('id', groupIds.slice(i, i + CLAIM_CHUNK))
+          .eq('company_id', companyId)
+          .eq('journal_entry_id', draft.id)
+        if (error) log.error('webshop day claim release failed', error, { entryId: draft.id })
+      }
+    }
   }
 
   // The claim guards both links plus the manual mark, like the single
   // booking: a concurrent booking, invoice or mark on any row loses the day.
   const ids = included.map((i) => i.order.id)
   let claimedCount = 0
-  for (let i = 0; i < ids.length; i += CLAIM_CHUNK) {
-    const { data: claimed, error: claimError } = await supabase
-      .from('webshop_orders')
-      .update({ journal_entry_id: draft.id })
-      .in('id', ids.slice(i, i + CLAIM_CHUNK))
-      .eq('company_id', companyId)
-      .is('journal_entry_id', null)
-      .is('invoice_id', null)
-      .is('manually_booked_at', null)
-      .select('id')
-    if (claimError) {
-      log.error('webshop day claim failed', claimError, { entryId: draft.id })
-      await releaseClaims()
-      await cancelDraft()
-      return { ok: false, code: 'WEBSHOP_DAY_BOOKING_FAILED' }
+  for (const [from, groupIds] of claimGroups) {
+    for (let i = 0; i < groupIds.length; i += CLAIM_CHUNK) {
+      const claim = supabase
+        .from('webshop_orders')
+        .update({ journal_entry_id: draft.id })
+        .in('id', groupIds.slice(i, i + CLAIM_CHUNK))
+        .eq('company_id', companyId)
+      const { data: claimed, error: claimError } = await (from
+        ? claim.eq('journal_entry_id', from)
+        : claim.is('journal_entry_id', null)
+      )
+        .is('invoice_id', null)
+        .is('manually_booked_at', null)
+        .select('id')
+      if (claimError) {
+        log.error('webshop day claim failed', claimError, { entryId: draft.id })
+        await releaseClaims()
+        await cancelDraft()
+        return { ok: false, code: 'WEBSHOP_DAY_BOOKING_FAILED' }
+      }
+      claimedCount += claimed?.length ?? 0
     }
-    claimedCount += claimed?.length ?? 0
   }
   if (claimedCount !== ids.length) {
     await releaseClaims()

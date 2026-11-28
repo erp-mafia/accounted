@@ -3,15 +3,22 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateQuery } from '@/lib/api/validate'
 import { WebshopOrdersListQuerySchema } from '@/lib/api/schemas'
 import { errorResponse } from '@/lib/errors/get-structured-error'
-import { BOOKED_EXITS_FILTER } from '@/lib/webshop-orders/booking-status'
+import { whereWebshopOrderBooked } from '@/lib/webshop-orders/booking-status'
+import {
+  readCompanyReleasedWebshopBookings,
+  readReleasedWebshopBookings,
+} from '@/lib/webshop-orders/released-booking'
 import { listWebshopStores, type WebshopStore } from '@/lib/webshop-orders/stores'
+import type { WebshopOrder } from '@/types'
 
 const DEFAULT_LIMIT = 50
 
 /**
  * List webshop order rows for the Orders page, with a store facet for the
  * per-shop filter. Refund rows are returned inline (they are independent
- * bookable rows) and grouped client-side under their parent.
+ * bookable rows) and grouped client-side under their parent. Each row says
+ * whether a storno released it from the verifikat it names
+ * (booking_released, isWebshopBookingReleased): such a row books again.
  */
 export const GET = withRouteContext(
   'webshop_order.list',
@@ -21,6 +28,18 @@ export const GET = withRouteContext(
     const { platform, store_scope, status, row_type, paid, booked } = validation.data
     const limit = validation.data.limit ?? DEFAULT_LIMIT
     const offset = validation.data.offset ?? 0
+
+    // The booked split needs the company's released verifikat before the
+    // query; without it, the page's own are read after.
+    let companyReleased: string[] | null = null
+    if (booked) {
+      try {
+        companyReleased = Array.from((await readCompanyReleasedWebshopBookings(supabase, companyId)).keys())
+      } catch (releasedError) {
+        log.error('failed to read released webshop bookings', releasedError)
+        return errorResponse(releasedError, log, { requestId })
+      }
+    }
 
     let query = supabase
       .from('webshop_orders')
@@ -39,12 +58,7 @@ export const GET = withRouteContext(
     // marked as manually booked outside it, never a voided row (nothing was
     // booked); "unbooked" is the open set the Att bokfora tab shows, so a
     // manual mark, a void included, removes the row from it.
-    if (booked === 'booked') {
-      query = query.or(BOOKED_EXITS_FILTER)
-    }
-    if (booked === 'unbooked') {
-      query = query.is('journal_entry_id', null).is('manually_booked_at', null)
-    }
+    if (booked && companyReleased) query = whereWebshopOrderBooked(query, booked, companyReleased)
 
     const { data, error, count } = await query
     if (error) {
@@ -62,6 +76,25 @@ export const GET = withRouteContext(
       return errorResponse(facetError, log, { requestId })
     }
 
-    return NextResponse.json({ data: data ?? [], count, stores })
+    const rows = (data ?? []) as WebshopOrder[]
+    let released: Set<string>
+    try {
+      released = new Set(
+        companyReleased ??
+          (await readReleasedWebshopBookings(supabase, companyId, rows.map((row) => row.journal_entry_id))).keys(),
+      )
+    } catch (releasedError) {
+      log.error('failed to read released webshop bookings', releasedError)
+      return errorResponse(releasedError, log, { requestId })
+    }
+
+    return NextResponse.json({
+      data: rows.map((row) => ({
+        ...row,
+        booking_released: !!row.journal_entry_id && released.has(row.journal_entry_id),
+      })),
+      count,
+      stores,
+    })
   },
 )

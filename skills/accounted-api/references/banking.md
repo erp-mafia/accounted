@@ -5068,6 +5068,7 @@ Lists the rows the Shopify, WooCommerce and Zettle syncs store: one per paid ord
 - customer_country is ISO 3166-1 alpha-2. Shopify stores the shipping (destination) country, or the billing country when nothing on the order ships (digital products, services); WooCommerce the billing country. It is null for a Shopify local pickup or when the store withholds addresses.
 - booked=unbooked also returns unpaid, invoiced and cancelled rows. A to_book row can be booked. A cancelled row (the store cancelled the order, platform_status cancelled) with refunded_total 0 is left out of the day booking and books only one at a time, when the customer paid and kept no refund; otherwise a person voids it on the Orders page.
 - voided: marked makulerad on the Orders page after the store cancelled the order. Nothing is booked, and booked=booked leaves it out.
+- An order whose verifikat a storno reversed (no rättelse in its place) reads as never booked (booking_status to_book, or cancelled when the store cancelled it) and unbooked while journal_entry_id still names the reversed verifikat; booking it again moves journal_entry_id to the new verifikat, which lands in the reversed one's series and fiscal year.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
