@@ -43,7 +43,7 @@ export interface TokenCredentials {
 export const MIGRATION_PROVIDERS: readonly MigrationProviderInfo[] = [
   { id: 'fortnox', name: 'Fortnox', authType: 'oauth', sieViaApi: true },
   { id: 'visma', name: 'Visma', authType: 'oauth', sieViaApi: false },
-  { id: 'bokio', name: 'Bokio', authType: 'token', sieViaApi: false, credentials: { secret: true, companyId: true } },
+  { id: 'bokio', name: 'Bokio', authType: 'token', sieViaApi: true, credentials: { secret: true, companyId: true } },
   { id: 'bjornlunden', name: 'Björn Lundén', authType: 'token', sieViaApi: true, credentials: { secret: false, companyId: true } },
   { id: 'briox', name: 'Briox', authType: 'token', sieViaApi: true, credentials: { secret: true, companyId: true } },
   { id: 'wint', name: 'WINT', authType: 'token', sieViaApi: true, credentials: { secret: true, companyId: true } },
