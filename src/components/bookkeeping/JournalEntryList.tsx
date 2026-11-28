@@ -956,14 +956,17 @@ export default function JournalEntryList({
   // missing set (and the selection, which only keeps eligible rows), and with
   // the saknade-underlag filter on they leave the list too.
   const handleSweepLinked = (linkedIds: string[]) => {
+    // At once on screen: each of them had no underlag and now holds one. The
+    // refetch below then reads the counts from the server, and its generation
+    // guard drops any count read that started before the sweep.
     setAttachmentCounts((prev) => {
       const next = { ...prev }
-      for (const id of linkedIds) next[id] = (next[id] ?? 0) + 1
+      for (const id of linkedIds) next[id] = Math.max(next[id] ?? 0, 1)
       return next
     })
     selection.deselect(linkedIds)
     setSweepRound((round) => round + 1)
-    if (showMissingOnly) void fetchEntries({ preserveSelection: true })
+    void fetchEntries({ preserveSelection: true })
   }
 
   // Filter-scoped bulk mark: mark EVERY missing-doc verifikat matching the active

@@ -115,6 +115,15 @@ export default function JournalEntryAttachments({
 
   const onCountChangeRef = useRef(onCountChange)
   onCountChangeRef.current = onCountChange
+  // An instance the parent replaced (a list row remounted after a sweep) may
+  // still finish a read: its count is stale and must not reach the parent.
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
 
   const fetchDocuments = useCallback(async () => {
     try {
@@ -159,6 +168,7 @@ export default function JournalEntryAttachments({
       }
 
       const allDocuments = [...direct, ...referenced]
+      if (!mountedRef.current) return
       setDocuments(allDocuments)
       onCountChangeRef.current?.(allDocuments.length)
       setLoadFailed(false)

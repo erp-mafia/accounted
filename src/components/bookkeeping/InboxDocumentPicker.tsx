@@ -320,34 +320,52 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, jou
     if (sweepIds.length === 0) return
     setLinkingId(doc.document_id)
     setSweepDone(0)
-    const linked: string[] = []
-    let failed = 0
+    // Each selected verifikat's answer: true once it holds the document or a copy.
+    const outcome = new Map<string, boolean>()
     let reason: string | undefined
+    const post = (id: string, copy: boolean) =>
+      fetch(`/api/documents/${doc.document_id}/link`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          journal_entry_id: id,
+          copy,
+          ...(doc.inbox_item_id && !copy ? { inbox_item_id: doc.inbox_item_id } : {}),
+        }),
+      })
+    type LinkFailure = { error?: string | { message?: string; code?: string; details?: { current_journal_entry_id?: unknown } } }
     for (const [index, id] of sweepIds.entries()) {
       try {
-        const res = await fetch(`/api/documents/${doc.document_id}/link`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            journal_entry_id: id,
-            copy: doc.held || linked.length > 0,
-            ...(doc.inbox_item_id && linked.length === 0 ? { inbox_item_id: doc.inbox_item_id } : {}),
-          }),
-        })
-        if (res.ok) {
-          linked.push(id)
-        } else {
-          failed += 1
-          const json = (await res.json().catch(() => ({}))) as { error?: string | { message?: string } }
-          reason ??= json.error ? getErrorMessage(json, { locale: errorLocale }) : undefined
+        const copy = doc.held || [...outcome.values()].some(Boolean)
+        let res = await post(id, copy)
+        if (!res.ok) {
+          const json = (await res.json().catch(() => ({}))) as LinkFailure
+          const failure = typeof json.error === 'object' ? json.error : undefined
+          const holder = failure?.details?.current_journal_entry_id
+          // A link this sweep made whose answer was lost holds the document:
+          // that verifikat has it, and this one takes a copy like the rest.
+          // Held by any verifikat outside the selection, the refusal stands.
+          if (!copy && failure?.code === 'DOC_LINK_ALREADY_LINKED' && typeof holder === 'string' && holder !== id && outcome.has(holder)) {
+            outcome.set(holder, true)
+            res = await post(id, true)
+            if (!res.ok) {
+              const retried = (await res.json().catch(() => ({}))) as LinkFailure
+              reason ??= retried.error ? getErrorMessage(retried, { locale: errorLocale }) : undefined
+            }
+          } else {
+            reason ??= json.error ? getErrorMessage(json, { locale: errorLocale }) : undefined
+          }
         }
+        outcome.set(id, res.ok)
       } catch {
         // A network failure is one verifikat not linked: counted and said in
         // the summary below, and the rest of the selection still gets its link.
-        failed += 1
+        outcome.set(id, false)
       }
       setSweepDone(index + 1)
     }
+    const linked = sweepIds.filter((id) => outcome.get(id) === true)
+    const failed = sweepIds.length - linked.length
     setLinkingId(null)
     setSweepDone(null)
     if (failed === 0) {
