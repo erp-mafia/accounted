@@ -719,6 +719,35 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
         'Fix the invoice if it is wrong, reverse the carry with reversal_date equal to its entry_date, then stage the kontantmetod cut-off again.',
     },
   },
+  // A verifikat a register names is corrected through the register's own
+  // flow while that flow can (lib/core/bookkeeping/own-correction-flow.ts).
+  OPENING_BALANCE_CORRECTION_OWN_FLOW: {
+    httpStatus: 409,
+    message_sv: 'Verifikatet är årets ingående balans och rättas med Korrigera ingående balanser på verifikatet.',
+    message_en: "This voucher is the year's opening balance and is corrected with Correct opening balances on the voucher.",
+    remediation: {
+      description: 'details.fiscalPeriodId is the year. Correct its opening balance with gnubok_correct_opening_balances. Nothing was written.',
+      tool: 'gnubok_correct_opening_balances',
+    },
+  },
+  SALARY_RUN_CORRECTION_OWN_FLOW: {
+    httpStatus: 409,
+    message_sv: 'Verifikatet hör till en bokförd lönekörning och rättas med Korrigera lönekörning på lönekörningen.',
+    message_en: 'This voucher belongs to a booked payroll run and is corrected with Correct payroll run on the run.',
+    remediation: {
+      description: 'details.salaryRunId is the run. Correct it with gnubok_correct_salary_run, which reverses its vouchers together. Nothing was written.',
+      tool: 'gnubok_correct_salary_run',
+    },
+  },
+  DEPRECIATION_CORRECTION_OWN_FLOW: {
+    httpStatus: 409,
+    message_sv: 'Verifikatet är en avskrivning från anläggningsregistret. Återför det, rätta tillgången om den är fel och bokför avskrivningen igen under Bokslut.',
+    message_en: 'This voucher is a depreciation from the fixed asset register. Reverse it, correct the asset if it is wrong, and book the depreciation again under Year-end.',
+    remediation: {
+      description: 'details.assetId is the asset. Reverse the voucher (gnubok_reverse_journal_entry), which frees the year in the register, then gnubok_post_annual_depreciation. Nothing was written.',
+      tool: 'gnubok_reverse_journal_entry',
+    },
+  },
   KONTANTMETOD_CARRY_CANCEL_REFUSED: {
     httpStatus: 409,
     message_sv:

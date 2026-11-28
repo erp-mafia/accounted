@@ -9,6 +9,8 @@ import {
   EntryAlreadyReversedError,
   ImportVatWithoutBaseError,
   MeaninglessCorrectionError,
+  OpeningBalanceCorrectionOwnFlowError,
+  SalaryRunCorrectionOwnFlowError,
   TargetPeriodClosedError,
   TargetPeriodLockedError,
 } from '@/lib/bookkeeping/errors'
@@ -120,6 +122,17 @@ vi.mock('@/lib/core/bookkeeping/correction-payment-relink', () => ({
   relinkBookedRecordsToEntry: (...args: unknown[]) => mockRelinkBookedRecords(...(args as [])),
 }))
 
+// The register check (own-correction-flow.test.ts covers its rules): the real
+// one by default, which reads nothing for these tests' manual verifikat or
+// for a moved storno; a test makes it refuse.
+const mockAssertNoOwnCorrectionFlow = vi.fn()
+vi.mock('@/lib/core/bookkeeping/own-correction-flow', () => ({
+  assertNoOwnCorrectionFlow: (...args: unknown[]) => mockAssertNoOwnCorrectionFlow(...args),
+}))
+const { assertNoOwnCorrectionFlow: realAssertNoOwnCorrectionFlow } = await vi.importActual<
+  typeof import('@/lib/core/bookkeeping/own-correction-flow')
+>('@/lib/core/bookkeeping/own-correction-flow')
+
 import { correctEntry } from '../storno-service'
 import { CORRECTION_COLUMN_POLICY } from '../correction-column-policy'
 import {
@@ -146,6 +159,7 @@ beforeEach(() => {
   mockBackfill.mockResolvedValue([])
   mockAssertBankAccount.mockResolvedValue(undefined)
   mockFetchDynamic.mockResolvedValue({ mappingByAccount: new Map(), explicitAccounts: new Set() })
+  mockAssertNoOwnCorrectionFlow.mockImplementation(realAssertNoOwnCorrectionFlow)
 })
 
 describe('correctEntry', () => {
@@ -277,6 +291,40 @@ describe('correctEntry', () => {
     expect(inserts.filter((i) => i.table === 'journal_entries')).toEqual([])
   })
 
+  // A verifikat a register names goes through the register's own flow while
+  // it can act (own-correction-flow.test.ts has the rule per register): the
+  // check gets the original and where its storno lands, and its refusal stops
+  // the correction before anything is written.
+  it('asks the register check with the original and where its storno lands', async () => {
+    setupResults()
+    const supabase = makeClient()
+    await correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', correctedLines)
+
+    expect(mockAssertNoOwnCorrectionFlow).toHaveBeenCalledWith(
+      supabase,
+      'company-1',
+      expect.objectContaining({ id: 'orig-1', source_type: 'manual' }),
+      expect.objectContaining({ moved: false }),
+    )
+  })
+
+  it.each([
+    ['opening_balance', null, new OpeningBalanceCorrectionOwnFlowError('fp-1')],
+    ['salary_payment', 'run-1', new SalaryRunCorrectionOwnFlowError('run-1')],
+  ])('refuses a %s verifikat its register corrects, before anything is written', async (sourceType, sourceId, refusal) => {
+    setupResults()
+    results[0] = { data: { ...originalEntry, source_type: sourceType, source_id: sourceId }, error: null }
+    mockAssertNoOwnCorrectionFlow.mockRejectedValueOnce(refusal)
+    const supabase = makeClient()
+
+    await expect(
+      correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', correctedLines),
+    ).rejects.toBe(refusal)
+
+    expect(commitStornoOrCorrectionDraft).not.toHaveBeenCalled()
+    expect(inserts).toEqual([])
+  })
+
   // The person's doors (inFirstOpenPeriodWhenLocked): a verifikat in a locked
   // or closed year is corrected by a storno and a corrected verifikat dated
   // in the first open period, naming the original, and nothing is written to
@@ -360,6 +408,31 @@ describe('correctEntry', () => {
       expect(result).not.toHaveProperty('transactionRelinkError')
       expect(result).not.toHaveProperty('documentRelinkError')
       expect(result).not.toHaveProperty('recordRelinkError')
+    })
+
+    // Korrigera lönekörning reverses on the original's own date, which takes no
+    // write here: the moved rättelse is the way, and the register is not read.
+    it('corrects a booked payroll run\'s verifikat here, with no register read', async () => {
+      setupMovedResults()
+      results[0] = {
+        data: { ...originalEntry, voucher_number: 12, entry_date: '2025-03-15', source_type: 'salary_payment', source_id: 'run-1' },
+        error: null,
+      }
+      mockAssertStornoTarget.mockResolvedValueOnce(MOVED)
+      const supabase = makeClient()
+
+      const result = await correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', correctedLines, {
+        inFirstOpenPeriodWhenLocked: true,
+      })
+
+      expect(mockAssertNoOwnCorrectionFlow).toHaveBeenCalledWith(
+        supabase,
+        'company-1',
+        expect.objectContaining({ id: 'orig-1', source_type: 'salary_payment' }),
+        MOVED,
+      )
+      expect(vi.mocked(supabase.from).mock.calls.map(([table]) => table)).not.toContain('salary_runs')
+      expect(result.corrected.id).toBe('corrected-1')
     })
 
     it('keeps the person\'s own text and puts the reference after it', async () => {

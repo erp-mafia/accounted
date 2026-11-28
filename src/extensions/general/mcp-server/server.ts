@@ -572,6 +572,7 @@ import {
 import { assertNoOpeningBalance } from '@/lib/import/opening-balance/existing'
 import { assertStornoTarget, movedCorrectionDescription } from '@/lib/core/bookkeeping/storno-target'
 import { correctionLanding } from '@/lib/vat/moved-correction-vat'
+import { assertNoOwnCorrectionFlow } from '@/lib/core/bookkeeping/own-correction-flow'
 import { rcBasisTwiceVoucherWarning } from '@/lib/vat/voucher-rc-basis-twice-warning'
 import { assertCorrectedImportVatBase } from '@/lib/bookkeeping/import-vat-base'
 import {
@@ -28337,6 +28338,12 @@ export const tools: McpTool[] = [
       // Importmoms keeps its ruta 50 base in the corrected lines (#94): the
       // rule correctEntry runs at commit, refused here before staging.
       await assertCorrectedImportVatBase(supabase, companyId, original.source_type, lines)
+
+      // The year's opening balance, a booked payroll run's verifikat and a
+      // planenlig avskrivning go through their register's own flow while it
+      // can act: the rule correctEntry runs at commit, refused here before
+      // staging (lib/core/bookkeeping/own-correction-flow.ts).
+      await assertNoOwnCorrectionFlow(supabase, companyId, original, stornoTarget)
 
       // Chain-depth guard at staging time so the agent reconsiders NOW, not at
       // approval. The executor (commitCorrectEntry → correctEntry) re-checks.

@@ -63,6 +63,9 @@ export const INVOICE_DEFERRED_INCOME_PERIOD_PAST = 'INVOICE_DEFERRED_INCOME_PERI
 export const CUTOFF_CARRY_REVERSAL_DATE = 'CUTOFF_CARRY_REVERSAL_DATE' as const
 export const KONTANTMETOD_CARRY_HAS_SETTLEMENTS = 'KONTANTMETOD_CARRY_HAS_SETTLEMENTS' as const
 export const CUTOFF_CARRY_CORRECTION_REFUSED = 'CUTOFF_CARRY_CORRECTION_REFUSED' as const
+export const OPENING_BALANCE_CORRECTION_OWN_FLOW = 'OPENING_BALANCE_CORRECTION_OWN_FLOW' as const
+export const SALARY_RUN_CORRECTION_OWN_FLOW = 'SALARY_RUN_CORRECTION_OWN_FLOW' as const
+export const DEPRECIATION_CORRECTION_OWN_FLOW = 'DEPRECIATION_CORRECTION_OWN_FLOW' as const
 export const IMPORT_VAT_WITHOUT_BASE = 'IMPORT_VAT_WITHOUT_BASE' as const
 export const CORRECTION_BANK_ACCOUNT_CHANGED = 'CORRECTION_BANK_ACCOUNT_CHANGED' as const
 export const UNATTENDED_COMMIT_LIMIT_EXCEEDED = 'UNATTENDED_COMMIT_LIMIT_EXCEEDED' as const
@@ -961,6 +964,48 @@ export class CutoffCarryCorrectionRefusedError extends Error {
 }
 
 /**
+ * A rättelse (storno plus a corrected verifikat) of the verifikat the year's
+ * opening balance pointer names, while Korrigera ingående balanser can
+ * correct it: the pointer does not follow a rättelse, so the year would read
+ * the struck verifikat (lib/core/bookkeeping/own-correction-flow.ts).
+ */
+export class OpeningBalanceCorrectionOwnFlowError extends Error {
+  readonly code = OPENING_BALANCE_CORRECTION_OWN_FLOW
+  constructor(public readonly fiscalPeriodId: string) {
+    super("The voucher is the year's opening balance: correct it with Correct opening balances")
+    this.name = 'OpeningBalanceCorrectionOwnFlowError'
+  }
+}
+
+/**
+ * A rättelse of a verifikat a booked salary run names, while Korrigera
+ * lönekörning can correct the run: the run's pointers do not follow a
+ * rättelse, so the run would stand as booked against the struck verifikat
+ * (lib/core/bookkeeping/own-correction-flow.ts).
+ */
+export class SalaryRunCorrectionOwnFlowError extends Error {
+  readonly code = SALARY_RUN_CORRECTION_OWN_FLOW
+  constructor(public readonly salaryRunId: string) {
+    super('The voucher belongs to a booked payroll run: correct it with Correct payroll run')
+    this.name = 'SalaryRunCorrectionOwnFlowError'
+  }
+}
+
+/**
+ * A rättelse of a planenlig avskrivning the asset register names, while its
+ * year is open: the register row does not follow a rättelse, so the register
+ * would count the struck verifikat. A storno releases the row and the
+ * register books the year again (lib/core/bookkeeping/own-correction-flow.ts).
+ */
+export class DepreciationCorrectionOwnFlowError extends Error {
+  readonly code = DEPRECIATION_CORRECTION_OWN_FLOW
+  constructor(public readonly assetId: string) {
+    super('The voucher is a depreciation from the fixed asset register: reverse it and book the depreciation again')
+    this.name = 'DepreciationCorrectionOwnFlowError'
+  }
+}
+
+/**
  * A rättelse that would leave importmoms (rutor 60-62) in the verifikat with
  * no beskattningsunderlag in ruta 50 (#94), the shape the booking doors refuse
  * too (#83, lib/bookkeeping/import-vat-base.ts). The message is the Swedish
@@ -1180,6 +1225,9 @@ export type BookkeepingOperation =
   // Where a storno lands (lib/core/bookkeeping/storno-target.ts).
   | 'load_stornos_of_original'
   | 'load_open_periods'
+  // The register that names a verifikat, and whether its own correction flow
+  // can act (lib/core/bookkeeping/own-correction-flow.ts).
+  | 'load_correction_register'
   | 'replace_opening_balance'
   | 'create_corrected_entry'
   | 'create_corrected_lines'
@@ -1351,6 +1399,9 @@ export function isBookkeepingError(err: unknown): boolean {
     err instanceof CutoffCarryReversalDateError ||
     err instanceof KontantmetodCarryHasSettlementsError ||
     err instanceof CutoffCarryCorrectionRefusedError ||
+    err instanceof OpeningBalanceCorrectionOwnFlowError ||
+    err instanceof SalaryRunCorrectionOwnFlowError ||
+    err instanceof DepreciationCorrectionOwnFlowError ||
     err instanceof ImportVatWithoutBaseError ||
     err instanceof CorrectionBankAccountChangedError ||
     err instanceof DimensionValidationError ||
@@ -1762,6 +1813,27 @@ export function bookkeepingErrorResponse(err: unknown): NextResponse | null {
   if (err instanceof CutoffCarryCorrectionRefusedError) {
     return NextResponse.json(
       { error: { code: err.code, message: err.message } },
+      { status: 409 }
+    )
+  }
+
+  if (err instanceof OpeningBalanceCorrectionOwnFlowError) {
+    return NextResponse.json(
+      { error: { code: err.code, message: err.message, details: { fiscalPeriodId: err.fiscalPeriodId } } },
+      { status: 409 }
+    )
+  }
+
+  if (err instanceof SalaryRunCorrectionOwnFlowError) {
+    return NextResponse.json(
+      { error: { code: err.code, message: err.message, details: { salaryRunId: err.salaryRunId } } },
+      { status: 409 }
+    )
+  }
+
+  if (err instanceof DepreciationCorrectionOwnFlowError) {
+    return NextResponse.json(
+      { error: { code: err.code, message: err.message, details: { assetId: err.assetId } } },
       { status: 409 }
     )
   }

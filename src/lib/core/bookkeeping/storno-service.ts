@@ -29,6 +29,7 @@ import {
   movedStornoDescription,
 } from '@/lib/core/bookkeeping/storno-target'
 import { negatesOriginal } from '@/lib/core/bookkeeping/correction-shape'
+import { assertNoOwnCorrectionFlow } from '@/lib/core/bookkeeping/own-correction-flow'
 import { postedLineAsInput } from '@/lib/core/bookkeeping/posted-line-input'
 import { findKontantmetodCarry } from '@/lib/bookkeeping/kontantmetod-carry-guard'
 import { assertCorrectedImportVatBase } from '@/lib/bookkeeping/import-vat-base'
@@ -471,6 +472,13 @@ export async function correctEntry(
     options?.inFirstOpenPeriodWhenLocked ? { inFirstOpenPeriodWhenLocked: true } : undefined,
   )
   const moved = stornoTarget.moved
+
+  // The year's opening balance, a booked payroll run's verifikat and a
+  // planenlig avskrivning are named by a register this rättelse would leave
+  // naming the struck verifikat: corrected through the register's own flow
+  // while that flow can act. Moved out of a locked year, none can, and this
+  // rättelse is the way (own-correction-flow.ts).
+  await assertNoOwnCorrectionFlow(supabase, companyId, original, stornoTarget)
 
   // Resolve where the corrected entry lands. Defaults to the original's own
   // date/period (a plain line-correction), or to the storno's when the storno

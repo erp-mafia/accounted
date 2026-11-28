@@ -1344,6 +1344,48 @@ describe('gnubok_correct_entry: the corrected entry\'s text', () => {
   })
 })
 
+// The year's opening balance is corrected with Korrigera ingående balanser
+// while that flow can act (lib/core/bookkeeping/own-correction-flow.ts):
+// refused at staging, the rule correctEntry runs again at approval.
+describe('gnubok_correct_entry: the year\'s opening balance in an open year', () => {
+  const blank = { line_description: null, currency: null, amount_in_currency: null, exchange_rate: null, tax_code: null, dimensions: null, cost_center: null, project: null }
+  const original = {
+    id: '55555555-5555-4555-8555-555555555555',
+    status: 'posted',
+    entry_date: '2026-01-01',
+    description: 'Ingående balans 2026',
+    voucher_number: 1,
+    voucher_series: 'A',
+    fiscal_period_id: 'fp-1',
+    correction_of_id: null,
+    reverses_id: null,
+    source_type: 'opening_balance',
+    source_id: null,
+    lines: [
+      { account_number: '1930', debit_amount: 5000, credit_amount: 0, ...blank },
+      { account_number: '2081', debit_amount: 0, credit_amount: 5000, ...blank },
+    ],
+  }
+  const lines = [
+    { account_number: '1930', debit_amount: 6000, credit_amount: 0 },
+    { account_number: '2081', debit_amount: 0, credit_amount: 6000 },
+  ]
+
+  it('refuses it with OPENING_BALANCE_CORRECTION_OWN_FLOW, naming the year, and stages nothing', async () => {
+    const { supabase, enqueue, enqueueMany, findCall } = createQueuedMockSupabase()
+    enqueue({ data: original, error: null })
+    enqueueMany(OPEN_STORNO_TARGET)
+    // The year that names it as its opening balance, then its bokslut (none).
+    enqueue({ data: { id: 'fp-1', period_start: '2026-01-01', opening_balances_set: true }, error: null })
+    enqueue({ data: null, error: null, count: 0 })
+
+    await expect(
+      correctEntry.execute({ entry_id: original.id, lines }, 'company-1', 'user-1', supabase as never),
+    ).rejects.toMatchObject({ code: 'OPENING_BALANCE_CORRECTION_OWN_FLOW', fiscalPeriodId: 'fp-1' })
+    expect(findCall('pending_operations', 'insert')).toBeUndefined()
+  })
+})
+
 // Importmoms keeps its ruta 50 base through a rättelse (#94): refused at
 // staging, the rule correctEntry runs again at approval.
 describe('gnubok_correct_entry: importmoms without its ruta 50 base', () => {
