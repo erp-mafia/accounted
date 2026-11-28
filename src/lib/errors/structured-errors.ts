@@ -3805,14 +3805,17 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Inkorgen är inte aktiverad i den här miljön, så brevlådan kan inte läsas in.',
     message_en: 'The inbox is not enabled in this environment, so the mailbox cannot be read.',
   },
+  // The send composes the sentence and next step for where sending stands
+  // (details.state: off, pending, rejected; lib/digital-mailboxes/sending-not-active.ts).
   DIGITAL_MAILBOX_SENDING_NOT_ACTIVE: {
     httpStatus: 409,
-    message_sv: 'Aktivera utskick via den digitala brevlådan först.',
-    message_en: 'Activate sending through this digital mailbox first.',
+    message_sv: 'Utskick via den digitala brevlådan är inte aktivt för företaget.',
+    message_en: 'Sending through this digital mailbox is not active for the company.',
     remediation: {
       description:
-        'Sending through this mailbox is off for the company. A person connects Kivra or Billo and switches on "Utskick av fakturor och lönebesked" under Settings, Connections (/settings/connections); an agent or API key cannot. Until then send by email: channel email, the default.',
+        'Sending through this mailbox is not active for the company; details.state says where it stands. off: a company admin switches on "Utskick av fakturor och lönebesked" under Settings, Connections (/settings/connections). pending: the provider has not yet approved Accounted\'s access request; wait, sending starts by itself once it does. rejected: the provider declined; an admin switches sending on again to ask once more, or contacts Accounted. An agent or API key cannot change it. Until then send by email: channel email, the default.',
     },
+    thrown_message_sv: true,
   },
   DIGITAL_MAILBOX_INVOICE_NOT_SENDABLE: {
     httpStatus: 409,

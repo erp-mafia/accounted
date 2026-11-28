@@ -26,6 +26,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { isKronorCurrency } from '@/lib/bookkeeping/currency-utils'
 import { revealStoredCustomerPersonalNumber } from '@/lib/customers/protect-personal-number'
 import { getConnection } from '@/lib/digital-mailboxes/connections'
+import { isActiveSender, sendingNotActiveRefusal } from '@/lib/digital-mailboxes/sending-not-active'
 import { isDigitalMailboxApiError } from '@/lib/digital-mailboxes/http'
 import { personnummer12 } from '@/lib/digital-mailboxes/identifiers'
 import { getDigitalMailboxProviders } from '@/lib/digital-mailboxes/providers'
@@ -41,6 +42,7 @@ import { issueAndBookInvoice } from '@/lib/invoices/issue-and-book-invoice'
 import { invoicePaymentReference, invoicePrintsBankgiro, invoicePrintsPlusgiro } from '@/lib/invoices/ocr-reference'
 import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
 import { renderInvoicePdfBuffer } from '@/lib/invoices/render-invoice-pdf'
+import type { StructuredErrorRemediation } from '@/lib/errors/structured-errors'
 import type { Logger } from '@/lib/logger'
 import { isSandboxCompany } from '@/lib/sandbox/guard'
 import { usageGateRefusal } from '@/lib/usage/gate'
@@ -79,6 +81,8 @@ export type DigitalMailboxSendOutcome =
       details?: Record<string, unknown>
       messageSv?: string
       messageEn?: string
+      /** Replaces the registry's next step for `code` (DIGITAL_MAILBOX_SENDING_NOT_ACTIVE per state). */
+      remediation?: StructuredErrorRemediation
       bookingError?: unknown
     }
 
@@ -242,9 +246,8 @@ async function mailboxSendPreflight(
   if (await isSandboxCompany(ctx.supabase, ctx.companyId)) return { ok: false, code: 'DIGITAL_MAILBOX_SANDBOX' }
 
   const connection = await getConnection(ctx.service, ctx.companyId, providerId)
-  if (connection?.send_state !== 'active' || !connection.tenant_ref) {
-    return { ok: false, code: 'DIGITAL_MAILBOX_SENDING_NOT_ACTIVE' }
-  }
+  // Off, waiting for the provider's approval, or declined: the refusal says which.
+  if (!isActiveSender(connection)) return { ok: false, ...sendingNotActiveRefusal(providerId, connection) }
   const tenantRef = connection.tenant_ref
   // Every send is a billable unit, a resend too: past what the
   // month includes it waits for a subscription and an admin's acceptance.
