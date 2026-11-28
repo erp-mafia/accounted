@@ -57,6 +57,9 @@ export const VOUCHER_WARNING_CODES = [
   // what an open invoice has left to pay
   // (lib/invoices/voucher-open-invoice-warning.ts).
   'OPEN_INVOICE_COVERS_POSTING',
+  // A 45xx/4598 basis pair beside an account that reports ruta 20-24 itself:
+  // the purchase counted twice (lib/vat/voucher-rc-basis-twice-warning.ts).
+  'REVERSE_CHARGE_BASIS_TWICE',
 ] as const
 
 export type VoucherWarningCode = (typeof VOUCHER_WARNING_CODES)[number]
