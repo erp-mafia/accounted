@@ -100,16 +100,50 @@ export function pairRowsWithPayouts<R extends Pick<ClearingBankRow, 'id' | 'amou
     const nearest = fits.filter((p) => distance(row, p) === best)
     if (nearest.length === 1) nearestPayout.set(row.id, nearest[0]!)
   }
+  const rowsByPayout = new Map<string, R[]>()
+  for (const row of rows) {
+    const payout = nearestPayout.get(row.id)
+    if (payout) rowsByPayout.set(payout.id, [...(rowsByPayout.get(payout.id) ?? []), row])
+  }
   const out = new Map<string, P>()
   for (const row of rows) {
     const payout = nearestPayout.get(row.id)
     if (!payout) continue
-    const rivals = rows.filter((r) => r.id !== row.id && nearestPayout.get(r.id)?.id === payout.id)
     const mine = distance(row, payout)
+    const rivals = (rowsByPayout.get(payout.id) ?? []).filter((r) => r.id !== row.id)
     if (rivals.some((r) => distance(r, payout) <= mine)) continue
     out.set(row.id, payout)
   }
   return out
+}
+
+/**
+ * The payouts still to book: none booked, or booked on a verifikat that is no
+ * longer posted (reversed with storno, or the bank row's booking undone), which
+ * reopens the payout for the row's next booking.
+ */
+async function openPayouts(supabase: SupabaseClient, companyId: string, payouts: readonly PayoutRow[]): Promise<PayoutRow[]> {
+  const booked = [...new Set(payouts.map((p) => p.journal_entry_id).filter((id): id is string => !!id))]
+  if (booked.length === 0) return [...payouts]
+  const { data, error } = await supabase.from('journal_entries').select('id, status').eq('company_id', companyId).in('id', booked)
+  if (error) throw new Error(`payout verifikat read failed: ${error.message}`)
+  const posted = new Set(((data ?? []) as Array<{ id: string; status: string }>).filter((e) => e.status === 'posted').map((e) => e.id))
+  return payouts.filter((p) => !p.journal_entry_id || !posted.has(p.journal_entry_id))
+}
+
+/** A payout reopened by a reversed verifikat, as the booking sees it: no verifikat, no claim. */
+function reopened(payout: PayoutRow): PayoutRow {
+  return payout.journal_entry_id ? { ...payout, journal_entry_id: null, transaction_id: null } : payout
+}
+
+/**
+ * Whether the row's text names the payout: the provider, or the payout's own
+ * reference. A row that names neither (a bare "INSÄTTNING") can still be the
+ * payout, at a lower confidence; it is never booked without a review either way.
+ */
+function textNamesPayout(row: Pick<ClearingBankRow, 'text' | 'merchant_name'>, payout: Pick<PayoutRow, 'platform' | 'reference'>): boolean {
+  const text = `${row.text} ${row.merchant_name ?? ''}`.toLowerCase()
+  return text.includes(payout.platform) || (!!payout.reference && text.includes(payout.reference.toLowerCase()))
 }
 
 /** The store settings of each store the payouts belong to, keyed platform:store_scope. */
@@ -158,6 +192,7 @@ function evidenceOf(payout: PayoutRow, account: string, plan: PayoutVoucherPlan)
 }
 
 function proposalFor(row: ClearingBankRow, payout: PayoutRow, account: string, plan: PayoutVoucherPlan): BookingProposal {
+  const confidence = textNamesPayout(row, payout) ? 0.95 : 0.7
   const evidence = evidenceOf(payout, account, plan)
   const label = `Utbetalning ${evidence.provider}`
   const base = accountProposal({
@@ -169,7 +204,7 @@ function proposalFor(row: ClearingBankRow, payout: PayoutRow, account: string, p
     category: 'income_other',
     vat_treatment: 'exempt',
     amount: row.amount,
-    confidence: 0.95,
+    confidence,
     description: clearingReasonSv(evidence),
   })
   return {
@@ -193,11 +228,12 @@ async function propose(
     .from('webshop_payouts')
     .select(PAYOUT_COLUMNS)
     .eq('company_id', companyId)
-    .is('journal_entry_id', null)
     .gte('payout_date', addDaysIso(dates[0]!, -DAYS_AFTER))
     .lte('payout_date', addDaysIso(dates[dates.length - 1]!, DAYS_BEFORE))
   if (error) throw new Error(`webshop payouts read failed: ${error.message}`)
-  const payouts = ((data ?? []) as PayoutRow[]).map(normalize)
+  const read = ((data ?? []) as PayoutRow[]).map(normalize)
+  if (read.length === 0) return out
+  const payouts = (await openPayouts(supabase, companyId, read)).map(reopened)
   if (payouts.length === 0) return out
 
   // A payout another row has claimed is that row's.
@@ -209,8 +245,9 @@ async function propose(
     loadSettings(supabase, companyId, free.map(([, p]) => p)),
     vatRegisteredOf(supabase, companyId),
   ])
+  const askedById = new Map(asked.map((r) => [r.id, r]))
   for (const [rowId, payout] of free) {
-    const row = asked.find((r) => r.id === rowId)!
+    const row = askedById.get(rowId)!
     const account = clearingAccountOf(payout, settings)
     if (!account) continue
     const planned = planPayoutVoucher({ payout, clearingAccount: account, vatRegistered })
@@ -233,8 +270,9 @@ async function lines(
   ref: string,
   context: { vatRegistered: boolean },
 ): Promise<ClearingLinesOutcome> {
-  const payout = await loadPayout(supabase, companyId, ref)
-  if (!payout) return { ok: false, code: 'WEBSHOP_PAYOUT_NOT_FOUND' }
+  const stored = await loadPayout(supabase, companyId, ref)
+  if (!stored) return { ok: false, code: 'WEBSHOP_PAYOUT_NOT_FOUND' }
+  const payout = (await openPayouts(supabase, companyId, [stored])).length > 0 ? reopened(stored) : stored
   if (payout.journal_entry_id || (payout.transaction_id && payout.transaction_id !== row.id)) {
     return { ok: false, code: 'CLEARING_RECORD_TAKEN', details: { journal_entry_id: payout.journal_entry_id } }
   }
@@ -253,10 +291,26 @@ async function lines(
   return { ok: true, lines: planned.plan.lines, description: payoutDescription(payout) }
 }
 
-async function claim(_supabase: SupabaseClient, companyId: string, ref: string, transactionId: string): Promise<boolean> {
+async function claim(supabase: SupabaseClient, companyId: string, ref: string, transactionId: string): Promise<boolean> {
   // Payout rows have no member write policy: the claim is the service role's,
   // scoped to the company the booking runs in.
-  const { data, error } = await createServiceClient()
+  const service = createServiceClient()
+  // A payout booked on a verifikat that no longer stands is open again: its
+  // old pointers are cleared first, conditionally on that very verifikat.
+  const stored = await loadPayout(supabase, companyId, ref)
+  if (stored?.journal_entry_id && (await openPayouts(supabase, companyId, [stored])).length > 0) {
+    const { error: resetError } = await service
+      .from('webshop_payouts')
+      .update({ journal_entry_id: null, transaction_id: null })
+      .eq('company_id', companyId)
+      .eq('id', ref)
+      .eq('journal_entry_id', stored.journal_entry_id)
+    if (resetError) {
+      log.error('failed to reopen the payout', resetError, { payoutId: ref })
+      return false
+    }
+  }
+  const { data, error } = await service
     .from('webshop_payouts')
     .update({ transaction_id: transactionId })
     .eq('company_id', companyId)
@@ -305,13 +359,16 @@ async function settle(
   journalEntryId: string,
 ): Promise<void> {
   try {
+    // The claim may have been let go meanwhile by a second booking of the same
+    // row that lost: the winner settles all the same, as long as no other
+    // row holds the payout and no verifikat books it.
     const { data, error } = await createServiceClient()
       .from('webshop_payouts')
-      .update({ journal_entry_id: journalEntryId })
+      .update({ transaction_id: transactionId, journal_entry_id: journalEntryId })
       .eq('company_id', companyId)
       .eq('id', ref)
-      .eq('transaction_id', transactionId)
       .is('journal_entry_id', null)
+      .or(`transaction_id.is.null,transaction_id.eq.${transactionId}`)
       .select(PAYOUT_COLUMNS)
     if (error || !data || data.length === 0) {
       log.error('failed to settle the payout on its verifikat', error ?? new Error('no claimed payout matched'), { payoutId: ref, journalEntryId })

@@ -5727,7 +5727,7 @@
     "rec_why_clearing_receipt": "Swish receipt {receipt} in the till on {date}; the sale is booked in the daily takings, so the money goes against {account}, not to revenue again",
     "rec_why_clearing_days": "{count, plural, one {Card sales in the till on {first}} other {Card sales in the till {first} to {last}}}; the sale is booked in the daily takings, so the money goes against {account}, not to revenue again",
     "rec_why_clearing_balance": "Card money from the till not yet received, up to {date}; the sale is booked in the daily takings, so the money goes against {account}, not to revenue again",
-    "rec_why_clearing_payout": "Payout from {provider} {date}, exact to the öre; the orders booked the sales on {account}, so the payout clears {account} and the fees {fees} are booked as a cost",
+    "rec_why_clearing_payout": "Payout from {provider} {date}, exact to the öre; the orders book the sales on {account}, so the payout clears {account}, with the fees {fees} and their VAT {vat} on lines of their own",
     "ai_reading": "The assistant is reading the underlag…",
     "ai_agrees": "The assistant agrees.",
     "ai_instead": "The assistant suggests instead",

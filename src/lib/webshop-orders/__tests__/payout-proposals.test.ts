@@ -116,7 +116,11 @@ describe('webshopPayoutProposer.propose', () => {
   })
 
   it('proposes nothing for a booked payout, one another row claimed, or a cash ledger', async () => {
-    const booked = createFakeDb({ webshop_payouts: [payout({ journal_entry_id: 'je-1' })], company_settings: [] })
+    const booked = createFakeDb({
+      webshop_payouts: [payout({ transaction_id: 'tx-old', journal_entry_id: 'je-1' })],
+      journal_entries: [{ id: 'je-1', company_id: COMPANY, status: 'posted' }],
+      company_settings: [],
+    })
     expect((await webshopPayoutProposer.propose(booked.client as never, COMPANY, [bankRow()], noBank)).size).toBe(0)
     const claimed = createFakeDb({ webshop_payouts: [payout({ transaction_id: 'tx-other' })], company_settings: [] })
     expect((await webshopPayoutProposer.propose(claimed.client as never, COMPANY, [bankRow()], noBank)).size).toBe(0)
@@ -126,6 +130,25 @@ describe('webshopPayoutProposer.propose', () => {
       company_settings: [],
     })
     expect((await webshopPayoutProposer.propose(cash.client as never, COMPANY, [bankRow()], noBank)).size).toBe(0)
+  })
+
+  it('proposes a payout again once its verifikat is reversed', async () => {
+    const db = createFakeDb({
+      webshop_payouts: [payout({ transaction_id: 'tx-old', journal_entry_id: 'je-1' })],
+      journal_entries: [{ id: 'je-1', company_id: COMPANY, status: 'reversed' }],
+      webshop_store_settings: [],
+      company_settings: [],
+    })
+    const out = await webshopPayoutProposer.propose(db.client as never, COMPANY, [bankRow()], noBank)
+    expect(out.get('tx-1')?.booking).toMatchObject({ clearing_ref: { ref: PAYOUT_ID } })
+  })
+
+  it('is less sure of a row whose text names neither the provider nor the payout', async () => {
+    const seed = () => createFakeDb({ webshop_payouts: [payout()], webshop_store_settings: [], company_settings: [] })
+    const named = await webshopPayoutProposer.propose(seed().client as never, COMPANY, [bankRow({ text: 'INSÄTTNING PAY123' })], noBank)
+    expect(named.get('tx-1')?.confidence).toBe(0.95)
+    const bare = await webshopPayoutProposer.propose(seed().client as never, COMPANY, [bankRow({ text: 'INSÄTTNING' })], noBank)
+    expect(bare.get('tx-1')?.confidence).toBe(0.7)
   })
 
   it('reads only the payouts for a company that has none', async () => {
@@ -157,7 +180,10 @@ describe('webshopPayoutProposer.booking', () => {
     const row = { id: 'tx-1', date: '2026-11-20', amount: 934.37, currency: 'SEK' }
     const empty = createFakeDb({ webshop_payouts: [] })
     expect(await booking.lines(empty.client as never, COMPANY, row, PAYOUT_ID, { vatRegistered: true })).toMatchObject({ ok: false, code: 'WEBSHOP_PAYOUT_NOT_FOUND' })
-    const taken = createFakeDb({ webshop_payouts: [payout({ journal_entry_id: 'je-1' })] })
+    const taken = createFakeDb({
+      webshop_payouts: [payout({ transaction_id: 'tx-old', journal_entry_id: 'je-1' })],
+      journal_entries: [{ id: 'je-1', company_id: COMPANY, status: 'posted' }],
+    })
     expect(await booking.lines(taken.client as never, COMPANY, row, PAYOUT_ID, { vatRegistered: true })).toMatchObject({ ok: false, code: 'CLEARING_RECORD_TAKEN' })
     const other = createFakeDb({ webshop_payouts: [payout({ transaction_id: 'tx-other' })] })
     expect(await booking.lines(other.client as never, COMPANY, row, PAYOUT_ID, { vatRegistered: true })).toMatchObject({ ok: false, code: 'CLEARING_RECORD_TAKEN' })
@@ -170,11 +196,14 @@ describe('webshopPayoutProposer.booking', () => {
       vi.clearAllMocks()
     })
 
+    const reader = (row: Record<string, unknown> = payout(), entries: Record<string, unknown>[] = []) =>
+      createFakeDb({ webshop_payouts: [row], journal_entries: entries }).client as never
+
     it('claims an open payout for the row, as the service role, scoped to the company', async () => {
       const { supabase, enqueue, findCall, findCalls } = createQueuedMockSupabase()
       service.current = supabase
       enqueue({ data: [{ id: PAYOUT_ID }] })
-      expect(await booking.claim({} as never, COMPANY, PAYOUT_ID, 'tx-1')).toBe(true)
+      expect(await booking.claim(reader(), COMPANY, PAYOUT_ID, 'tx-1')).toBe(true)
       expect(findCall('webshop_payouts', 'update')).toEqual([{ transaction_id: 'tx-1' }])
       expect(findCalls('webshop_payouts', 'eq')).toEqual([
         ['company_id', COMPANY],
@@ -184,7 +213,18 @@ describe('webshopPayoutProposer.booking', () => {
       expect(findCall('webshop_payouts', 'or')).toEqual(['transaction_id.is.null,transaction_id.eq.tx-1'])
 
       enqueue({ data: [] })
-      expect(await booking.claim({} as never, COMPANY, PAYOUT_ID, 'tx-2')).toBe(false)
+      expect(await booking.claim(reader(), COMPANY, PAYOUT_ID, 'tx-2')).toBe(false)
+    })
+
+    it('reopens a payout whose verifikat was reversed before claiming it', async () => {
+      const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+      service.current = supabase
+      enqueue({ data: null }) // the reset
+      enqueue({ data: [{ id: PAYOUT_ID }] }) // the claim
+      const stored = payout({ transaction_id: 'tx-old', journal_entry_id: 'je-1' })
+      expect(await booking.claim(reader(stored, [{ id: 'je-1', company_id: COMPANY, status: 'reversed' }]), COMPANY, PAYOUT_ID, 'tx-1')).toBe(true)
+      expect(findCalls('webshop_payouts', 'update')).toEqual([[{ journal_entry_id: null, transaction_id: null }], [{ transaction_id: 'tx-1' }]])
+      expect(findCalls('webshop_payouts', 'eq')).toContainEqual(['journal_entry_id', 'je-1'])
     })
 
     it('releases only its own claim on a payout not yet booked', async () => {
@@ -213,7 +253,8 @@ describe('webshopPayoutProposer.booking', () => {
       })
       uploadDocument.mockResolvedValue({ id: 'doc-1' })
       await booking.settle(user.supabase as never, COMPANY, 'user-1', PAYOUT_ID, 'tx-1', 'je-1')
-      expect(findCall('webshop_payouts', 'update')).toEqual([{ journal_entry_id: 'je-1' }])
+      expect(findCall('webshop_payouts', 'update')).toEqual([{ transaction_id: 'tx-1', journal_entry_id: 'je-1' }])
+      expect(findCall('webshop_payouts', 'or')).toEqual(['transaction_id.is.null,transaction_id.eq.tx-1'])
       expect(uploadDocument).toHaveBeenCalledTimes(1)
       const [, userId, companyId, file, meta] = uploadDocument.mock.calls[0] as [unknown, string, string, { name: string }, Record<string, unknown>]
       expect([userId, companyId, file.name]).toEqual(['user-1', COMPANY, 'Utbetalning_Kustom_2026-11-19.pdf'])

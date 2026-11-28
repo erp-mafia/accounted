@@ -1,5 +1,6 @@
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
+import { netVat } from '@/lib/bookkeeping/gross-split'
 import { equalOre, roundOre, sumOre } from '@/lib/money'
 import type { WebshopPayout, WebshopPayoutLine, WebshopPayoutLineKind } from '@/types'
 
@@ -27,10 +28,14 @@ import type { WebshopPayout, WebshopPayoutLine, WebshopPayoutLineKind } from '@/
  * VAT-registered has no deduction, so the VAT is part of the cost. An
  * acquiring fee without VAT (Shopify Payments) books on 6570 alone.
  *
- * Holdbacks, releases, reversals and adjustments move the receivable, not the
- * fee: they are inside the clearing credit, and whatever the clearing account
- * still holds after the payout (a holdback, a reversed sale the orders booked)
- * is the provider's to pay or a person's to book.
+ * Holdbacks, releases and reversals move the receivable, not the fee: the
+ * clearing credit is what the payout settled, and whatever the clearing
+ * account still holds after it (a holdback, a reversed sale the orders booked)
+ * is the provider's to pay or a person's to book. A payout with any other
+ * part (an adjustment: a commission, a fee correction, a repayment) is not
+ * proposed: what it is cannot be read from the report, so a person books it.
+ * Nor is one whose fee VAT is not 25 % of its fees, the rate Kustom charges:
+ * a column read wrong must not reach ruta 48.
  */
 
 /** The fee account (BAS 6570 Bankkostnader): payment provider and acquiring fees. */
@@ -61,6 +66,21 @@ export function payoutLines(parts: ReadonlyArray<[WebshopPayoutLineKind, number]
   return parts.map(([kind, amount]) => payoutLine(kind, amount)).filter((l): l is WebshopPayoutLine => l !== null)
 }
 
+/** The Swedish standard rate (ML 2023:200 9 kap. 2 §), the one a provider's fee VAT is charged at. */
+const FEE_VAT_RATE = 0.25
+
+/**
+ * Whether the fee VAT is the standard rate of the fees. The provider rounds
+ * the VAT of each fee line before summing, so the sum may stray from 25 % of
+ * the summed fees by up to half an öre per line: one krona, or 0,5 % of the
+ * VAT on a payout with more lines than that, is allowed.
+ */
+export function feeVatFitsRate(fees: number, feeVat: number): boolean {
+  const expected = netVat(fees, FEE_VAT_RATE)
+  const tolerance = Math.max(1, expected * 0.005)
+  return Math.abs(roundOre(feeVat - expected)) <= tolerance
+}
+
 /** The magnitude of one kind's parts. */
 function totalOf(lines: readonly WebshopPayoutLine[], kind: WebshopPayoutLineKind): number {
   return Math.abs(sumOre(lines.filter((l) => l.kind === kind).map((l) => l.amount)))
@@ -73,6 +93,10 @@ export type PayoutPlanRefusal =
   | 'parts_do_not_add_up'
   /** The payout settles nothing of the receivable (fees above what it carries). */
   | 'nothing_to_clear'
+  /** A part the report does not name (commission, fee correction, repayment): a person books it. */
+  | 'adjustment'
+  /** The fee VAT is not 25 % of the fees, beyond the rounding of one fee line at a time. */
+  | 'fee_vat_rate'
 
 export interface PayoutVoucherLine {
   account_number: string
@@ -129,8 +153,10 @@ export function planPayoutVoucher(
   if (!equalOre(sumOre(lines.map((l) => l.amount)), payout.amount)) {
     return { ok: false, reason: 'parts_do_not_add_up' }
   }
+  if (lines.some((l) => l.kind === 'adjustment' && l.amount !== 0)) return { ok: false, reason: 'adjustment' }
   const fees = totalOf(lines, 'fee')
   const feeVat = totalOf(lines, 'fee_vat')
+  if (feeVat > 0 && !feeVatFitsRate(fees, feeVat)) return { ok: false, reason: 'fee_vat_rate' }
   const clearing = sumOre([payout.amount, fees, feeVat])
   if (!(clearing > 0) || !(payout.amount > 0)) return { ok: false, reason: 'nothing_to_clear' }
 

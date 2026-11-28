@@ -35,7 +35,9 @@ create table public.webshop_payouts (
   journal_entry_id uuid references public.journal_entries(id) on delete set null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  constraint webshop_payouts_company_external_key unique (company_id, external_id)
+  constraint webshop_payouts_company_external_key unique (company_id, external_id),
+  -- A payout booked on a verifikat was booked from a bank row.
+  constraint webshop_payouts_booked_from_row check (journal_entry_id is null or transaction_id is not null)
 );
 
 comment on table public.webshop_payouts is

@@ -404,12 +404,12 @@ describe('a webshop payout clearing proposal', () => {
   it('says what the payout clears and what the fees are, in both languages\' keys and in Swedish', () => {
     expect(whyKeyFor(payout)).toEqual({
       key: 'rec_why_clearing_payout',
-      values: { provider: 'Kustom', date: '2026-11-19', fees: expect.stringMatching(/15,63/), account: '1686' },
+      values: { provider: 'Kustom', date: '2026-11-19', fees: expect.stringMatching(/12,5/), vat: expect.stringMatching(/3,13/), account: '1686' },
     })
     const text = whyTextSv(payout)
     expect(text).toContain('Utbetalning från Kustom PAY123 2026-11-19')
     expect(text).toMatch(/950\skr/)
-    expect(text).toMatch(/12,50/)
+    expect(text).toMatch(/12,5/)
     expect(text).toMatch(/3,13/)
   })
 })

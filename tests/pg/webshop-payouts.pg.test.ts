@@ -4,11 +4,12 @@ import { getPool, withUserContext } from './setup'
 import { seedCompany } from './fixtures'
 
 /**
- * Covers 20261127184217_webshop_payouts: a payment provider's payout, stored
+ * Covers 20261128091537_webshop_payouts: a payment provider's payout, stored
  * by the upload with the service role and read by the company's members. The
  * bank row's booking claims and settles it as the service role too, so a
  * member writes nothing: no member insert, update or delete. One payout per
- * provider key and company; a payout pays something out; its parts are a list.
+ * provider key and company; a payout pays something out; its parts are a list;
+ * a payout booked on a verifikat names the bank row it was booked from.
  */
 
 async function insertPayout(companyId: string, userId: string, over: { externalId?: string; amount?: number; lines?: string } = {}) {
@@ -74,5 +75,13 @@ describe('webshop_payouts', () => {
     await expect(insertPayout(companyId, userId, { externalId: key })).rejects.toMatchObject({ code: '23505' })
     await expect(insertPayout(companyId, userId, { amount: 0 })).rejects.toMatchObject({ code: '23514' })
     await expect(insertPayout(companyId, userId, { lines: '{"kind":"sale"}' })).rejects.toMatchObject({ code: '23514' })
+  })
+
+  it('refuses a payout booked on a verifikat without the bank row it was booked from', async () => {
+    const { userId, companyId } = await seedCompany()
+    const { rows } = await insertPayout(companyId, userId)
+    await expect(
+      getPool().query(`UPDATE public.webshop_payouts SET journal_entry_id = gen_random_uuid() WHERE id = $1`, [rows[0].id]),
+    ).rejects.toMatchObject({ code: expect.stringMatching(/^23(514|503)$/) })
   })
 })

@@ -464,7 +464,7 @@ describe('kustomPayoutRecord', () => {
     expect(sumOre(record!.lines.map((l) => l.amount))).toBe(record!.amount)
   })
 
-  it('keeps reversals, holdbacks, releases and the rest as their own parts, and the verifikat still balances', () => {
+  it('keeps reversals, holdbacks, releases and the rest as their own parts; a part it cannot name is booked by a person', () => {
     const record = kustomPayoutRecord(
       read(
         report({
@@ -482,10 +482,20 @@ describe('kustomPayoutRecord', () => {
       { kind: 'release', amount: 40 },
       { kind: 'adjustment', amount: -9.37 },
     ])
-    const planned = planPayoutVoucher({ payout: record, clearingAccount: '1686', vatRegistered: true })
+    expect(planPayoutVoucher({ payout: record, clearingAccount: '1686', vatRegistered: true })).toEqual({ ok: false, reason: 'adjustment' })
+
+    // Without the unnamed part the payout is proposed: bank 1429.37 + fees
+    // 18.10 + VAT 4.53 is the clearing credit, the holdback stays on 1686.
+    const named = kustomPayoutRecord(
+      read(
+        report({
+          summary: '1862.00;18.10;300.00;50.00;0.00;100.00;0.00;40.00;0.00;1429.37;4.53;PAY123;SEK;2026-11-19T00:00:00.000Z;M100;NET',
+        }),
+      ).payout,
+    )!
+    const planned = planPayoutVoucher({ payout: named, clearingAccount: '1686', vatRegistered: true })
     if (!planned.ok) throw new Error(planned.reason)
-    // Bank 1420.00 + fees 18.10 + VAT 4.53 = the clearing credit.
-    expect(planned.plan.clearing).toBe(1442.63)
+    expect(planned.plan.clearing).toBe(1452)
   })
 
   it('stores nothing for a payout that paid nothing or has no payout day', () => {

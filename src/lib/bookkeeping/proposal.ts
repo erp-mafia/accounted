@@ -7,7 +7,6 @@ import type { SkattekontoLedgerAccount } from '@/lib/skatteverket/skattekonto-ac
 import { accountHue, templateGroupHue, type TemplateHue } from './template-group-colors'
 import { getDefaultAccountForCategory, getDefaultVatTreatmentForCategory } from './category-mapping'
 import { groupForAccount } from './template-groups'
-import { sumOre } from '@/lib/money'
 import { formatCurrency } from '@/lib/utils'
 import {
   DEFAULT_REVERSE_CHARGE_KIND,
@@ -723,7 +722,7 @@ function clearingWhyKey(p: BookingProposal): { key: string; values?: Record<stri
   if (e.channel === 'webshop') {
     return {
       key: 'rec_why_clearing_payout',
-      values: { provider: e.provider, date: e.business_dates[0] ?? '', fees: formatCurrency(sumOre([e.fees, e.fee_vat])), account: e.account },
+      values: { provider: e.provider, date: e.business_dates[0] ?? '', fees: formatCurrency(e.fees), vat: formatCurrency(e.fee_vat), account: e.account },
     }
   }
   const dates = e.business_dates
@@ -745,11 +744,11 @@ function clearingWhyKey(p: BookingProposal): { key: string; values?: Record<stri
 export function clearingReasonSv(e: ClearingEvidence): string {
   if (e.channel === 'webshop') {
     const reference = e.reference ? ` ${e.reference}` : ''
-    const vat = e.fee_vat > 0 ? ` och ${formatCurrency(e.fee_vat)} moms på dem` : ''
+    const vat = e.fee_vat > 0 ? ` och ${formatCurrency(e.fee_vat)} moms på avgifterna, som dras av mot ${e.provider}s faktura för dem` : ''
     return (
       `Utbetalning från ${e.provider}${reference} ${e.business_dates[0] ?? ''}, som stämmer på öret. ` +
-      `Ordrarna har bokfört försäljningen på ${e.account}, så utbetalningen bokförs mot ${e.account} med ${formatCurrency(e.clearing_amount)}: ` +
-      `bankens ${formatCurrency(e.expected_amount)} plus ${formatCurrency(e.fees)} i avgifter${vat}, som bokförs som kostnad.`
+      `Försäljningen bokförs från ordrarna mot ${e.account}, så utbetalningen bokförs mot ${e.account} med ${formatCurrency(e.clearing_amount)}: ` +
+      `bankens ${formatCurrency(e.expected_amount)} plus ${formatCurrency(e.fees)} i avgifter${vat}.`
     )
   }
   const dates = e.business_dates

@@ -81,15 +81,25 @@ export const POST = withRouteContext(
       return errorResponseFromCode('KUSTOM_SETTLEMENT_IMPORT_FAILED', opLog, { requestId })
     }
 
-    // The payout, once: a second upload of the report finds it by its key
-    // and leaves it as it was, booked or not.
+    // The payout, once: a second upload of the report finds it by its key.
+    // A payout no bank row has claimed takes the report's figures again (a
+    // corrected report); a claimed or booked one keeps what it was booked by.
     const record = kustomPayoutRecord(payout)
     if (record) {
       const { error: payoutError } = await service
         .from('webshop_payouts')
         .upsert({ ...record, company_id: companyId, user_id: user.id }, { onConflict: 'company_id,external_id', ignoreDuplicates: true })
-      if (payoutError) {
-        opLog.error('kustom payout not saved', { error: payoutError.message })
+      const { error: refreshError } = payoutError
+        ? { error: null }
+        : await service
+            .from('webshop_payouts')
+            .update({ reference: record.reference, payout_date: record.payout_date, currency: record.currency, amount: record.amount, lines: record.lines })
+            .eq('company_id', companyId)
+            .eq('external_id', record.external_id)
+            .is('transaction_id', null)
+            .is('journal_entry_id', null)
+      if (payoutError || refreshError) {
+        opLog.error('kustom payout not saved', { error: (payoutError ?? refreshError)?.message })
         return errorResponseFromCode('KUSTOM_SETTLEMENT_IMPORT_FAILED', opLog, { requestId })
       }
     }

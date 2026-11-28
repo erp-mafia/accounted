@@ -5,11 +5,24 @@ import type { WebshopOrderUpsert } from '@/lib/webshop-orders/types'
 
 const { supabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 const payoutUpsert = vi.fn()
+const payoutRefresh = vi.fn()
+const refreshFilters: unknown[][] = []
 const serviceClient = {
   marker: 'service',
   from: (table: string) => {
     if (table !== 'webshop_payouts') throw new Error(`unexpected service table ${table}`)
-    return { upsert: (...args: unknown[]) => payoutUpsert(...args) }
+    return {
+      upsert: (...args: unknown[]) => payoutUpsert(...args),
+      update: (patch: unknown) => {
+        payoutRefresh(patch)
+        const chain = {
+          eq: (...args: unknown[]) => (refreshFilters.push(['eq', ...args]), chain),
+          is: (...args: unknown[]) => (refreshFilters.push(['is', ...args]), chain),
+          then: (resolve: (v: unknown) => unknown) => resolve({ error: null }),
+        }
+        return chain
+      },
+    }
   },
 }
 
@@ -190,6 +203,15 @@ describe('POST /api/webshop-orders/kustom-settlement', () => {
       user_id: 'user-1',
     })
     expect(options).toEqual({ onConflict: 'company_id,external_id', ignoreDuplicates: true })
+    // A payout no bank row has claimed takes the report's figures again.
+    expect(payoutRefresh).toHaveBeenCalledWith(expect.objectContaining({ amount: 934.37 }))
+    expect(refreshFilters).toEqual(
+      expect.arrayContaining([
+        ['eq', 'external_id', 'kustom_M100_payout_PAY123'],
+        ['is', 'transaction_id', null],
+        ['is', 'journal_entry_id', null],
+      ]),
+    )
   })
 
   it('returns 500 when the payout could not be stored, so the user reads the file again', async () => {
