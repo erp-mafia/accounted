@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 480 endpoints.
+  pagination, scopes), and all 483 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -225,7 +225,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 480 operations. Paths are shown without
+API version `2026-05-12`, 483 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.accounted.se/api/v1`).
 
 ### Core (25)
@@ -370,7 +370,7 @@ POST /companies/{companyId}/tax-loss-carryforwards : Save one fiscal year of the
 GET /companies/{companyId}/tax-loss-carryforwards/{id} : One fiscal year of the underskottsregister, checked against the year before it [scope:reports:read risk:low idempotent]
 ```
 
-### Invoices (AR) (32)
+### Invoices (AR) (35)
 
 Full detail: [references/invoices.md](references/invoices.md)
 
@@ -405,6 +405,9 @@ DELETE /companies/{companyId}/invoices/{id}/underlag/{documentId} : Remove one d
 POST /companies/{companyId}/invoices/bulk-book : Book many customer invoices in one call, each with its own outcome [scope:invoices:write risk:high idempotent dry-run]
 POST /companies/{companyId}/invoices/bulk-create : Create up to 50 draft invoices in one call (partial-success) [scope:invoices:draft risk:medium idempotent dry-run reversible]
 GET /companies/{companyId}/invoices/late-payment-interest : Dröjsmålsränta per customer invoice: interest earned by invoices paid late, and interest accrued on overdue unpaid ones [scope:invoices:read risk:low idempotent]
+GET /companies/{companyId}/recurring-invoice-schedules : List the company's recurring invoice schedules, newest first [scope:invoices:read risk:low idempotent]
+POST /companies/{companyId}/recurring-invoice-schedules : Create a recurring invoice schedule: a customer invoice from the same lines every interval_months months [scope:invoices:write risk:medium idempotent dry-run reversible]
+PATCH /companies/{companyId}/recurring-invoice-schedules/{id} : Change a recurring invoice schedule: its fields, its status (pause or resume) or all of its lines [scope:invoices:write risk:medium idempotent dry-run reversible]
 POST /companies/{companyId}/setoffs : Set off (kvitta) an open customer invoice against an open supplier invoice of the same counterparty: one verifikat, both invoices lowered, the net left to pay or receive [scope:invoices:write risk:high idempotent dry-run reversible]
 GET /companies/{companyId}/setoffs/counterparty : A counterparty that is both customer and supplier, as one relation: its open customer and supplier invoices, the net per currency and its set-offs [scope:reports:read risk:low idempotent]
 ```

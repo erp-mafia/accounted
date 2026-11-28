@@ -1,3 +1,14 @@
+/**
+ * Approving a staged recurring schedule: commitPendingOperation runs the
+ * operation of the pending type (lib/operations/recurring-invoice-schedules.ts,
+ * rules in lib/invoices/recurring-schedule-actions.ts) through
+ * commitRegisteredOperation, the same run() its v1 endpoint and MCP tool use.
+ *
+ * The update rows below are staged in the shape the hand-written tool used
+ * ({ schedule_id, changes: {...} }), so they also prove the operation's
+ * upgradeParams: a proposal staged before the switch still commits. The rows
+ * staged since are flat; the last block approves those.
+ */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PendingOperation } from '@/types'
 import { createQueuedMockSupabase } from '@/tests/helpers'
@@ -218,7 +229,7 @@ describe('commitPendingOperation: create_recurring_schedule', () => {
 
     expect(result.status).toBe('failed')
     expect(result.http_status).toBe(400)
-    expect(result.error).toMatch(/email/i)
+    expect(result.error).toMatch(/e-postadress/)
   })
 
   it('rejects a start_date off the day_of_month grid at commit', async () => {
@@ -503,7 +514,7 @@ describe('commitPendingOperation: update_recurring_schedule', () => {
 
     expect(result.status).toBe('failed')
     expect(result.http_status).toBe(400)
-    expect(result.error).toMatch(/email/i)
+    expect(result.error).toMatch(/e-postadress/)
   })
 
   it('auto-rejects when the schedule no longer exists', async () => {
@@ -633,5 +644,46 @@ describe('commitPendingOperation: update_recurring_schedule', () => {
     expect(result.http_status).toBe(400)
     expect(result.error).toMatch(/unrecognized key/i)
     expect(supabase.from).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('commitPendingOperation: a proposal staged by the operation', () => {
+  it('commits a flat update row, as the v1 door and the generated tool stage it', async () => {
+    const { supabase, updates } = createCapturingSupabase([
+      { data: { id: 'op-recurring-1' }, error: null }, // claim
+      { data: { id: SCHEDULE_ID, status: 'active', auto_send: false, customer_id: CUSTOMER_ID, day_of_month: 25, next_run_date: '2999-01-25' }, error: null },
+      { data: null, error: null }, // schedule update
+      { data: null, error: null }, // finalize
+    ])
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp('update_recurring_schedule', { schedule_id: SCHEDULE_ID, status: 'paused' }),
+    )
+
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({ recurring_schedule_id: SCHEDULE_ID, status: 'paused', updated_fields: ['status'] })
+    expect(updates.recurring_invoice_schedules).toEqual([{ status: 'paused' }])
+  })
+
+  it('keeps a start_date that passed while the proposal waited: the cron rolls a missed run forward on the grid', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-recurring-1' } }) // claim
+    enqueue({ data: { id: CUSTOMER_ID, email: 'billing@example.test' } }) // customer
+    enqueue({ data: { id: SCHEDULE_ID } }) // schedule insert
+    enqueue({ data: null }) // items insert
+    enqueue({ data: null }) // finalize
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp('create_recurring_schedule', { ...createParams, start_date: '2020-09-25' }),
+    )
+
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({ recurring_schedule_id: SCHEDULE_ID, next_run_date: '2020-09-25' })
   })
 })

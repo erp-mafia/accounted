@@ -143,6 +143,9 @@ export const SINGLE_ACTION_WARNING_KEYS: Readonly<Record<string, string>> = {
   add_employee_recurring_line: 'warning_add_employee_recurring_line',
   update_employee_recurring_line: 'warning_update_employee_recurring_line',
   delete_employee_recurring_line: 'warning_delete_employee_recurring_line',
+  // Without auto_send; an auto-sending schedule speaks warning_recurring_schedule_auto_send (singleActionWarning).
+  create_recurring_schedule: 'warning_create_recurring_schedule',
+  update_recurring_schedule: 'warning_update_recurring_schedule',
   delete_employee: 'warning_delete_employee',
   create_supplier_payment_batch: 'warning_create_supplier_payment_batch',
   cancel_supplier_payment_batch: 'warning_cancel_supplier_payment_batch',

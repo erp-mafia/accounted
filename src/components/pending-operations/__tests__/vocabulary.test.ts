@@ -520,9 +520,13 @@ describe('a consent sentence for every high-tier operation (accounted#22)', () =
         expect(getRiskLevel(type, { auto_send: true })).toBe('high')
         expect(singleActionWarning(type, { auto_send: true }, t)).toBe(expected)
         expect(rowConsentSentence({ operation_type: type, status: 'pending', risk_level: 'high', params: { auto_send: true } }, t)).toBe(expected)
-        // Without auto_send the schedule stays medium and its row shows nothing.
+        // Without auto_send the schedule stays medium: its row shows nothing,
+        // and the approval says what the schedule does, drafts only.
         expect(getRiskLevel(type, { auto_send: false })).toBe('medium')
-        expect(singleActionWarning(type, { auto_send: false }, t)).toBe('')
+        expect(rowConsentSentence({ operation_type: type, status: 'pending', risk_level: 'medium', params: { auto_send: false } }, t)).toBe('')
+        const own = messages(lang).pending[`warning_${type}`]
+        expect(own).toBeTruthy()
+        expect(singleActionWarning(type, { auto_send: false }, t)).toBe(own)
       }
     }
     expect(messages('sv').pending.warning_recurring_schedule_auto_send).toContain('mejlas till kunden')

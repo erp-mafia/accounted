@@ -1514,6 +1514,8 @@
     "type_create_recurring_schedule": "New recurring invoice",
     "type_update_recurring_schedule": "Update recurring invoice",
     "warning_recurring_schedule_auto_send": "By clicking approve, the schedule sends its invoices automatically: on every run the invoice is numbered, issued and emailed to the customer, with no approval of the individual send. The schedule can be paused or deleted before the next run.",
+    "warning_create_recurring_schedule": "By clicking approve, the schedule is created: on every run the invoice is created as a draft for someone in the company to review and send.",
+    "warning_update_recurring_schedule": "By clicking approve, the schedule is changed, and the change applies to the invoices it creates from the next run on.",
     "type_post_kontantmetod_cutoff": "Unpaid at year end (cash method)",
     "warning_post_kontantmetod_cutoff": "By clicking approve, the cash method's year-end cut-off is booked: every unpaid customer and supplier invoice the proposal shows is booked as a receivable or payable with its own voucher on the last day of the financial year. Where such an invoice was already booked when it was paid after year end, that voucher is corrected so the revenue or cost and the VAT are booked only once. The vouchers cannot be changed afterwards, only corrected with a reversal.",
     "type_update_salary_run": "Update payroll run",

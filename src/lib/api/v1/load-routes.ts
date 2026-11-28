@@ -72,6 +72,9 @@ import '@/app/api/v1/companies/[companyId]/invoices/[id]/quote-status/route'
 import '@/app/api/v1/companies/[companyId]/invoices/[id]/cancel/route'
 import '@/app/api/v1/companies/[companyId]/invoices/[id]/link-credit-note/route'
 import '@/app/api/v1/companies/[companyId]/invoices/bulk-create/route'
+// Recurring invoice schedules (återkommande fakturor): list, create, change.
+import '@/app/api/v1/companies/[companyId]/recurring-invoice-schedules/route'
+import '@/app/api/v1/companies/[companyId]/recurring-invoice-schedules/[id]/route'
 // Phase 2 PR-B-3: invoice PDF + customer bulk-create.
 import '@/app/api/v1/companies/[companyId]/invoices/[id]/pdf/route'
 // Underlag behind an invoice (accounted#42, lib/operations/invoice-underlag.ts).

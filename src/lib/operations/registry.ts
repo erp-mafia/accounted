@@ -97,6 +97,11 @@ import { invoicesLinkCreditNote } from './invoice-credit-link'
 import { invoicesUnderlagAttach, invoicesUnderlagDetach, invoicesUnderlagList } from './invoice-underlag'
 import { invoicesLatePaymentInterestGet } from './late-payment-interest'
 import {
+  recurringInvoiceSchedulesCreate,
+  recurringInvoiceSchedulesList,
+  recurringInvoiceSchedulesUpdate,
+} from './recurring-invoice-schedules'
+import {
   invoicesPeppolDeliveries,
   invoicesPeppolReadiness,
   invoicesSendPeppol,
@@ -381,6 +386,10 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   invoicesUnderlagList,
   invoicesUnderlagAttach,
   invoicesUnderlagDetach,
+  // recurring-invoice-schedules (återkommande fakturor: v1 and MCP; the dashboard routes enforce the same rules)
+  recurringInvoiceSchedulesList,
+  recurringInvoiceSchedulesCreate,
+  recurringInvoiceSchedulesUpdate,
   // peppol
   invoicesPeppolReadiness,
   invoicesSendPeppol,

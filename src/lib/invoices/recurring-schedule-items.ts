@@ -7,7 +7,7 @@
  */
 import type { z } from 'zod'
 import type { PostgrestError, SupabaseClient } from '@supabase/supabase-js'
-import type { RecurringScheduleItemSchema } from '@/lib/api/schemas'
+import type { CreateRecurringScheduleObjectSchema, RecurringScheduleItemSchema } from '@/lib/api/schemas'
 
 export type RecurringScheduleLineType = 'product' | 'text'
 
@@ -57,6 +57,41 @@ export function toRecurringScheduleItemRow(
     vat_rate: item.vat_rate ?? null,
     dimensions: item.dimensions ?? {},
     article_id: item.article_id ?? null,
+  }
+}
+
+/** A new schedule as every door validates it (CreateRecurringScheduleObjectSchema). */
+export type RecurringScheduleCreateInput = z.output<typeof CreateRecurringScheduleObjectSchema>
+
+/**
+ * The recurring_invoice_schedules row a new schedule is inserted as, active,
+ * first run on `nextRunDate`: one place for the dashboard's create route and
+ * the machine doors (recurring-schedule-actions.ts).
+ */
+export function toRecurringScheduleRow(
+  companyId: string,
+  userId: string,
+  input: RecurringScheduleCreateInput,
+  nextRunDate: string,
+): Record<string, unknown> {
+  return {
+    company_id: companyId,
+    user_id: userId,
+    customer_id: input.customer_id,
+    name: input.name,
+    day_of_month: input.day_of_month,
+    interval_months: input.interval_months,
+    send_hour: input.send_hour,
+    payment_terms_days: input.payment_terms_days,
+    currency: input.currency,
+    your_reference: input.your_reference ?? null,
+    our_reference: input.our_reference ?? null,
+    notes: input.notes ?? null,
+    period_start: input.period_start ?? null,
+    auto_send: input.auto_send,
+    default_dimensions: input.default_dimensions ?? {},
+    next_run_date: nextRunDate,
+    status: 'active',
   }
 }
 

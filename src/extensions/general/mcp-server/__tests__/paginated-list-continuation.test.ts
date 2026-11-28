@@ -44,6 +44,8 @@ const cases = [
     itemsKey: 'invoices',
     primaryOrder: 'invoice_date',
     row: invoiceRow,
+    // The hand-written list floors a fractional offset.
+    floorsFractionalOffset: true,
   },
   {
     name: 'gnubok_list_recurring_schedules',
@@ -51,6 +53,9 @@ const cases = [
     itemsKey: 'schedules',
     primaryOrder: 'created_at',
     row: scheduleRow,
+    // Generated from recurring-invoice-schedules.list: the offset is an
+    // integer, as advertised and as v1 takes it.
+    floorsFractionalOffset: false,
   },
 ] as const
 
@@ -59,7 +64,7 @@ beforeEach(() => {
   eventBus.clear()
 })
 
-describe.each(cases)('$name continuation', ({ name, table, itemsKey, primaryOrder, row }) => {
+describe.each(cases)('$name continuation', ({ name, table, itemsKey, primaryOrder, row, floorsFractionalOffset }) => {
   const tool = tools.find((candidate) => candidate.name === name)!
 
   it('advertises optional offset input and the complete pagination envelope', () => {
@@ -142,9 +147,17 @@ describe.each(cases)('$name continuation', ({ name, table, itemsKey, primaryOrde
     expect(result).not.toHaveProperty('next_offset')
   })
 
-  it('normalizes fractional offsets for direct execution', async () => {
+  it('normalizes fractional offsets for direct execution, or refuses them where the offset is validated', async () => {
     const { supabase, enqueue, findCall } = createQueuedMockSupabase()
     enqueue({ data: [row('row-5')], error: null, count: 6 })
+
+    if (!floorsFractionalOffset) {
+      await expect(
+        tool.execute({ limit: 2, offset: 4.9 }, 'company-1', 'user-1', supabase as never),
+      ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' })
+      expect(supabase.from).not.toHaveBeenCalled()
+      return
+    }
 
     const result = (await tool.execute(
       { limit: 2, offset: 4.9 },

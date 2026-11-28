@@ -458,8 +458,6 @@ export const PENDING_TYPE_DOORS: Readonly<Record<string, DoorSpec>> = Object.fre
   create_invoice: INVOICING,
   update_invoice: INVOICING,
   create_invoice_from_sales_order: INVOICING,
-  create_recurring_schedule: INVOICING,
-  update_recurring_schedule: INVOICING,
   convert_invoice: INVOICING,
   credit_invoice: INVOICING,
   delete_draft_invoice: INVOICING,

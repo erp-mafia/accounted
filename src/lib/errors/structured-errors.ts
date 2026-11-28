@@ -3550,6 +3550,17 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_en:
       'The recurring schedule update failed and the compensating rollback did not fully apply: the schedule may be left in a partial state (header fields and items out of sync). Inspect the schedule fields and items before retrying.',
   },
+  // A schedule id the company holds no recurring schedule under (v1, MCP and
+  // the approval of a proposal: lib/invoices/recurring-schedule-actions.ts).
+  RECURRING_SCHEDULE_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Det återkommande fakturaschemat finns inte i företaget. Det kan ha tagits bort.',
+    message_en: 'No recurring invoice schedule with this id in the company.',
+    remediation: {
+      description: 'List the schedules for their ids: GET /recurring-invoice-schedules or gnubok_list_recurring_schedules.',
+      tool: 'gnubok_list_recurring_schedules',
+    },
+  },
   // "Skapa faktura nu" lost the run claim to another run of the same schedule
   // (another tab, or the hourly cron): nothing was created by this request.
   RECURRING_RUN_IN_PROGRESS: {

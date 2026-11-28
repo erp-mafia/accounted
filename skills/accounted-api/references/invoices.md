@@ -2,7 +2,7 @@
 
 # Invoices (AR) endpoints
 
-Accounts receivable invoices: draft -> send -> paid/credited; the F-series number is assigned at send, not create. Supplier bills you receive are a different resource: see suppliers.md. Customer and article registers: customers.md. Collections: overdue invoices handed to the collections provider the company activated (the handover and escalations are staged for a person to approve in Accounted), the case on each invoice, and booking what the provider collected and paid out. Setting a customer invoice off against a supplier invoice of the same counterparty: setoffs.
+Accounts receivable invoices: draft -> send -> paid/credited; the F-series number is assigned at send, not create. Supplier bills you receive are a different resource: see suppliers.md. Customer and article registers: customers.md. Recurring invoice schedules (återkommande fakturor) create an invoice from the same lines every 1-12 months; ?stage=true proposes a schedule or a change for a person to approve. Collections: overdue invoices handed to the collections provider the company activated (the handover and escalations are staged for a person to approve in Accounted), the case on each invoice, and booking what the provider collected and paid out. Setting a customer invoice off against a supplier invoice of the same counterparty: setoffs.
 
 Conventions (auth, envelope, pagination, dry-run, idempotency, standard errors)
 are in SKILL.md and are not repeated per endpoint.
@@ -2513,6 +2513,309 @@ Example response `200`:
         "overdue_interest": 0
       }
     ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/recurring-invoice-schedules`
+
+**List the company's recurring invoice schedules, newest first.**
+`scope:invoices:read · risk:low · idempotent`
+
+Each schedule creates a customer invoice on day_of_month (clamped to the last day in shorter months) every interval_months months at send_hour, Europe/Stockholm, from its template lines. Answers status, auto_send, next_run_date, the last run and its invoice, the lines in their order and what one run bills excl. VAT. Filter by status. Paged with limit and offset: total_count, has_more and next_offset say what is left.
+
+**Use when:** Before changing a schedule (its recurring_schedule_id and lines), or to see what will be invoiced and when.
+**Do not use for:** The invoices a schedule created (GET /invoices), or a schedule's run history in detail.
+
+**Pitfalls:**
+- Send a line back with its article_id when you replace the lines: a line without it loses the link to its article.
+- next_run_date is a day in Europe/Stockholm; the run happens at send_hour that day.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `status` | query | `"active" \| "paused"` | no | Only active or only paused schedules. Default both. |
+| `limit` | query | `number` | no | Schedules per page, 1-100. Default 50. |
+| `offset` | query | `number` | no | Schedules to skip: next_offset of the previous page. Default 0. |
+
+Response `200`:
+```ts
+{
+  data: {
+    schedules: { recurring_schedule_id: string, name: string, status: "active" | "paused", customer_id: string, customer_name: string | null, day_of_month: number, interval_months: number, send_hour: number, payment_terms_days: number, currency: string, auto_send: boolean, next_run_date: string, period_start: string | null, last_run_at: string | null, last_invoice_id: string | null, last_run_warning: string | null, generated_count: number, monthly_total_excl_vat: number, default_dimensions: Record<string, string>, items: { line_type: string, description: string, quantity: number, unit: string, unit_price: number, vat_rate: number | null, dimensions: Record<string, string>, article_id: string | null }[] }[],
+    count: number,
+    total_count: number,
+    has_more: boolean,
+    next_offset?: number
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string }, payment_order_id?: string, supplier_invoice_id?: string }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "schedules": [
+      {
+        "recurring_schedule_id": "5c2d…",
+        "name": "Månadsavgift support",
+        "status": "active",
+        "customer_id": "0a1b…",
+        "customer_name": "Kunden AB",
+        "day_of_month": 25,
+        "interval_months": 1,
+        "send_hour": 8,
+        "payment_terms_days": 30,
+        "currency": "SEK",
+        "auto_send": false,
+        "next_run_date": "2026-12-25",
+        "period_start": null,
+        "last_run_at": "2026-11-25T07:00:12Z",
+        "last_invoice_id": "9e8f…",
+        "last_run_warning": null,
+        "generated_count": 4,
+        "monthly_total_excl_vat": 5000,
+        "default_dimensions": {},
+        "items": [
+          {
+            "line_type": "product",
+            "description": "Support {månad}",
+            "quantity": 1,
+            "unit": "st",
+            "unit_price": 5000,
+            "vat_rate": null,
+            "dimensions": {},
+            "article_id": null
+          }
+        ]
+      }
+    ],
+    "count": 1,
+    "total_count": 1,
+    "has_more": false
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/recurring-invoice-schedules`
+
+**Create a recurring invoice schedule: a customer invoice from the same lines every interval_months months.**
+`scope:invoices:write · risk:medium · idempotent · dry-run · reversible`
+
+The schedule creates a customer invoice on day_of_month (29-31 clamp to the last day in shorter months) every interval_months months at send_hour, Europe/Stockholm, from its template lines, first on start_date or the next occurrence of day_of_month. With auto_send false (the default) each invoice is a draft for a person to send; with auto_send true each one is numbered, issued and emailed to the customer with no further approval. ?stage=true proposes the schedule for a person to approve instead of creating it. Dry-runnable: the preview names the first run and what one run bills.
+
+**Use when:** The customer is invoiced the same thing on a fixed rhythm: a subscription, a retainer, rent or a support agreement.
+**Do not use for:** A single invoice (POST /invoices), or changing a schedule that exists (PATCH /recurring-invoice-schedules/{id}).
+
+**Pitfalls:**
+- auto_send true needs a customer with an email address, else 400 VALIDATION_ERROR (details.field auto_send). Its proposal is high risk: approving it lets every run email an invoice.
+- start_date off the grid (not on day_of_month, clamped) or in the past answers 400 VALIDATION_ERROR (details.field start_date).
+- A line's article_id must be one of the company's articles (400, details.field items); {periodstart}, {periodslut} and {nästa periodstart} need period_start.
+- Over MCP the schedule is always staged: nothing exists until a person approves it.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{
+  customer_id: string,
+  name: string,
+  day_of_month: number,
+  interval_months?: number,
+  send_hour?: number,
+  payment_terms_days?: number,
+  currency?: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK" | "CHF" | "CAD",
+  your_reference?: string,
+  our_reference?: string,
+  notes?: string,
+  auto_send?: boolean,
+  default_dimensions?: Record<string, string>,
+  start_date?: string,
+  period_start?: string | null,
+  items: { line_type?: "product" | "text", description: string, quantity: number, unit?: string, unit_price: number, vat_rate?: 0 | 6 | 12 | 25 | null, dimensions?: Record<string, string>, article_id?: string | null }[]
+}
+```
+
+Example request:
+```json
+{
+  "customer_id": "0a1b…",
+  "name": "Månadsavgift support",
+  "day_of_month": 25,
+  "items": [
+    {
+      "description": "Support {månad}",
+      "quantity": 1,
+      "unit": "st",
+      "unit_price": 5000
+    }
+  ]
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    recurring_schedule_id: string,
+    name: string,
+    customer_id: string,
+    day_of_month: number,
+    interval_months: number,
+    send_hour: number,
+    currency: string,
+    auto_send: boolean,
+    status: "active",
+    next_run_date: string,
+    item_count: number
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string }, payment_order_id?: string, supplier_invoice_id?: string }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "recurring_schedule_id": "5c2d…",
+    "name": "Månadsavgift support",
+    "customer_id": "0a1b…",
+    "day_of_month": 25,
+    "interval_months": 1,
+    "send_hour": 8,
+    "currency": "SEK",
+    "auto_send": false,
+    "status": "active",
+    "next_run_date": "2026-12-25",
+    "item_count": 1
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `PATCH /api/v1/companies/{companyId}/recurring-invoice-schedules/{id}`
+
+**Change a recurring invoice schedule: its fields, its status (pause or resume) or all of its lines.**
+`scope:invoices:write · risk:medium · idempotent · dry-run · reversible`
+
+Changes only the fields given; items replaces every line. status paused stops the schedule, active resumes it. A new day_of_month, or resuming a schedule whose next_run_date has passed, moves next_run_date to the next run strictly after today (never today, so no edit sends an invoice the same hour); next_run_date given re-phases the schedule and wins. Any other change leaves next_run_date alone. ?stage=true proposes the change for a person to approve instead of making it. Dry-runnable: the preview shows the schedule as it is (current), the changes and the schedule as it would be (proposed).
+
+**Use when:** A price, a line, the rhythm or the customer of a schedule changes, or the schedule should pause or resume.
+**Do not use for:** Creating a schedule (POST /recurring-invoice-schedules), or changing an invoice a schedule already created (PATCH /invoices/{id}).
+
+**Pitfalls:**
+- An unknown schedule_id answers 404 RECURRING_SCHEDULE_NOT_FOUND.
+- next_run_date off the grid of the day_of_month in effect, or not after today, answers 400 VALIDATION_ERROR (details.field next_run_date). A proposal approved after its next_run_date passed rolls it forward on the same grid.
+- Turning auto_send on, or moving an auto-sending schedule to another customer, needs that customer's email address (400, details.field auto_send); the proposal is then high risk.
+- items replaces every line: send the ones to keep too, each with its article_id.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{
+  customer_id?: string,
+  name?: string,
+  day_of_month?: number,
+  interval_months?: number,
+  send_hour?: number,
+  payment_terms_days?: number,
+  currency?: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK" | "CHF" | "CAD",
+  your_reference?: string | null,
+  our_reference?: string | null,
+  notes?: string | null,
+  auto_send?: boolean,
+  status?: "active" | "paused",
+  next_run_date?: string,
+  default_dimensions?: Record<string, string>,
+  period_start?: string | null,
+  items?: { line_type?: "product" | "text", description: string, quantity: number, unit?: string, unit_price: number, vat_rate?: 0 | 6 | 12 | 25 | null, dimensions?: Record<string, string>, article_id?: string | null }[]
+}
+```
+
+Example request:
+```json
+{
+  "status": "paused"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    recurring_schedule_id: string,
+    status: "active" | "paused",
+    updated_fields: string[],
+    items_replaced: boolean,
+    item_count?: number,
+    next_run_date?: string
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string }, payment_order_id?: string, supplier_invoice_id?: string }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "recurring_schedule_id": "5c2d…",
+    "status": "paused",
+    "updated_fields": [
+      "status"
+    ],
+    "items_replaced": false
   },
   "meta": {
     "request_id": "req_…",

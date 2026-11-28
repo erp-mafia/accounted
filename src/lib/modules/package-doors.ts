@@ -241,16 +241,15 @@ const CUSTOMER_INVOICES: PackageDoors = {
     'POST /api/webshop-orders/:id/create-invoice',
     'POST /api/v1/companies/:companyId/invoices',
     'POST /api/v1/companies/:companyId/invoices/bulk-create',
+    'op:recurring-invoice-schedules.create',
     'mcp:gnubok_convert_invoice',
     'mcp:gnubok_create_invoice',
     'mcp:gnubok_create_invoice_from_sales_order',
-    'mcp:gnubok_create_recurring_schedule',
     'mcp:gnubok_create_sales_order',
     'mcp:gnubok_register_booked_invoice',
     'pending:convert_invoice',
     'pending:create_invoice',
     'pending:create_invoice_from_sales_order',
-    'pending:create_recurring_schedule',
     'pending:create_sales_order',
   ],
   continue: [
@@ -356,6 +355,7 @@ const CUSTOMER_INVOICES: PackageDoors = {
     'op:invoices.underlag.detach',
     'op:peppol.register',
     'op:peppol.request-access',
+    'op:recurring-invoice-schedules.update',
     'mcp:gnubok_create_article',
     'mcp:gnubok_create_customer',
     'mcp:gnubok_credit_invoice',
@@ -374,7 +374,6 @@ const CUSTOMER_INVOICES: PackageDoors = {
     'mcp:gnubok_update_article',
     'mcp:gnubok_update_customer',
     'mcp:gnubok_update_invoice',
-    'mcp:gnubok_update_recurring_schedule',
   ],
 }
 

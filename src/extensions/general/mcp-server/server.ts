@@ -395,16 +395,6 @@ import {
 } from '@/lib/dimensions/retag-service'
 import { fetchRetagLockFacts, retagBlockOf } from '@/lib/dimensions/retag-lock'
 import { createCustomer, updateCustomer } from '@/lib/customers/customer-commands'
-import {
-  CreateRecurringScheduleParamsSchema,
-  UpdateRecurringScheduleParamsSchema,
-} from '@/lib/pending-operations/schemas/recurring-schedule'
-import { computeInitialRunDate, getStockholmDateHour } from '@/lib/invoices/recurring-schedule-service'
-import { runDateMatchesDayOfMonth } from '@/lib/invoices/recurring-run-date'
-import {
-  RECURRING_ARTICLE_INVALID_MESSAGE,
-  findForeignRecurringArticleIds,
-} from '@/lib/invoices/recurring-schedule-items'
 import { UpdateInvoiceParamsSchema } from '@/lib/pending-operations/schemas/update-invoice'
 import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
 import { isRegisteredFromBooks } from '@/lib/bookkeeping/registered-from-books'
@@ -1221,23 +1211,6 @@ const CreateSkillArgsSchema = z.object({
 }).strict().refine((input) => input.kind === 'workflow' ? input.steps.length > 0 : input.text.trim().length > 0, {
   message: 'A workflow needs steps; knowledge and an analysis need text',
 })
-
-/**
- * Recurring schedule lines may link only this company's articles (the commit
- * executor checks again). Refused at staging so the agent learns it before
- * anyone approves.
- */
-async function assertRecurringArticlesOwned(
-  supabase: SupabaseClient,
-  companyId: string,
-  items: ReadonlyArray<{ line_type?: string | null; article_id?: string | null }>,
-): Promise<void> {
-  const { invalidArticleIds, error } = await findForeignRecurringArticleIds(supabase, companyId, items)
-  if (error) throw dbError(error)
-  if (invalidArticleIds.length > 0) {
-    throw badArgument('items', `${RECURRING_ARTICLE_INVALID_MESSAGE} (${invalidArticleIds.join(', ')}). Use gnubok_list_articles.`)
-  }
-}
 
 /**
  * The company's own private item an agent may replace or delete (crm#1506).
@@ -2648,6 +2621,39 @@ async function prepareBulkBookDimensions(
   if (!defaults) return { args }
   const { bags, resolutions } = await resolveDimensionBags(supabase, companyId, [defaults])
   return { args: { ...args, default_dimensions: bags[0] }, ...echo(resolutions) }
+}
+
+/**
+ * Resolve-don't-select for a recurring schedule's tags (prepareInput of
+ * recurring-invoice-schedules.create and .update): a value in
+ * default_dimensions or a line's dimensions may be a code or a name, and the
+ * operation takes codes. A line whose bag comes out empty is staged without
+ * one; an explicit {} default_dimensions on an update stays the replace that
+ * clears every tag.
+ */
+async function prepareRecurringScheduleDimensions(
+  args: Record<string, unknown>,
+  { supabase, companyId }: { supabase: SupabaseClient; companyId: string },
+): Promise<{ args: Record<string, unknown>; preview?: Record<string, unknown> }> {
+  const lines = Array.isArray(args.items) ? (args.items as unknown[]) : null
+  const defaults = parseDimensionsArg(args.default_dimensions, 'default_dimensions')
+  const lineBags = (lines ?? []).map((line, i) =>
+    parseDimensionsArg((line as Record<string, unknown> | null)?.dimensions, `items[${i}].dimensions`),
+  )
+  if (!defaults && lineBags.every((bag) => bag === undefined)) return { args }
+  const { bags, resolutions } = await resolveDimensionBags(supabase, companyId, [defaults, ...lineBags])
+  const [resolvedDefaults, ...resolvedLines] = bags
+  const prepared: Record<string, unknown> = { ...args }
+  if (defaults) prepared.default_dimensions = resolvedDefaults
+  if (lines) {
+    prepared.items = lines.map((line, i) => {
+      if (typeof line !== 'object' || line === null) return line
+      const { dimensions: _raw, ...rest } = line as Record<string, unknown>
+      const bag = resolvedLines[i]
+      return bag && Object.keys(bag).length > 0 ? { ...rest, dimensions: bag } : rest
+    })
+  }
+  return { args: prepared, ...(resolutions.length > 0 ? { preview: { dimension_resolutions: resolutions } } : {}) }
 }
 
 async function stagePendingOperation(
@@ -30149,626 +30155,9 @@ export const tools: McpTool[] = [
     },
   },
 
-  // ── Recurring invoice schedules ──────────────────────────────
+  // Recurring invoice schedules: generated from lib/operations/recurring-invoice-schedules.ts
+  // (createOperationTools below), the same operations as their v1 endpoints.
 
-  {
-    name: 'gnubok_list_recurring_schedules',
-    keywords: ['återkommande fakturor', 'stående faktura', 'abonnemang'],
-    title: 'List Recurring Invoice Schedules',
-    description: "List the company's recurring invoice schedules: auto-create customer invoices on day_of_month (clamps to the last day in shorter months) every interval_months months (1-12) at send_hour, Europe/Stockholm. Shows status, auto_send and next_run_date.",
-    inputSchema: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        status: {
-          type: 'string',
-          enum: ['active', 'paused'],
-          description: 'Filter by schedule status',
-        },
-        limit: { type: 'number', description: 'Max results (default 50, max 100)' },
-        offset: { type: 'integer', minimum: 0, description: 'Number of results to skip for pagination (default 0)' },
-      },
-    },
-    outputSchema: paginatedSchema('schedules', {
-      type: 'object',
-      properties: {
-        recurring_schedule_id: { type: 'string' },
-        name: { type: 'string' },
-        status: { type: 'string', enum: ['active', 'paused'] },
-        customer_id: { type: 'string' },
-        customer_name: { type: ['string', 'null'] },
-        day_of_month: { type: 'number', description: '1-31; clamps to the last day in shorter months' },
-        interval_months: { type: 'number', description: 'Months between runs, 1-12 (3 = quarterly, 12 = yearly)' },
-        send_hour: { type: 'number', description: 'Whole hour 0-23 in Europe/Stockholm time' },
-        payment_terms_days: { type: 'number' },
-        currency: { type: 'string' },
-        auto_send: { type: 'boolean' },
-        next_run_date: { type: 'string' },
-        period_start: { type: ['string', 'null'], description: 'First day of the billing period the next invoice covers; null = no period' },
-        last_run_at: { type: ['string', 'null'] },
-        last_invoice_id: { type: ['string', 'null'], description: 'Most recently generated invoice' },
-        last_run_warning: { type: ['string', 'null'] },
-        generated_count: { type: 'number' },
-        monthly_total_excl_vat: { type: 'number' },
-        default_dimensions: {
-          type: 'object',
-          description: 'Dims bag {sie_dim_no: code} copied onto every generated invoice',
-        },
-        items: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              line_type: { type: 'string', enum: ['product', 'text'] },
-              description: { type: 'string' },
-              quantity: { type: 'number' },
-              unit: { type: 'string' },
-              unit_price: { type: 'number' },
-              vat_rate: { type: ['number', 'null'], description: 'null = customer default at spawn' },
-              dimensions: { type: 'object', description: 'Per-item dims bag; wins per key over default_dimensions' },
-              article_id: { type: ['string', 'null'] },
-            },
-          },
-        },
-      },
-    }),
-    annotations: ANNOTATIONS_READ_ONLY,
-    catalogVisibility: 'search',
-    async execute(args, companyId, userId, supabase) {
-      const limit = Math.min(Math.max(1, Number(args.limit) || 50), 100)
-      const offset = Math.max(0, Math.floor(Number(args.offset) || 0))
-      const status = args.status as string | undefined
-
-      let query = supabase
-        .from('recurring_invoice_schedules')
-        .select(
-          'id, name, status, customer_id, day_of_month, interval_months, send_hour, payment_terms_days, currency, auto_send, default_dimensions, next_run_date, period_start, last_run_at, last_invoice_id, last_run_warning, generated_count, customer:customers(name), items:recurring_invoice_schedule_items(*)',
-          { count: 'exact' },
-        )
-        .eq('company_id', companyId)
-
-      if (status) {
-        query = query.eq('status', status)
-      }
-
-      const { data, error, count } = await query
-        .order('created_at', { ascending: false })
-        .order('id', { ascending: false })
-        .range(offset, offset + limit)
-
-      if (error) throw dbError(error)
-
-      const rows = data ?? []
-      const schedules = rows.slice(0, limit).map((row: Record<string, unknown>) => {
-        const items = ((row.items as Array<Record<string, unknown>>) ?? [])
-          .slice()
-          .sort((a, b) => Number(a.sort_order) - Number(b.sort_order))
-          .map((it) => ({
-            line_type: it.line_type ?? 'product',
-            description: it.description,
-            quantity: it.quantity,
-            unit: it.unit,
-            unit_price: it.unit_price,
-            vat_rate: it.vat_rate ?? null,
-            dimensions: it.dimensions ?? {},
-            // '*' above: article_id is absent until migration 20261101003800.
-            article_id: it.article_id ?? null,
-          }))
-        const monthlyTotalExclVat =
-          Math.round(items.reduce((sum, it) => sum + Number(it.quantity) * Number(it.unit_price), 0) * 100) / 100
-        return {
-          recurring_schedule_id: row.id,
-          name: row.name,
-          status: row.status,
-          customer_id: row.customer_id,
-          customer_name: (row.customer as Record<string, unknown> | null)?.name ?? null,
-          day_of_month: row.day_of_month,
-          interval_months: row.interval_months,
-          send_hour: row.send_hour,
-          payment_terms_days: row.payment_terms_days,
-          currency: row.currency,
-          auto_send: row.auto_send,
-          next_run_date: row.next_run_date,
-          period_start: row.period_start ?? null,
-          last_run_at: row.last_run_at ?? null,
-          last_invoice_id: row.last_invoice_id ?? null,
-          last_run_warning: row.last_run_warning ?? null,
-          generated_count: row.generated_count,
-          monthly_total_excl_vat: monthlyTotalExclVat,
-          default_dimensions: row.default_dimensions ?? {},
-          items,
-        }
-      })
-
-      const hasMore = count == null
-        ? rows.length > limit
-        : offset + schedules.length < count
-      const total = count ?? offset + schedules.length + (hasMore ? 1 : 0)
-
-      return {
-        schedules,
-        count: schedules.length,
-        total_count: total,
-        has_more: hasMore,
-        ...(hasMore ? { next_offset: offset + schedules.length } : {}),
-      }
-    },
-  },
-
-  {
-    name: 'gnubok_create_recurring_schedule',
-    keywords: ['återkommande faktura', 'stående faktura', 'abonnemang'],
-    title: 'Create Recurring Invoice Schedule',
-    description: 'Stage a new recurring invoice schedule: creates a customer invoice on day_of_month (clamps to the last day in shorter months) every interval_months months (default 1) at send_hour, Europe/Stockholm. auto_send defaults false; true emails each invoice without new approval.',
-    outputSchema: STAGED_OPERATION_SCHEMA,
-    inputSchema: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        customer_id: { type: 'string', description: 'Customer UUID from gnubok_list_customers.' },
-        name: { type: 'string', minLength: 1, maxLength: 200, description: 'Internal schedule name (not printed on the invoice).' },
-        day_of_month: {
-          type: 'integer',
-          minimum: 1,
-          maximum: 31,
-          description: 'Day the invoice is created; 29-31 clamp to the last day in shorter months.',
-        },
-        interval_months: {
-          type: 'integer',
-          minimum: 1,
-          maximum: 12,
-          description: 'Months between invoices: any integer 1-12. Default 1 (monthly); 3 = quarterly, 6 = half-yearly, 12 = yearly.',
-        },
-        send_hour: {
-          type: 'integer',
-          minimum: 0,
-          maximum: 23,
-          description: 'Whole hour (0-23) in Europe/Stockholm time at which the schedule runs. Default 8.',
-        },
-        payment_terms_days: { type: 'integer', minimum: 0, maximum: 90, description: 'due_date = invoice_date + terms. Default 30.' },
-        currency: { type: 'string', enum: [...CURRENCIES], description: 'Default SEK.' },
-        your_reference: { type: 'string' },
-        our_reference: { type: 'string' },
-        notes: { type: 'string', description: 'Printed on every generated invoice. Placeholders in notes and line descriptions are substituted when each invoice is created: {månad} {nästa månad} {föregående månad} {år} (month names in the customer language) and, when period_start is set, {periodstart} {periodslut} (last day of the period) {nästa periodstart}.' },
-        period_start: {
-          type: 'string',
-          description: 'YYYY-MM-DD first day of the billing period the first invoice covers. Advances by interval_months after every run. Required when {periodstart}/{periodslut}/{nästa periodstart} are used.',
-        },
-        auto_send: {
-          type: 'boolean',
-          description: 'Default false: invoices are created as drafts for manual review. true emails every generated invoice to the customer with no further approval; requires the customer to have an email address.',
-        },
-        start_date: {
-          type: 'string',
-          description: 'YYYY-MM-DD first run date; fixes the month phase of a quarterly/yearly schedule (e.g. 2027-02-15 with interval_months 12 = every February). Must fall on day_of_month (clamped in shorter months) and not be in the past. Omit to run on the next occurrence of day_of_month.',
-        },
-        default_dimensions: {
-          type: 'object',
-          additionalProperties: { type: 'string' },
-          description: 'Dims bag keyed by SIE dim no, value = code OR name, e.g. {"6":"P001"}. Copied onto every generated invoice. Unknown values rejected: never auto-created.',
-        },
-        items: {
-          type: 'array',
-          minItems: 1,
-          description: 'Template lines copied onto every generated invoice.',
-          items: {
-            type: 'object',
-            properties: {
-              line_type: { type: 'string', enum: ['product', 'text'], description: 'Default product. text = free-text/blank row copied onto every invoice (description only, may be empty; amounts ignored, never booked). At least one product row is required.' },
-              description: { type: 'string', description: 'May use the placeholders listed under notes.' },
-              quantity: { type: 'number' },
-              unit: { type: 'string', description: 'st, tim, dag, mån. Default st.' },
-              unit_price: { type: 'number', description: 'Price per unit excl. VAT.' },
-              vat_rate: {
-                type: ['number', 'null'],
-                enum: [0, 6, 12, 25, null],
-                description: 'Omit/null = customer default at spawn. A rate outside that default set (non-zero to a foreign business) bills the default.',
-              },
-              article_id: { type: 'string', description: 'From gnubok_list_articles: books to its account and, without vat_rate, its rate.' },
-              dimensions: {
-                type: 'object',
-                additionalProperties: { type: 'string' },
-                description: 'Dims bag {sie_dim_no: kod eller namn}, e.g. {"6":"P001"}. Wins per key over default_dimensions.',
-              },
-            },
-            required: ['description', 'quantity', 'unit_price'],
-          },
-        },
-        dry_run: STAGING_ARGS_PROPERTIES.dry_run,
-        idempotency_key: STAGING_ARGS_PROPERTIES.idempotency_key,
-      },
-      required: ['customer_id', 'name', 'day_of_month', 'items'],
-    },
-    annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
-    catalogVisibility: 'search',
-    async execute(args, companyId, userId, supabase, actor) {
-      // Resolve-don't-select: parse the schedule-level default bag + each
-      // item's own bag, then resolve codes AND natural-language names against
-      // the registry in ONE pass (mirrors gnubok_create_invoice). The staged
-      // params carry only resolved codes; the cron copies them verbatim onto
-      // every generated invoice.
-      const rawItems = Array.isArray(args.items)
-        ? (args.items as Array<Record<string, unknown>>)
-        : []
-      const defaultDimensions = parseDimensionsArg(args.default_dimensions, 'default_dimensions')
-      const { bags: resolvedDimBags, resolutions: dimensionResolutions } = await resolveDimensionBags(
-        supabase,
-        companyId,
-        [defaultDimensions, ...rawItems.map((item, i) => parseDimensionsArg(item.dimensions, `items[${i}].dimensions`))],
-      )
-      const resolvedDefaultDimensions = resolvedDimBags[0]
-      const stagedItems = rawItems.map((item, i) => {
-        const { dimensions: _rawDimensions, ...rest } = item
-        const bag = resolvedDimBags[i + 1]
-        return bag && Object.keys(bag).length > 0 ? { ...rest, dimensions: bag } : rest
-      })
-
-      const candidate: Record<string, unknown> = {}
-      for (const key of [
-        'customer_id',
-        'name',
-        'day_of_month',
-        'interval_months',
-        'send_hour',
-        'payment_terms_days',
-        'currency',
-        'your_reference',
-        'our_reference',
-        'notes',
-        'period_start',
-        'auto_send',
-        'start_date',
-      ]) {
-        if (args[key] !== undefined) candidate[key] = args[key]
-      }
-      if (args.items !== undefined) {
-        // Non-array garbage passes through verbatim so the schema error below
-        // names the real problem instead of a synthetic empty list.
-        candidate.items = Array.isArray(args.items) ? stagedItems : args.items
-      }
-      if (resolvedDefaultDimensions && Object.keys(resolvedDefaultDimensions).length > 0) {
-        candidate.default_dimensions = resolvedDefaultDimensions
-      }
-
-      const parsed = CreateRecurringScheduleParamsSchema.safeParse(candidate)
-      if (!parsed.success) {
-        throw fieldValidationError('Invalid recurring schedule', zodFieldIssues(parsed.error, candidate))
-      }
-      const params = parsed.data
-
-      const { data: customer, error } = await supabase
-        .from('customers')
-        .select('id, name, email')
-        .eq('id', params.customer_id)
-        .eq('company_id', companyId)
-        .maybeSingle()
-
-      if (error) throw dbError(error)
-      if (!customer) throw new Error('Customer not found. Use gnubok_list_customers to find IDs.')
-      await assertRecurringArticlesOwned(supabase, companyId, params.items)
-      if (params.auto_send && !customer.email) {
-        throw new Error('Customer has no email address: auto_send requires one. Stage with auto_send=false or add an email first.')
-      }
-
-      // Same rules the create route enforces, applied at staging so the
-      // preview the human approves is what the commit executor will write:
-      // an off-grid or past start_date must fail here, not after approval.
-      if (params.start_date !== undefined) {
-        if (!runDateMatchesDayOfMonth(params.start_date, params.day_of_month)) {
-          throw new Error(
-            `start_date ${params.start_date} does not fall on day_of_month ${params.day_of_month} (clamped to the last day in shorter months). Pick a date on that day or change day_of_month.`,
-          )
-        }
-        const { date: todayStockholm } = getStockholmDateHour(new Date())
-        if (params.start_date < todayStockholm) {
-          throw new Error(`start_date ${params.start_date} is in the past (today in Europe/Stockholm is ${todayStockholm}).`)
-        }
-      }
-
-      const monthlyTotalExclVat =
-        Math.round(params.items.reduce((sum, it) => sum + it.quantity * it.unit_price, 0) * 100) / 100
-
-      // auto_send appears explicitly in the preview: an auto-sending schedule
-      // is recurring outbound customer email that never sees approval again,
-      // so the human must see exactly that flag when approving.
-      const preview = {
-        name: params.name,
-        customer_id: customer.id,
-        customer_name: customer.name,
-        day_of_month: params.day_of_month,
-        interval_months: params.interval_months,
-        send_hour: params.send_hour,
-        payment_terms_days: params.payment_terms_days,
-        currency: params.currency,
-        auto_send: params.auto_send,
-        projected_first_run_date: computeInitialRunDate(new Date(), params.day_of_month, params.start_date),
-        monthly_total_excl_vat: monthlyTotalExclVat,
-        items: params.items,
-        ...(params.default_dimensions && Object.keys(params.default_dimensions).length > 0
-          ? { default_dimensions: params.default_dimensions }
-          : {}),
-        // Echoed for every non-exact dimension resolution (resolve-don't-
-        // select) so the agent can verify what a name attached to.
-        ...(dimensionResolutions.length > 0 ? { dimension_resolutions: dimensionResolutions } : {}),
-      }
-
-      return stage({
-        supabase,
-        companyId,
-        userId,
-        type: 'create_recurring_schedule',
-        title: `Nytt återkommande fakturaschema: ${params.name}`,
-        params: params as unknown as Record<string, unknown>,
-        preview,
-        actor,
-        next: {
-          description: 'Once approved, verify the schedule with gnubok_list_recurring_schedules; the hourly cron creates invoices from next_run_date.',
-          tool: 'gnubok_list_recurring_schedules',
-        },
-        ...stagingOptions(args),
-      })
-    },
-  },
-
-  {
-    name: 'gnubok_update_recurring_schedule',
-    keywords: ['återkommande faktura', 'stående faktura'],
-    title: 'Update Recurring Invoice Schedule',
-    description: 'Stage an update to a recurring invoice schedule (schedule_id from gnubok_list_recurring_schedules). status pauses/resumes; items replace all lines; day_of_month clamps to the last day in shorter months; next_run_date re-phases (yearly in February); send_hour is Europe/Stockholm.',
-    outputSchema: STAGED_OPERATION_SCHEMA,
-    inputSchema: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        schedule_id: { type: 'string', description: 'UUID from gnubok_list_recurring_schedules.' },
-        customer_id: { type: 'string', description: 'Move the schedule to another customer.' },
-        name: { type: 'string', minLength: 1, maxLength: 200 },
-        day_of_month: {
-          type: 'integer',
-          minimum: 1,
-          maximum: 31,
-          description: '1-31, clamped in shorter months. Changing it rolls next_run_date to the next future occurrence.',
-        },
-        interval_months: {
-          type: 'integer',
-          minimum: 1,
-          maximum: 12,
-          description: 'Months between invoices, 1-12 (3 = quarterly, 12 = yearly). Changing only interval_months leaves next_run_date untouched.',
-        },
-        send_hour: { type: 'integer', minimum: 0, maximum: 23, description: 'Whole hour (0-23) in Europe/Stockholm time.' },
-        payment_terms_days: { type: 'integer', minimum: 0, maximum: 90 },
-        currency: { type: 'string', enum: [...CURRENCIES] },
-        your_reference: { type: ['string', 'null'], description: 'Null clears the field.' },
-        our_reference: { type: ['string', 'null'], description: 'Null clears the field.' },
-        notes: { type: ['string', 'null'], description: 'Null clears the field. Placeholders in notes and line descriptions are substituted when each invoice is created: {månad} {nästa månad} {föregående månad} {år} (month names in the customer language) and, when period_start is set, {periodstart} {periodslut} (last day of the period) {nästa periodstart}.' },
-        period_start: {
-          type: ['string', 'null'],
-          description: 'YYYY-MM-DD first day of the billing period the NEXT invoice covers; advances by interval_months after every run. Null clears it (then the period placeholders must not be used).',
-        },
-        auto_send: {
-          type: 'boolean',
-          description: 'true emails every generated invoice with no further approval (requires customer email). false returns to draft-only.',
-        },
-        status: {
-          type: 'string',
-          enum: ['active', 'paused'],
-          description: 'paused stops generating invoices; active resumes. Reactivating from a stale date rolls next_run_date to the next future occurrence, never today.',
-        },
-        next_run_date: {
-          type: 'string',
-          description: 'YYYY-MM-DD explicit next run; re-phases the schedule (e.g. move a yearly invoice to February). Must fall on the effective day_of_month (clamped in shorter months) and be after today in Europe/Stockholm. Wins over the automatic recompute.',
-        },
-        default_dimensions: {
-          type: 'object',
-          additionalProperties: { type: 'string' },
-          description: 'Dims bag {sie_dim_no: kod eller namn} copied onto every generated invoice. Replaces the whole bag; {} clears all tags. Omit to keep.',
-        },
-        items: {
-          type: 'array',
-          minItems: 1,
-          description: 'Replaces ALL lines (send each back with its article_id); omit to keep.',
-          items: {
-            type: 'object',
-            properties: {
-              line_type: { type: 'string', enum: ['product', 'text'], description: 'Default product. text = free-text/blank row (description only, no amounts). At least one product row is required.' },
-              description: { type: 'string', description: 'May use the placeholders listed under notes.' },
-              quantity: { type: 'number' },
-              unit: { type: 'string', description: 'st, tim, dag, mån. Default st.' },
-              unit_price: { type: 'number', description: 'Price per unit excl. VAT.' },
-              vat_rate: {
-                type: ['number', 'null'],
-                enum: [0, 6, 12, 25, null],
-                description: 'Omit/null = customer default at spawn. A rate outside that default set (non-zero to a foreign business) bills the default.',
-              },
-              article_id: { type: 'string', description: 'From gnubok_list_articles: books to its account and, without vat_rate, its rate.' },
-              dimensions: {
-                type: 'object',
-                additionalProperties: { type: 'string' },
-                description: 'Dims bag {sie_dim_no: kod eller namn}, e.g. {"6":"P001"}. Wins per key over default_dimensions.',
-              },
-            },
-            required: ['description', 'quantity', 'unit_price'],
-          },
-        },
-        dry_run: STAGING_ARGS_PROPERTIES.dry_run,
-        idempotency_key: STAGING_ARGS_PROPERTIES.idempotency_key,
-      },
-      required: ['schedule_id'],
-    },
-    annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
-    catalogVisibility: 'search',
-    async execute(args, companyId, userId, supabase, actor) {
-      // Resolve-don't-select for both the replacement default bag and any
-      // per-item bags (mirrors gnubok_create_recurring_schedule). An explicit
-      // {} default_dimensions passes through as the clear-all-tags update.
-      const rawItems = Array.isArray(args.items)
-        ? (args.items as Array<Record<string, unknown>>)
-        : []
-      const defaultDimensions = parseDimensionsArg(args.default_dimensions, 'default_dimensions')
-      const { bags: resolvedDimBags, resolutions: dimensionResolutions } = await resolveDimensionBags(
-        supabase,
-        companyId,
-        [defaultDimensions, ...rawItems.map((item, i) => parseDimensionsArg(item.dimensions, `items[${i}].dimensions`))],
-      )
-      const stagedItems = rawItems.map((item, i) => {
-        const { dimensions: _rawDimensions, ...rest } = item
-        const bag = resolvedDimBags[i + 1]
-        return bag && Object.keys(bag).length > 0 ? { ...rest, dimensions: bag } : rest
-      })
-
-      const changes: Record<string, unknown> = {}
-      for (const key of [
-        'customer_id',
-        'name',
-        'day_of_month',
-        'interval_months',
-        'send_hour',
-        'payment_terms_days',
-        'currency',
-        'your_reference',
-        'our_reference',
-        'notes',
-        'period_start',
-        'auto_send',
-        'status',
-        'next_run_date',
-      ]) {
-        if (args[key] !== undefined) changes[key] = args[key]
-      }
-      if (args.default_dimensions !== undefined) {
-        changes.default_dimensions = resolvedDimBags[0] ?? {}
-      }
-      if (args.items !== undefined) {
-        // Non-array garbage passes through verbatim so the schema error below
-        // names the real problem instead of a synthetic empty list.
-        changes.items = Array.isArray(args.items) ? stagedItems : args.items
-      }
-
-      const parsed = UpdateRecurringScheduleParamsSchema.safeParse({
-        schedule_id: args.schedule_id,
-        changes,
-      })
-      if (!parsed.success) {
-        throw fieldValidationError(
-          'Invalid schedule update',
-          changesIssues(parsed.error, { schedule_id: args.schedule_id, changes }),
-        )
-      }
-      const parsedChanges = parsed.data.changes
-
-      const { data: current, error } = await supabase
-        .from('recurring_invoice_schedules')
-        .select(
-          'id, name, status, customer_id, day_of_month, interval_months, send_hour, payment_terms_days, currency, your_reference, our_reference, notes, period_start, auto_send, default_dimensions, next_run_date, customer:customers(name, email), items:recurring_invoice_schedule_items(*)',
-        )
-        .eq('id', parsed.data.schedule_id)
-        .eq('company_id', companyId)
-        .maybeSingle()
-
-      if (error) throw dbError(error)
-      if (!current) throw new Error('Recurring schedule not found. Use gnubok_list_recurring_schedules to find IDs.')
-      if (parsedChanges.items) await assertRecurringArticlesOwned(supabase, companyId, parsedChanges.items)
-
-      // Turning auto_send on, or moving the schedule to another customer,
-      // requires the (target) customer to have an email when auto_send is
-      // effectively on; otherwise every cron run degrades to a draft +
-      // warning. Mirrors the cookie-session PATCH route's guard.
-      const effectiveAutoSend = parsedChanges.auto_send ?? (current.auto_send as boolean)
-      if (parsedChanges.customer_id !== undefined) {
-        const { data: target, error: targetError } = await supabase
-          .from('customers')
-          .select('id, email')
-          .eq('id', parsedChanges.customer_id)
-          .eq('company_id', companyId)
-          .maybeSingle()
-        if (targetError) throw dbError(targetError)
-        if (!target) throw new Error('Customer not found. Use gnubok_list_customers to find IDs.')
-        if (effectiveAutoSend && !target.email) {
-          throw new Error('Customer has no email address: auto_send requires one.')
-        }
-      } else if (parsedChanges.auto_send === true) {
-        const currentCustomer = current.customer as { name?: string; email?: string | null } | null
-        if (!currentCustomer?.email) {
-          throw new Error('Customer has no email address: auto_send requires one. Add an email to the customer first.')
-        }
-      }
-
-      // Same rules the PATCH route enforces, applied at staging so the
-      // proposed next_run_date in the preview is exactly what gets written
-      // on approval (the executor only rolls a date that went stale while
-      // waiting for approval; it never silently moves a date staged today).
-      if (parsedChanges.next_run_date !== undefined) {
-        const effectiveDay = parsedChanges.day_of_month ?? (current.day_of_month as number)
-        if (!runDateMatchesDayOfMonth(parsedChanges.next_run_date, effectiveDay)) {
-          throw new Error(
-            `next_run_date ${parsedChanges.next_run_date} does not fall on day_of_month ${effectiveDay} (clamped to the last day in shorter months). Pick a date on that day or change day_of_month in the same call.`,
-          )
-        }
-        const { date: todayStockholm } = getStockholmDateHour(new Date())
-        if (parsedChanges.next_run_date <= todayStockholm) {
-          throw badArgument('next_run_date', `next_run_date must be after today in Europe/Stockholm (${todayStockholm}).`)
-        }
-      }
-
-      const currentItems = ((current.items as Array<Record<string, unknown>>) ?? [])
-        .slice()
-        .sort((a, b) => Number(a.sort_order) - Number(b.sort_order))
-        .map((it) => ({
-          description: it.description,
-          quantity: it.quantity,
-          unit: it.unit,
-          unit_price: it.unit_price,
-          vat_rate: it.vat_rate ?? null,
-          dimensions: it.dimensions ?? {},
-          article_id: it.article_id ?? null,
-        }))
-
-      const currentPreview = {
-        recurring_schedule_id: current.id,
-        name: current.name,
-        status: current.status,
-        customer_id: current.customer_id,
-        customer_name: (current.customer as { name?: string } | null)?.name ?? null,
-        day_of_month: current.day_of_month,
-        interval_months: current.interval_months,
-        send_hour: current.send_hour,
-        payment_terms_days: current.payment_terms_days,
-        currency: current.currency,
-        your_reference: current.your_reference ?? null,
-        our_reference: current.our_reference ?? null,
-        notes: current.notes ?? null,
-        auto_send: current.auto_send,
-        default_dimensions: current.default_dimensions ?? {},
-        next_run_date: current.next_run_date,
-        items: currentItems,
-      }
-
-      const { items: newItems, ...fieldChanges } = parsedChanges
-
-      return stage({
-        supabase,
-        companyId,
-        userId,
-        type: 'update_recurring_schedule',
-        title: `Uppdatera återkommande fakturaschema: ${current.name}`,
-        params: parsed.data as unknown as Record<string, unknown>,
-        preview: {
-          current: currentPreview,
-          changes: parsedChanges,
-          proposed: {
-            ...currentPreview,
-            ...fieldChanges,
-            ...(newItems ? { items: newItems } : {}),
-          },
-          // Echoed for every non-exact dimension resolution (resolve-don't-
-          // select) so the agent can verify what a name attached to.
-          ...(dimensionResolutions.length > 0 ? { dimension_resolutions: dimensionResolutions } : {}),
-        },
-        actor,
-        ...stagingOptions(args),
-      })
-    },
-  },
   // ── Service accounts (lib/service-accounts) ──────────────────
   // Read and revoke only. No tool mints a key: a secret must never pass
   // through a chat transcript (keys are minted on v1 and shown once there).
@@ -30917,7 +30306,11 @@ export const tools: McpTool[] = [
   // Operations defined once in src/lib/operations: the same contract and
   // rules as their v1 endpoints (operation-tools.ts).
   ...createOperationTools(OPERATIONS, {
-    prepareInput: { 'transactions.bulk-book': prepareBulkBookDimensions },
+    prepareInput: {
+      'transactions.bulk-book': prepareBulkBookDimensions,
+      'recurring-invoice-schedules.create': prepareRecurringScheduleDimensions,
+      'recurring-invoice-schedules.update': prepareRecurringScheduleDimensions,
+    },
     readOnly: ANNOTATIONS_READ_ONLY,
     stagedWrite: ANNOTATIONS_STAGED_WRITE,
     stagedSchema: STAGED_OPERATION_SCHEMA,

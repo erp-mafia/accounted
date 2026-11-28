@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `480`;
+exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `483`;
 
 exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-keys 1`] = `
 [
@@ -137,6 +137,7 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "GET /api/v1/companies/:companyId/reconciliation/accounts/:accountKey/items",
   "GET /api/v1/companies/:companyId/reconciliation/accounts/:accountKey/signoff",
   "GET /api/v1/companies/:companyId/reconciliation/bank/status",
+  "GET /api/v1/companies/:companyId/recurring-invoice-schedules",
   "GET /api/v1/companies/:companyId/reports/ar-ledger",
   "GET /api/v1/companies/:companyId/reports/avgifter-basis",
   "GET /api/v1/companies/:companyId/reports/balance-sheet",
@@ -244,6 +245,7 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "PATCH /api/v1/companies/:companyId/k3-transition",
   "PATCH /api/v1/companies/:companyId/owner-loans/:id",
   "PATCH /api/v1/companies/:companyId/pos-sales/connections/:connectionId/settings",
+  "PATCH /api/v1/companies/:companyId/recurring-invoice-schedules/:id",
   "PATCH /api/v1/companies/:companyId/salary-runs/:id",
   "PATCH /api/v1/companies/:companyId/salary-runs/:id/employees/:employeeId",
   "PATCH /api/v1/companies/:companyId/salary-runs/:id/lines/:lineId",
@@ -400,6 +402,7 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "POST /api/v1/companies/:companyId/reconciliation/accounts/:accountKey/signoff",
   "POST /api/v1/companies/:companyId/reconciliation/accounts/:accountKey/signoff/:signoffId/reopen",
   "POST /api/v1/companies/:companyId/reconciliation/bank/run",
+  "POST /api/v1/companies/:companyId/recurring-invoice-schedules",
   "POST /api/v1/companies/:companyId/reports/vat-declaration/filings",
   "POST /api/v1/companies/:companyId/salary-runs",
   "POST /api/v1/companies/:companyId/salary-runs/:id/approve",
@@ -499,7 +502,7 @@ exports[`v1 spec snapshot > matches the recorded module catalogue > endpoint-mod
   "expenses": 5,
   "import": 8,
   "inbox": 13,
-  "invoicing": 37,
+  "invoicing": 40,
   "ledger": 141,
   "parties": 1,
   "payments": 20,
