@@ -1996,6 +1996,8 @@ export default function TransactionsPage() {
     templateId?: string
     /** A learned counterpart rule: the server books its stored lines. */
     counterpartyTemplateId?: string
+    /** A clearing record (a payout): the server books the record's own lines. */
+    clearingRef?: { proposer: string; ref: string }
     /** The suggestion the booking started from, recorded in suggestion_log. */
     proposalId?: string
     /** false: the row's one click; true: booked from Granska bokföring. Sent as review_shown. */
@@ -2035,7 +2037,7 @@ export default function TransactionsPage() {
     // state: a silent row the duplicate guard flagged, parked for the batch's
     // single confirmation and therefore neither booked nor failed.
   }): Promise<BatchCategorizeOutcome> {
-    const { id, isBusiness, category, vatTreatment, reverseChargeKind, accountOverride, templateId, counterpartyTemplateId, proposalId, reviewShown, inBulk, onReviewRequired, inboxItemId, dimensions, vatAmount, confirmNoMatch, confirmForeignSellerVat, confirmFiledVatPeriod, force, expectedDuplicateJournalEntryId, silent, narration } = args
+    const { id, isBusiness, category, vatTreatment, reverseChargeKind, accountOverride, templateId, counterpartyTemplateId, clearingRef, proposalId, reviewShown, inBulk, onReviewRequired, inboxItemId, dimensions, vatAmount, confirmNoMatch, confirmForeignSellerVat, confirmFiledVatPeriod, force, expectedDuplicateJournalEntryId, silent, narration } = args
     try {
       setProcessingId(id)
       const response = await fetch(`/api/transactions/${id}/categorize`, {
@@ -2049,6 +2051,7 @@ export default function TransactionsPage() {
           account_override: accountOverride,
           template_id: templateId,
           ...(counterpartyTemplateId ? { counterparty_template_id: counterpartyTemplateId } : {}),
+          ...(clearingRef ? { clearing_ref: clearingRef } : {}),
           ...(proposalId ? { proposal_id: proposalId } : {}),
           ...(reviewShown !== undefined ? { review_shown: reviewShown } : {}),
           ...(inBulk ? { in_bulk: true } : {}),
@@ -4337,6 +4340,7 @@ export default function TransactionsPage() {
       accountOverride: body.account_override,
       templateId: body.template_id,
       counterpartyTemplateId: body.counterparty_template_id,
+      clearingRef: body.clearing_ref,
       proposalId: body.proposal_id,
       reviewShown: extras.reviewShown,
       onReviewRequired: extras.onReviewRequired,
