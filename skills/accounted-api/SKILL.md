@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 479 endpoints.
+  pagination, scopes), and all 480 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -225,7 +225,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 479 operations. Paths are shown without
+API version `2026-05-12`, 480 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.accounted.se/api/v1`).
 
 ### Core (24)
@@ -259,7 +259,7 @@ GET /health : Health check [risk:low idempotent]
 GET /operations/{id} : Poll a long-running operation by id [scope:operations:read risk:low idempotent]
 ```
 
-### Journal entries (18)
+### Journal entries (19)
 
 Full detail: [references/journal-entries.md](references/journal-entries.md)
 
@@ -281,6 +281,7 @@ POST /companies/{companyId}/journal-entries/{id}/reverse : Storno a posted journ
 POST /companies/{companyId}/journal-entries/{id}/strike-lines : Strike lines of a posted verifikat and add replacement lines inside the same verifikat (inline rättelse) [scope:bookkeeping:write risk:high idempotent dry-run]
 POST /companies/{companyId}/journal-entries/batch-create : Create up to 50 draft journal entries (partial-success) [scope:bookkeeping:write risk:high idempotent dry-run reversible]
 POST /companies/{companyId}/journal-entries/no-document-required : Mark many posted verifikat as "Inget underlag krävs" in one call [scope:bookkeeping:write risk:medium idempotent dry-run reversible]
+POST /companies/{companyId}/journal-entries/no-document-required/by-filter : Mark every verifikat missing underlag in a period, series or date range as "Inget underlag krävs", in one call [scope:bookkeeping:write risk:medium idempotent dry-run reversible]
 POST /companies/{companyId}/voucher-gap-explanations : Document a gap in the verifikationsserie (BFL 5 kap 6-7 §§) [scope:bookkeeping:write risk:low idempotent dry-run]
 ```
 

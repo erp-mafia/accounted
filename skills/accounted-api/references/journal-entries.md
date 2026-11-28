@@ -1579,6 +1579,79 @@ Example response `200`:
 
 ---
 
+### `POST /api/v1/companies/{companyId}/journal-entries/no-document-required/by-filter`
+
+**Mark every verifikat missing underlag in a period, series or date range as "Inget underlag krävs", in one call.**
+`scope:bookkeeping:write · risk:medium · idempotent · dry-run · reversible`
+
+BFL 5 kap 6 § requires a verifikation for every affärshändelse; where no external underlag exists (avskrivning, periodisering, internal transfer) the verifikation itself is the documentation. The flag records that judgement and removes the entry from the missing-underlag worklist. It is stored beside the verifikat, which is not changed, and the audit log records who set it. The set is the one the verifikat list shows under Visa saknade underlag, narrowed by period, series and dates and taken across every page: the list's Markera alla utan underlag for an agent, where the id batch takes at most 500 ids. Imported verifikat keep their underlag in the earlier system, so they are not in the set unless include_imported. At least one of period_id, series, date_from or date_to. Idempotent. Dry-runnable: the dry run counts what would be marked.
+
+**Use when:** The user has confirmed that every verifikat missing underlag in a range has none by nature (bokslutsposter, periodiseringar, transfers between own accounts) and wants them out of the worklist without approving page after page of ids.
+**Do not use for:** Waiving receipts that are missing (find and attach them), or imported verifikat: their underlag is in the earlier system, so they are not missing and need no mark.
+
+**Pitfalls:**
+- Dry-run first and tell the user the count (data.would_exempt) before staging it.
+- The write reads the set again when it runs: a verifikat booked into the range after the dry run is marked too.
+- Undo per verifikat with DELETE /journal-entries/{id}/no-document-required.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{
+  period_id?: string,
+  series?: string,
+  date_from?: string,
+  date_to?: string,
+  include_imported?: boolean,
+  reason?: string | null
+}
+```
+
+Example request:
+```json
+{
+  "period_id": "3f1a…",
+  "series": "C",
+  "reason": "Bokslutsposter, egen handling"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: { exempted: number },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string }, payment_order_id?: string, supplier_invoice_id?: string }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "exempted": 42
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `POST /api/v1/companies/{companyId}/voucher-gap-explanations`
 
 **Document a gap in the verifikationsserie (BFL 5 kap 6-7 §§).**
