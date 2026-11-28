@@ -13,6 +13,12 @@ import {
   type ApiKeyScope,
 } from '@/lib/auth/api-keys'
 import { builtInRedirectProvider, capScopesForRole, lookupCompanyRole, resolveRedirectUri } from '@/lib/auth/oauth-allowlist'
+import {
+  authenticateGrantClient,
+  clientAuthenticationError,
+  readClientCredentials,
+  type PresentedClient,
+} from '@/lib/auth/oauth-client-auth'
 import { partnerClientValue } from '@/lib/auth/oauth-partner-clients'
 import { getActiveCompanyId } from '@/lib/company/context'
 import { isUuid } from '@/lib/invariants/uuid'
@@ -43,6 +49,10 @@ const AGENT_PAUSED_DESCRIPTION =
  *   - refresh_token: rotate both the refresh_token and the api_key. The
  *     api_key does not expire server-side until a refresh supersedes it;
  *     expires_in is a hint so clients refresh on a cadence.
+ *
+ * A partner client that holds a secret authenticates on both grants
+ * (lib/auth/oauth-client-auth.ts); every other client is public and sends
+ * no credentials.
  */
 export async function POST(request: Request) {
   let params: URLSearchParams
@@ -59,13 +69,14 @@ export async function POST(request: Request) {
   }
 
   const grantType = params.get('grant_type')
+  const presented = readClientCredentials(request.headers, params)
 
   if (grantType === 'authorization_code') {
-    return handleAuthorizationCodeGrant(params)
+    return handleAuthorizationCodeGrant(params, presented)
   }
 
   if (grantType === 'refresh_token') {
-    return handleRefreshTokenGrant(params)
+    return handleRefreshTokenGrant(params, presented)
   }
 
   return NextResponse.json(
@@ -77,7 +88,7 @@ export async function POST(request: Request) {
   )
 }
 
-async function handleAuthorizationCodeGrant(params: URLSearchParams) {
+async function handleAuthorizationCodeGrant(params: URLSearchParams, presented: PresentedClient) {
   const code = params.get('code')
   const codeVerifier = params.get('code_verifier')
   const redirectUri = params.get('redirect_uri')
@@ -240,12 +251,34 @@ async function handleAuthorizationCodeGrant(params: URLSearchParams) {
   const conflictingScope = findStageApproveConflict(grantedScopes)
   const sodAcknowledgedAt = conflictingScope ? new Date().toISOString() : null
   let storedClient: string | null = builtInRedirectProvider(payload.redirectUri)
+  if (!storedClient && typeof payload.partnerClientId === 'string') {
+    // The partner client /authorize issued the code to.
+    storedClient = partnerClientValue(payload.partnerClientId)
+  }
   if (!storedClient) {
     // The partner row, or the registration, /authorize resolved for this
     // user: several users may each have registered the same URI (crm#1654).
     const resolution = await resolveRedirectUri(payload.redirectUri, supabase, { consentingUserId: payload.userId })
     if (resolution.allowed && resolution.kind === 'registered') storedClient = `registered:${resolution.registrationId}`
     if (resolution.allowed && resolution.kind === 'partner') storedClient = partnerClientValue(resolution.slug)
+  }
+
+  // The code is exchanged only for the client it was issued to: a client
+  // that holds a secret authenticates as itself (RFC 6749 section 4.1.3);
+  // any other client is public, and PKCE above bound its code. Checked here,
+  // once the client is known, also for a code from before the binding
+  // existed. A failed lookup refuses the exchange: a client with a secret is
+  // never treated as public.
+  const clientAuthentication = await authenticateGrantClient(supabase, storedClient, presented)
+  if (clientAuthentication === 'unavailable') {
+    return NextResponse.json(
+      { error: 'server_error', error_description: 'Failed to authenticate the client' },
+      { status: 500 }
+    )
+  }
+  if (clientAuthentication === 'refused') {
+    log.info('code exchange refused: client authentication failed', { client: storedClient, credentials: presented.kind })
+    return clientAuthenticationError(presented)
   }
 
   // A reconnect lands on the same connector identity as the connection it
@@ -399,7 +432,7 @@ function parseReadOnlyCompanies(
   return ids.every((id) => allowed.has(id.toLowerCase())) ? { ok: true, readOnly: ids } : { ok: false }
 }
 
-async function handleRefreshTokenGrant(params: URLSearchParams) {
+async function handleRefreshTokenGrant(params: URLSearchParams, presented: PresentedClient) {
   const refreshToken = params.get('refresh_token')
   if (!refreshToken) {
     return NextResponse.json(
@@ -424,13 +457,24 @@ async function handleRefreshTokenGrant(params: URLSearchParams) {
   // legitimate connection without a trace.
   const successor = deriveRotatedCredentials(refreshToken)
 
-  const { data, error } = await supabase.rpc('rotate_mcp_refresh_token', {
+  const rotation = {
     p_presented_hash: presentedHash,
     p_new_refresh_hash: successor.refresh.hash,
     p_new_key_hash: successor.key.hash,
     p_new_key_prefix: successor.key.prefix,
     p_grace_seconds: ACCESS_KEY_GRACE_SECONDS,
-  })
+  }
+  // A grant whose client holds a secret rotates only for a request that
+  // authenticates as that client (RFC 6749 section 6), checked by the
+  // database in the rotation's own transaction. A request without
+  // credentials, as every public client sends, makes the same call as before.
+  const { data, error } = presented.kind === 'secret'
+    ? await supabase.rpc('rotate_mcp_refresh_token_for_client', {
+        ...rotation,
+        p_client_id: presented.clientId,
+        p_client_secret_hash: presented.secretHash,
+      })
+    : await supabase.rpc('rotate_mcp_refresh_token', rotation)
 
   if (error) {
     console.error('[mcp-oauth/token] refresh rotation failed', { code: error.code, message: error.message })
@@ -454,6 +498,11 @@ async function handleRefreshTokenGrant(params: URLSearchParams) {
     log.info('refresh token replayed: same successor returned', { apiKeyId, outcome })
   } else if (outcome === 'paused') {
     log.info('refresh refused: agent paused', { apiKeyId, outcome })
+  } else if (outcome === 'client_auth_required') {
+    // Nothing was written: the grant's client holds a secret and the
+    // request did not authenticate as it.
+    log.info('refresh refused: client authentication failed', { apiKeyId, outcome, credentials: presented.kind })
+    return clientAuthenticationError(presented)
   }
 
   // 'rotated' and 'replayed' both succeed with the successor pair. Everything

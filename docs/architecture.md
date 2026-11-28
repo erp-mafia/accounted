@@ -129,7 +129,12 @@ declarations.
   scenes. A native app (iPhone, Android, desktop) signs in the same way through
   the system browser, with the code sent back to its own reverse-domain URI
   scheme (RFC 8252, for example `se.example.app:/oauth/callback`), so its users
-  never paste a key. Authentication is lazy: a client can connect, list tools, and call a
+  never paste a key. These are public clients: PKCE alone binds the code. A
+  partner client (`oauth_partner_clients`) can also be issued a client secret
+  (`issue_oauth_partner_client_secret`); it is then a confidential client whose
+  client_id is its slug, and it authenticates with HTTP Basic or in the form
+  body on every code exchange and refresh, PKCE still required
+  (`src/lib/auth/oauth-client-auth.ts`). Authentication is lazy: a client can connect, list tools, and call a
   small set of public discovery tools before an account exists; the first
   tenant-touching call answers 401 and triggers the client's connect prompt
   (`src/extensions/general/mcp-server/public-tools.ts`).
