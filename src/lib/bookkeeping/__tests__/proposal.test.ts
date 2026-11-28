@@ -404,6 +404,8 @@ describe('a webshop payout clearing proposal', () => {
       clearing_ref: { proposer: 'webshop-payouts', ref: 'p1' },
       proposal_id: 'clearing:webshop-payout:p1',
     })
+    // Dimensions picked in the review travel with the record.
+    expect(categorizeBodyFor(payout, { dimensions: { '1': 'K10' } })).toMatchObject({ dimensions: { '1': 'K10' } })
   })
 
   it('gives an agent no one-account booking: the payout books more than one account', () => {

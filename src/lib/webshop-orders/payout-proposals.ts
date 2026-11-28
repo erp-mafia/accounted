@@ -99,17 +99,14 @@ export function pairRowsWithPayouts<R extends Pick<ClearingBankRow, 'id' | 'amou
     const nearest = fits.filter((p) => distance(row, p) === best)
     if (nearest.length === 1) nearestPayout.set(row.id, nearest[0]!)
   }
-  const rowsByPayout = new Map<string, R[]>()
-  for (const row of rows) {
-    const payout = nearestPayout.get(row.id)
-    if (payout) rowsByPayout.set(payout.id, [...(rowsByPayout.get(payout.id) ?? []), row])
-  }
   const out = new Map<string, P>()
   for (const row of rows) {
     const payout = nearestPayout.get(row.id)
     if (!payout) continue
     const mine = distance(row, payout)
-    const rivals = (rowsByPayout.get(payout.id) ?? []).filter((r) => r.id !== row.id)
+    // Every other row that fits the payout is a rival, whichever payout it
+    // leans to: a farther row never takes a payout a nearer one could be.
+    const rivals = rows.filter((r) => r.id !== row.id && rowFitsPayout(r, payout))
     if (rivals.some((r) => distance(r, payout) <= mine)) continue
     out.set(row.id, payout)
   }
@@ -164,7 +161,10 @@ async function loadSettings(
 /** The clearing account the payout's orders were booked against; null when it is a cash ledger (the row's own side). */
 function clearingAccountOf(payout: PayoutRow, settings: Map<string, WebshopStoreSettings>): string | null {
   const store = settings.get(`${payout.platform}:${payout.store_scope}`) ?? null
-  const { account } = resolvePaymentAccount({ payment_method: PAYMENT_METHOD[payout.platform] }, store)
+  const { account, invoiceMode } = resolvePaymentAccount({ payment_method: PAYMENT_METHOD[payout.platform] }, store)
+  // Orders the store invoices book on the customer's receivable, never on a
+  // clearing account: the payout has nothing there to clear.
+  if (invoiceMode) return null
   return isCashLedger(account) ? null : account
 }
 
@@ -235,9 +235,17 @@ async function propose(
   const payouts = (await openPayouts(supabase, companyId, read)).map(reopened)
   if (payouts.length === 0) return out
 
-  // A payout another row has claimed is that row's.
-  const pairs = pairRowsWithPayouts(asked, payouts)
-  const free = [...pairs.entries()].filter(([rowId, payout]) => !payout.transaction_id || payout.transaction_id === rowId)
+  // A payout a row has claimed is that row's, and no other row's to pair
+  // with; the rest pair among themselves.
+  const askedRowById = new Map(asked.map((r) => [r.id, r]))
+  const free: Array<[string, PayoutRow]> = []
+  for (const payout of payouts) {
+    const claimer = payout.transaction_id ? askedRowById.get(payout.transaction_id) : undefined
+    if (claimer && rowFitsPayout(claimer, payout)) free.push([claimer.id, payout])
+  }
+  const claimers = new Set(free.map(([rowId]) => rowId))
+  const unclaimed = payouts.filter((p) => !p.transaction_id)
+  free.push(...pairRowsWithPayouts(asked.filter((r) => !claimers.has(r.id)), unclaimed).entries())
   if (free.length === 0) return out
 
   const [settings, vatRegistered] = await Promise.all([
@@ -337,11 +345,13 @@ async function release(_supabase: SupabaseClient, companyId: string, ref: string
 
 /** The verifikat's lines as booked, for the underlag (the bank leg included). */
 async function bookedLines(supabase: SupabaseClient, journalEntryId: string) {
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('journal_entry_lines')
     .select('account_number, debit_amount, credit_amount, sort_order')
     .eq('journal_entry_id', journalEntryId)
     .order('sort_order', { ascending: true })
+  // A specification without the verifikat's lines would say the wrong thing.
+  if (error) throw new Error(`payout verifikat lines read failed: ${error.message}`)
   return ((data ?? []) as Array<{ account_number: string; debit_amount: number; credit_amount: number }>).map((l) => ({
     account_number: l.account_number,
     debit_amount: Number(l.debit_amount),

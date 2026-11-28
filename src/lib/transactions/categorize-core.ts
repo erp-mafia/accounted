@@ -731,10 +731,10 @@ export async function buildCategorizeMapping(
     // (a payout: the provider's fees and the clearing account gross); the
     // bank leg is the row's own, as for any booking.
     const booking = clearingBookingFor(input.clearing_ref)
-    if (!booking || !isBusiness || input.template_id || input.counterparty_template_id || input.account_override || input.vat_amount != null) {
+    if (!booking || !isBusiness || input.template_id || input.counterparty_template_id || input.account_override || input.vat_amount != null || input.vat_treatment != null) {
       return refuse('VALIDATION_ERROR', {
         field: 'clearing_ref',
-        message: 'clearing_ref names no clearing booking, or is combined with a template, an account override, a VAT amount or a private marking.',
+        message: 'clearing_ref names no clearing booking, or is combined with a template, an account override, a VAT treatment or amount, or a private marking.',
       })
     }
     if (!(transaction.amount > 0)) {

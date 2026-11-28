@@ -238,4 +238,30 @@ describe('categorizeTransaction with a clearing record', () => {
     expect(out).toMatchObject({ ok: false, code: 'VALIDATION_ERROR' })
     expect(booking.lines).not.toHaveBeenCalled()
   })
+
+  it('refuses a VAT treatment beside the record: the record states its own VAT', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueRow(enqueue)
+    const out = await categorizeTransaction(supabase as never, 'user-1', 'company-1', TX_ID, { ...input, vat_treatment: 'exempt' }, { onBooked: 'refuse' })
+    expect(out).toMatchObject({ ok: false, code: 'VALIDATION_ERROR' })
+    expect(booking.claim).not.toHaveBeenCalled()
+  })
+
+  it('tags the fee line, and only it, with the booking\'s dimensions', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueRow(enqueue)
+    booking.lines.mockResolvedValueOnce({
+      ok: true,
+      lines: PAYOUT_LINES.map((l) => (l.account_number === '6570' ? { ...l, business_line: true } : l)),
+      description: 'Utbetalning Kustom PAY123 2026-11-19',
+    })
+    const outcome = await categorizeTransaction(supabase as never, 'user-1', 'company-1', TX_ID, { ...input, dimensions: { '1': 'K10' } }, {
+      onBooked: 'update_flags',
+      dryRun: true,
+    })
+    expect(outcome.ok).toBe(true)
+    if (!outcome.ok || !outcome.dryRun) return
+    const tagged = outcome.preview.lines.filter((l) => l.dimensions && Object.keys(l.dimensions).length > 0).map((l) => l.account_number)
+    expect(tagged).toEqual(['6570'])
+  })
 })
