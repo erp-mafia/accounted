@@ -100,6 +100,7 @@ import { assertTransactionBookable } from '@/lib/transactions/is-booked'
 import { OPEN_INVOICES } from '@/lib/composition/open-invoices'
 import { CLEARING_PROPOSERS } from '@/lib/composition/clearing-proposals'
 import type { ClearingBooking, ClearingRef } from '@/lib/transactions/clearing-proposals'
+import { uploadDocument } from '@/lib/core/documents/document-service'
 import { invoiceMatchSide } from '@/lib/transactions/invoice-match-side'
 import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
 import { refuseWhenPairBooked } from '@/lib/operations/inbox-pair-guard'
@@ -1647,7 +1648,27 @@ export async function categorizeTransaction(
   // The clearing record (a payout) now points at its verifikat, which also
   // gets the record's underlag. Never fails the booking: the verifikat stands.
   if (clearingBooking && input.clearing_ref) {
-    await clearingBooking.settle(supabase, companyId, userId, input.clearing_ref.ref, txId, bookedEntry.id)
+    const underlag = await clearingBooking.settle(supabase, companyId, userId, input.clearing_ref.ref, txId, bookedEntry.id)
+    if (underlag) {
+      try {
+        await uploadDocument(
+          supabase,
+          userId,
+          companyId,
+          { name: underlag.name, buffer: underlag.bytes.buffer, type: underlag.type },
+          {
+            upload_source: 'system',
+            journal_entry_id: bookedEntry.id,
+            linkBasis: linkBasisColumns('system_derived'),
+            idempotency_key: underlag.idempotencyKey,
+            extractionOwner: 'none',
+          },
+        )
+      } catch (err) {
+        // A missing specification shows as missing underlag on the verifikat.
+        txLog.error('failed to file the clearing record\'s underlag', err as Error, { journalEntryId: bookedEntry.id })
+      }
+    }
   }
 
   // Learning runs only after the booking won its write, so it never learns

@@ -9,7 +9,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { eventBus } from '@/lib/events'
 
-const { mockCreateJE, mockReverseOrphanedJE, mockUpsertTemplate, mockSaveRule, booking } = vi.hoisted(() => ({
+const { mockCreateJE, mockReverseOrphanedJE, mockUpsertTemplate, mockSaveRule, booking, mockUpload } = vi.hoisted(() => ({
+  mockUpload: vi.fn(),
   mockCreateJE: vi.fn(),
   mockReverseOrphanedJE: vi.fn(),
   mockUpsertTemplate: vi.fn(),
@@ -17,6 +18,7 @@ const { mockCreateJE, mockReverseOrphanedJE, mockUpsertTemplate, mockSaveRule, b
   booking: { lines: vi.fn(), claim: vi.fn(), release: vi.fn(), settle: vi.fn() },
 }))
 
+vi.mock('@/lib/core/documents/document-service', () => ({ uploadDocument: (...args: unknown[]) => mockUpload(...args) }))
 vi.mock('@/lib/composition/clearing-proposals', () => ({
   CLEARING_PROPOSERS: [{ id: 'test-payouts', module: 'webshop', propose: vi.fn(), booking }],
 }))
@@ -99,7 +101,8 @@ beforeEach(() => {
   booking.lines.mockResolvedValue({ ok: true, lines: PAYOUT_LINES, description: 'Utbetalning Kustom PAY123 2026-11-19' })
   booking.claim.mockResolvedValue(true)
   booking.release.mockResolvedValue(undefined)
-  booking.settle.mockResolvedValue(undefined)
+  booking.settle.mockResolvedValue(null)
+  mockUpload.mockResolvedValue({ id: 'doc-1' })
   mockCreateJE.mockResolvedValue({ id: 'je-payout-1' })
 })
 
@@ -148,12 +151,38 @@ describe('categorizeTransaction with a clearing record', () => {
     expect(booking.claim.mock.invocationCallOrder[0]).toBeLessThan(mockCreateJE.mock.invocationCallOrder[0])
     expect(booking.settle).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', PAYOUT_ID, TX_ID, 'je-payout-1')
     expect(booking.release).not.toHaveBeenCalled()
+    expect(mockUpload).not.toHaveBeenCalled()
     // The verifikat books the record's lines beside the bank leg.
     const mapping = mockCreateJE.mock.calls[0][4] as { vat_lines: unknown[]; all_lines_complete: boolean }
     expect(mapping.all_lines_complete).toBe(true)
     expect(mapping.vat_lines).toEqual(PAYOUT_LINES)
     expect(mockSaveRule).not.toHaveBeenCalled()
     expect(mockUpsertTemplate).not.toHaveBeenCalled()
+  })
+
+  it('files the underlag the settle hands back on the verifikat, once per record', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueRow(enqueue)
+    enqueue({ data: [{ id: 'fp-1' }] }) // ensureFiscalPeriod
+    enqueue({ data: [txRow({ journal_entry_id: 'je-payout-1', category: 'income_other', is_business: true })] }) // the link
+    booking.settle.mockResolvedValueOnce({ name: 'Utbetalning.pdf', bytes: new Uint8Array([37, 80, 68, 70]), type: 'application/pdf', idempotencyKey: `test:${PAYOUT_ID}` })
+    const outcome = await categorizeTransaction(supabase as never, 'user-1', 'company-1', TX_ID, input, { onBooked: 'refuse' })
+    expect(outcome).toMatchObject({ ok: true, booked: { journal_entry_id: 'je-payout-1' } })
+    expect(mockUpload).toHaveBeenCalledTimes(1)
+    const [, userId, companyId, file, meta] = mockUpload.mock.calls[0] as [unknown, string, string, { name: string; type: string }, Record<string, unknown>]
+    expect([userId, companyId, file.name, file.type]).toEqual(['user-1', 'company-1', 'Utbetalning.pdf', 'application/pdf'])
+    expect(meta).toMatchObject({ upload_source: 'system', journal_entry_id: 'je-payout-1', idempotency_key: `test:${PAYOUT_ID}`, extractionOwner: 'none' })
+  })
+
+  it('keeps the verifikat when the underlag cannot be filed', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueRow(enqueue)
+    enqueue({ data: [{ id: 'fp-1' }] }) // ensureFiscalPeriod
+    enqueue({ data: [txRow({ journal_entry_id: 'je-payout-1', category: 'income_other', is_business: true })] }) // the link
+    booking.settle.mockResolvedValueOnce({ name: 'Utbetalning.pdf', bytes: new Uint8Array([1]), type: 'application/pdf', idempotencyKey: 'k' })
+    mockUpload.mockRejectedValueOnce(new Error('storage down'))
+    const outcome = await categorizeTransaction(supabase as never, 'user-1', 'company-1', TX_ID, input, { onBooked: 'refuse' })
+    expect(outcome).toMatchObject({ ok: true, booked: { journal_entry_id: 'je-payout-1' } })
   })
 
   it('refuses when another booking holds the record, before anything is written', async () => {

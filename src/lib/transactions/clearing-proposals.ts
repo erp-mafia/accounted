@@ -120,8 +120,17 @@ export type ClearingLinesOutcome =
  * every line beside the bank leg, claims the record for the row before the
  * verifikat is written, lets go of the claim when the booking fails, and
  * settles the record once the verifikat stands. The proposer owns its record;
- * the bank side owns the row and the verifikat.
+ * the bank side owns the row and the verifikat, and files the underlag the
+ * settle hands back (so a proposer stays a hook leaf: no documents, no bus).
  */
+export interface ClearingUnderlag {
+  name: string
+  bytes: Uint8Array<ArrayBuffer>
+  type: string
+  /** Keeps a retried booking from filing the same underlag twice. */
+  idempotencyKey: string
+}
+
 export interface ClearingBooking {
   /** The lines beside the bank leg, for this row and record, or a refusal. */
   lines(
@@ -135,7 +144,7 @@ export interface ClearingBooking {
   claim(supabase: SupabaseClient, companyId: string, ref: string, transactionId: string): Promise<boolean>
   /** Lets go of a claim whose booking wrote no verifikat. */
   release(supabase: SupabaseClient, companyId: string, ref: string, transactionId: string): Promise<void>
-  /** Ties the claimed record to the posted verifikat and files its underlag. Never throws. */
+  /** Ties the claimed record to the posted verifikat; returns its underlag to file, if any. Never throws. */
   settle(
     supabase: SupabaseClient,
     companyId: string,
@@ -143,7 +152,7 @@ export interface ClearingBooking {
     ref: string,
     transactionId: string,
     journalEntryId: string,
-  ): Promise<void>
+  ): Promise<ClearingUnderlag | null>
 }
 
 

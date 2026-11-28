@@ -9,8 +9,6 @@ vi.mock('@/lib/supabase/server', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/supabase/server')>()),
   createServiceClient: () => service.current,
 }))
-const uploadDocument = vi.hoisted(() => vi.fn())
-vi.mock('@/lib/core/documents/document-service', () => ({ uploadDocument: (...args: unknown[]) => uploadDocument(...args) }))
 
 import { pairRowsWithPayouts, rowFitsPayout, webshopPayoutProposer } from '../payout-proposals'
 
@@ -237,7 +235,7 @@ describe('webshopPayoutProposer.booking', () => {
       expect(findCalls('webshop_payouts', 'is')).toEqual([['journal_entry_id', null]])
     })
 
-    it('settles the claimed payout on its verifikat and files the specification there', async () => {
+    it('settles the claimed payout on its verifikat and hands back its specification to file', async () => {
       const { supabase, enqueue, findCall } = createQueuedMockSupabase()
       service.current = supabase
       enqueue({ data: [payout({ transaction_id: 'tx-1', journal_entry_id: 'je-1' })] })
@@ -251,22 +249,19 @@ describe('webshopPayoutProposer.booking', () => {
           { account_number: '1686', debit_amount: 0, credit_amount: 950 },
         ],
       })
-      uploadDocument.mockResolvedValue({ id: 'doc-1' })
-      await booking.settle(user.supabase as never, COMPANY, 'user-1', PAYOUT_ID, 'tx-1', 'je-1')
+      const underlag = await booking.settle(user.supabase as never, COMPANY, 'user-1', PAYOUT_ID, 'tx-1', 'je-1')
       expect(findCall('webshop_payouts', 'update')).toEqual([{ transaction_id: 'tx-1', journal_entry_id: 'je-1' }])
       expect(findCall('webshop_payouts', 'or')).toEqual(['transaction_id.is.null,transaction_id.eq.tx-1'])
-      expect(uploadDocument).toHaveBeenCalledTimes(1)
-      const [, userId, companyId, file, meta] = uploadDocument.mock.calls[0] as [unknown, string, string, { name: string }, Record<string, unknown>]
-      expect([userId, companyId, file.name]).toEqual(['user-1', COMPANY, 'Utbetalning_Kustom_2026-11-19.pdf'])
-      expect(meta).toMatchObject({ upload_source: 'system', journal_entry_id: 'je-1', idempotency_key: `webshop-payout:${PAYOUT_ID}` })
+      expect(underlag).toMatchObject({ name: 'Utbetalning_Kustom_2026-11-19.pdf', type: 'application/pdf', idempotencyKey: `webshop-payout:${PAYOUT_ID}` })
+      // A real PDF.
+      expect(new TextDecoder().decode(underlag!.bytes.slice(0, 5))).toBe('%PDF-')
     })
 
     it('never throws: a payout that did not settle is logged and the verifikat stands', async () => {
       const { supabase, enqueue } = createQueuedMockSupabase()
       service.current = supabase
       enqueue({ data: [] })
-      await expect(booking.settle({} as never, COMPANY, 'user-1', PAYOUT_ID, 'tx-1', 'je-1')).resolves.toBeUndefined()
-      expect(uploadDocument).not.toHaveBeenCalled()
+      await expect(booking.settle({} as never, COMPANY, 'user-1', PAYOUT_ID, 'tx-1', 'je-1')).resolves.toBeNull()
     })
   })
 })
