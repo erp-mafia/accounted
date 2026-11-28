@@ -19,6 +19,13 @@
  * Hooks always run, whatever package switches a company has: they keep a
  * sub-ledger in step with the ledger, which is data integrity, not a
  * feature. correctEntry (storno plus rättelse) runs none of them.
+ *
+ * A correction is booked as source_type 'correction' with no source_id,
+ * while the records its original booked now name it
+ * (lib/core/bookkeeping/correction-payment-relink.ts). The storno of a
+ * correction runs, for the source type of the verifikat it corrects
+ * (correctedOriginalOf, lib/core/bookkeeping/correction-chain.ts), the hooks
+ * marked followsCorrection, and no other (selectCorrectionReversalHooks).
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { ModuleId } from '@/lib/modules/manifest'
@@ -56,6 +63,17 @@ export interface ReversalHookContext {
    * expense claim hook lets it through. Absent on every other storno.
    */
   readonly expenseClaimRemoval?: true
+  /**
+   * Set only on the storno of a correction: the verifikat it corrects, at the
+   * root of its correction_of_id chain, with the source columns it was booked
+   * with. `entry` is still the correction being reversed. Absent on every
+   * other storno.
+   */
+  readonly correctedOriginal?: {
+    readonly id: string
+    readonly source_type: JournalEntrySourceType
+    readonly source_id: string | null
+  }
 }
 
 /** What an afterReversal gets: the context plus the storno reverseEntry posted. */
@@ -70,6 +88,14 @@ export interface ReversalHook {
   readonly module: ModuleId
   /** The source types whose storno runs this hook. */
   readonly sourceTypes: readonly JournalEntrySourceType[]
+  /**
+   * The hook also runs on the storno of a correction of a verifikat of one of
+   * sourceTypes (ReversalHookContext.correctedOriginal). Set only where the
+   * record the hook reads is one the rättelse moves to the correction, so the
+   * hook finds it by the correction's id. A hook whose record stays on the
+   * original is left off for corrections.
+   */
+  readonly followsCorrection?: true
   /** Before anything is written. A throw refuses the storno; no voucher number is spent. */
   beforeReversal?(ctx: ReversalHookContext): Promise<void>
   /** After the storno is posted and the original marked reversed, before the emits. */
@@ -119,4 +145,21 @@ export function selectReversalHooks(
     throw new ReversalHookMissingError(sourceType)
   }
   return selected
+}
+
+/**
+ * The hooks in `all` that the storno of a correction runs: those that cover
+ * `correctedSourceType`, the source type of the verifikat it corrects, and
+ * follow a correction (followsCorrection), in list order. Never throws: a
+ * source type whose hooks all stay on the original runs none, as every
+ * correction did before.
+ */
+export function selectCorrectionReversalHooks(
+  all: readonly ReversalHook[],
+  correctedSourceType: string | null | undefined,
+): ReversalHook[] {
+  if (!correctedSourceType) return []
+  return all.filter(
+    (hook) => hook.followsCorrection === true && (hook.sourceTypes as readonly string[]).includes(correctedSourceType),
+  )
 }

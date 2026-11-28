@@ -843,3 +843,677 @@ exports[`reverseEntry: reversal hooks per source type (characterisation) > year_
   ],
 }
 `;
+
+exports[`reverseEntry: the storno of a correction runs the rules of the verifikat it corrects (characterisation) > a correction of accrual 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number, source_type, source_id)",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number)",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: the storno of a correction runs the rules of the verifikat it corrects (characterisation) > a correction of bank_transaction 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number, source_type, source_id)",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number)",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: the storno of a correction runs the rules of the verifikat it corrects (characterisation) > a correction of collection_settlement 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number, source_type, source_id)",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number)",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: the storno of a correction runs the rules of the verifikat it corrects (characterisation) > a correction of counterparty_setoff 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number, source_type, source_id)",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number)",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: the storno of a correction runs the rules of the verifikat it corrects (characterisation) > a correction of credit_note 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number, source_type, source_id)",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number)",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: the storno of a correction runs the rules of the verifikat it corrects (characterisation) > a correction of currency_revaluation 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number, source_type, source_id)",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number)",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: the storno of a correction runs the rules of the verifikat it corrects (characterisation) > a correction of customer_loss 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number, source_type, source_id)",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number)",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: the storno of a correction runs the rules of the verifikat it corrects (characterisation) > a correction of expense_claim 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number, source_type, source_id)",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number)",
+    "assertExpenseClaimVerifikatReversible(<client>, "company-1", "entry-1")",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: the storno of a correction runs the rules of the verifikat it corrects (characterisation) > a correction of expense_payout 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number, source_type, source_id)",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number)",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: the storno of a correction runs the rules of the verifikat it corrects (characterisation) > a correction of import 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number, source_type, source_id)",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number)",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: the storno of a correction runs the rules of the verifikat it corrects (characterisation) > a correction of inbox_item 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number, source_type, source_id)",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number)",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: the storno of a correction runs the rules of the verifikat it corrects (characterisation) > a correction of invoice_cash_payment 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number, source_type, source_id)",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number)",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "syncInvoiceStatusFromPaymentEntry(<client>, "company-1", {"id":"entry-1","source_type":"invoice_cash_payment","source_id":"source-1"}, , {"requirePaymentRow":true})",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: the storno of a correction runs the rules of the verifikat it corrects (characterisation) > a correction of invoice_created 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number, source_type, source_id)",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number)",
+    "assertInvoiceVerifikatReversible(<client>, "company-1", "entry-1")",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: the storno of a correction runs the rules of the verifikat it corrects (characterisation) > a correction of invoice_paid 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number, source_type, source_id)",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number)",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "syncInvoiceStatusFromPaymentEntry(<client>, "company-1", {"id":"entry-1","source_type":"invoice_paid","source_id":"source-1"}, , {"requirePaymentRow":true})",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: the storno of a correction runs the rules of the verifikat it corrects (characterisation) > a correction of manual 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number, source_type, source_id)",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number)",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: the storno of a correction runs the rules of the verifikat it corrects (characterisation) > a correction of opening_balance 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number, source_type, source_id)",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number)",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: the storno of a correction runs the rules of the verifikat it corrects (characterisation) > a correction of pos_daily_sales 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number, source_type, source_id)",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number)",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: the storno of a correction runs the rules of the verifikat it corrects (characterisation) > a correction of reminder_fee 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number, source_type, source_id)",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number)",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: the storno of a correction runs the rules of the verifikat it corrects (characterisation) > a correction of result_appropriation 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number, source_type, source_id)",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number)",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: the storno of a correction runs the rules of the verifikat it corrects (characterisation) > a correction of rot_rut_payout 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number, source_type, source_id)",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number)",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: the storno of a correction runs the rules of the verifikat it corrects (characterisation) > a correction of rot_rut_reclaim 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number, source_type, source_id)",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number)",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: the storno of a correction runs the rules of the verifikat it corrects (characterisation) > a correction of rot_rut_reclassification 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number, source_type, source_id)",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number)",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: the storno of a correction runs the rules of the verifikat it corrects (characterisation) > a correction of salary_payment 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number, source_type, source_id)",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number)",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: the storno of a correction runs the rules of the verifikat it corrects (characterisation) > a correction of storno 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number, source_type, source_id)",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number)",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number)",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: the storno of a correction runs the rules of the verifikat it corrects (characterisation) > a correction of stripe_payout 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number, source_type, source_id)",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number)",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: the storno of a correction runs the rules of the verifikat it corrects (characterisation) > a correction of supplier_credit_note 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number, source_type, source_id)",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number)",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: the storno of a correction runs the rules of the verifikat it corrects (characterisation) > a correction of supplier_invoice_cash_payment 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number, source_type, source_id)",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number)",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "syncInvoiceStatusFromPaymentEntry(<client>, "company-1", {"id":"entry-1","source_type":"supplier_invoice_cash_payment","source_id":"source-1"}, , {"requirePaymentRow":true})",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: the storno of a correction runs the rules of the verifikat it corrects (characterisation) > a correction of supplier_invoice_paid 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number, source_type, source_id)",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number)",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "syncInvoiceStatusFromPaymentEntry(<client>, "company-1", {"id":"entry-1","source_type":"supplier_invoice_paid","source_id":"source-1"}, , {"requirePaymentRow":true})",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: the storno of a correction runs the rules of the verifikat it corrects (characterisation) > a correction of supplier_invoice_privately_paid 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number, source_type, source_id)",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number)",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: the storno of a correction runs the rules of the verifikat it corrects (characterisation) > a correction of supplier_invoice_registered 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number, source_type, source_id)",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number)",
+    "assertSupplierInvoiceRegistrationReversible(<client>, "company-1", "entry-1")",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "releaseSupplierInvoiceRegistrationAfterReversal(<client>, "company-1", "entry-1")",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: the storno of a correction runs the rules of the verifikat it corrects (characterisation) > a correction of system 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number, source_type, source_id)",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number)",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: the storno of a correction runs the rules of the verifikat it corrects (characterisation) > a correction of tax_account 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number, source_type, source_id)",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number)",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: the storno of a correction runs the rules of the verifikat it corrects (characterisation) > a correction of vat_settlement 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number, source_type, source_id)",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number)",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: the storno of a correction runs the rules of the verifikat it corrects (characterisation) > a correction of webshop_order 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number, source_type, source_id)",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number)",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;
+
+exports[`reverseEntry: the storno of a correction runs the rules of the verifikat it corrects (characterisation) > a correction of year_end 1`] = `
+{
+  "trace": [
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number, source_type, source_id)",
+    "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number)",
+    "assertStornoTarget",
+    "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
+    "insert journal_entry_lines x2",
+    "rpc commit_journal_entry",
+    "update journal_entries reversed_by_id=reversal-1 status=reversed",
+    "rpc release_reversed_entry_transactions",
+    "read journal_entries (*, lines:journal_entry_lines(*))",
+    "emit journal_entry.committed",
+    "emit journal_entry.reversed",
+  ],
+}
+`;

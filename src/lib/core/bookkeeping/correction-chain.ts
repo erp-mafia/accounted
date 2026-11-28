@@ -61,18 +61,25 @@ export interface CorrectionChainRoot {
  * true only when the last node has no backward link: when the walk stopped
  * early, `root` is just the last node reached. `withSource` adds the source
  * columns the root walk needs; both selects stay literal so the
- * no-phantom-columns guard can check them.
+ * no-phantom-columns guard can check them. `links` 'correction' follows
+ * correction_of_id alone, so the walk ends at a storno instead of passing it.
+ * `readError` is the failed read that ended the walk, other than a parent
+ * not found.
  */
 async function walkToChainRoot(
   supabase: SupabaseClient,
   companyId: string,
   entry: ChainEntryRow,
   withSource: boolean,
-): Promise<{ depth: number; root: ChainEntryRow; reachedRoot: boolean }> {
+  links: 'both' | 'correction' = 'both',
+): Promise<{ depth: number; root: ChainEntryRow; reachedRoot: boolean; readError?: { message: string; code?: string } }> {
+  const backLink = (row: ChainEntryRow) =>
+    links === 'correction' ? (row.correction_of_id ?? null) : (row.correction_of_id ?? row.reverses_id ?? null)
   const visited = new Set<string>([entry.id])
   let depth = 0
   let root: ChainEntryRow = entry
-  let parentId = entry.correction_of_id ?? entry.reverses_id ?? null
+  let parentId = backLink(entry)
+  let readError: { message: string; code?: string } | undefined
 
   while (parentId && depth < MAX_CHAIN_WALK) {
     if (visited.has(parentId)) break
@@ -92,14 +99,17 @@ async function walkToChainRoot(
           .eq('company_id', companyId)
           .single()
 
-    if (error || !parent) break
+    if (error || !parent) {
+      if (error && (error as { code?: string }).code !== 'PGRST116') readError = error
+      break
+    }
 
     depth++
     root = parent as unknown as ChainEntryRow
-    parentId = root.correction_of_id ?? root.reverses_id ?? null
+    parentId = backLink(root)
   }
 
-  return { depth, root, reachedRoot: (root.correction_of_id ?? root.reverses_id) == null }
+  return { depth, root, reachedRoot: backLink(root) == null, ...(readError ? { readError } : {}) }
 }
 
 /**
@@ -189,6 +199,27 @@ export async function correctionChainRoot(
   entry: ChainEntryRow,
 ): Promise<CorrectionChainRoot | null> {
   const { root, reachedRoot } = await walkToChainRoot(supabase, companyId, entry, true)
+  if (!reachedRoot) return null
+  return { id: root.id, source_type: root.source_type ?? null, source_id: root.source_id ?? null }
+}
+
+/**
+ * The verifikat a correction corrects: followed back over correction_of_id
+ * alone, through corrections of corrections, to the first one that corrects
+ * nothing, with the source columns it was booked with (a correction itself
+ * is booked as 'correction' with no source_id). Unlike correctionChainRoot it
+ * does not continue over a storno's reverses_id: a correction of a storno
+ * corrects that storno. An entry that corrects nothing is its own root. Null
+ * when the walk stopped before the root (parent not found, cycle,
+ * MAX_CHAIN_WALK); throws when a read fails.
+ */
+export async function correctedOriginalOf(
+  supabase: SupabaseClient,
+  companyId: string,
+  entry: ChainEntryRow,
+): Promise<CorrectionChainRoot | null> {
+  const { root, reachedRoot, readError } = await walkToChainRoot(supabase, companyId, entry, true, 'correction')
+  if (readError) throw dbError(readError, 'correction chain: corrected original')
   if (!reachedRoot) return null
   return { id: root.id, source_type: root.source_type ?? null, source_id: root.source_id ?? null }
 }

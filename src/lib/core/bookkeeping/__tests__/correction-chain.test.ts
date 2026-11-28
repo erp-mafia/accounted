@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import {
+  correctedOriginalOf,
   correctionChainDepth,
   CORRECTION_CHAIN_GUARD_DEPTH,
   liveEntryOf,
@@ -143,6 +144,67 @@ describe('correctionChainDepth', () => {
     // Locked by the plan: depth 2 targets (fixing the fix) pass the guard,
     // depth 3+ requires the explicit override.
     expect(CORRECTION_CHAIN_GUARD_DEPTH).toBe(3)
+  })
+})
+
+describe('correctedOriginalOf', () => {
+  function sourced(
+    id: string,
+    links: { correction_of_id?: string | null; reverses_id?: string | null },
+    source: { source_type: string; source_id: string | null },
+  ) {
+    const base = row(id, links)
+    return { data: { ...(base.data as object), ...source }, error: null }
+  }
+
+  it('answers the verifikat a correction corrects, with its source columns, in one read', async () => {
+    results = [sourced('orig', {}, { source_type: 'supplier_invoice_registered', source_id: 'si-1' })]
+    const supabase = makeClient()
+    const root = await correctedOriginalOf(supabase as never, 'company-1', { id: 'c1', correction_of_id: 'orig' })
+    expect(root).toEqual({ id: 'orig', source_type: 'supplier_invoice_registered', source_id: 'si-1' })
+    expect(fetchedIds).toEqual(['orig'])
+  })
+
+  it('follows a correction of a correction back to the first verifikat that corrects nothing', async () => {
+    results = [
+      sourced('c1', { correction_of_id: 'orig' }, { source_type: 'correction', source_id: null }),
+      sourced('orig', {}, { source_type: 'invoice_paid', source_id: 'inv-1' }),
+    ]
+    const supabase = makeClient()
+    const root = await correctedOriginalOf(supabase as never, 'company-1', { id: 'c2', correction_of_id: 'c1' })
+    expect(root).toEqual({ id: 'orig', source_type: 'invoice_paid', source_id: 'inv-1' })
+    expect(fetchedIds).toEqual(['c1', 'orig'])
+  })
+
+  it('ends at a storno a correction corrects, without following its reverses_id', async () => {
+    results = [sourced('storno-1', { reverses_id: 'orig' }, { source_type: 'storno', source_id: 'si-1' })]
+    const supabase = makeClient()
+    const root = await correctedOriginalOf(supabase as never, 'company-1', { id: 'c1', correction_of_id: 'storno-1' })
+    expect(root).toEqual({ id: 'storno-1', source_type: 'storno', source_id: 'si-1' })
+    expect(fetchedIds).toEqual(['storno-1'])
+  })
+
+  it('answers null when the parent is not found', async () => {
+    results = [{ data: null, error: { message: 'no rows', code: 'PGRST116' } }]
+    const supabase = makeClient()
+    expect(await correctedOriginalOf(supabase as never, 'company-1', { id: 'c1', correction_of_id: 'gone' })).toBeNull()
+  })
+
+  it('throws when a read fails, so a refusal is not skipped on a guess', async () => {
+    results = [{ data: null, error: { message: 'timeout', code: '57014' } }]
+    const supabase = makeClient()
+    await expect(correctedOriginalOf(supabase as never, 'company-1', { id: 'c1', correction_of_id: 'orig' })).rejects.toThrow(
+      'timeout',
+    )
+  })
+
+  it('answers null when the walk is capped before the root', async () => {
+    for (let i = 0; i < MAX_CHAIN_WALK + 5; i++) {
+      results.push(sourced(`e${i}`, { correction_of_id: `e${i + 1}` }, { source_type: 'correction', source_id: null }))
+    }
+    const supabase = makeClient()
+    expect(await correctedOriginalOf(supabase as never, 'company-1', { id: 'start', correction_of_id: 'e0' })).toBeNull()
+    expect(fetchedIds).toHaveLength(MAX_CHAIN_WALK)
   })
 })
 

@@ -640,6 +640,45 @@ describe('syncInvoiceStatusFromPaymentEntry with links loaded before the entry w
   })
 })
 
+// The storno of a correction of a payment verifikat (lib/composition/
+// reversal-hooks.ts) reads the payment rows by the correction's id. Rows that
+// stayed on the reversed original mean the payment did not follow, and the
+// fallback for a voucher without a row would revert the whole paid amount.
+describe('syncInvoiceStatusFromPaymentEntry with requirePaymentRow', () => {
+  const correction = { id: 'correction-1', source_type: 'invoice_paid', source_id: 'invoice-1' } as Pick<
+    JournalEntry,
+    'id' | 'source_type' | 'source_id'
+  >
+
+  it('changes nothing when no payment row of the invoice names the entry', async () => {
+    const { supabase, calls, tablesUpdated, wasDeleted } = createRecordingSupabase([
+      { data: [] }, // invoice_payments by the correction's id
+      { data: [] }, // transactions by the correction's id
+    ])
+
+    await syncInvoiceStatusFromPaymentEntry(supabase, 'co-1', correction, undefined, { requirePaymentRow: true })
+
+    expect(calls.map((c) => c.table)).toEqual(['invoice_payments', 'transactions'])
+    expect(tablesUpdated('invoices')).toEqual([])
+    expect(wasDeleted('invoice_payments')).toBe(false)
+  })
+
+  it('reverts the invoice by the rows that name the entry, as without the option', async () => {
+    const { supabase, updatePayload, wasDeleted } = createRecordingSupabase([
+      { data: [{ id: 'ip-1', amount: 400, transaction_id: null }] }, // the row that followed the correction
+      { data: [] },
+      { data: { paid_amount: 1000, total: 1000, due_date: '2099-12-31' } },
+      { data: null }, // invoices update
+      { data: null }, // invoice_payments delete
+    ])
+
+    await syncInvoiceStatusFromPaymentEntry(supabase, 'co-1', correction, undefined, { requirePaymentRow: true })
+
+    expect(updatePayload('invoices')).toMatchObject({ status: 'partially_paid', paid_amount: 600, remaining_amount: 400 })
+    expect(wasDeleted('invoice_payments')).toBe(true)
+  })
+})
+
 describe('loadPaymentEntryLinks', () => {
   it('returns null without querying for a non-payment entry', async () => {
     const { supabase } = createQueuedMockSupabase()
