@@ -999,9 +999,19 @@ export function createRowsMockSupabase(
     let head = false
     for (const { method, args } of chain) {
       const [column, value] = args as [string, unknown]
-      if (method === 'eq') out = out.filter((row) => row[column] === value)
+      if (method === 'eq' && column.includes('.')) {
+        // A filter on an embedded resource ('document.sha256_hash'): the row
+        // carries the embed as a nested object.
+        const [embed, field] = column.split('.') as [string, string]
+        out = out.filter((row) => (row[embed] as Row | null | undefined)?.[field] === value)
+      } else if (method === 'eq') out = out.filter((row) => row[column] === value)
       else if (method === 'neq') out = out.filter((row) => row[column] !== value)
       else if (method === 'in') out = out.filter((row) => (value as unknown[]).includes(row[column]))
+      else if (method === 'not' && args[1] === 'in') {
+        // .not(column, 'in', '(a,b)'): PostgREST's list form.
+        const listed = String(args[2]).replace(/^\(|\)$/g, '').split(',')
+        out = out.filter((row) => !listed.includes(String(row[column])))
+      }
       else if (method === 'lt') out = out.filter((row) => String(row[column]) < String(value))
       else if (method === 'lte') out = out.filter((row) => String(row[column]) <= String(value))
       else if (method === 'gt') out = out.filter((row) => String(row[column]) > String(value))

@@ -70,6 +70,11 @@ import {
 } from '@/lib/bookkeeping/supplier-invoice-registration-lines'
 import type { ChartVatTreatments } from '@/lib/bookkeeping/vat-entries'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
+import {
+  RELEASED_UNDERLAG_COPY_FAILED_WARNING,
+  copyReleasedUnderlag,
+  documentForRegistration,
+} from '@/lib/supplier-invoices/released-underlag'
 import { parseEntityType } from '@/lib/company/entity-type'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import type { SiCreateInvalidInputReason } from '@/lib/errors/structured-errors'
@@ -466,31 +471,23 @@ export async function createSupplierInvoice(
   // The model's original reading of the inbox underlag, before anything is written.
   const extractionSnapshot = inboxItem && !dryRun ? await snapshotInboxExtraction(supabase, companyId, inboxItem) : null
 
+  // The document is free, or it is the underlag of an invoice that was
+  // credited (or reversed): released, and the new registration gets its own
+  // copy when the old verifikat keeps the document (released-underlag.ts).
+  // An utlägg links its document inside the claims writer, which takes no
+  // copy, so it still needs a document nothing holds.
+  let copyUnderlag = false
   if (documentId) {
-    const { data: document, error: documentError } = await supabase
-      .from('document_attachments')
-      .select('id, journal_entry_id')
-      .eq('id', documentId)
-      .eq('company_id', companyId)
-      .maybeSingle()
-    if (documentError || !document || document.journal_entry_id) {
-      return invalid('document_unavailable')
-    }
-
-    const { data: existingDocumentUse, error: existingDocumentUseError } = await supabase
-      .from('supplier_invoices')
-      .select('id')
-      .eq('company_id', companyId)
-      .eq('document_id', documentId)
-      .limit(1)
-      .maybeSingle()
-    if (existingDocumentUseError) {
-      log.error('supplier invoice document usage lookup failed', existingDocumentUseError)
+    let usable: Awaited<ReturnType<typeof documentForRegistration>>
+    try {
+      usable = await documentForRegistration(supabase, companyId, documentId)
+    } catch (err) {
+      log.error('supplier invoice document usage lookup failed', err as Error)
       return { ok: false, code: 'SI_CREATE_FAILED', details: { step: 'document_lookup' } }
     }
-    if (existingDocumentUse) {
-      return invalid('document_already_used')
-    }
+    if (!usable.ok) return invalid(usable.reason)
+    if (usable.copy && paidPrivately) return invalid('document_unavailable')
+    copyUnderlag = usable.copy
   }
 
   // Supplier, scoped to the company; an archived supplier takes no new
@@ -1213,7 +1210,25 @@ export async function createSupplierInvoice(
 
   // The utlägg path links the document inside registerExpenseClaim.
   const primaryJournalEntryId = paymentJournalEntryId || registrationJournalEntryId
-  if (documentId && primaryJournalEntryId && !paidPrivately) {
+  // A released underlag the old verifikat keeps: the invoice's own copy, on
+  // its verifikat now or anchored by its booking later.
+  let copiedDocumentId: string | null = null
+  if (documentId && copyUnderlag && !paidPrivately) {
+    try {
+      copiedDocumentId = await copyReleasedUnderlag(supabase, companyId, userId, {
+        sourceDocumentId: documentId,
+        supplierInvoiceId: invoiceId,
+        journalEntryId: primaryJournalEntryId,
+      })
+    } catch (err) {
+      log.warn('supplier invoice got no copy of its released underlag', {
+        documentId,
+        journalEntryId: primaryJournalEntryId,
+        error: err instanceof Error ? err.message : String(err),
+      })
+      warnings.push({ ...RELEASED_UNDERLAG_COPY_FAILED_WARNING })
+    }
+  } else if (documentId && primaryJournalEntryId && !paidPrivately) {
     try {
       // The verifikat was booked from this document.
       await linkToJournalEntry(supabase, companyId, documentId, primaryJournalEntryId, linkBasisColumns('user_created'))
@@ -1260,6 +1275,7 @@ export async function createSupplierInvoice(
     registration_journal_entry_id: registrationJournalEntryId,
     payment_journal_entry_id: paymentJournalEntryId ?? invoice.payment_journal_entry_id ?? null,
     ...(selfBillingDocumentId ? { document_id: selfBillingDocumentId } : {}),
+    ...(copiedDocumentId ? { document_id: copiedDocumentId } : {}),
   } as SupplierInvoice & Record<string, unknown>
 
   try {
