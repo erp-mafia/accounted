@@ -13,9 +13,11 @@ import {
   EU_GOODS_SUPPLY_NOTICE,
   EU_REVERSE_CHARGE_NOTICE,
   EXPORT_GOODS_NOTICE_SV,
+  OUTSIDE_SCOPE_NOTICE_SV,
   deriveInvoiceVatHeader,
   getPermittedVatRates,
   getVatRules,
+  outsideScopeLineRefusal,
   resolveInvoiceVatRules,
   type InvoiceVatTreatmentOverride,
   type VatTreatmentCustomer,
@@ -373,5 +375,61 @@ describe('zero-rated invoice treatments', () => {
     expect(resolveLineVatTreatment(0, null)).toBe('exempt')
     expect(resolveLineVatTreatment(25, 'reverse_charge_domestic')).toBe('standard_25')
     expect(resolveLineVatTreatment(12, 'export')).toBe('reduced_12')
+  })
+})
+
+describe('outside the scope of Swedish VAT (a räntefaktura)', () => {
+  // swedish-vat skill and ML 8 kap. 2-3 §§: dröjsmålsränta is compensation
+  // for a late payment, not consideration for a good or a service, so it is
+  // neither taxed nor exempt and no ruta of the momsdeklaration reads it.
+  const outsideScope = { vat_treatment: 'outside_scope' as const, delivery_country: null }
+
+  it.each([
+    ['a Swedish business', swedishBusiness],
+    ['an EU business with a validated number', germanBusiness],
+    ['a business outside the EU', norwegianBusiness],
+    ['a private person', consumer],
+  ])('%s: 0 %, no ruta, the outside-scope notice, whoever the customer is', (_label, customer) => {
+    expect(resolveInvoiceVatRules(customer, outsideScope)).toEqual({
+      ok: true,
+      rules: { treatment: 'outside_scope', rate: 0, momsRuta: null, reverseChargeText: OUTSIDE_SCOPE_NOTICE_SV },
+      permittedRates: [{ rate: 0, label: '0% (utanför svensk moms)', treatment: 'outside_scope' }],
+      explainFromCustomer: false,
+    })
+  })
+
+  it('refuses a delivery country: a sale of goods abroad is not this case', () => {
+    for (const country of ['SE', 'NL', 'HK']) {
+      expect(resolveInvoiceVatRules(germanBusiness, { vat_treatment: 'outside_scope', delivery_country: country })).toEqual({
+        ok: false,
+        code: 'INVOICE_VAT_TREATMENT_DELIVERY_COUNTRY_MISMATCH',
+        details: { vat_treatment: 'outside_scope', delivery_country: country, required: 'no_delivery_country' },
+      })
+    }
+  })
+
+  it('the header carries the treatment, no ruta and the notice; never the exemption notice', () => {
+    const resolved = resolveInvoiceVatRules(germanBusiness, outsideScope)
+    if (!resolved.ok) throw new Error('expected ok')
+    expect(deriveInvoiceVatHeader(resolved.rules, [0], { vatRegistered: true })).toEqual({
+      vat_treatment: 'outside_scope',
+      moms_ruta: null,
+      reverse_charge_text: OUTSIDE_SCOPE_NOTICE_SV,
+    })
+    expect(OUTSIDE_SCOPE_NOTICE_SV).not.toMatch(/ML 10 kap|undantag/i)
+  })
+
+  it('a 0 % line takes the treatment and keeps its own account: 8313 reaches no ruta', () => {
+    expect(isZeroRatedInvoiceTreatment('outside_scope')).toBe(false)
+    expect(resolveLineVatTreatment(0, 'outside_scope')).toBe('outside_scope')
+    expect(getRevenueAccount('outside_scope', 'aktiebolag')).toBe('8313')
+    expect(ACCOUNT_RUTA['8313']).toBeUndefined()
+  })
+
+  it('every priced line must book an interest-income account', () => {
+    expect(outsideScopeLineRefusal([{ revenue_account: '8313' }, { line_type: 'text', revenue_account: null }])).toBeNull()
+    expect(outsideScopeLineRefusal([{ revenue_account: '8313' }, { revenue_account: null }, { revenue_account: '3001' }])).toEqual({
+      rows: [2, 3],
+    })
   })
 })

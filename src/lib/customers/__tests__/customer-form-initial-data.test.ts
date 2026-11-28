@@ -55,6 +55,7 @@ const card: Customer = makeCustomer({
   default_payment_terms: 45,
   invoice_reference: 'PO-778',
   invoice_marking: '4500012345',
+  invoice_send_way: 'peppol',
   notes: 'Fakturera i slutet av månaden.',
 })
 

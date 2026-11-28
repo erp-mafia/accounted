@@ -18,6 +18,7 @@ import { InstallAppSection } from '@/components/settings/InstallAppSection'
 import { CalendarFeedSettings } from '@/components/settings/CalendarFeedSettings'
 import { AnalyticsConsentRow } from '@/components/settings/AnalyticsConsentRow'
 import { FabVisibilityRow } from '@/components/settings/FabVisibilityRow'
+import { StartPageRow } from '@/components/settings/StartPageRow'
 import {
   SettingsGroup,
   SettingsInput,
@@ -330,6 +331,10 @@ export function AccountSettingsContent() {
             }))}
           />
         </SettingsRow>
+
+        {/* Where sign-in and a company switch land in the active company:
+            renders nothing without one. */}
+        <StartPageRow />
 
         {/* The floating button in the corner, shown or hidden for this
             person: the built-in assistant's, or the support's where the

@@ -11,6 +11,7 @@
  * status each verb starts from, the AGI-filed refusal, the sandbox and
  * capability gates on the email, and a dry run that writes and sends nothing.
  */
+import { sendingNotActiveRefusal } from '@/lib/digital-mailboxes/sending-not-active'
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 beforeAll(() => {
@@ -404,14 +405,15 @@ describe('POST /salary-runs/:id/send-payslips', () => {
   })
 
   it('channel kivra: 409 DIGITAL_MAILBOX_SENDING_NOT_ACTIVE says where sending is switched on, and nothing is sent', async () => {
-    mocks.payslipMailboxBlock.mockResolvedValue('DIGITAL_MAILBOX_SENDING_NOT_ACTIVE')
+    mocks.payslipMailboxBlock.mockResolvedValue(sendingNotActiveRefusal('kivra', null))
     const c = client()
     mockServiceClient.mockReturnValue(c)
     const res = await postBody({ channel: 'kivra' })
     expect(res.status).toBe(409)
     const body = await res.json()
     expect(body.error.code).toBe('DIGITAL_MAILBOX_SENDING_NOT_ACTIVE')
-    expect(body.error.details).toMatchObject({ channel: 'kivra' })
+    expect(body.error.details).toMatchObject({ channel: 'kivra', state: 'off' })
+    expect(body.error.message).toMatch(/^Utskick via Kivra är inte påslaget för företaget/)
     expect(body.error.recovery_hint).toMatch(/\/settings\/connections/)
     expect(mocks.deliverPayslipsToMailbox).not.toHaveBeenCalled()
     expect(mocks.sendEmail).not.toHaveBeenCalled()

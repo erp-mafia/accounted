@@ -122,6 +122,21 @@ describe('buildEditorPreviewRequest', () => {
     expect(buildEditorPreviewRequest(form(), options)).not.toHaveProperty('vat_treatment')
   })
 
+  it('previews a räntefaktura draft as it is sent: its treatment, and no late-payment terms', () => {
+    const request = buildEditorPreviewRequest(form(), {
+      ...options,
+      vatStatement: { vat_treatment: 'outside_scope', delivery_country: null },
+      lateInterestInvoice: true,
+    })
+    const parsed = InvoicePreviewSchema.safeParse(JSON.parse(JSON.stringify(request)))
+    expect(parsed.success).toBe(true)
+    if (parsed.success) {
+      expect(parsed.data.vat_treatment).toBe('outside_scope')
+      expect(parsed.data.is_late_interest_invoice).toBe(true)
+    }
+    expect(buildEditorPreviewRequest(form(), options)).not.toHaveProperty('is_late_interest_invoice')
+  })
+
   it('survives a cleared number field (NaN serializes as null)', () => {
     const typing = form()
     typing.items[0] = { ...typing.items[0], quantity: Number.NaN, unit_price: Number.NaN }

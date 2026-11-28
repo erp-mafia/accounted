@@ -93,14 +93,16 @@ export function emailRefusal(invoice: Pick<Invoice, 'document_type'>): IssueRefu
 }
 
 /**
- * A draft with no moms_ruta that is not a momsfri sale: an imported draft, as
- * every write path stamps one. A momsfri sale is the one sale with no ruta to
- * state, a seller outside the VAT register and no VAT on the row:
+ * A draft with no moms_ruta that is not a sale with no ruta to state: an
+ * imported draft, as every write path stamps one. Two sales have none. A
+ * momsfri sale: a seller outside the VAT register and no VAT on the row;
  * deriveInvoiceVatHeader writes null for it, and recreating it writes null
- * again. The treatment alone does not say that: `exempt` also comes from an
- * imported 0 % line, which the mapper cannot tell from reverse charge or
- * export, and from a seller leaving the register with a VAT-bearing draft
- * open. PATCH with items re-derives the header, so those have a way out.
+ * again. And an outside_scope row without VAT (a räntefaktura): not a supply
+ * made in Sweden, so no ruta whoever sells. The treatment alone does not say
+ * the first: `exempt` also comes from an imported 0 % line, which the mapper
+ * cannot tell from reverse charge or export, and from a seller leaving the
+ * register with a VAT-bearing draft open. PATCH with items re-derives the
+ * header, so those have a way out.
  *
  * v1 mark-sent and v1 send refuse it. No other door reads the column (nor do
  * the books or the declaration, which follow the accounts), so it is not part
@@ -111,10 +113,10 @@ export function lacksMomsRuta(
   settings: Pick<CompanySettings, 'vat_registered'>,
 ): boolean {
   if (invoice.moms_ruta) return false
-  const momsfriSale = settings.vat_registered === false
-    && invoice.vat_treatment === 'exempt'
-    && Number(invoice.vat_amount) === 0
-  return !momsfriSale
+  const noVat = Number(invoice.vat_amount) === 0
+  const momsfriSale = settings.vat_registered === false && invoice.vat_treatment === 'exempt' && noVat
+  const outsideScope = invoice.vat_treatment === 'outside_scope' && noVat
+  return !momsfriSale && !outsideScope
 }
 
 export type IssueAndBookResult =

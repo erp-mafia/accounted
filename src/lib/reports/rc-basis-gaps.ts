@@ -6,7 +6,7 @@ import {
   fetchLinesByEntryIds,
   type EntryLinesQuery,
 } from '@/lib/bookkeeping/entry-lines'
-import { RC_BASIS_BOXES } from '@/lib/bookkeeping/vat-entries'
+import { isReverseChargeBasisAccount, RC_BASIS_BOXES, RC_BASIS_OFFSET_ACCOUNT } from '@/lib/bookkeeping/vat-entries'
 import { roundOre } from '@/lib/money'
 import { resolvePeriodDates } from './vat-declaration'
 import { RC_BASIS_ACCOUNTS_BY_RATE } from './vat-filing-gate'
@@ -165,6 +165,85 @@ export function isRcBasisGap(rate: RcBasisAtRate): boolean {
 /** What a momssats lacks: the basis its fiktiv moms implies less the basis reported at it. */
 export function missingRcBasis(rate: RcBasisAtRate): number {
   return roundOre(rate.expectedBasisAmount - rate.reportedBasisAmount)
+}
+
+/** A verifikat whose lines declare one reverse-charge purchase twice in rutor 20-24 (rcBasisCountedTwice). */
+export interface RcBasisCountedTwice {
+  /** Debited accounts that report their own ruta 20-24 and are no BAS basis account (6541 with its momskod), sorted. */
+  ownRutaAccounts: string[]
+  /** Debited BAS basis accounts (44xx/45xx), sorted. */
+  basisAccounts: string[]
+  /** Net basis the lines report in rutor 20-24, every momssats together. */
+  reportedBasisAmount: number
+  /** The basis the lines' fiktiv moms is computed on (moms / sats, summed). */
+  expectedBasisAmount: number
+}
+
+/**
+ * The mirror of isRcBasisGap: lines that report MORE basis than their fiktiv
+ * moms is computed on, because a 45xx/4598 basis pair sits beside a line on
+ * an account that reports ruta 20-24 itself (a cost account whose kontoplan
+ * momskod is a reverse-charge purchase, 6541 set to EU services, or a BAS
+ * basis account booked as the cost, 4531). Each puts the same base in rutor
+ * 20-24, so the momsdeklaration counts the purchase twice while ruta 30-32
+ * counts its moms once. The producers never book this (reverseChargeOnAccount
+ * leaves the pair out on such an account); typed lines can.
+ *
+ * Read with the declaration's own account reading (rcBasisReading), and only
+ * when the lines tell how large the purchase is and that a pair is there:
+ *  - fiktiv moms credited on 2614/2624/2634 (moms / sats is the purchase):
+ *    without it a basis line cannot be told from a basis-only correction or
+ *    an omföring between boxes;
+ *  - 4598 credited: the pair's offset;
+ *  - the basis reported exceeds both what the fiktiv moms is computed on and
+ *    the pair's own amount: some line besides the pair reports a box itself.
+ *
+ * Two purchases in one verifikat, one on an account with its own ruta and one
+ * with the pair, report exactly what their fiktiv moms is computed on and are
+ * not flagged. Summed over the momssatser, not per sats: an account with its
+ * own ruta at another sats than the pair still declares the purchase a second
+ * time. Purchases only (fiktiv moms credited), as isRcBasisGap.
+ */
+export function rcBasisCountedTwice(
+  lines: ReadonlyArray<LineAmounts>,
+  accounts: RcBasisAccounts,
+): RcBasisCountedTwice | null {
+  let pairOffset = 0
+  let reported = 0
+  const reportedByAccount = new Map<string, number>()
+  for (const line of lines) {
+    const debitNet = (Number(line.debit_amount) || 0) - (Number(line.credit_amount) || 0)
+    const account = line.account_number
+    if (account === RC_BASIS_OFFSET_ACCOUNT) {
+      pairOffset = roundOre(pairOffset - debitNet)
+      continue
+    }
+    if (rcBasisReading(account, accounts) === null) continue
+    reported = roundOre(reported + debitNet)
+    reportedByAccount.set(account, roundOre((reportedByAccount.get(account) ?? 0) + debitNet))
+  }
+  if (pairOffset <= RC_BASIS_TOLERANCE) return null
+
+  const expected = roundOre(
+    readVerifikatRcBasis(lines, accounts).rates
+      .filter((rate) => rate.rcOutputAmount > RC_BASIS_TOLERANCE)
+      .reduce((sum, rate) => sum + rate.expectedBasisAmount, 0),
+  )
+  if (expected <= 0) return null
+  if (reported <= expected + RC_BASIS_TOLERANCE || reported <= pairOffset + RC_BASIS_TOLERANCE) return null
+
+  const debited = [...reportedByAccount].filter(([, net]) => net > 0).map(([account]) => account).sort()
+  const basisAccounts = debited.filter((account) => isReverseChargeBasisAccount(account))
+  // A 4598 credit is a pair only beside a debited basis account (44xx/45xx):
+  // without one, nothing reports the purchase a second time, and an
+  // understated fiktiv moms is the gap rule's business, not this one's.
+  if (basisAccounts.length === 0) return null
+  return {
+    ownRutaAccounts: debited.filter((account) => !isReverseChargeBasisAccount(account)),
+    basisAccounts,
+    reportedBasisAmount: reported,
+    expectedBasisAmount: expected,
+  }
 }
 
 export interface RcBasisGap {

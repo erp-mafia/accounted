@@ -74,6 +74,12 @@ export const ACCOUNT_ROLES = [
   'foreign_per_diem_tax_free',
   /** The part of a foreign per diem above the tax-free allowance: taxed as pay. */
   'foreign_per_diem_taxable',
+  /**
+   * Interest a customer owes for paying an invoice late (dröjsmålsränta),
+   * charged on a räntefaktura: financial income on a short-term receivable,
+   * no supply and no VAT.
+   */
+  'late_payment_interest_income',
 ] as const
 
 export type AccountRole = (typeof ACCOUNT_ROLES)[number]

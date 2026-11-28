@@ -3803,7 +3803,7 @@ export async function postKontantmetodCutoff(
 
     // The invoice's archived document is the carry's underlag. Never throws.
     if (plan.side === 'customer') {
-      await anchorCustomerInvoiceDocument(supabase, companyId, plan.invoiceId)
+      await anchorCustomerInvoiceDocument(supabase, companyId, plan.invoiceId, userId)
     } else {
       await anchorSupplierInvoiceDocument(supabase, companyId, plan.invoiceId)
     }

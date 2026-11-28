@@ -6,6 +6,7 @@
 import type { TaxDeadlineType, EntityType, MomsPeriod, TaxFilingMethod } from '@/types'
 import { filesIncomeReturn, fiscalYearLockedToCalendar, isEntityType, preparesForenklatArsbokslut } from '@/lib/company/entity-type'
 import { nextFiscalYearRange } from '@/lib/bookkeeping/suggest-fiscal-period'
+import { isDeclaredFirstFiscalYearName } from '@/lib/company/compute-fiscal-period'
 import { getNextBankingDay, isBankingDay } from './swedish-holidays'
 import { helarsmomsHasEuTrade } from '@/lib/reports/eu-trade'
 import {
@@ -30,6 +31,12 @@ export interface CompanySettingsForDeadlines {
   moms_period: MomsPeriod | null
   f_skatt: boolean
   preliminary_tax_monthly: number | null
+  /**
+   * The first förfallodag of the debiterad preliminärskatt (YYYY-MM-DD), from
+   * Skatteverket's decision: the f_skatt rows start in its month. Null or
+   * undefined: every month gets its row.
+   */
+  preliminary_tax_first_due_date?: string | null
   vat_registered: boolean
   pays_salaries: boolean
   // null = never attested; the generator falls back to pays_salaries so
@@ -135,6 +142,28 @@ function fromEmployeeEvidenceStart(
 export interface FiscalYearForDeadlines {
   start: string
   end: string
+  /**
+   * The company was created in this räkenskapsår and said it was its first
+   * (isDeclaredFirstFiscalYearName): no year came before it, kept here or
+   * elsewhere.
+   */
+  declaredFirst?: boolean
+}
+
+/** The fiscal_periods columns a FiscalYearForDeadlines is read from. */
+export interface FiscalPeriodRowForDeadlines {
+  name: string | null
+  period_start: string
+  period_end: string
+}
+
+/** One fiscal_periods row as the deadline schedule reads it. */
+export function fiscalYearForDeadlines(row: FiscalPeriodRowForDeadlines): FiscalYearForDeadlines {
+  return {
+    start: row.period_start,
+    end: row.period_end,
+    ...(isDeclaredFirstFiscalYearName(row.name) ? { declaredFirst: true } : {}),
+  }
 }
 
 /** A räkenskapsår a yearly deadline is computed from. */
@@ -294,7 +323,8 @@ function recordedFiscalYears(settings: FiscalCalendar): FiscalYearForDeadlines[]
  *    räkenskapsår starts mid-month only when bokföringsskyldigheten begins
  *    (BFL 3 kap. 1 and 3 §§), so a first period starting mid-month has no
  *    predecessor. One starting on the 1st may follow years kept elsewhere;
- *    that year's obligations are real and stay.
+ *    that year's obligations are real and stay, unless the company declared
+ *    the period its first räkenskapsår (declaredFirst).
  * 3. Where nothing is recorded after a recorded year, the next years chain
  *    from it (nextFiscalYearRange): the years not created yet, and a gap
  *    between two recorded years. One that would run into a recorded period
@@ -328,7 +358,7 @@ export function fiscalYearsEndingIn(
   for (const fy of recorded) add(fy.end, fy.start)
 
   const first = recorded[0]
-  if (first && first.start.endsWith('-01')) {
+  if (first && first.start.endsWith('-01') && !first.declaredFirst) {
     const end = shiftIsoDate(first.start, -1)
     add(end, twelveMonthStart(end))
   }
@@ -383,13 +413,13 @@ export function fiscalYearEndMonthOn(day: string, settings: FiscalCalendar): num
 /**
  * The day the company's bookkeeping began, when its recorded fiscal periods
  * prove it: the first one starts mid-month, which only a company's first
- * räkenskapsår does (BFL 3 kap. 1 and 3 §§). A first period starting on the
- * 1st may follow years kept elsewhere, so it proves nothing and null is
- * returned.
+ * räkenskapsår does (BFL 3 kap. 1 and 3 §§), or the company declared it its
+ * first (declaredFirst). Any other first period starting on the 1st may
+ * follow years kept elsewhere, so it proves nothing and null is returned.
  */
 export function bookkeepingStartFor(settings: CompanySettingsForDeadlines): string | null {
   const first = recordedFiscalYears(settings)[0]
-  return first && !first.start.endsWith('-01') ? first.start : null
+  return first && (first.declaredFirst || !first.start.endsWith('-01')) ? first.start : null
 }
 
 /**
@@ -729,13 +759,20 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
       // 12th in August, January-only 17th (62 kap. 3-4 §§ SFL and
       // Skatteverket's published storföretag calendar).
       const storforetag = settings.vat_registered && settings.vat_taxable_base_over_40m
+      // A company whose first debitering comes later (F-skatt approved during
+      // the year) owes nothing before the first förfallodag of Skatteverket's
+      // decision. Compared by month: each month has one förfallodag, so the
+      // date's month is the first row whatever day was typed.
+      const firstMonth = settings.preliminary_tax_first_due_date?.slice(0, 7) ?? null
       const instances: DeadlineInstance[] = []
       for (let month = 0; month < 12; month++) {
+        const period = `${year}-${String(month + 1).padStart(2, '0')}`
+        if (firstMonth !== null && period < firstMonth) continue
         instances.push({
           day: month === 0 || (month === 7 && !storforetag) ? 17 : 12,
           month,
           year,
-          period: `${year}-${String(month + 1).padStart(2, '0')}`,
+          period,
           periodLabel: getMonthLabel(month, year),
         })
       }

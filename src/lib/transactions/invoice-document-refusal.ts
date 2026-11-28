@@ -27,11 +27,14 @@ export interface InvoiceDocumentFields {
   credit_notes?: CreditNoteRow[] | null
 }
 
+/** A credit note that counts: not cancelled and not half-created. */
+export function isActiveCreditNote(creditNote: CreditNoteRow): boolean {
+  return creditNote.status !== 'cancelled' && creditNote.creation_complete !== false
+}
+
 /** A credit note against this invoice that is not cancelled and not half-created. */
 export function hasActiveCreditNote(invoice: Pick<InvoiceDocumentFields, 'credit_notes'>): boolean {
-  return (invoice.credit_notes ?? []).some(
-    (creditNote) => creditNote.status !== 'cancelled' && creditNote.creation_complete !== false,
-  )
+  return (invoice.credit_notes ?? []).some(isActiveCreditNote)
 }
 
 export type InvoiceDocumentRefusal =

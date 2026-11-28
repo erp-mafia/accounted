@@ -13,6 +13,7 @@
  *     upcoming), when the company syncs its skattekonto: debited preliminary
  *     tax and every declaration already filed are in them.
  *   - F-skatt (company_settings.preliminary_tax_monthly) on its förfallodag,
+ *     from the first one the company states (preliminary_tax_first_due_date),
  *     unless Skatteverket's upcoming debits already hold preliminary tax that
  *     day.
  *   - Each momsdeklaration due inside the horizon: as filed (known) when it is
@@ -201,6 +202,7 @@ interface TaxSettings {
   moms_period: 'monthly' | 'quarterly' | 'yearly' | null
   vat_taxable_base_over_40m: boolean | null
   preliminary_tax_monthly: number | string | null
+  preliminary_tax_first_due_date: string | null
 }
 
 export interface LoadedTaxInputs {
@@ -219,12 +221,17 @@ const ymd = (d: Date) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 
 /** The F-skatt förfallodagar inside the window, as the deadline calendar places them, moved to a banking day. */
-export function fSkattDueDates(window: ForecastWindow, settings: Pick<TaxSettings, 'vat_registered' | 'vat_taxable_base_over_40m'>): string[] {
+export function fSkattDueDates(
+  window: ForecastWindow,
+  settings: Pick<TaxSettings, 'vat_registered' | 'vat_taxable_base_over_40m'> &
+    Partial<Pick<TaxSettings, 'preliminary_tax_first_due_date'>>,
+): string[] {
   const config = TAX_DEADLINE_CONFIGS.find((c) => c.type === 'f_skatt')
   if (!config) return []
   const generatorSettings = {
     vat_registered: settings.vat_registered === true,
     vat_taxable_base_over_40m: settings.vat_taxable_base_over_40m === true,
+    preliminary_tax_first_due_date: settings.preliminary_tax_first_due_date ?? null,
   } as CompanySettingsForDeadlines
   const years = [...new Set([Number(window.today.slice(0, 4)), Number(window.end.slice(0, 4))])]
   return years
@@ -320,7 +327,7 @@ export async function loadTaxInputs(supabase: SupabaseClient, companyId: string,
   const [settingsRes, snapshotRes, upcomingRes] = await Promise.all([
     supabase
       .from('company_settings')
-      .select('vat_registered, moms_period, vat_taxable_base_over_40m, preliminary_tax_monthly')
+      .select('vat_registered, moms_period, vat_taxable_base_over_40m, preliminary_tax_monthly, preliminary_tax_first_due_date')
       .eq('company_id', companyId)
       .maybeSingle(),
     supabase
@@ -344,6 +351,7 @@ export async function loadTaxInputs(supabase: SupabaseClient, companyId: string,
     moms_period: null,
     vat_taxable_base_over_40m: null,
     preliminary_tax_monthly: null,
+    preliminary_tax_first_due_date: null,
   }) as TaxSettings
   const snapshot = snapshotRes.data?.value as { saldo?: { saldoSkatteverket?: unknown }; fetchedAt?: unknown } | null | undefined
   const rawSaldo = Number(snapshot?.saldo?.saldoSkatteverket)

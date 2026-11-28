@@ -209,7 +209,12 @@ export function namesCounterparty(raw: string): boolean {
  * deposit and a card payout alike (crm#1707).
  */
 export function mappingPatternNamesCounterparty(pattern: string): boolean {
-  return namesCounterparty(pattern.replace(/\\(.)/g, '$1'))
+  return namesCounterparty(mappingPatternText(pattern))
+}
+
+/** A learned rule's merchant pattern (an escaped regex literal) read back as the text it was learned from. */
+export function mappingPatternText(pattern: string): string {
+  return pattern.replace(/\\(.)/g, '$1')
 }
 
 /**
@@ -486,6 +491,41 @@ export async function findSwitchedOffCounterpartyRules(
       .range(from, to),
   )
   return new Set(matchCounterpartyTemplates(switchedOff, transactions).keys())
+}
+
+/** A counterparty rule the company switched off, as a learned mapping row beside it is read against it. */
+export type SwitchedOffCounterpartyRule = Pick<CategorizationTemplate, 'debit_account' | 'credit_account'>
+
+/**
+ * The company's switched-off counterparty rules by the names they answer to:
+ * each one's key and aliases, trimmed and lowercased. A pause in Regler and a
+ * rule the system took back (an undone first booking, a cleanup) are the same
+ * write: is_active false, which categorization_templates_sync_mode shows as
+ * paused. Read by mappingRulesBesideSwitchedOff (./mapping-engine.ts). Throws
+ * when the read fails.
+ */
+export async function readSwitchedOffRulesByName(
+  supabase: SupabaseClient,
+  companyId: string,
+): Promise<Map<string, SwitchedOffCounterpartyRule[]>> {
+  const rows = await fetchAllRows<
+    Pick<CategorizationTemplate, 'id' | 'counterparty_name' | 'counterparty_aliases' | 'debit_account' | 'credit_account'>
+  >(({ from, to }) =>
+    supabase
+      .from('categorization_templates')
+      .select('id, counterparty_name, counterparty_aliases, debit_account, credit_account')
+      .eq('company_id', companyId)
+      .eq('is_active', false)
+      .order('id')
+      .range(from, to),
+  )
+  const byName = new Map<string, SwitchedOffCounterpartyRule[]>()
+  for (const row of rows) {
+    const rule = { debit_account: row.debit_account, credit_account: row.credit_account }
+    const names = new Set([row.counterparty_name, ...(row.counterparty_aliases ?? [])].map((name) => name?.trim().toLowerCase()))
+    for (const name of names) if (name) byName.set(name, [...(byName.get(name) ?? []), rule])
+  }
+  return byName
 }
 
 /**
