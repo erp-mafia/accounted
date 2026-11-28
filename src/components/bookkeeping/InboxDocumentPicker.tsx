@@ -350,7 +350,11 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, jou
           if (!copy && failure?.code === 'DOC_LINK_ALREADY_LINKED' && typeof holder !== 'string') {
             holder = await fetch(`/api/documents/${doc.document_id}`)
               .then(async (r) => (r.ok ? ((await r.json()) as { data?: { journal_entry_id?: string | null } }).data?.journal_entry_id : null))
-              .catch(() => null)
+              .catch(() => {
+                // Holder unknown: the refusal stands and is counted below, as
+                // a refusal naming no verifikat of this sweep would be.
+                return null
+              })
           }
           if (!copy && failure?.code === 'DOC_LINK_ALREADY_LINKED' && typeof holder === 'string' && holder !== id && outcome.has(holder)) {
             outcome.set(holder, true)
