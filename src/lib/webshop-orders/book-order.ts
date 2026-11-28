@@ -89,12 +89,14 @@ export async function assertOrderBookable(
   // store refunded money after the void, so the void is undone and the order
   // and its refund book together.
   if (order.row_type === 'refund' && order.parent_order_id) {
-    const { data: parent } = await supabase
+    const { data: parent, error: parentError } = await supabase
       .from('webshop_orders')
       .select('invoice_id, manually_voided')
       .eq('id', order.parent_order_id)
       .eq('company_id', companyId)
       .maybeSingle()
+    // A failed read must not let the refund through as if its parent were open.
+    if (parentError) throw new Error(`refund parent lookup failed: ${parentError.message}`)
     if (parent?.invoice_id) {
       return {
         code: 'WEBSHOP_ORDER_REFUND_PARENT_INVOICED',

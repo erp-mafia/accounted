@@ -144,4 +144,17 @@ describe('webshop_orders voided mark', () => {
       getPool().query(`UPDATE public.webshop_orders SET manually_booked_at = NULL WHERE id = $1`, [rowId]),
     ).rejects.toMatchObject({ code: '23514' })
   })
+
+  it('refuses a booking that reaches a voided row after the void', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+    const rowId = await insertCancelledOrder(companyId, userId)
+    const entryId = await insertDraftJournalEntry({ companyId, userId, fiscalPeriodId })
+    await getPool().query(
+      `UPDATE public.webshop_orders SET manually_booked_at = now(), manually_voided = true WHERE id = $1`,
+      [rowId],
+    )
+    await expect(
+      getPool().query(`UPDATE public.webshop_orders SET journal_entry_id = $2 WHERE id = $1`, [rowId, entryId]),
+    ).rejects.toMatchObject({ code: '23514' })
+  })
 })

@@ -10,8 +10,9 @@
 -- outside the integration; true, nothing is booked because the store
 -- cancelled the order. The row itself is never deleted.
 --
--- A void links no verifikat, so the check refuses a voided row that carries
--- one, and a void without the mark it belongs to.
+-- A void links no verifikat and no invoice, so the check refuses a voided
+-- row that carries one (a manual one, or a booking or invoice that reached
+-- the row after the void), and a void without the mark it belongs to.
 --
 -- No RLS change: the member UPDATE policy already covers the mark and the
 -- unmark. No grant: a column of an existing table.
@@ -23,7 +24,12 @@ alter table public.webshop_orders
   add constraint webshop_orders_void_is_a_mark
   check (
     not manually_voided
-    or (manually_booked_at is not null and manually_booked_journal_entry_id is null)
+    or (
+      manually_booked_at is not null
+      and manually_booked_journal_entry_id is null
+      and journal_entry_id is null
+      and invoice_id is null
+    )
   );
 
 comment on column public.webshop_orders.manually_voided is

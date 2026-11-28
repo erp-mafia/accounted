@@ -99,6 +99,15 @@ describe('deriveUnattendedOrderLines', () => {
     expect(outcome).toMatchObject({ ok: false, code: 'WEBSHOP_ORDER_REFUND_PARENT_VOIDED' })
   })
 
+  it('lets no refund through when its order cannot be read', async () => {
+    const refund = order({ id: 'refund-1', row_type: 'refund', parent_order_id: 'order-0', status: 'refund', total: -125, total_tax: -25, total_sek: -125 })
+    const chain = { select: () => chain, eq: () => chain, maybeSingle: async () => ({ data: null, error: { message: 'timeout' } }) }
+    const supabase = { from: () => chain }
+    await expect(
+      deriveUnattendedOrderLines({ supabase: supabase as never, companyId: COMPANY, order: refund, settings: null, log }),
+    ).rejects.toThrow('refund parent lookup failed')
+  })
+
   it('books a cancelled order the store refunded money on, like any other: its refund row books against it', async () => {
     const outcome = await derive(order({ status: 'cancelled', refunded_total: 125 }))
     expect(outcome.ok).toBe(true)

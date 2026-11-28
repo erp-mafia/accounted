@@ -255,12 +255,17 @@ async function voidOrder(
   // would hide the order's pointer to it, and the row could still be booked
   // there as a sale. Book or ignore that row first.
   if (order.legacy_transaction_id) {
-    const { data: legacyTxn } = await supabase
+    const { data: legacyTxn, error: legacyError } = await supabase
       .from('open_bank_rows')
       .select('id')
       .eq('id', order.legacy_transaction_id)
       .eq('company_id', companyId)
       .maybeSingle()
+    // A failed read is not "no open row": the void waits for an answer.
+    if (legacyError) {
+      log.error('failed to read the legacy twin before a void', legacyError, { orderId: order.id })
+      return errorResponse(legacyError, log, { requestId })
+    }
     if (legacyTxn) {
       return errorResponseFromCode('WEBSHOP_ORDER_LEGACY_TRANSACTION_OPEN', log, {
         requestId,

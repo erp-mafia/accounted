@@ -148,6 +148,12 @@ export default function OrdersPage() {
   useEffect(() => {
     void load()
   }, [load])
+  // The list the page shows now: an action that finishes after a filter
+  // change refreshes the new filter, not the one it started under.
+  const loadRef = useRef(load)
+  useEffect(() => {
+    loadRef.current = load
+  }, [load])
 
   useEffect(() => {
     fetch('/api/webshop-orders/settings')
@@ -226,12 +232,12 @@ export default function OrdersPage() {
           return
         }
         toast({ title: t('void_done', { number: order.order_number }) })
-        void load()
+        void loadRef.current()
       } catch {
         toast({ title: t('void_failed'), variant: 'destructive' })
       }
     },
-    [load, t, toast, errorLocale],
+    [t, toast, errorLocale],
   )
 
   // A booked order whose verifikat lacks its orderunderlag (archiving never

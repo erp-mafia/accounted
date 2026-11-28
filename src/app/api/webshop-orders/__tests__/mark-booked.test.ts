@@ -332,6 +332,14 @@ describe('POST /api/webshop-orders/[id]/mark-booked with voided: true', () => {
     expect(findCall('webshop_orders', 'update')).toBeUndefined()
   })
 
+  it('does not void when the legacy feed cannot be read: a failed read is not "no open row"', async () => {
+    enqueue({ data: cancelledRow({ legacy_transaction_id: 'txn-1' }) })
+    enqueue({ data: null, error: { message: 'timeout', code: '57014' } }) // open_bank_rows fails
+    const { status } = await parseJsonResponse(await postMark({ voided: true }))
+    expect(status).toBeGreaterThanOrEqual(500)
+    expect(findCall('webshop_orders', 'update')).toBeUndefined()
+  })
+
   it('voids once the legacy feed row is booked or ignored', async () => {
     enqueue({ data: cancelledRow({ legacy_transaction_id: 'txn-1' }) })
     enqueue({ data: null }) // open_bank_rows leaves it out
