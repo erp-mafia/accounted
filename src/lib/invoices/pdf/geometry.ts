@@ -11,7 +11,9 @@
  *                                kept whole, or three when the fine print is
  *                                long: it then sits between them as text
  *                                that may break across pages
- *   E  payment area             fixed height, bottom of the LAST page only
+ *   E  payment area             fixed height, bottom of the LAST page only,
+ *                                or of the summary's page when a long fine
+ *                                print goes to the page after it
  *   F  footer                   every page, fixed at the bottom
  *   overlays                    UTKAST watermark, BETALD / MAKULERAD /
  *                                KREDITERAD stamp
@@ -25,6 +27,9 @@
  * under it, a short fine print and the payment area move to the next page
  * together, and a long one stays under the summary as far as it fits
  * (FINE_PRINT_KEEP_TOGETHER_LINES, crm#1787).
+ * When a long one and the payment area do not both fit under the summary but
+ * the payment area alone does, the payment area stays there and the fine print
+ * starts on the next page (render-invoice-pdf.ts: renderInvoiceDocument).
  */
 
 export const A4_WIDTH_PT = 595.28

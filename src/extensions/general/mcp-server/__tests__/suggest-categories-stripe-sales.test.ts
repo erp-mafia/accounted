@@ -1,7 +1,8 @@
 /**
  * gnubok_suggest_categories: a Stripe sale (a card payment from the Stripe
- * feed, money in) carries no moms and no buyer country, so nothing matched
- * it and it was listed in no_signal_transaction_ids with nothing to go on.
+ * feed, money in) carries no moms (only the buyer's countries when Stripe
+ * states them), so nothing matched it and it was listed in
+ * no_signal_transaction_ids with nothing to go on.
  * It now leads with how Stripe sales are booked (one samlingsverifikat per
  * day), the verifikat that booked the latest one, and where its moms comes
  * from: never an account or a rate. A row nothing matched that is not a

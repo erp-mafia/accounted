@@ -439,7 +439,7 @@ export async function withChangesAfterFiling(
         // Moved out: the period's special entries no longer list it, so the
         // shape is judged on its own lines, as a staged voucher is.
         taxAccounts ??= await skattekontoShapeAccounts(supabase, companyId)
-        const shaped = momsredovisningShapeOfLines(linesOf(entry.id).map((line) => line.account_number), taxAccounts)
+        const shaped = momsredovisningShapeOfLines(linesOf(entry.id), taxAccounts)
         if (entry.source_type === 'vat_settlement' || closingIds.has(entry.id) || shaped) continue
       }
       const change: RutorChange = {}

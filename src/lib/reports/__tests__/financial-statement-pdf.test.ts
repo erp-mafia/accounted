@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildIncomeStatementPdfModel } from '../financial-statement-pdf'
+import { buildIncomeStatementPdfModel, incomeStatementLayout } from '../financial-statement-pdf'
 import { NET_RESULT_LABEL } from '../income-definitions'
 import type { IncomeStatementReport, IncomeStatementSection } from '@/types'
 
@@ -53,5 +53,64 @@ describe('buildIncomeStatementPdfModel', () => {
       { label: 'Skatt på årets resultat', amount: -68_000 },
       { label: NET_RESULT_LABEL, amount: 262_000, emphasis: true },
     ])
+  })
+
+  it('groups class 8 as the uppställningsform does: finansiella poster, bokslutsdispositioner, skatter', () => {
+    const { groups, summary } = buildIncomeStatementPdfModel(
+      report(
+        [
+          section('Ränteintäkter', '8314', 1_000),
+          section('Räntekostnader', '8410', -3_000),
+          section('Bokslutsdispositioner', '8811', -50_000),
+          section('Skatter och årets resultat', '8910', -68_000),
+        ],
+        260_000,
+      ),
+    )
+
+    expect(groups.map((g) => [g.heading, g.totalLabel, g.total])).toEqual([
+      ['Rörelseintäkter', 'Summa rörelseintäkter', 500_000],
+      ['Rörelsekostnader', 'Summa rörelsekostnader', 120_000],
+      ['Finansiella poster', 'Summa finansiella poster', -2_000],
+      ['Bokslutsdispositioner', 'Summa bokslutsdispositioner', -50_000],
+      ['Skatter', 'Summa skatter', -68_000],
+    ])
+    expect(summary).toEqual([
+      { label: 'Rörelseresultat', amount: 380_000 },
+      { label: 'Resultat efter finansiella poster', amount: 378_000 },
+      { label: 'Bokslutsdispositioner', amount: -50_000 },
+      { label: 'Skatt på årets resultat', amount: -68_000 },
+      { label: NET_RESULT_LABEL, amount: 260_000, emphasis: true },
+    ])
+  })
+})
+
+describe('incomeStatementLayout', () => {
+  it('places Resultat efter finansiella poster after the blocks above it, other class-8 groups included', () => {
+    const layout = incomeStatementLayout(
+      report(
+        [
+          section('Räntekostnader', '8410', -3_000),
+          section('Övriga finansiella poster', '8510', 500),
+          section('Bokslutsdispositioner', '8811', -50_000),
+        ],
+        327_500,
+      ),
+    )
+
+    expect(layout.operatingResult).toBe(380_000)
+    expect(layout.class8.map((b) => [b.group.key, b.total])).toEqual([
+      ['finansiella_poster', -3_000],
+      ['ovriga_finansiella_poster', 500],
+      ['bokslutsdispositioner', -50_000],
+    ])
+    expect(layout.resultAfterFinancial).toBe(377_500)
+  })
+
+  it('has no Resultat efter finansiella poster when class 8 holds only bokslutsdispositioner and skatt', () => {
+    const layout = incomeStatementLayout(report([section('Skatter och årets resultat', '8910', -68_000)], 312_000))
+
+    expect(layout.class8.map((b) => b.group.key)).toEqual(['skatter'])
+    expect(layout.resultAfterFinancial).toBeNull()
   })
 })

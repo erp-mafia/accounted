@@ -294,6 +294,19 @@ describe('listOrdersPage', () => {
     expect(sentQuery(0)).not.toMatch(/address1|address2|zip|city|province|email|phone|customer|firstName|lastName/)
   })
 
+  it('asks whether the store cancelled the order, with and without the addresses', async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        jsonResponse({ data: ordersData([{ legacyResourceId: '1042', cancelledAt: '2026-08-02T08:00:00Z' }]) }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ data: ordersData([{ legacyResourceId: '1043', cancelledAt: null }]) }))
+    const page = await listOrdersPage(SESSION, OPTIONS)
+    expect(page.orders[0].cancelledAt).toBe('2026-08-02T08:00:00Z')
+    await listOrdersPage(SESSION, { ...OPTIONS, includeAddresses: false })
+    expect(sentQuery(0)).toMatch(/\bcancelledAt\b/)
+    expect(sentQuery(1)).toMatch(/\bcancelledAt\b/)
+  })
+
   it('tolerates the documented protected-data refusal: null field plus a field-scoped error', async () => {
     // Shopify's documented shape for a field the app may not read: HTTP 200,
     // the field null in data, an errors entry whose path points at it.

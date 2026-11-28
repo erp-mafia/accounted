@@ -31,6 +31,7 @@ const VAT_KEYS: Record<string, string> = {
   reverse_charge: 'vat_reverse_charge',
   reverse_charge_eu: 'vat_reverse_charge',
   reverse_charge_non_eu: 'vat_reverse_charge',
+  unknown: 'vat_unknown',
 }
 
 /** i18n key in the `rules` namespace for a VAT treatment, or null for an unknown value. */

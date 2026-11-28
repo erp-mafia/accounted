@@ -13,6 +13,9 @@ const mocks = vi.hoisted(() => ({
   getBranding: vi.fn(),
   createAuthCode: vi.fn<(...args: unknown[]) => string>(() => 'test-auth-code'),
   resolveBrandResultByHost: vi.fn(),
+  // Default: no partner client holds a secret, so no request is refused for
+  // its client_id; the confidential-client tests override it.
+  refuseForeignPartnerClientId: vi.fn(async (..._args: unknown[]): Promise<Response | null> => null),
   // Default: a single-company user, so the consent page renders no picker and
   // every pre-existing test keeps its shape. Multi-company tests override
   // with mockResolvedValue; clearAllMocks keeps this implementation.
@@ -58,6 +61,11 @@ vi.mock('@/lib/auth/oauth-allowlist', async (importOriginal) => {
 
 vi.mock('@/lib/company/context', () => ({
   getActiveCompanyId: (...args: unknown[]) => mocks.getActiveCompanyId(...args),
+}))
+
+vi.mock('@/lib/auth/oauth-client-auth', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/auth/oauth-client-auth')>()),
+  refuseForeignPartnerClientId: (...args: unknown[]) => mocks.refuseForeignPartnerClientId(...args),
 }))
 
 vi.mock('@/lib/branding/service', () => ({
@@ -741,6 +749,74 @@ describe('client identity on the consent page', () => {
     expect(html).not.toContain('<img src=x')
     expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;')
     expect(html).toContain('Registrerad av dig')
+  })
+})
+
+describe('a partner client that holds a secret (confidential client)', () => {
+  const params = {
+    response_type: 'code',
+    redirect_uri: 'https://gateway.example.com/oauth/callback',
+    client_id: 'acme',
+    code_challenge: 'abc',
+    code_challenge_method: 'S256',
+    state: 'xyz',
+  }
+  const refusal = () =>
+    Response.json(
+      { error: 'invalid_request', error_description: 'client_id is not the client this redirect_uri belongs to' },
+      { status: 400 },
+    )
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-service-key'
+    mocks.createClient.mockResolvedValue(buildSupabase({ id: 'user-1' }))
+    mocks.resolveRedirectUri.mockResolvedValue(PARTNER)
+    mocks.refuseForeignPartnerClientId.mockResolvedValue(null)
+    mocks.getActiveCompanyId.mockResolvedValue('company-1')
+    mocks.getBranding.mockReturnValue({ appName: 'Accounted' })
+  })
+
+  it('shows no consent for its callback under another client_id, and never redirects (RFC 6749 section 4.1.2.1)', async () => {
+    mocks.refuseForeignPartnerClientId.mockResolvedValueOnce(refusal())
+    const res = await GET(new Request(buildAuthorizeUrl({ ...params, client_id: 'b9f6a1e2-1111-4222-8333-944455556666' })))
+
+    expect(res.status).toBe(400)
+    expect(res.headers.get('location')).toBeNull()
+    expect((await res.json()).error).toBe('invalid_request')
+    expect(mocks.refuseForeignPartnerClientId).toHaveBeenCalledWith('acme', 'b9f6a1e2-1111-4222-8333-944455556666')
+  })
+
+  it('mints no code on a POST under another client_id', async () => {
+    mocks.refuseForeignPartnerClientId.mockResolvedValueOnce(refusal())
+    const res = await POST(
+      new Request(buildAuthorizeUrl({ ...params, client_id: 'other' }), { method: 'POST', body: consentForm('') }),
+    )
+
+    expect(res.status).toBe(400)
+    expect(mocks.createAuthCode).not.toHaveBeenCalled()
+  })
+
+  it('binds the code it issues to the partner client', async () => {
+    const res = await POST(new Request(buildAuthorizeUrl(params), { method: 'POST', body: consentForm('') }))
+
+    expect(res.status).toBe(303)
+    expect(mocks.refuseForeignPartnerClientId).toHaveBeenCalledWith('acme', 'acme')
+    expect(lastMintedPayload().partnerClientId).toBe('acme')
+  })
+
+  it('binds no partner and asks nothing for a built-in client', async () => {
+    mocks.resolveRedirectUri.mockResolvedValue(CLAUDE)
+    const res = await POST(
+      new Request(buildAuthorizeUrl({ ...params, redirect_uri: 'https://claude.ai/api/mcp/auth_callback' }), {
+        method: 'POST',
+        body: consentForm(''),
+      }),
+    )
+
+    expect(res.status).toBe(303)
+    expect(mocks.refuseForeignPartnerClientId).not.toHaveBeenCalled()
+    expect(lastMintedPayload()).not.toHaveProperty('partnerClientId')
   })
 })
 

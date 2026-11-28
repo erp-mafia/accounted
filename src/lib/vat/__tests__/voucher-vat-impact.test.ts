@@ -15,7 +15,6 @@ type Line = [account: string, debit: number, credit: number]
 
 const toLines = (lines: Line[]): VoucherImpactLine[] =>
   lines.map(([account_number, debit_amount, credit_amount]) => ({ account_number, debit_amount, credit_amount }))
-const accounts = (lines: Line[]) => lines.map(([account]) => account)
 
 const AB = ['1630']
 const EF = ['1630', '2012']
@@ -36,6 +35,17 @@ const HISTORICAL_CORRECTION: Line[] = [
   ['3740', 0, 0.4],
 ]
 
+// The reported case: an ordinary domestic sale with VAT of another scheme
+// booked straight to 2650 next to it, every line in credit against the bank.
+// Amounts are illustrative.
+const SALE_WITH_2650_LINE: Line[] = [
+  ['1930', 1350, 0],
+  ['3001', 0, 1000],
+  ['2611', 0, 250],
+  ['2650', 0, 100],
+]
+const flipped = (lines: Line[]): Line[] => lines.map(([account, debit, credit]): Line => [account, credit, debit])
+
 describe('momsredovisningShapeOfLines: the SQL shape_flags over one verifikat', () => {
   // Expectations are the SQL's, as the pg tests pin them on
   // vat_declaration_special_entries (tests/pg/vat-skattekonto-counter-entries
@@ -55,13 +65,56 @@ describe('momsredovisningShapeOfLines: the SQL shape_flags over one verifikat', 
     ['a reverse-charge purchase', [['2645', 25, 0], ['2614', 0, 25], ['4535', 100, 0], ['2440', 0, 100]], null],
     ['the correction without its 2650 leg', [['5420', 1000, 0], ['2645', 0, 1000]], null],
   ])('%s', (_label, lines, expected) => {
-    expect(momsredovisningShapeOfLines(accounts(lines), AB)).toBe(expected)
+    expect(momsredovisningShapeOfLines(toLines(lines), AB)).toBe(expected)
   })
 
   it('reads 2012 as the skattekonto only where the SQL does (enskild firma)', () => {
     const lines: Line[] = [['2611', 300, 0], ['2012', 0, 300]]
-    expect(momsredovisningShapeOfLines(accounts(lines), EF)).toBe('tax_account_shape')
-    expect(momsredovisningShapeOfLines(accounts(lines), AB)).toBeNull()
+    expect(momsredovisningShapeOfLines(toLines(lines), EF)).toBe('tax_account_shape')
+    expect(momsredovisningShapeOfLines(toLines(lines), AB)).toBeNull()
+  })
+
+  // Shape 1 leaves a sale or a purchase with a same-side 2650/1650 line to the
+  // rutor: no declaration-account line against a 2650/1650 line, and a
+  // declaration line outside 26xx (a sales or purchase base). The cases
+  // tests/pg/vat-net-shape-sales-base.pg.test.ts pins on the SQL.
+  describe('a sale or a purchase with a same-side 2650/1650 line', () => {
+    it.each<[string, Line[]]>([
+      ['a sale with a 2650 line next to it, all in credit', SALE_WITH_2650_LINE],
+      ['its storno, all in debit', flipped(SALE_WITH_2650_LINE)],
+      ['a sale whose output VAT was booked on 2650', [['1510', 1250, 0], ['3001', 0, 1000], ['2650', 0, 250]]],
+      ['a sale whose only 2650 line is a zero line', [['1930', 1250, 0], ['3001', 0, 1000], ['2611', 0, 250], ['2650', 0, 0]]],
+      ['a grant on 3980 next to a VAT refund on the skattekonto', [['1630', 30000, 0], ['3980', 0, 24000], ['1650', 0, 6000]]],
+    ])('reads %s as an ordinary verifikat', (_label, lines) => {
+      expect(momsredovisningShapeOfLines(toLines(lines), AB)).toBeNull()
+    })
+
+    it.each<[string, Line[]]>([
+      ['a write-off of VAT balances to a cost', [['2641', 0, 488], ['2650', 0, 891], ['6992', 1379, 0]]],
+      ['VAT balances moved to the owner', [['2641', 0, 475], ['1650', 0, 6369], ['2012', 6844, 0]]],
+      ['a purchase whose only declaration line is 2641, next to a 1650 line', [['6110', 400, 0], ['2641', 100, 0], ['1650', 50, 0], ['1930', 0, 550]]],
+      ['a sale whose only base line is a zero line', [['1930', 250, 0], ['3001', 0, 0], ['2611', 0, 150], ['2650', 0, 100]]],
+    ])('still takes %s for a momsredovisning', (_label, lines) => {
+      expect(momsredovisningShapeOfLines(toLines(lines), AB)).toBe('net_account_shape')
+    })
+
+    it.each<[string, Line[]]>([
+      ['a settle-and-pay voucher that debits last period\'s 2650', [['2611', 1000, 0], ['2641', 0, 400], ['2650', 0, 600], ['2650', 500, 0], ['1930', 0, 500]]],
+      ['a year-end voucher that clears the VAT next to a sales line', [['1510', 1000, 0], ['3001', 0, 1000], ['2611', 250, 0], ['2650', 0, 250]]],
+      ['a correction that moves output VAT to 1650 next to a sales correction', [['2611', 300, 0], ['3001', 300, 0], ['3988', 0, 300], ['1650', 0, 300]]],
+      ['a sale mixed with a refund whose VAT stands against the 2650 line', [...SALE_WITH_2650_LINE, ['3001', 100, 0], ['2611', 25, 0], ['1930', 0, 125]]],
+    ])('keeps %s, with a line against 2650/1650, a momsredovisning', (_label, lines) => {
+      expect(momsredovisningShapeOfLines(toLines(lines), AB)).toBe('net_account_shape')
+    })
+
+    it('reads a line stored with both sides by its net', () => {
+      // A row from before the single-side constraint: 2650 nets to credit.
+      const lines: VoucherImpactLine[] = [
+        { account_number: '2611', debit_amount: 250, credit_amount: 0 },
+        { account_number: '2650', debit_amount: 40, credit_amount: 290 },
+      ]
+      expect(momsredovisningShapeOfLines(lines, AB)).toBe('net_account_shape')
+    })
   })
 })
 
@@ -127,6 +180,16 @@ describe('voucherVatDeclarationImpact', () => {
       .toContain('Momsperioden är redan deklarerad (inlämnad 2026-11-12)')
     // Nothing to say about a filed period when no ruta moves.
     expect(impact(HISTORICAL_CORRECTION, { vatPeriod: filed }).summary).not.toContain('redan deklarerad')
+  })
+
+  it('reads a sale with a 2650 line next to it: the rutor move by the sale', () => {
+    const result = impact(SALE_WITH_2650_LINE)
+    expect(result).toMatchObject({
+      counted: true, excluded_as: null, rutor_change: { ruta05: 1000, ruta10: 250, ruta49: 250 },
+    })
+    expect(result.summary).toBe(
+      `Ändrar momsdeklarationen för Oktober 2026: ruta 05 +${formatCurrency(1000)}, ruta 10 +${formatCurrency(250)}, ruta 49 +${formatCurrency(250)}.`,
+    )
   })
 
   it('names the skattekonto shape', () => {

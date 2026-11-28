@@ -25,6 +25,7 @@ import type {
   WebshopStoreSettings,
 } from '@/types'
 import { WEBSHOP_PREFILL_ACCOUNTS } from './booking-lines'
+import { isCancelledWithoutRefund } from './booking-status'
 import { ensureWebshopPrefillAccounts } from './ensure-accounts'
 import { deriveUnattendedOrderLines } from './unattended-lines'
 
@@ -171,6 +172,8 @@ type DerivationRow = Pick<
   | 'is_paid'
   | 'customer_country'
   | 'ships_nothing'
+  | 'status'
+  | 'refunded_total'
 >
 
 function derivationFingerprint(row: DerivationRow): string {
@@ -189,6 +192,9 @@ function derivationFingerprint(row: DerivationRow): string {
     row.is_paid,
     row.customer_country,
     row.ships_nothing ?? false,
+    // The store's cancel is a guard input, not a line input: only whether
+    // it refuses the order counts, so a status that moves on does not.
+    isCancelledWithoutRefund(row),
   ])
 }
 
@@ -553,7 +559,7 @@ export async function bookWebshopDay(
   const derivedFrom = new Map(included.map(({ order }) => [order.id, derivationFingerprint(order)]))
   const { data: claimedRows, error: verifyError } = await supabase
     .from('webshop_orders')
-    .select('id, row_type, currency, total, total_tax, total_sek, exchange_rate, vat_breakdown, paid_date, order_date, payment_method, is_paid, customer_country, ships_nothing')
+    .select('id, row_type, currency, total, total_tax, total_sek, exchange_rate, vat_breakdown, paid_date, order_date, payment_method, is_paid, customer_country, ships_nothing, status, refunded_total')
     .eq('company_id', companyId)
     .eq('journal_entry_id', draft.id)
   const changed = ((claimedRows ?? []) as unknown as DerivationRow[])

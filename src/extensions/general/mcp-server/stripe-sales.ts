@@ -8,8 +8,9 @@ import type { Transaction } from '@/types'
  * A Stripe sale in gnubok_suggest_categories.
  *
  * The Stripe feed brings each card payment onto the Stripe balance as a row
- * of its own with the gross amount and the payer's name, and nothing else:
- * no moms, no buyer country (stripe/lib/transaction-sync.ts). No rule,
+ * of its own with the gross amount, the payer's name and the buyer's two
+ * countries when Stripe states them (billing_country, card_country, kept
+ * apart), and no moms (stripe/lib/transaction-sync.ts). No rule,
  * history or learned counterpart matches such a row, so it was listed as
  * having no signal at all, and an agent filled the gap with 25 % Swedish
  * moms, which is wrong for a sale to another EU country or outside the EU.
@@ -26,7 +27,7 @@ export const STRIPE_DAILY_SALES_PROPOSAL_ID = 'stripe_daily_sales'
 
 /** The hint on that proposal: where the moms of a Stripe sale comes from (MCP, Swedish like `why`). */
 export const STRIPE_SALE_VAT_HINT =
-  'Raden har varken moms eller köparens land. Momsen beror på vad som sålts och på köparen (land, företag eller privatperson): ta den ur Stripes rapport för dagen och avgör den med horizontal/swedish-vat. Anta aldrig 25 % svensk moms; saknas rapporten, be användaren om den.'
+  'Raden har ingen moms. Köparens länder står på raden när Stripe angav dem, var för sig: billing_country (fakturaadressens land) och card_country (kortets land); säger de olika, säg det till användaren innan momsen väljs. Momsen beror på vad som sålts och på köparen (land, företag eller privatperson): ta den ur Stripes rapport för dagen och avgör den med horizontal/swedish-vat. Anta aldrig 25 % svensk moms; saknas rapporten, be användaren om den.'
 
 /** A sale on the Stripe balance: a card payment from the Stripe feed, money in. */
 export function isStripeSaleRow(tx: Pick<Transaction, 'import_source' | 'transaction_method' | 'amount'>): boolean {

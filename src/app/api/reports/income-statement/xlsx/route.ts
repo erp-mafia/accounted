@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
-import { NET_RESULT_LABEL } from '@/lib/reports/income-definitions'
+import { buildIncomeStatementPdfModel, incomeStatementLayout } from '@/lib/reports/financial-statement-pdf'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { parseReportDateRange } from '@/lib/reports/date-range'
 import {
@@ -109,27 +109,20 @@ export const GET = withRouteContext('report.income_statement.xlsx', async (reque
       'Summa rörelsekostnader',
       report.total_expenses,
     )
-    const financialRows = flatten(
-      report.financial_sections,
-      'Finansiella poster',
-      'Summa finansiella poster',
-      report.total_financial,
-    )
+    // One sheet per class-8 block of the uppställningsform, as the PDF groups
+    // them: 88 and 89 are not finansiella poster.
+    const class8Sheets = incomeStatementLayout(report).class8.map((block) => ({
+      name: block.group.heading,
+      rows: flatten(block.sections, block.group.heading, block.group.totalLabel, block.total),
+    }))
 
-    const summaryRows: FlatRow[] = [
-      {
-        section: 'Sammanfattning',
-        account_number: '',
-        account_name: 'Rörelseresultat',
-        amount: Math.round((report.total_revenue - report.total_expenses) * 100) / 100,
-      },
-      {
-        section: 'Sammanfattning',
-        account_number: '',
-        account_name: NET_RESULT_LABEL,
-        amount: report.net_result,
-      },
-    ]
+    // The PDF's summary lines, Resultat efter finansiella poster included.
+    const summaryRows: FlatRow[] = buildIncomeStatementPdfModel(report).summary.map((line) => ({
+      section: 'Sammanfattning',
+      account_number: '',
+      account_name: line.label,
+      amount: line.amount,
+    }))
 
     const columns = [
       textColumn('Sektion'),
@@ -149,7 +142,7 @@ export const GET = withRouteContext('report.income_statement.xlsx', async (reque
         account_name: '',
         amount: null as unknown as number,
       }
-      for (const sheetRows of [revenueRows, expenseRows, financialRows, summaryRows]) {
+      for (const sheetRows of [revenueRows, expenseRows, ...class8Sheets.map((sheet) => sheet.rows), summaryRows]) {
         sheetRows.unshift(note)
       }
     }
@@ -157,7 +150,7 @@ export const GET = withRouteContext('report.income_statement.xlsx', async (reque
     const buffer = await reportToWorkbook<FlatRow>([
       { name: 'Intäkter', columns, rows: revenueRows, mapRow },
       { name: 'Kostnader', columns, rows: expenseRows, mapRow },
-      { name: 'Finansiella poster', columns, rows: financialRows, mapRow },
+      ...class8Sheets.map((sheet) => ({ name: sheet.name, columns, rows: sheet.rows, mapRow })),
       { name: 'Sammanfattning', columns, rows: summaryRows, mapRow },
     ])
 

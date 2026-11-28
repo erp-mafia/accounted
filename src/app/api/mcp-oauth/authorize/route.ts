@@ -21,6 +21,7 @@ import {
   resolveRedirectUri,
   type RedirectUriResolution,
 } from '@/lib/auth/oauth-allowlist'
+import { refuseForeignPartnerClientId } from '@/lib/auth/oauth-client-auth'
 import { resolveDiscoveryBaseUrl } from '@/lib/api/v1/base-url'
 import { requestCspNonce } from '@/lib/security/csp'
 import {
@@ -274,6 +275,13 @@ export async function GET(request: Request) {
       { error: 'invalid_request', error_description: 'redirect_uri is not allowed' },
       { status: 400 }
     )
+  }
+
+  // A partner client that holds a secret is confidential and its client_id
+  // is its slug: consent is never shown for its callback under another one.
+  if (resolution.kind === 'partner') {
+    const refusal = await refuseForeignPartnerClientId(resolution.slug, url.searchParams.get('client_id'))
+    if (refusal) return refusal
   }
 
   // null for an account with no company yet (signed up from the OAuth popup,
@@ -1156,6 +1164,10 @@ export async function POST(request: Request) {
       { status: 400 }
     )
   }
+  if (resolution.kind === 'partner') {
+    const refusal = await refuseForeignPartnerClientId(resolution.slug, url.searchParams.get('client_id'))
+    if (refusal) return refusal
+  }
 
   // Parse form body
   const formData = await request.formData()
@@ -1319,6 +1331,9 @@ export async function POST(request: Request) {
     companyId,
     companyIds,
     readOnlyCompanyIds,
+    // The partner client the code is issued to: /token records the key under
+    // it and, when it holds a secret, demands it before the exchange.
+    ...(resolution.kind === 'partner' ? { partnerClientId: resolution.slug } : {}),
   })
 
   // Redirect to callback with the code

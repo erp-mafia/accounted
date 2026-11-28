@@ -23,9 +23,9 @@
  *   - automatic: the matcher chose it (runReconciliation, a confirmed
  *     suggestion, the auto-link after an invoice is linked to its voucher,
  *     proposals applied in bulk). Taught only once the same bank text has
- *     been linked onto a verifikat of the same accounts before: an earlier
- *     link that would have taught the same shape, or a template already
- *     holding that shape. Repetition is the evidence one system match lacks
+ *     been linked onto a verifikat of the same accounts and moms before: an
+ *     earlier link that would have taught the same shape, or a template
+ *     already holding that shape. Repetition is the evidence one system match lacks
  *     (accounted#36). An automatic link never changes a template's accounts.
  *
  * Never taught, whoever linked:
@@ -57,6 +57,7 @@ import {
   findTemplateByKey,
   insertOrUpdateTemplate,
   isRoutineVoucherText,
+  learnedMoms,
   learnsOtherMoms,
   namesCounterparty,
   normalizeCounterpartyName,
@@ -67,6 +68,7 @@ import {
   type VerifikatTemplateShape,
 } from '@/lib/bookkeeping/counterparty-templates'
 import { clearsAnInvoice } from '@/lib/bookkeeping/invoice-clearing'
+import { readVatRegistration, type VatRegistration } from '@/lib/bookkeeping/vat-registration'
 import { BANK_LEG_PLACEHOLDER, isCashLedger } from '@/lib/bookkeeping/bank-leg'
 import { ledgerLineAmountIn } from '@/lib/bookkeeping/ledger-line-amount'
 import { isSkatteverketPayment } from '@/lib/bookkeeping/skatteverket-payment'
@@ -78,7 +80,7 @@ import { ID_READ_CHUNK } from '@/lib/reconciliation/limits'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { readBankLegHolders } from '@/lib/transactions/voucher-bank-leg'
 import { chunk } from '@/lib/utils'
-import type { CategorizationTemplateSource } from '@/types'
+import type { CategorizationTemplateSource, TemplateVatTreatment } from '@/types'
 
 const log = createLogger('transactions/link-learning')
 
@@ -237,9 +239,10 @@ async function learn(
   const earlier = teaching === 'automatic' && learnable.length > 0
     ? await readEarlierLinks(supabase, companyId, learnable)
     : new Map<string, LearnableLink[]>()
+  const vatRegistered = learnable.length > 0 ? await readVatRegistration(supabase, companyId) : undefined
 
   for (const link of learnable) {
-    results.set(link.transactionId, await teach(supabase, companyId, link, teaching, earlier))
+    results.set(link.transactionId, await teach(supabase, companyId, link, teaching, earlier, vatRegistered))
   }
 
   const counts: Record<string, number> = {}
@@ -256,11 +259,13 @@ async function teach(
   link: LearnableLink,
   teaching: LinkTeaching,
   earlier: Map<string, LearnableLink[]>,
+  vatRegistered: VatRegistration,
 ): Promise<LinkLearningResult> {
   if (teaching === 'explicit') {
     // As a categorize booking: one occurrence, a correction when the stored
-    // template books otherwise (insertOrUpdateTemplate decides).
-    const written = await insertOrUpdateTemplate(supabase, companyId, upsertParams(link, 1, 'user_approved'))
+    // template books otherwise (insertOrUpdateTemplate decides), the
+    // company's VAT registration read as categorize reads it.
+    const written = await insertOrUpdateTemplate(supabase, companyId, upsertParams(link, 1, 'user_approved', vatRegistered))
     return { outcome: written ? 'learned' : 'write_failed' }
   }
 
@@ -269,18 +274,20 @@ async function teach(
     // A template already holding this shape is the earlier occurrence; one
     // holding another is the person's or an earlier booking's, and the
     // matcher never overrides it.
-    // The same pair and the same moms too, so insertOrUpdateTemplate counts
+    // The same pair and the same moms too, the verifikat's whole moms read
+    // off its own lines (learnedMoms), so a verifikat with moms never counts
+    // for a template without. insertOrUpdateTemplate then counts
     // it and never reads it as a correction.
     // The stored pattern stays: the matcher's link only counts.
-    const counted = { ...upsertParams(link, 1, 'auto_learned'), linePattern: undefined }
+    const counted = { ...upsertParams(link, 1, 'auto_learned', vatRegistered), linePattern: undefined }
     if (
       templateAccountSet(existing) !== link.shape.accountSet ||
       !samePairButBankLedger(existing, link.shape.debitAccount, link.shape.creditAccount) ||
-      learnsOtherMoms(existing, counted)
+      learnsOtherMoms(existing, upsertParams(link, 1, 'auto_learned', vatRegistered))
     ) {
       return { outcome: 'conflicts_template' }
     }
-    const written = await insertOrUpdateTemplate(supabase, companyId, counted, existing)
+    const written = await insertOrUpdateTemplate(supabase, companyId, { ...counted, momsAsTemplate: true }, existing)
     return { outcome: written ? 'reapproved' : 'write_failed' }
   }
 
@@ -289,15 +296,21 @@ async function teach(
       before.transactionId !== link.transactionId &&
       before.journalEntryId !== link.journalEntryId &&
       before.shape.accountSet === link.shape.accountSet &&
+      shapeMoms(before.shape) === shapeMoms(link.shape) &&
       compareLinks(before, link) < 0,
   )
   if (!repeated) return { outcome: 'awaiting_repetition' }
   // Both links are the evidence.
-  const written = await insertOrUpdateTemplate(supabase, companyId, upsertParams(link, 2, 'auto_learned'), null)
+  const written = await insertOrUpdateTemplate(supabase, companyId, upsertParams(link, 2, 'auto_learned', vatRegistered), null)
   return { outcome: written ? 'learned' : 'write_failed' }
 }
 
-function upsertParams(link: LearnableLink, occurrenceCount: number, source: CategorizationTemplateSource): TemplateUpsertParams {
+function upsertParams(
+  link: LearnableLink,
+  occurrenceCount: number,
+  source: CategorizationTemplateSource,
+  vatRegistered: VatRegistration,
+): TemplateUpsertParams {
   const { debitAccount, creditAccount, vatTreatment, vatAccount, linePattern } = link.shape
   return {
     counterpartyName: link.key,
@@ -312,7 +325,13 @@ function upsertParams(link: LearnableLink, occurrenceCount: number, source: Cate
     confidence: calculateConfidence(occurrenceCount),
     lastSeenDate: link.date,
     source,
+    vatRegistered,
   }
+}
+
+/** The moms a shape teaches (learnedMoms): two links with other moms are not a repetition. */
+function shapeMoms(shape: VerifikatTemplateShape): string {
+  return learnedMoms({ vat_treatment: shape.vatTreatment as TemplateVatTreatment | null, line_pattern: shape.linePattern })
 }
 
 function compareLinks(a: Pick<LearnableLink, 'date' | 'transactionId'>, b: Pick<LearnableLink, 'date' | 'transactionId'>): number {

@@ -292,6 +292,20 @@ describe('categorizeArgsFor', () => {
     expect(categorizeArgsFor(accountProposal({ ...base, reverse_charge_kind: 'eu_services' }))?.vat_treatment).toBe('reverse_charge_eu_services')
     expect(categorizeArgsFor(accountProposal(base))?.vat_treatment).toBe('reverse_charge')
   })
+  it('hands an agent no arguments for a counterpart whose moms is unknown: never exempt, the underlag states it', () => {
+    const p: BookingProposal = {
+      template_id: 'cp:abc', source: 'counterparty', booking: { kind: 'counterparty', counterparty_template_id: 'abc' },
+      name_sv: 'Forradshyra', name_en: 'Forradshyra', group: 'counterparty', debit_account: '5010', credit_account: '1930', confidence: 0.75,
+      description_sv: '', risk_level: 'NONE', requires_review: true, vat_treatment: null, vat_unknown: true, seen_count: 7,
+    }
+    expect(categorizeArgsFor(p)).toBeNull()
+    // A box the assistant's read disputes is still said after the unknown moms.
+    expect(whyTextSv({ ...p, read_reverse_charge_kind: 'non_eu_services', line_pattern: [{ account: '2641', type: 'vat', side: 'debit' } as never] })).toContain('assistentens läsning säger att säljaren finns utomlands')
+    expect(categorizeArgsFor({ ...p, vat_unknown: undefined, requires_review: false })).toMatchObject({ account_override: '5010', vat_treatment: 'exempt' })
+    expect(whyTextSv(p)).toBe(
+      'Bokförd så 7 gånger tidigare, men momsen på motpartens bokningar är inte 25, 12 eller 6 % av beloppet och går inte att föreslå: bokför momsen som underlaget anger (vat_amount), inte som momsfri',
+    )
+  })
   it('spells the box a catalog template books, so an agent books a non-EU template in ruta 22 (accounted#37)', () => {
     expect(categorizeArgsFor(proposalFromTemplate(getTemplateById('it_saas_non_eu')!, 'catalog'))?.vat_treatment).toBe('reverse_charge_non_eu_services')
     expect(categorizeArgsFor(proposalFromTemplate(getTemplateById('it_saas_eu')!, 'catalog'))?.vat_treatment).toBe('reverse_charge')

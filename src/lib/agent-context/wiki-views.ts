@@ -16,6 +16,14 @@ export function wikiViewHref(view: WikiView): string {
   return view === 'context' ? '/wiki' : `/wiki?view=${view}`
 }
 
+/**
+ * Where a person sees the facts agents saved with gnubok_remember_fact, for
+ * an agent to tell them: the briefing's memory line and the onboarding
+ * import say it. With the agent picture on, the address opens the picture's
+ * Minne row (wikiPlace).
+ */
+export const MEMORY_PLACE_IN_APP = `A person sees and reviews these facts in Accounted under Agenter > Minne (Agents > Memory in English), at ${wikiViewHref('memory')}.`
+
 export function parseWikiView(raw: string | null | undefined): WikiView {
   return (WIKI_VIEWS as readonly string[]).includes(raw ?? '') ? (raw as WikiView) : 'context'
 }

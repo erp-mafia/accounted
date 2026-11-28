@@ -214,6 +214,7 @@ import {
 import { invoiceTotalSek, type AttestInvoiceFacts } from '@/lib/supplier-invoices/attest-policy'
 import { inboxStatedPaymentDetails, planSupplierPaymentBackfill, type SupplierPaymentColumns } from '@/lib/supplier-invoices/payment-details-backfill'
 import { loadOpenPaymentInstructions } from '@/lib/supplier-invoices/lifecycle-stages'
+import { releasedForRegistration } from '@/lib/supplier-invoices/released-underlag'
 import { readAttestHold, type AttestHold } from '@/lib/supplier-invoices/attest-hold'
 import { loadAttestPolicyOn } from '@/lib/supplier-invoices/attest-policy-read'
 import { PAYABLE_SUPPLIER_INVOICE_STATUSES } from '@/lib/payments/batch-eligibility'
@@ -299,6 +300,7 @@ import { uiWidgets, findUiWidget, WIDGET_MIME_TYPE } from './widgets'
 import { dataResources, findCompanyScopedResource, findResource, parseResourceQuery } from './resources'
 import { buildLedgerContext, buildLedgerDigest } from '@/lib/agent-context/ledger-context'
 import { lastSessionSync, loadRememberedFacts } from '@/lib/agent-context/remembered-facts'
+import { MEMORY_PLACE_IN_APP } from '@/lib/agent-context/wiki-views'
 import {
   capabilityDigest,
   capabilitySurface,
@@ -4801,7 +4803,7 @@ const PURCHASE_NOTE_PLACE =
  * undeclared in outputSchema like the other briefing guidance (tools/list budget).
  */
 const WHERE_TO_FIND = [
-  `memory: every fact agents were told about this company, newest first; a later fact settles an earlier one. Save a new one with gnubok_remember_fact; pass replaces with the old fact_id when it updates one. ${PURCHASE_NOTE_PLACE}`,
+  `memory: every fact agents were told about this company, newest first; a later fact settles an earlier one. Save a new one with gnubok_remember_fact; pass replaces with the old fact_id when it updates one. ${PURCHASE_NOTE_PLACE} ${MEMORY_PLACE_IN_APP} arkiv.facts counts Arkiv's own registered facts, a separate list, not these.`,
   'ledger_context (all of it: Accounted://ledger/context): how this company has booked each counterparty and supplier.',
   'Documents: gnubok_search_records and gnubok_read_document (arkiv explains, when present).',
   'Workflows: gnubok_list_skills, then gnubok_load_skill; a curated workflow arrives with the company facts inline.',
@@ -9539,7 +9541,7 @@ export const tools: McpTool[] = [
         .from('open_bank_rows')
         .select(
           'id, date, description, amount, currency, merchant_name, reference, is_business, category, cash_account_id, ' +
-          'counterparty_org_number, instructed_amount, instructed_currency, balance_after, is_enriched, potential_match_method, ' +
+          'counterparty_org_number, billing_country, card_country, instructed_amount, instructed_currency, balance_after, is_enriched, potential_match_method, ' +
           'counterparty_account, counterparty_iban, original_description, external_id, provider_transaction_id, ' + SUGGESTION_POINTER_COLUMNS,
           { count: 'exact' },
         )
@@ -14273,7 +14275,12 @@ export const tools: McpTool[] = [
                 p.booking.kind === 'template'
                   ? templateSkattekontoAccount(businessAccount(p), skattekontoAccount)
                   : businessAccount(p),
-              vat_treatment: p.booking.kind === 'account' ? p.booking.vat_treatment : (p.vat_treatment ?? null),
+              // A counterpart whose moms is no one rate says so, never
+              // 'exempt': categorize_args is then null, and the agent books
+              // the underlag's moms itself.
+              vat_treatment: p.vat_unknown
+                ? 'unknown'
+                : p.booking.kind === 'account' ? p.booking.vat_treatment : (p.vat_treatment ?? null),
               categorize_args: categorizeArgsFor(p, entityType, skattekontoAccount),
             }
           })
@@ -14302,8 +14309,9 @@ export const tools: McpTool[] = [
         }
       }
 
-      // A Stripe sale carries neither moms nor the buyer's country: it leads
-      // with how Stripe sales are booked, the verifikat that booked the
+      // A Stripe sale carries no moms (the buyer's countries, when Stripe
+      // states them, ride on the row apart): it leads with how Stripe sales
+      // are booked, the verifikat that booked the
       // latest one, and where the moms comes from (./stripe-sales.ts). A
       // failed read of that verifikat is logged and only leaves it out.
       const stripeSales = (transactions as Transaction[]).filter(isStripeSaleRow)
@@ -19045,10 +19053,18 @@ export const tools: McpTool[] = [
       // The refusals below were plain Errors: UNKNOWN_ERROR, "try again", for
       // calls that fail the same way until something else changes (13 in 30 days).
       if (inboxErr || !inbox) throw inboxItemNotFound(inboxItemId)
-      if (inbox.created_supplier_invoice_id) {
+      // The item as the conversion reads it: an invoice it became that was
+      // credited (or reversed) no longer holds it, so its underlag can be
+      // registered again (lib/supplier-invoices/released-underlag.ts).
+      const { item: registrable, release: underlagRelease } = await releasedForRegistration(
+        supabase,
+        companyId,
+        inbox as unknown as InboxItemBookingRow & { document_id: string | null },
+      )
+      if (registrable.created_supplier_invoice_id) {
         throw codedRefusal(
           'INBOX_ITEM_ALREADY_CONVERTED',
-          `Inbox item already converted to supplier invoice ${inbox.created_supplier_invoice_id}`,
+          `Inbox item already converted to supplier invoice ${registrable.created_supplier_invoice_id}`,
           { description: 'Do not stage it again: that supplier invoice registers this item (gnubok_list_supplier_invoices).' },
         )
       }
@@ -19467,7 +19483,7 @@ export const tools: McpTool[] = [
       // What the approval refuses (convertInboxItemToSupplierInvoice): a
       // verifikat of its own next to the one that books the purchase already.
       if (bookingMoment === 'issue') {
-        const booking = await bookingStateOfItem(supabase, companyId, withDocumentHold(inbox as unknown as InboxItemBookingRow))
+        const booking = await bookingStateOfItem(supabase, companyId, registrable)
         if (booking.state === 'booked') {
           throw codedRefusal(
             'INBOX_ITEM_ALREADY_BOOKED',
@@ -19999,6 +20015,17 @@ export const tools: McpTool[] = [
         inbox_item_id: inboxItemId,
         supplier_id: supplierId,
         supplier_resolution: supplierResolution,
+        // Registered again: the invoice it was registered as is credited.
+        ...(underlagRelease.supplier_invoice_id
+          ? {
+              registers_again: {
+                credited_supplier_invoice_id: underlagRelease.supplier_invoice_id,
+                note: underlagRelease.copy_from_document_id
+                  ? 'The invoice this item was registered as is credited. Approving registers the underlag again; the credited verifikat keeps the document and the new registration gets a byte-identical copy of it.'
+                  : 'The invoice this item was registered as is credited. Approving registers the underlag again.',
+              },
+            }
+          : {}),
         extracted_supplier_name: supplierIdentity.name,
         extracted_org_number: supplierIdentity.orgNumber,
         extracted_vat_number: supplierIdentity.vatNumber,

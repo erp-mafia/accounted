@@ -240,6 +240,19 @@ describe('gnubok_list_uncategorized_transactions', () => {
     expect(result.transactions[0]).toMatchObject({ transaction_id: 't-foreign', counterparty_account: null, counterparty_iban: 'NO9386011117947' })
   })
 
+  it("returns a Stripe sale's billing address country and card country, apart", async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueuePage(enqueue, [
+      { id: 't-sale', date: '2026-11-20', description: 'Stripe-betalning Kund', amount: 499, currency: 'SEK', merchant_name: null, reference: null, is_business: null, category: null, cash_account_id: null, billing_country: 'SE', card_country: 'DE' },
+    ])
+
+    const result = (await tool.execute({ limit: 20 }, 'company-1', 'user-1', supabase as never)) as { transactions: Array<Record<string, unknown>> }
+
+    const select = String(findCalls('open_bank_rows', 'select')[0][0]).split(',').map((c) => c.trim())
+    expect(select).toEqual(expect.arrayContaining(['billing_country', 'card_country']))
+    expect(result.transactions[0]).toMatchObject({ transaction_id: 't-sale', billing_country: 'SE', card_country: 'DE' })
+  })
+
   it('reads the work queue server-side: not ignored, not private, anchored to no verifikat', async () => {
     // journal_entry_id IS NULL is only the first anchor: a row split over
     // several verifikat (#1553), bulk-booked into a samlingsverifikat or

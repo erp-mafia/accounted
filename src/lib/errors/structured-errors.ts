@@ -1154,6 +1154,13 @@ const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
     message_en:
       "The document's VAT cannot be used for this booking: it is more than 25 % VAT on the amount, or the booking has no rate-based VAT line. Book with the proposal's VAT instead, or choose Edit lines and enter the VAT yourself.",
   },
+  TX_CATEGORIZE_TEMPLATE_VAT_UNKNOWN: {
+    httpStatus: 400,
+    message_sv:
+      'Mallens moms är okänd: tidigare bokningar hade moms som inte är 25, 12 eller 6 procent av beloppet. Bokför på kontot med momsen som underlaget anger.',
+    message_en:
+      "The learned template's VAT is unknown: earlier bookings carried VAT that is not 25, 12 or 6 % of the amount. Book on its account (account_override with a category) with vat_treatment and the document's vat_amount instead of counterparty_template_id.",
+  },
   TRANSACTION_TITLE_LOCKED: {
     httpStatus: 409,
     message_sv:
@@ -8134,6 +8141,21 @@ const SUPPLIER_INVOICE_WAVE4: Record<string, StructuredErrorEntry> = {
       tool: 'gnubok_uncredit_supplier_invoice',
     },
   },
+  // The credit released the invoice's underlag and it was registered again
+  // (lib/supplier-invoices/released-underlag.ts): undone, the credit would
+  // bring the invoice back beside the new one, the purchase booked twice.
+  SI_UNCREDIT_REGISTERED_AGAIN: {
+    httpStatus: 409,
+    message_sv:
+      'Krediteringen går inte att ångra: underlaget har bokförts igen, på en annan leverantörsfaktura eller verifikation. Ta bort den bokföringen först om den ska bort.',
+    message_en:
+      'The credit cannot be undone: its underlag is booked again, as another supplier invoice (details.supplier_invoice_id) or on another verifikat (details.journal_entry_id). Undone, the credit would book the purchase twice. Take that booking out first if it is the one to go.',
+    remediation: {
+      description:
+        'Do not retry. details names what books this underlag now: credit that invoice (gnubok_credit_supplier_invoice) or reverse that verifikat, and only if the person says it is the wrong one.',
+      tool: 'gnubok_credit_supplier_invoice',
+    },
+  },
   SI_ITEM_NOT_FOUND: {
     httpStatus: 404,
     message_sv: 'Fakturaraden kunde inte hittas.',
@@ -11744,6 +11766,46 @@ const WEBSHOP_ORDERS: Record<string, StructuredErrorEntry> = {
       'Ordern är markerad som bokförd utanför integrationen. Ångra markeringen först om du vill bokföra eller fakturera den härifrån.',
     message_en:
       'The order is marked as booked outside the integration. Undo the mark first if you want to book or invoice it from here.',
+  },
+  WEBSHOP_ORDER_VOIDED: {
+    httpStatus: 409,
+    message_sv:
+      'Ordern är makulerad. Ångra makuleringen först för att bokföra eller fakturera den.',
+    message_en:
+      'The order is voided. Undo the void first to book or invoice it.',
+  },
+  WEBSHOP_ORDER_REFUND_PARENT_VOIDED: {
+    httpStatus: 409,
+    message_sv:
+      'Återbetalningens order är makulerad. Ångra makuleringen och bokför ordern och återbetalningen.',
+    message_en:
+      "The refund's order is voided. Undo the void and book the order and its refund.",
+  },
+  WEBSHOP_ORDER_NOT_CANCELLED: {
+    httpStatus: 409,
+    message_sv:
+      'Butiken rapporterar inte ordern som avbruten, så den kan inte makuleras.',
+    message_en:
+      'The store does not report the order as cancelled, so it cannot be voided.',
+  },
+  WEBSHOP_ORDER_VOID_RACED: {
+    httpStatus: 409,
+    message_sv: 'Ordern ändrades medan den makulerades och makulerades inte. Ladda om sidan.',
+    message_en: 'The order changed while it was being voided and was not voided. Reload the page.',
+  },
+  WEBSHOP_ORDER_CANCELLED_WITH_REFUND: {
+    httpStatus: 409,
+    message_sv:
+      'Butiken har betalat tillbaka pengar på ordern, så den bokförs med sin återbetalning i stället för att makuleras.',
+    message_en:
+      'The store has refunded money on the order, so it is booked with its refund instead of voided.',
+  },
+  WEBSHOP_ORDER_CANCELLED_IN_STORE: {
+    httpStatus: 422,
+    message_sv:
+      'Ordern är avbruten i butiken och bokförs inte automatiskt. Makulera den, eller bokför den enskilt om kunden har betalat.',
+    message_en:
+      'The order is cancelled in the store and is not booked automatically. Void it, or book it individually if the customer paid.',
   },
   WEBSHOP_ORDER_MARK_ENTRY_NOT_FOUND: {
     httpStatus: 404,

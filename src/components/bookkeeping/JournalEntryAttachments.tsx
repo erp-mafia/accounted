@@ -38,14 +38,18 @@ import {
 } from '@/components/icons'
 import DocumentUploadZone from '@/components/bookkeeping/DocumentUploadZone'
 import type { UploadedFile } from '@/components/bookkeeping/DocumentUploadZone'
-import InboxDocumentPicker from '@/components/bookkeeping/InboxDocumentPicker'
 import { useViewerLock } from '@/components/ui/viewer-lock'
 import { useBranding } from '@/lib/branding/brand-context'
 import { DOCUMENT_UPLOAD_ACCEPT } from '@/lib/documents/upload-types'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 
-// "Fel verifikation": a dialog, loaded when an underlag's link is struck.
+// "Fel verifikation": a dialog, mounted (and its code loaded) when an
+// underlag's link is first struck.
 const StrikeUnderlagDialog = dynamic(() => import('@/components/bookkeeping/StrikeUnderlagDialog'))
+
+// "Välj från inkorgen": mounted when it is first used, so the picker's code
+// loads then and not with every page that lists verifikat.
+const InboxDocumentPicker = dynamic(() => import('@/components/bookkeeping/InboxDocumentPicker'))
 
 interface DocumentRecord {
   id: string
@@ -107,6 +111,7 @@ export default function JournalEntryAttachments({
   const [expandedDoc, setExpandedDoc] = useState<string | null>(null)
   const [showUpload, setShowUpload] = useState(false)
   const [showInboxPicker, setShowInboxPicker] = useState(false)
+  const [inboxPickerUsed, setInboxPickerUsed] = useState(false)
   const [uploadFiles, setUploadFiles] = useState<UploadedFile[]>([])
 
   // Docs listed here are filtered by journal_entry_id, so every row is bound
@@ -129,6 +134,15 @@ export default function JournalEntryAttachments({
 
   const onCountChangeRef = useRef(onCountChange)
   onCountChangeRef.current = onCountChange
+  // An instance the parent replaced (a list row remounted after a sweep) may
+  // still finish a read: its count is stale and must not reach the parent.
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
 
   const fetchDocuments = useCallback(async () => {
     try {
@@ -190,6 +204,7 @@ export default function JournalEntryAttachments({
           }
         }),
       )
+      if (!mountedRef.current) return
       setStrikes(Object.fromEntries(records.filter((record) => record !== null)))
       setDocuments(allDocuments)
       // A struck link is not this verifikat's underlag: it does not count.
@@ -357,7 +372,10 @@ export default function JournalEntryAttachments({
         <div className="flex items-center gap-2">
           <Button
             variant="outline"
-            onClick={() => setShowInboxPicker(true)}
+            onClick={() => {
+              setInboxPickerUsed(true)
+              setShowInboxPicker(true)
+            }}
             disabled={!canWrite}
             title={lockedTitle}
           >
@@ -610,20 +628,24 @@ export default function JournalEntryAttachments({
         </DialogContent>
       </Dialog>
 
-      <StrikeUnderlagDialog
-        open={strikeDoc !== null}
-        onClose={() => setStrikeDoc(null)}
-        document={strikeDoc}
-        journalEntryId={journalEntryId}
-        onStruck={() => void fetchDocuments()}
-      />
+      {strikeDoc !== null && (
+        <StrikeUnderlagDialog
+          open
+          onClose={() => setStrikeDoc(null)}
+          document={strikeDoc}
+          journalEntryId={journalEntryId}
+          onStruck={() => void fetchDocuments()}
+        />
+      )}
 
-      <InboxDocumentPicker
-        open={showInboxPicker}
-        onClose={() => setShowInboxPicker(false)}
-        journalEntryId={journalEntryId}
-        onLinked={fetchDocuments}
-      />
+      {inboxPickerUsed && (
+        <InboxDocumentPicker
+          open={showInboxPicker}
+          onClose={() => setShowInboxPicker(false)}
+          journalEntryId={journalEntryId}
+          onLinked={fetchDocuments}
+        />
+      )}
     </div>
   )
 }
