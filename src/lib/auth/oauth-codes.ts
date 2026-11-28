@@ -50,6 +50,14 @@ export interface AuthCodePayload {
    * `companyIds` when present; null or undefined means none.
    */
   readOnlyCompanyIds?: string[] | null
+  /**
+   * client_id (the oauth_partner_clients slug) of the partner client the code
+   * was issued to, set by /authorize whenever the redirect URI resolved to a
+   * partner. /token records the key under that client and, when the client
+   * holds a secret, exchanges the code only for a request that authenticates
+   * as it. Absent for every other client.
+   */
+  partnerClientId?: string
   exp: number
 }
 

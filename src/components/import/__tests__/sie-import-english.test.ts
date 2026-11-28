@@ -187,6 +187,7 @@ const successResult: ImportResult = {
     openingBalanceSkipped: 'prior_activity',
     skippedVouchers: { unbalanced: 1, unmapped: 2, singleLine: 1, empty: 3, total: 7 },
     untransferredResults: [{ fiscal_period_id: 'p0', period_name: '2024', pl_net: 1000 }],
+    resultTransfer: { entryId: 'e1', voucher: 'A2', date: '2025-01-01', from: '2099', to: '2091', amount: 11850 },
   },
   nextPeriodIBResync: { nextPeriodId: 'p3', nextPeriodName: '2026', stornoEntryId: 's', newOpeningBalanceEntryId: 'n' },
   nextPeriodIBResyncSkipped: { reason: 'locked', nextPeriodName: '2027' },
@@ -283,6 +284,15 @@ describe('SIE import wizard under the English locale (crm#1356)', () => {
     const html = render(STEPS[0][1], 'en')
     expect(html).toContain('Upload SIE file')
     expect(render(STEPS.find(([name]) => name === 'mapping, all rows')![1], 'en')).toContain('Showing 1-50 of 60')
+  })
+
+  it('names the omföring of last year\'s result the import booked, in both languages', () => {
+    const done = STEPS.find(([name]) => name === 'result, done')![1]
+    const english = visibleText(render(done, 'en'))
+    expect(english).toContain('Last year\'s result')
+    expect(english).toContainEqual(expect.stringMatching(/^11\s850,00\skr transferred to 2091, voucher A2$/))
+    expect(english).toContainEqual(expect.stringContaining('has it on 2091'))
+    expect(visibleText(render(done, 'sv'))).toContainEqual(expect.stringMatching(/^11\s850,00\skr omfört till 2091, verifikation A2$/))
   })
 
   it('names what the mapper did with a row in English', () => {

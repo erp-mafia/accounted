@@ -22,7 +22,10 @@
  *     original whose rows do not add up to its payable (or that has no rows
  *     at all) is refused instead (SI_CREDIT_ROWS_MISMATCH), on a dry run too
  *     and before an ankomstnummer is drawn or anything is written;
- *   - the original moves to 'credited' with nothing left to pay;
+ *   - the original moves to 'credited' with nothing left to pay, and its
+ *     underlag is released: the document stays on the original and its
+ *     verifikat, and may be registered again, the new registration getting a
+ *     byte-identical copy (released-underlag.ts);
  *   - periodisering schedules on the original stop, and their posted
  *     dissolutions are stornoed (best-effort: a warning, never a failure).
  *

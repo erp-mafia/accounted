@@ -70,16 +70,23 @@ export default function ImportResultStep({
   const skipped = result.details?.skippedVouchers
   const untransferred = result.details?.untransferredResults
   const ibDifferences = result.details?.openingBalanceDifferences ?? []
+  // The omföring of last year's result the import booked the way the file's
+  // #IB has it (sie-result-transfer.ts).
+  const resultTransfer = result.details?.resultTransfer
   // The books open on the file's own previous year on every account: the
   // file's #IB is the side that is off (booksMatchFilePreviousYear).
   const ibFileOff = (result.notices ?? []).some((n) => n.code === 'sie_ib_file_differs_from_previous_year')
   // Outcome rows that show beside the reveal too (the reveal carries the counts).
   const hasOutcomeRows =
-    !!result.nextPeriodIBResync || !!result.dimensionsImported || (!!skipped && skipped.total > 0)
+    !!result.nextPeriodIBResync ||
+    !!result.dimensionsImported ||
+    !!resultTransfer ||
+    (!!skipped && skipped.total > 0)
 
-  // The skipped-voucher, untransferred-result, IB-difference and IB-resync
-  // rows and lines below render those facts with their own explanations, so their
-  // notice codes are excluded here by code, never by matching Swedish sentences.
+  // The skipped-voucher, untransferred-result, IB-difference, IB-resync and
+  // result-transfer rows and lines below render those facts with their own
+  // explanations, so their notice codes are excluded here by code, never by
+  // matching Swedish sentences.
   const notices = resolveNotices(result, [
     'sie_vouchers_skipped',
     'sie_untransferred_result',
@@ -87,6 +94,7 @@ export default function ImportResultStep({
     'sie_ib_file_differs_from_previous_year',
     'sie_next_ib_resynced',
     'sie_next_period_locked',
+    'sie_result_transferred',
   ])
 
   return (
@@ -227,6 +235,32 @@ export default function ImportResultStep({
               }
             >
               {t('result_ib_resync_value')}
+            </DefRow>
+          )}
+
+          {/* Last year's result moved the way the file's #IB has it: a
+              verifikat the import booked, so the row names it. */}
+          {resultTransfer && (
+            <DefRow
+              labelWidth={180}
+              label={
+                <span className="inline-flex items-center gap-2">
+                  {t('result_transfer_label')}
+                  <HelpPopover className="shrink-0">
+                    {tStep('result_transfer_help', {
+                      from: resultTransfer.from,
+                      to: resultTransfer.to,
+                      date: resultTransfer.date,
+                    })}
+                  </HelpPopover>
+                </span>
+              }
+            >
+              {t('result_transfer_value', {
+                amount: formatCurrency(resultTransfer.amount, 'SEK', { minimumFractionDigits: 2 }),
+                to: resultTransfer.to,
+                voucher: resultTransfer.voucher,
+              })}
             </DefRow>
           )}
 
