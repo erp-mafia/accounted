@@ -65,6 +65,7 @@ const h = vi.hoisted(() => {
     releaseSupplierInvoiceRegistrationAfterReversal: hook('releaseSupplierInvoiceRegistrationAfterReversal'),
     assertInvoiceVerifikatReversible: hook('assertInvoiceVerifikatReversible'),
     assertSalaryRunVerifikatReversible: hook('assertSalaryRunVerifikatReversible'),
+    assertCorrectedSalaryRunVerifikatReversible: hook('assertCorrectedSalaryRunVerifikatReversible'),
     assertExpenseClaimVerifikatReversible: hook('assertExpenseClaimVerifikatReversible'),
     emit: vi.fn(async (event: { type: string }) => {
       trace.push(`emit ${event.type}`)
@@ -102,6 +103,7 @@ vi.mock('@/lib/invoices/invoice-verifikat-reversal', () => ({
 }))
 vi.mock('@/lib/salary/run-verifikat-reversal', () => ({
   assertSalaryRunVerifikatReversible: h.assertSalaryRunVerifikatReversible,
+  assertCorrectedSalaryRunVerifikatReversible: h.assertCorrectedSalaryRunVerifikatReversible,
 }))
 vi.mock('@/lib/expenses/claim-verifikat-reversal', () => ({
   assertExpenseClaimVerifikatReversible: h.assertExpenseClaimVerifikatReversible,
@@ -160,6 +162,7 @@ const HOOK_FUNCTIONS = [
   'releaseSupplierInvoiceRegistrationAfterReversal',
   'assertInvoiceVerifikatReversible',
   'assertSalaryRunVerifikatReversible',
+  'assertCorrectedSalaryRunVerifikatReversible',
   'assertExpenseClaimVerifikatReversible',
 ] as const
 
@@ -477,8 +480,21 @@ describe('reverseEntry: the storno of a correction runs the rules of the verifik
         'assertSupplierInvoiceRegistrationReversible',
         'releaseSupplierInvoiceRegistrationAfterReversal',
       ],
+      // The run stays on the verifikat the correction corrects, so the check
+      // reads it by that verifikat.
+      salary_payment: ['assertCorrectedSalaryRunVerifikatReversible'],
       expense_claim: ['assertExpenseClaimVerifikatReversible'],
     })
+  })
+
+  it('hands the salary run check the corrected verifikat, and skips it on the stornos of Korrigera lönekörning', async () => {
+    await runReverseCorrection('salary_payment')
+    expect(h.assertCorrectedSalaryRunVerifikatReversible).toHaveBeenCalledExactlyOnceWith(expect.anything(), 'company-1', {
+      id: 'orig-1',
+      source_type: 'salary_payment',
+      source_id: 'source-1',
+    })
+    expect(h.assertSalaryRunVerifikatReversible).not.toHaveBeenCalled()
   })
 
   it('leaves the engine\'s own source-typed releases off: the IB link, the depreciation row and the tax account row', async () => {

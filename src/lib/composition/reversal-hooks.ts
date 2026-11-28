@@ -38,7 +38,10 @@ import {
   releaseSupplierInvoiceRegistrationAfterReversal,
 } from '@/lib/supplier-invoices/registration-reversal'
 import { assertInvoiceVerifikatReversible } from '@/lib/invoices/invoice-verifikat-reversal'
-import { assertSalaryRunVerifikatReversible } from '@/lib/salary/run-verifikat-reversal'
+import {
+  assertCorrectedSalaryRunVerifikatReversible,
+  assertSalaryRunVerifikatReversible,
+} from '@/lib/salary/run-verifikat-reversal'
 import { assertExpenseClaimVerifikatReversible } from '@/lib/expenses/claim-verifikat-reversal'
 
 export const REVERSAL_HOOKS: readonly ReversalHook[] = Object.freeze<ReversalHook[]>([
@@ -185,14 +188,18 @@ export const REVERSAL_HOOKS: readonly ReversalHook[] = Object.freeze<ReversalHoo
   // A booked salary run's verifikat: refused on its own, since Korrigera
   // lönekörning reverses all of them together
   // (lib/salary/run-verifikat-reversal.ts). Its own stornos carry
-  // salaryRunCorrection and pass.
+  // salaryRunCorrection and pass. A correction of one is refused the same
+  // way: the run keeps naming the verifikat it corrected, so the run is read
+  // by that verifikat, not by the correction.
   {
     id: 'salary-run-verifikat',
     module: 'payroll',
     sourceTypes: ['salary_payment'],
-    beforeReversal: async ({ supabase, companyId, entry, salaryRunCorrection }) => {
+    followsCorrection: true,
+    beforeReversal: async ({ supabase, companyId, entry, salaryRunCorrection, correctedOriginal }) => {
       if (salaryRunCorrection) return
-      await assertSalaryRunVerifikatReversible(supabase, companyId, entry)
+      if (correctedOriginal) await assertCorrectedSalaryRunVerifikatReversible(supabase, companyId, correctedOriginal)
+      else await assertSalaryRunVerifikatReversible(supabase, companyId, entry)
     },
   },
   // An expense claim's verifikat: refused while the claim stands, since Ta
