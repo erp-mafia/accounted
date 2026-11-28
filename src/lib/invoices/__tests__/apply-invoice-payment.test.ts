@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   deriveCustomerSettlementAmount,
+  paidLinesOreLeft,
   planInvoicePayment,
   planInvoicePaymentForLines,
   PAYMENT_OVERSHOOT_TOLERANCE,
@@ -405,6 +406,45 @@ describe('planInvoicePaymentForLines', () => {
       )
       expect(r.ok && r.plan.newStatus).toBe('paid')
     })
+  })
+})
+
+describe('paidLinesOreLeft', () => {
+  const UP = { total: 999.75, paid_amount: 0, remaining_amount: 999.75 }
+  const DOWN = { total: 1000.4, paid_amount: 0, remaining_amount: 1000.4 }
+  const row = (account_number: string, debit_amount: number, credit_amount: number) => ({
+    account_number,
+    debit_amount,
+    credit_amount,
+  })
+
+  it('rows at the reskontra figure leave the öre the issue verifikat put on 1510', () => {
+    expect(paidLinesOreLeft(UP, [row('1930', 1000, 0), row('1510', 0, 999.75), row('3740', 0, 0.25)], 'SEK', 1000)).toEqual({
+      carried: 1000,
+      cleared: 999.75,
+      left: 0.25,
+    })
+    expect(paidLinesOreLeft(DOWN, [row('1930', 1000, 0), row('3740', 0.4, 0), row('1510', 0, 1000.4)], 'SEK', 1000)).toEqual({
+      carried: 1000,
+      cleared: 1000.4,
+      left: -0.4,
+    })
+  })
+
+  it('rows that clear what 1510 carries leave nothing, whatever reached the bank', () => {
+    expect(paidLinesOreLeft(UP, [row('1930', 1000, 0), row('1510', 0, 1000)], 'SEK', 1000)).toBeNull()
+    expect(paidLinesOreLeft(UP, [row('1930', 999.75, 0), row('3740', 0.25, 0), row('1510', 0, 1000)], 'SEK', 1000)).toBeNull()
+  })
+
+  it('1513 is Skatteverket\'s share, never what the rows clear for the customer', () => {
+    expect(paidLinesOreLeft(UP, [row('1930', 1000.25, 0), row('1510', 0, 1000), row('1513', 0, 0.25)], 'SEK', 1000)).toBeNull()
+  })
+
+  it('answers nothing when 1510 carries the remainder, the ledger cannot say, or the invoice is foreign', () => {
+    const rows = [row('1930', 1000, 0), row('1510', 0, 999.75), row('3740', 0, 0.25)]
+    expect(paidLinesOreLeft(UP, rows, 'SEK', 999.75)).toBeNull()
+    expect(paidLinesOreLeft(UP, rows, 'SEK', null)).toBeNull()
+    expect(paidLinesOreLeft(UP, rows, 'EUR', 1000)).toBeNull()
   })
 })
 

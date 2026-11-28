@@ -4477,6 +4477,7 @@ Confirms an invoice match for a transaction. Creates the payment journal entry, 
 - A failed read of the transaction returns 503 BANK_ROW_READ_FAILED: nothing was booked, retry the same request.
 - Kontantmetoden: an invoice never booked at issue is matched only by one payment of its whole amount. A partial payment, or the final payment of an invoice already part-paid, returns INVOICE_PAID_CASH_PARTIAL_UNSUPPORTED (details.reason partial_payment | previously_partially_paid); book that payment as a manual journal entry.
 - Faktureringsmetoden with defer_invoice_booking (Registrera men bokför inte): an invoice sent without its verifikat is booked first by the invoices :book step (dated on the invoice date), then the payment clears that 1510; sale_journal_entry_id names it. When the book step refuses (PERIOD_LOCKED on the invoice date, INVOICE_BOOK_NO_FISCAL_PERIOD, INVOICE_BOOK_INVALID_STATUS for a partially paid invoice) or the transaction date is locked (PERIOD_LOCKED with details.payment_date), the match is refused with that code, details.sale_first is true, and nothing is booked.
+- Custom `lines` (journal lines, SEK) must balance, or 400 INVOICE_PAID_LINES_UNBALANCED. When a SEK transaction settles a SEK invoice in full and the invoice's own verifikat booked its öresavrundning, the lines credit 1510 what it carries for it: lines that would leave öre on 1510 return 400 INVOICE_PAID_ORE_LEFT with details.carried, the figure to credit.
 - Idempotency-Key is mandatory.
 
 | Parameter | In | Type | Required | Notes |

@@ -218,9 +218,32 @@ export function planInvoicePaymentForLines(
 
   const payment = planLinesPayment(invoice, paymentAmountInInvoiceCurrency, lines, absorbEligible, carriedSek)
   if (!payment.ok || !booked || payment.plan.newStatus !== 'paid') return payment
+  const oreLeft = oreLeftByBookedOre(booked)
+  return oreLeft ? { ok: false, code: 'INVOICE_PAID_ORE_LEFT', details: oreLeft } : payment
+}
+
+/**
+ * What lines that settle a SEK customer invoice in full would leave on 1510,
+ * for an invoice whose own verifikat booked the öresavrundning: the refusal
+ * planInvoicePaymentForLines answers, for a door that plans the payment from
+ * something other than the lines, as the bank match does from the bank row
+ * (bookCustomerBankMatch). Null when the lines clear what 1510 carries, or
+ * when 1510 carries the remainder.
+ */
+export function paidLinesOreLeft(
+  invoice: InvoicePaymentTotals,
+  lines: PaymentLine[],
+  invoiceCurrency: string,
+  carriedSek: number | null | undefined,
+): { carried: number; cleared: number; left: number } | null {
+  if (!isKronorCurrency(invoiceCurrency)) return null
+  const booked = bookedOreClearing(invoice, lines, carriedSek)
+  return booked ? oreLeftByBookedOre(booked) : null
+}
+
+function oreLeftByBookedOre(booked: { carried: number; cleared: number }): { carried: number; cleared: number; left: number } | null {
   const left = oreSettlementResidual(booked.carried, booked.cleared)
-  if (left === 0) return payment
-  return { ok: false, code: 'INVOICE_PAID_ORE_LEFT', details: { carried: booked.carried, cleared: booked.cleared, left } }
+  return left === 0 ? null : { carried: booked.carried, cleared: booked.cleared, left }
 }
 
 type PaymentLine = { account_number: string; debit_amount: number; credit_amount: number }
