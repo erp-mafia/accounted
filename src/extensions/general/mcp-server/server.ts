@@ -569,6 +569,7 @@ import {
 import { assertNoOpeningBalance } from '@/lib/import/opening-balance/existing'
 import { assertStornoTarget, movedCorrectionDescription } from '@/lib/core/bookkeeping/storno-target'
 import { correctionLanding } from '@/lib/vat/moved-correction-vat'
+import { rcBasisTwiceVoucherWarning } from '@/lib/vat/voucher-rc-basis-twice-warning'
 import { assertCorrectedImportVatBase } from '@/lib/bookkeeping/import-vat-base'
 import {
   checkVoucherGapExplanation,
@@ -28321,6 +28322,30 @@ export const tools: McpTool[] = [
         throw new MeaninglessCorrectionError('negates_original')
       }
 
+      // A basis pair beside an account that reports ruta 20-24 itself counts
+      // the purchase twice in the momsdeklaration: the booking-time warning
+      // every typed door asks (lib/vat/voucher-rc-basis-twice-warning.ts),
+      // advice for the agent and the approver, never a refusal. A failed
+      // read never stops the staging.
+      const basisTwice = await rcBasisTwiceVoucherWarning(supabase, companyId, {
+        lines,
+        replaces: {
+          entry_date: original.entry_date,
+          lines: originalLines.map((l) => ({
+            account_number: l.account_number,
+            debit_amount: Number(l.debit_amount) || 0,
+            credit_amount: Number(l.credit_amount) || 0,
+          })),
+        },
+        ...(original.source_type === 'opening_balance' ? { opening_balance: true } : {}),
+      }).catch((err: unknown) => {
+        log.warn('correct_entry: reverse-charge basis check failed (continuing)', err as Error)
+        return null
+      })
+      const warnings = [ownedBy?.hint_sv, vatWarning?.message_sv, basisTwice?.message_sv].filter(
+        (w): w is string => !!w,
+      )
+
       return stage({
         supabase,
         companyId,
@@ -28381,9 +28406,7 @@ export const tools: McpTool[] = [
           },
           ...(dimensionResolutions.length > 0 ? { dimension_resolutions: dimensionResolutions } : {}),
           ...(ownedBy ? { owned_by: ownedBy } : {}),
-          ...(ownedBy || vatWarning
-            ? { warnings: [ownedBy?.hint_sv, vatWarning?.message_sv].filter((w): w is string => !!w) }
-            : {}),
+          ...(warnings.length > 0 ? { warnings } : {}),
           will: stornoTarget.moved
             ? `post a storno that mirrors the original and a new corrected entry, both dated ${stornoTarget.date} in the first open period and naming the original; the original stays as booked in its locked period (BFL 5 kap 5§)`
             : 'post a storno that mirrors the original, then post a new corrected entry, then mark the original as reversed (BFL 5 kap 5§)',
@@ -28396,6 +28419,9 @@ export const tools: McpTool[] = [
           tool: 'gnubok_query_journal',
         },
         dateForPeriodCheck: stornoTarget.date,
+        // The approval card in Att göra shows compliance_warning: the
+        // approver reads the double count there too.
+        ...(basisTwice ? { complianceNote: basisTwice.message_sv } : {}),
       })
     },
   },
