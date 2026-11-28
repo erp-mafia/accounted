@@ -504,12 +504,12 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
   DRAFT_HAS_DOCUMENTS: {
     httpStatus: 409,
     message_sv:
-      'Utkastet har bilagor som inte kan flyttas när utkastet har makulerats. Bokför utkastet, eller kontakta supporten.',
+      'Utkastet har bilagor som inte kan flyttas om utkastet makuleras. Radera utkastet i Accounted i stället (Bokföring › verifikationen › Fler alternativ › Radera utkast): bilagorna finns kvar och kan kopplas till en annan verifikation. Eller bokför utkastet.',
     message_en:
-      'The draft holds documents that can never be moved to another verifikat once the draft is cancelled. Book the draft, or contact support.',
+      'The draft holds documents that could never be moved to another verifikat once the draft is cancelled. Delete the draft in Accounted instead (Bokföring › the verifikat › Fler alternativ › Radera utkast): the documents stay and can be linked to another verifikat. Or book the draft.',
     remediation: {
       description:
-        'Do not cancel this draft. details.documents lists its underlag. Ask the user to book the draft (commit it), or to contact support to move the documents first.',
+        'Do not cancel this draft, and do not retry: no tool deletes a draft. details.documents lists its underlag. Ask the user (a company owner or admin) to delete the draft in Accounted: Bokföring, open the verifikat, Fler alternativ › Radera utkast. Deleting a draft releases its documents: they stay and can then be linked to another verifikat (gnubok_link_document_to_voucher). Or ask the user to book the draft (commit it).',
     },
   },
   JOURNAL_ENTRY_ALREADY_CANCELLED: {
