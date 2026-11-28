@@ -37,7 +37,7 @@ function bankRow(over: Partial<ClearingBankRow> = {}): ClearingBankRow {
   return { id: 'tx-1', date: '2026-11-20', amount: 934.37, currency: 'SEK', text: 'KUSTOM AB', merchant_name: null, transaction_method: null, ...over }
 }
 
-const noBank = { open: vi.fn(), cleared: vi.fn() }
+const noBank = { open: vi.fn(async () => []), cleared: vi.fn(async () => []) }
 
 describe('rowFitsPayout', () => {
   it('fits the same SEK amount from a day before to five days after the payout day', () => {
@@ -143,6 +143,15 @@ describe('webshopPayoutProposer.propose', () => {
       company_settings: [],
     })
     expect((await webshopPayoutProposer.propose(db.client as never, COMPANY, [bankRow()], noBank)).size).toBe(0)
+  })
+
+  it('proposes nothing on an asked row while a nearer open row the request left out fits the payout', async () => {
+    const db = createFakeDb({ webshop_payouts: [payout()], webshop_store_settings: [], company_settings: [] })
+    const nearer = bankRow({ id: 'tx-near', date: '2026-11-19' })
+    const bank = { open: vi.fn(async () => [nearer]), cleared: vi.fn(async () => []) }
+    const out = await webshopPayoutProposer.propose(db.client as never, COMPANY, [bankRow({ date: '2026-11-22' })], bank)
+    expect(out.size).toBe(0)
+    expect(bank.open).toHaveBeenCalledWith('2026-11-18', '2026-11-24')
   })
 
   it('keeps a claimed payout to its row and pairs the next row with another payout that fits', async () => {

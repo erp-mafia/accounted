@@ -8,6 +8,7 @@ import { equalOre } from '@/lib/money'
 import { createServiceClient } from '@/lib/supabase/server'
 import type {
   ClearingBankRow,
+  ClearingBankRows,
   ClearingBooking,
   ClearingBookingRow,
   ClearingLinesOutcome,
@@ -219,6 +220,7 @@ async function propose(
   supabase: SupabaseClient,
   companyId: string,
   asked: readonly ClearingBankRow[],
+  bank: ClearingBankRows,
 ): Promise<Map<string, BookingProposal>> {
   const out = new Map<string, BookingProposal>()
   if (asked.length === 0) return out
@@ -235,17 +237,26 @@ async function propose(
   const payouts = (await openPayouts(supabase, companyId, read)).map(reopened)
   if (payouts.length === 0) return out
 
+  // Every open row these payouts could be, not only the asked ones: a
+  // request for one row never gives a payout to it while a nearer open row
+  // fits it.
+  const payoutDates = payouts.map((p) => p.payout_date).sort()
+  const competing = await bank.open(addDaysIso(payoutDates[0]!, -DAYS_BEFORE), addDaysIso(payoutDates[payoutDates.length - 1]!, DAYS_AFTER))
+  const rowById = new Map([...competing, ...asked].map((r) => [r.id, r]))
+  const rows = [...rowById.values()]
+
   // A payout a row has claimed is that row's, and no other row's to pair
   // with; the rest pair among themselves.
-  const askedRowById = new Map(asked.map((r) => [r.id, r]))
-  const free: Array<[string, PayoutRow]> = []
+  const pairs: Array<[string, PayoutRow]> = []
   for (const payout of payouts) {
-    const claimer = payout.transaction_id ? askedRowById.get(payout.transaction_id) : undefined
-    if (claimer && rowFitsPayout(claimer, payout)) free.push([claimer.id, payout])
+    const claimer = payout.transaction_id ? rowById.get(payout.transaction_id) : undefined
+    if (claimer && rowFitsPayout(claimer, payout)) pairs.push([claimer.id, payout])
   }
-  const claimers = new Set(free.map(([rowId]) => rowId))
+  const claimers = new Set(pairs.map(([rowId]) => rowId))
   const unclaimed = payouts.filter((p) => !p.transaction_id)
-  free.push(...pairRowsWithPayouts(asked.filter((r) => !claimers.has(r.id)), unclaimed).entries())
+  pairs.push(...pairRowsWithPayouts(rows.filter((r) => !claimers.has(r.id)), unclaimed).entries())
+  const askedIds = new Set(asked.map((r) => r.id))
+  const free = pairs.filter(([rowId]) => askedIds.has(rowId))
   if (free.length === 0) return out
 
   const [settings, vatRegistered] = await Promise.all([
@@ -410,6 +421,6 @@ const booking: ClearingBooking = Object.freeze<ClearingBooking>({ lines, claim, 
 export const webshopPayoutProposer: ClearingProposer = Object.freeze<ClearingProposer>({
   id: WEBSHOP_PAYOUT_PROPOSER_ID,
   module: 'webshop',
-  propose: (supabase, companyId, asked) => propose(supabase, companyId, asked),
+  propose: (supabase, companyId, asked, bank) => propose(supabase, companyId, asked, bank),
   booking,
 })
