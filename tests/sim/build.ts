@@ -136,6 +136,14 @@ export async function buildSimCompany(plan: SimPlan, key: AnswerKey, options: Bu
   setSimDay(SIM_COMPANY.firstDay)
   await ensurePayrollYears(supabase)
   const companyId = await createCompany(supabase, userId)
+  // The simulated customers pay the exact total (sale_payment below, the
+  // answer key's gross), so the company invoices without öresavrundning: the
+  // invoices ask for that total and 1510 carries it from issue to payment.
+  const { error: roundingError } = await supabase
+    .from('company_settings')
+    .update({ ore_rounding: false })
+    .eq('company_id', companyId)
+  if (roundingError) throw new Error(`could not turn öresavrundning off: ${roundingError.message}`)
   const doors = new SimDoors(supabase, companyId, userId)
   const log = createLogger('sim')
 
