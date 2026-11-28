@@ -443,7 +443,11 @@ describe('POST /journal-entries/:id/strike-lines', () => {
         company_members: OWNER,
         'rpc:correct_entry_lines_inline': {
           data: null,
-          error: { code: 'P0001', message: 'Rader i utländsk valuta kan inte strykas: använd rättelseverifikat (storno).' },
+          error: {
+            code: 'P0001',
+            message:
+              'Rättelsen stryker en rad i utländsk valuta. Ange valuta på varje ny rad (valutakod med belopp i valutan och kurs, eller SEK för en rad i kronor), eller använd rättelseverifikat (storno).',
+          },
         },
       }),
     )
@@ -451,7 +455,128 @@ describe('POST /journal-entries/:id/strike-lines', () => {
     expect(res.status).toBe(409)
     const body = await res.json()
     expect(body.error.code).toBe('JOURNAL_RATTELSE_REFUSED')
-    expect(body.error.details.reason).toContain('utländsk valuta')
+    expect(body.error.details.reason).toContain('Ange valuta på varje ny rad')
+  })
+
+  it('commits a currency rättelse: the replacement line\'s currency, amount in currency and rate reach the RPC as stated', async () => {
+    const client = makeClient({
+      company_members: OWNER,
+      'rpc:correct_entry_lines_inline': {
+        data: { log_id: LINE_C, struck_count: 1, added_count: 1, total_debit: 625, total_credit: 625 },
+        error: null,
+      },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post({
+      strike_line_ids: [LINE_C],
+      lines: [{ account_number: '1930', credit_amount: 625, currency: 'EUR', amount_in_currency: 56.25, exchange_rate: 11.1111 }],
+    })
+    expect(res.status).toBe(200)
+    expect(client.rpc).toHaveBeenCalledWith(
+      'correct_entry_lines_inline',
+      expect.objectContaining({
+        p_new_lines: [
+          {
+            account_number: '1930',
+            debit_amount: 0,
+            credit_amount: 625,
+            line_description: null,
+            dimensions: {},
+            currency: 'EUR',
+            amount_in_currency: 56.25,
+            exchange_rate: 11.1111,
+          },
+        ],
+      }),
+    )
+  })
+
+  it('dry run: a kronor line given its currency is a change, and the preview shows both sides\' currency facts', async () => {
+    const client = makeClient(strikePreviewTables())
+    mockServiceClient.mockReturnValue(client)
+    const res = await post(
+      {
+        strike_line_ids: [LINE_C],
+        lines: [{ account_number: '1930', credit_amount: 625, currency: 'eur', amount_in_currency: 56.254, exchange_rate: 11.1111 }],
+      },
+      '?dry_run=true',
+    )
+    expect(res.status).toBe(200)
+    const { preview } = (await res.json()).data
+    expect(preview.struck_lines).toEqual([
+      expect.objectContaining({ id: LINE_C, account_number: '1930', currency: 'SEK', amount_in_currency: null, exchange_rate: null }),
+    ])
+    // Stored as the RPC stores it: the code in upper case, the amount to the öre.
+    expect(preview.added_lines).toEqual([
+      expect.objectContaining({ account_number: '1930', credit_amount: 625, currency: 'EUR', amount_in_currency: 56.25, exchange_rate: 11.1111 }),
+    ])
+    expect(preview).toMatchObject({ total_debit: 625, total_credit: 625 })
+    expect(wrote(client)).toBe(false)
+
+    // The same facts again change nothing.
+    const eurLines = LINES.map((l) =>
+      l.id === LINE_C ? { ...l, currency: 'EUR', amount_in_currency: '56.25', exchange_rate: '11.11110' } : l,
+    )
+    mockServiceClient.mockReturnValue(makeClient(strikePreviewTables({ journal_entry_lines: { data: eurLines, error: null } })))
+    const same = await post(
+      {
+        strike_line_ids: [LINE_C],
+        lines: [{ account_number: '1930', credit_amount: 625, currency: 'EUR', amount_in_currency: 56.25, exchange_rate: 11.1111 }],
+      },
+      '?dry_run=true',
+    )
+    expect((await same.json()).error.code).toBe('MEANINGLESS_CORRECTION')
+  })
+
+  it('dry run: a foreign line is struck only when every added line names its currency', async () => {
+    const eurLines = LINES.map((l) =>
+      l.id === LINE_A ? { ...l, currency: 'EUR', amount_in_currency: 45, exchange_rate: 11.1111 } : l,
+    )
+    const tables = () => strikePreviewTables({ journal_entry_lines: { data: eurLines, error: null } })
+
+    mockServiceClient.mockReturnValue(makeClient(tables()))
+    const unnamed = await post(SWAP, '?dry_run=true')
+    expect(unnamed.status).toBe(409)
+    const body = await unnamed.json()
+    expect(body.error.code).toBe('JOURNAL_RATTELSE_REFUSED')
+    expect(body.error.details.reason).toContain('Ange valuta på varje ny rad')
+
+    mockServiceClient.mockReturnValue(makeClient(tables()))
+    const named = await post(
+      {
+        strike_line_ids: [LINE_A],
+        lines: [{ account_number: '5420', debit_amount: 500, currency: 'EUR', amount_in_currency: 45, exchange_rate: 11.1111 }],
+      },
+      '?dry_run=true',
+    )
+    expect(named.status).toBe(200)
+
+    mockServiceClient.mockReturnValue(makeClient(tables()))
+    const kronor = await post(
+      { strike_line_ids: [LINE_A], lines: [{ account_number: '5420', debit_amount: 500, currency: 'SEK', amount_in_currency: 45 }] },
+      '?dry_run=true',
+    )
+    expect(kronor.status).toBe(200)
+    expect((await kronor.json()).data.preview.added_lines).toEqual([
+      expect.objectContaining({ currency: 'SEK', amount_in_currency: null, exchange_rate: null }),
+    ])
+  })
+
+  it.each([
+    ['a code that is not three letters', { currency: 'EURO', amount_in_currency: 45, exchange_rate: 11 }, 'Valutakoden "EURO" är ogiltig'],
+    ['no amount in the currency', { currency: 'EUR', exchange_rate: 11 }, 'En rad i EUR måste ha belopp i valutan och kurs'],
+    ['an amount in the currency of zero', { currency: 'EUR', amount_in_currency: 0, exchange_rate: 11 }, 'måste ha belopp i valutan och kurs'],
+    ['no rate', { currency: 'EUR', amount_in_currency: 45 }, 'måste ha belopp i valutan och kurs'],
+  ])('dry run: a foreign added line with %s is refused as the RPC refuses it', async (_name, facts, reason) => {
+    mockServiceClient.mockReturnValue(makeClient(strikePreviewTables()))
+    const res = await post(
+      { strike_line_ids: [LINE_A], lines: [{ account_number: '5420', debit_amount: 500, ...facts }] },
+      '?dry_run=true',
+    )
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error.code).toBe('JOURNAL_RATTELSE_REFUSED')
+    expect(body.error.details.reason).toContain(reason)
   })
 
   it('a dry run previews the struck, added and resulting lines, prices the change, and calls neither RPC nor backfill', async () => {

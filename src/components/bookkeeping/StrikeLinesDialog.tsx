@@ -261,8 +261,8 @@ export default function StrikeLinesDialog({ entry, open, onOpenChange, onCorrect
           <div className="divide-y">
             {originalLines.map((line) => {
               const struck = strikeIds.has(line.id)
-              // FX lines carry conversion data replacements cannot reproduce;
-              // the RPC rejects striking them, so the checkbox is disabled.
+              // The RPC strikes an FX line only when every added line names
+              // its currency, and this dialog's lines carry none: disabled.
               const isForeign = !!line.currency && line.currency !== 'SEK'
               return (
                 <label

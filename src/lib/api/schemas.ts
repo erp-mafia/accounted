@@ -2629,9 +2629,12 @@ export const CorrectEntryMetadataSchema = z
   })
 
 /**
- * Replacement line for an inline strike. Deliberately narrower than
- * CreateJournalEntryLineSchema: inline additions are SEK-only and carry no
- * tax_code or currency conversion (those corrections use the storno flow).
+ * Replacement line for an inline strike. Narrower than
+ * CreateJournalEntryLineSchema: inline additions carry no tax_code. The
+ * amounts are kronor; a line in a foreign currency states its code, its
+ * amount in the currency and its rate, as a CreateJournalEntryLineSchema line
+ * does (the RPC refuses one without them, and a struck foreign-currency line
+ * unless every added line names its currency).
  */
 export const InlineRattelseLineSchema = z.object({
   account_number: accountNumber,
@@ -2639,6 +2642,10 @@ export const InlineRattelseLineSchema = z.object({
   credit_amount: nonNegativeAmount.default(0),
   line_description: z.string().max(500).optional(),
   dimensions: DimensionsBagSchema.optional(),
+  // Trimmed here, so the dry run and the RPC read the same code.
+  currency: z.string().trim().optional(),
+  amount_in_currency: z.number().optional(),
+  exchange_rate: z.number().positive().optional(),
 }).refine(isSingleSidedLine, SINGLE_SIDED_LINE_ISSUE)
 
 /** POST /api/bookkeeping/journal-entries/[id]/strike-lines */

@@ -78,6 +78,8 @@ describe('POST /api/bookkeeping/journal-entries/[id]/strike-lines', () => {
     ['bad line id', { strike_line_ids: ['not-a-uuid'] }],
     ['bad account number', { lines: [{ account_number: '19', debit_amount: 100 }] }],
     ['negative amount', { lines: [{ account_number: '1930', debit_amount: -5 }] }],
+    ['rate of zero', { lines: [{ account_number: '1940', debit_amount: 100, currency: 'EUR', amount_in_currency: 9, exchange_rate: 0 }] }],
+    ['amount in currency as text', { lines: [{ account_number: '1940', debit_amount: 100, currency: 'EUR', amount_in_currency: '9', exchange_rate: 11 }] }],
   ])('rejects invalid body (%s) with 400', async (_label, body) => {
     const response = await POST(makeRequest(body), params())
     expect(response.status).toBe(400)
@@ -153,6 +155,40 @@ describe('POST /api/bookkeeping/journal-entries/[id]/strike-lines', () => {
       p_actor_type: 'user',
       p_actor_label: null,
     })
+  })
+
+  it('hands a replacement line\'s currency, amount in currency and rate to the RPC as stated', async () => {
+    rpcMock.mockResolvedValue({
+      data: { log_id: 'log-3', struck_count: 1, added_count: 1, total_debit: 11000, total_credit: 11000 },
+      error: null,
+    })
+
+    const response = await POST(
+      makeRequest({
+        strike_line_ids: [LINE_ID],
+        lines: [{ account_number: '1940', debit_amount: 11000, currency: 'EUR', amount_in_currency: 1000, exchange_rate: 11 }],
+      }),
+      params(),
+    )
+
+    expect(response.status).toBe(200)
+    expect(rpcMock).toHaveBeenCalledWith(
+      'correct_entry_lines_inline',
+      expect.objectContaining({
+        p_new_lines: [
+          {
+            account_number: '1940',
+            debit_amount: 11000,
+            credit_amount: 0,
+            line_description: null,
+            dimensions: {},
+            currency: 'EUR',
+            amount_in_currency: 1000,
+            exchange_rate: 11,
+          },
+        ],
+      }),
+    )
   })
 
   it('accepts a strike-only rättelse without new lines (skips backfill)', async () => {

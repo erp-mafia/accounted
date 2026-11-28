@@ -167,17 +167,18 @@ export const journalEntriesStrikeLines = defineOperation({
   docs: {
     summary: 'Strike lines of a posted verifikat and add replacement lines inside the same verifikat (inline rättelse).',
     description:
-      'Line rättelse (BFL 5 kap 5 §): removes the listed lines from a posted verifikat and adds replacement lines in the same verifikat, without a rättelseverifikation and without a new voucher number. The correct_entry_lines_inline RPC enforces the envelope (posted, open and unlocked period, after the company lock date, at least two lines left, balanced to the öre, SEK only) and snapshots the struck originals with who and when to the immutable rättelse log, so the original stays readable. Standard BAS accounts missing from the chart are added first. Idempotent. Dry-runnable: the dry run shows the struck, added and resulting lines and writes nothing.',
+      'Line rättelse (BFL 5 kap 5 §): removes the listed lines from a posted verifikat and adds replacement lines in the same verifikat, without a rättelseverifikation and without a new voucher number. The correct_entry_lines_inline RPC enforces the envelope (posted, open and unlocked period, after the company lock date, at least two lines left, balanced to the öre) and snapshots the struck originals with who and when to the immutable rättelse log, so the original stays readable. Amounts are kronor; a replacement line in a foreign currency also carries its currency, amount_in_currency and exchange_rate. Standard BAS accounts missing from the chart are added first. Idempotent. Dry-runnable: the dry run shows the struck, added and resulting lines and writes nothing.',
     useWhen:
-      'A posted verifikat in an open, unlocked period was booked on the wrong account or with a wrong amount split, e.g. 5410 that should have been 5420, and the user wants it fixed inside the verifikat the way Fortnox "ändra verifikat" does.',
+      'A posted verifikat in an open, unlocked period was booked on the wrong account or with a wrong amount split, e.g. 5410 that should have been 5420, or a line\'s kronor are right but its currency, amount in the currency or rate is missing or wrong, and the user wants it fixed inside the verifikat the way Fortnox "ändra verifikat" does.',
     doNotUseFor:
-      'Locked or closed periods (storno: POST /journal-entries/{id}/correct), foreign-currency lines, lines with a linked underlag, storno/year-end/VAT-settlement entries, drafts (PATCH /journal-entries/{id}), or cancelling a whole verifikat (/reverse).',
+      'Locked or closed periods (storno: POST /journal-entries/{id}/correct), lines with a linked underlag, storno/year-end/VAT-settlement entries, drafts (PATCH /journal-entries/{id}), or cancelling a whole verifikat (/reverse).',
     pitfalls: [
       INLINE_ENVELOPE_PITFALL,
       'The resulting verifikat must balance (sum debit = sum credit > 0): 400 JOURNAL_ENTRY_NOT_BALANCED otherwise. Amounts are SEK with at most two decimals; account numbers are 4-digit strings.',
-      'strike_line_ids must be ids of this verifikat\'s lines (GET /journal-entries/{id}); a line in foreign currency or with a linked underlag cannot be struck (409 JOURNAL_RATTELSE_REFUSED).',
+      'strike_line_ids must be ids of this verifikat\'s lines (GET /journal-entries/{id}); a line with a linked underlag cannot be struck (409 JOURNAL_RATTELSE_REFUSED).',
+      'A line in a foreign currency needs currency (three letters), amount_in_currency and exchange_rate, both above zero; a line with no currency, or SEK, is kronor and stores neither. Striking a foreign-currency line needs currency on every added line (its code, or SEK to put it in kronor): 409 JOURNAL_RATTELSE_REFUSED otherwise.',
       'A verifikat linked to a bank transaction may only change its bank-account net to the linked bank amount; linked customer/supplier payments keep their 15xx/24xx net. The dry run flags bank_anchor_check; the commit is authoritative.',
-      'Striking and re-adding identical lines answers 400 MEANINGLESS_CORRECTION.',
+      'Striking and re-adding identical lines, currency facts included, answers 400 MEANINGLESS_CORRECTION.',
     ],
     example: {
       request: {
@@ -202,7 +203,9 @@ export const journalEntriesStrikeLines = defineOperation({
         .array(InlineRattelseLineSchema)
         .max(100)
         .default([])
-        .describe('Replacement lines, SEK only: account_number as a 4-digit string, one non-zero side per line.'),
+        .describe(
+          'Replacement lines in kronor: account_number as a 4-digit string, one non-zero side per line; a foreign-currency line adds currency, amount_in_currency and exchange_rate.',
+        ),
     })
     .refine((body) => body.strike_line_ids.length > 0 || body.lines.length > 0, {
       message: 'Rättelsen måste stryka eller lägga till minst en rad',
@@ -234,7 +237,7 @@ export const journalEntriesStrikeLines = defineOperation({
     name: 'gnubok_correct_entry_lines',
     title: 'Correct Voucher Lines (Inline Rättelse)',
     description:
-      'Stage an inline rättelse: strike lines of a posted verifikat and add balanced replacement lines in the same verifikat, originals kept in the rättelse log (BFL 5 kap 5 §). Open, unlocked periods, SEK only. Locked: gnubok_correct_entry.',
+      'Stage an inline rättelse: strike lines of a posted verifikat and add balanced replacement lines in the same verifikat, originals kept in the rättelse log (BFL 5 kap 5 §). Open, unlocked periods; kronor amounts, a foreign line adds its currency facts. Locked: gnubok_correct_entry.',
     keywords: ['rättelse', 'stryk rad', 'ändra verifikat', 'fel konto', 'rätta konto', 'radrättelse'],
     stage: { pendingType: 'correct_entry_lines_inline', title: () => 'Rättelse av rader i verifikat' },
   },
@@ -250,6 +253,9 @@ export const journalEntriesStrikeLines = defineOperation({
           credit_amount: l.credit_amount,
           ...(l.line_description !== undefined ? { line_description: l.line_description } : {}),
           ...(l.dimensions !== undefined ? { dimensions: l.dimensions } : {}),
+          ...(l.currency !== undefined ? { currency: l.currency } : {}),
+          ...(l.amount_in_currency !== undefined ? { amount_in_currency: l.amount_in_currency } : {}),
+          ...(l.exchange_rate !== undefined ? { exchange_rate: l.exchange_rate } : {}),
         })),
       },
       { dryRun },
