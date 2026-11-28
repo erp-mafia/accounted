@@ -21,6 +21,14 @@ export const RESULT_ACCOUNT = '2099'
 /** Vinst eller förlust från föregående år. */
 export const PRIOR_RESULT_ACCOUNT = '2098'
 
+/**
+ * Where the omföring moves last year's result: the form's carry account
+ * (AB 2098), as the year-end close books it, or its balanserat resultat
+ * (AB 2091), where an imported SIE file's #IB can already carry it
+ * (lib/import/sie-result-transfer.ts).
+ */
+export type ResultAppropriationTarget = 'carry' | 'retained'
+
 export interface ResultAppropriationPlan {
   periodId: string
   periodName: string
@@ -28,7 +36,11 @@ export interface ResultAppropriationPlan {
   periodStart: string
   /** The form's "årets resultat" account (AB 2099, ideell förening 2069). */
   resultAccount: string
-  /** Where last year's result is carried (AB 2098, ideell förening 2068). */
+  /**
+   * Where last year's result is carried (AB 2098, ideell förening 2068), or
+   * the form's balanserat resultat (AB 2091) for a plan asked for the
+   * 'retained' target.
+   */
   priorResultAccount: string
   /**
    * Amount carried, credit-positive (a profit is > 0, a loss is < 0): the
@@ -61,11 +73,15 @@ export interface ResultAppropriationPlan {
  * Shared by generateResultAppropriation (which posts the plan) and the
  * retroactive catch-up script (which previews it in dry-run) so the preview
  * and the committed entry can never diverge.
+ *
+ * `options.to` names the account it moves to (ResultAppropriationTarget);
+ * the carry account unless told otherwise. The amount never depends on it.
  */
 export async function planResultAppropriation(
   supabase: SupabaseClient,
   companyId: string,
   periodId: string,
+  options: { to?: ResultAppropriationTarget } = {},
 ): Promise<ResultAppropriationPlan | null> {
   // Aktiebolag only. Same resolution as previewYearEndClosing's closing-account
   // decision, so the omföring runs exactly when the result was posted to 2099.
@@ -114,20 +130,23 @@ export async function planResultAppropriation(
     periodId,
     periodName: period.name,
     periodStart: period.period_start,
-    ...omforingFor(carry),
+    ...omforingFor(carry, options.to),
   }
 }
 
 /**
  * The omföring that moves what is still carried (`carry.remaining`, non-zero)
- * off the result account onto the carry account. Pure: the close posts it
+ * off the result account onto the carry account, or onto balanserat resultat
+ * when `to` is 'retained'. Pure: the close posts it
  * (planResultAppropriation) and the year-end previews disclose it
  * (previewResultAppropriation), so the two cannot differ.
  */
 function omforingFor(
   carry: PriorResultCarry,
+  to: ResultAppropriationTarget = 'carry',
 ): Pick<ResultAppropriationPlan, 'resultAccount' | 'priorResultAccount' | 'net' | 'amount' | 'direction' | 'lines'> {
-  const { resultAccount, priorResultAccount } = carry
+  const { resultAccount } = carry
+  const priorResultAccount = to === 'retained' ? carry.retainedAccount : carry.priorResultAccount
   const net = carry.remaining
   const amount = roundOre(Math.abs(net))
   const lines: CreateJournalEntryLineInput[] =
@@ -273,7 +292,23 @@ export async function generateResultAppropriation(
 ): Promise<JournalEntry | null> {
   const plan = await planResultAppropriation(supabase, companyId, periodId)
   if (!plan) return null
+  return postResultAppropriation(supabase, companyId, userId, plan, posting)
+}
 
+/**
+ * Post a plan from planResultAppropriation as its own verifikat, dated the
+ * period's first day. generateResultAppropriation posts the close's; an SIE
+ * import posts one it has first held against the file's #IB
+ * (lib/import/sie-result-transfer.ts).
+ */
+export async function postResultAppropriation(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  plan: ResultAppropriationPlan,
+  posting?: () => YearEndPostingContext,
+): Promise<JournalEntry> {
+  const periodId = plan.periodId
   const entry = await postingPort.postJournalEntry({
     supabase,
     companyId,
