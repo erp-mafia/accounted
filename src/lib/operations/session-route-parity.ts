@@ -983,7 +983,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/extensions/ext/tic/bankid/cancel': uiOnly('BankID flow'),
   'POST /api/extensions/ext/tic/bankid/link': uiOnly('links a BankID identity to the logged-in person'),
   'POST /api/extensions/ext/tic/bankid/unlink': uiOnly('unlinks a BankID identity from the logged-in person'),
-  'POST /api/extensions/ext/tic/lookup': covered(['gnubok_lookup_company'], 'read-only registry lookup, a POST so the org number stays out of the URL'),
+  'POST /api/extensions/ext/tic/lookup': covered([`POST ${V}/company-lookup`, 'gnubok_lookup_company'], 'read-only registry lookup, a POST so the org number stays out of the URL'),
 
   // mcp-server
   'POST /api/extensions/ext/mcp-server/mcp': machine('machine endpoint: the MCP door itself'),
