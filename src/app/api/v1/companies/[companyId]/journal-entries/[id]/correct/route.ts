@@ -44,6 +44,7 @@ import { correctionChainDepth, CORRECTION_CHAIN_GUARD_DEPTH } from '@/lib/core/b
 import { voucherOwnerOrNull } from '@/lib/core/bookkeeping/voucher-owner'
 import { OWNED_BY_PITFALL, VoucherOwnerSchema } from '@/lib/api/v1/voucher-owner-schema'
 import { negatesOriginal } from '@/lib/core/bookkeeping/correction-shape'
+import { assertNoOwnCorrectionFlow } from '@/lib/core/bookkeeping/own-correction-flow'
 import { CorrectionChainTooDeepError, MeaninglessCorrectionError, isBookkeepingError } from '@/lib/bookkeeping/errors'
 
 const JournalEntryCorrected = z.object({
@@ -81,6 +82,7 @@ registerEndpoint({
     'Lines crediting import VAT (2615/2625/2635, boxes 60-62) need the taxable amount in box 50 (4545-4547) in the same lines, else 400 IMPORT_VAT_WITHOUT_BASE; reverse charge books its output VAT on 2614/2624/2634.',
     'Lines with a 45xx/4598 basis pair beside an account that reports boxes 20-24 itself (a cost account with a reverse-charge momskod, or a basis account booked as the cost) count the purchase twice: warnings[] carries REVERSE_CHARGE_BASIS_TWICE. The correction still posts; remove the pair unless it is meant.',
     OWNED_BY_PITFALL,
+    "An opening balance the year names, a booked payroll run's entry or a depreciation from the asset register, in an open year, returns 409 OPENING_BALANCE_CORRECTION_OWN_FLOW, SALARY_RUN_CORRECTION_OWN_FLOW or DEPRECIATION_CORRECTION_OWN_FLOW: correct it through that register's own flow (error.recovery_hint). Refused only while that flow can act: a payroll run's entry in a locked or closed year is corrected here, moved as above.",
     'An entry linked to a bank transaction keeps its amount on that transaction\'s bank ledger account (the account the bank says the money moved on): lines that move it to another bank account (19xx or a cash account ledger) return 409 CORRECTION_BANK_ACCOUNT_CHANGED (details.bank_account, details.moved_to). If the transaction does not belong to the entry, reverse the entry instead.',
   ],
   example: {
@@ -220,6 +222,16 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // correctEntry runs at commit, here before the dry-run return too.
     try {
       await assertCorrectedImportVatBase(ctx.supabase, ctx.companyId!, typed.source_type, lines)
+    } catch (err) {
+      return v1ErrorResponse(err, ctx.log, { requestId: ctx.requestId })
+    }
+
+    // The year's opening balance, a booked payroll run's verifikat and a
+    // planenlig avskrivning go through their register's own flow while it can
+    // act (lib/core/bookkeeping/own-correction-flow.ts): the rule correctEntry
+    // runs at commit, here before the dry-run return too.
+    try {
+      await assertNoOwnCorrectionFlow(ctx.supabase, ctx.companyId!, typed, landing.target)
     } catch (err) {
       return v1ErrorResponse(err, ctx.log, { requestId: ctx.requestId })
     }

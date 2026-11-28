@@ -51,6 +51,9 @@ import {
   EntryDateOutsideFiscalPeriodError,
   ImportVatWithoutBaseError,
   CorrectionBankAccountChangedError,
+  DepreciationCorrectionOwnFlowError,
+  OpeningBalanceCorrectionOwnFlowError,
+  SalaryRunCorrectionOwnFlowError,
   MigratedDeductionHeldByRequestError,
   ReversalHookMissingError,
   FiscalPeriodNotFoundError,
@@ -775,6 +778,16 @@ export function extractBookkeepingDetails(err: unknown): { code: string; details
   }
   if (err instanceof CorrectionBankAccountChangedError) {
     return { code: err.code, details: { bank_account: err.bankAccount, moved_to: err.movedTo } }
+  }
+  // The register whose own flow corrects the verifikat (own-correction-flow.ts).
+  if (err instanceof OpeningBalanceCorrectionOwnFlowError) {
+    return { code: err.code, details: { fiscalPeriodId: err.fiscalPeriodId } }
+  }
+  if (err instanceof SalaryRunCorrectionOwnFlowError) {
+    return { code: err.code, details: { salaryRunId: err.salaryRunId } }
+  }
+  if (err instanceof DepreciationCorrectionOwnFlowError) {
+    return { code: err.code, details: { assetId: err.assetId } }
   }
   // Without this arm a required-dimension refusal (account_dimension_rules)
   // fell through to the INTERNAL_ERROR default: a 500 that never said which
