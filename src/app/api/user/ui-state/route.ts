@@ -4,6 +4,7 @@ import { requireAuth } from '@/lib/auth/require-auth'
 import type { UserUiState } from '@/types'
 import { SKIPPABLE_SETUP_STEPS } from '@/lib/onboarding/checklist'
 import { NAV_FAVORITES_CAP } from '@/lib/navigation/favorites'
+import { START_PAGE_IDS } from '@/lib/company/start-page'
 
 // Partial update: the client sends only the keys it changed. Strict schemas
 // so typos fail loudly instead of accumulating junk in the jsonb bag.
@@ -86,6 +87,10 @@ const BodySchema = z
     // Verifikat list row density (components/bookkeeping/JournalEntryList).
     // Plain top-level value, replaced by the spread.
     journal_density: z.enum(['compact', 'comfortable']).optional(),
+    // Startsida per company (lib/company/start-page.ts): companyId -> the
+    // page a sign-in or a company switch lands on. Merged per key like
+    // first_thing_closed, so choosing for one company keeps the others.
+    start_page: z.record(z.string().uuid(), z.enum(START_PAGE_IDS)).optional(),
   })
   .strict()
 
@@ -139,6 +144,9 @@ export async function POST(request: Request) {
       : {}),
     ...(patch.setup_skipped
       ? { setup_skipped: { ...current.setup_skipped, ...patch.setup_skipped } }
+      : {}),
+    ...(patch.start_page
+      ? { start_page: { ...current.start_page, ...patch.start_page } }
       : {}),
   }
 

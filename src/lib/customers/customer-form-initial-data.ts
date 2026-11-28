@@ -40,6 +40,8 @@ export function customerFormInitialData(customer: Customer): Partial<CreateCusto
     default_payment_terms: customer.default_payment_terms ?? undefined,
     invoice_reference: customer.invoice_reference,
     invoice_marking: customer.invoice_marking,
+    // A way left out would reach the form as "follow the company's order" and be cleared on save.
+    invoice_send_way: customer.invoice_send_way ?? null,
     notes: customer.notes || undefined,
   } satisfies Record<keyof CreateCustomerInput, unknown>
 }

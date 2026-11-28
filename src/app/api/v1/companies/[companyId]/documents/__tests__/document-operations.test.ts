@@ -7,7 +7,9 @@
  *
  * The rule under test is the service's (lib/documents/document-actions.ts):
  * a document linked to a verifikat is räkenskapsinformation (BFL 7 kap 2 §)
- * and is never deleted, and a dry run writes nothing.
+ * and is never deleted, and a dry run writes nothing. The list and the read
+ * name each document's type as Dokument reads it (lib/documents/locked-period.ts),
+ * and the list filters by it.
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -121,6 +123,7 @@ function docRow(overrides: Record<string, unknown> = {}) {
     original_id: null,
     superseded_by_id: null,
     digitization_date: null,
+    doc_type: null,
     ...overrides,
   }
 }
@@ -178,6 +181,100 @@ describe('GET /api/v1/companies/:companyId/documents', () => {
   })
 })
 
+describe('GET /api/v1/companies/:companyId/documents: doc_type', () => {
+  const get = (query = '') => listDocuments(request(`${BASE}${query}`, { method: 'GET' }), companyParams)
+  const BOOKED_ID = '11111111-1111-4111-8111-111111111111'
+  const docCalls = (client: ReturnType<typeof makeClient>) => client.calls.filter((c) => c.table === 'document_attachments')
+
+  it('names each document\'s type, and a booked one typed after its period closed by its classification', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      document_attachments: {
+        data: [docRow({ doc_type: 'receipt' }), docRow({ id: BOOKED_ID, doc_type: null, journal_entry_id: JE_ID }), docRow({ id: TX_ID })],
+        error: null,
+      },
+      document_classifications: { data: [{ document_id: BOOKED_ID, doc_type: 'supplier_invoice' }], error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await get()
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.documents.map((d: { doc_type: string | null }) => d.doc_type)).toEqual(['receipt', 'supplier_invoice', null])
+    // Only the booked document without a type on its row is looked up.
+    expect(client.calls).toContainEqual({ table: 'document_classifications', method: 'in', args: ['document_id', [BOOKED_ID]] })
+    // Without a filter the list joins nothing.
+    expect(String(docCalls(client).find((c) => c.method === 'select')?.args[0])).not.toContain('type_match')
+  })
+
+  it('filters by the type Dokument shows: the row\'s, else a booked document\'s current classification', async () => {
+    const client = makeClient({ company_members: MEMBER, document_attachments: { data: [docRow({ doc_type: 'minutes.board' })], error: null } })
+    mockServiceClient.mockReturnValue(client)
+    const res = await get('?doc_type=minutes.board')
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.documents[0].doc_type).toBe('minutes.board')
+    const calls = docCalls(client)
+    expect(String(calls.find((c) => c.method === 'select')?.args[0])).toContain('type_match:document_classifications()')
+    expect(calls).toContainEqual(expect.objectContaining({ method: 'eq', args: ['type_match.is_current', true] }))
+    expect(calls).toContainEqual(expect.objectContaining({ method: 'in', args: ['type_match.doc_type', ['minutes.board']] }))
+    expect(calls).toContainEqual(
+      expect.objectContaining({
+        method: 'or',
+        args: [
+          'doc_type.in.(minutes.board),and(doc_type.is.null,type_match.not.is.null,or(journal_entry_id.not.is.null,journal_entry_line_id.not.is.null))',
+        ],
+      }),
+    )
+    // The company fence stays.
+    expect(calls).toContainEqual(expect.objectContaining({ method: 'eq', args: ['company_id', COMPANY_ID] }))
+  })
+
+  it('a folder lists every type on its shelf, as gnubok_list_records does', async () => {
+    const client = makeClient({ company_members: MEMBER, document_attachments: { data: [], error: null } })
+    mockServiceClient.mockReturnValue(client)
+    expect((await get('?doc_type=supplier_invoices')).status).toBe(200)
+    expect(docCalls(client)).toContainEqual(
+      expect.objectContaining({ method: 'in', args: ['type_match.doc_type', ['supplier_invoice', 'credit_note']] }),
+    )
+  })
+
+  it('untyped: no type on the row and no classification that types a booked document', async () => {
+    const client = makeClient({ company_members: MEMBER, document_attachments: { data: [docRow()], error: null } })
+    mockServiceClient.mockReturnValue(client)
+    const res = await get('?doc_type=untyped&linked=false')
+    expect(res.status).toBe(200)
+    const calls = docCalls(client)
+    expect(calls).toContainEqual(expect.objectContaining({ method: 'is', args: ['doc_type', null] }))
+    expect(calls).toContainEqual(
+      expect.objectContaining({ method: 'or', args: ['type_match.is.null,and(journal_entry_id.is.null,journal_entry_line_id.is.null)'] }),
+    )
+    expect(calls).toContainEqual(expect.objectContaining({ method: 'is', args: ['journal_entry_id', null] }))
+  })
+
+  it('answers an error, not a page that contradicts its own filter, when the type cannot be read', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      document_attachments: { data: [docRow({ id: BOOKED_ID, journal_entry_id: JE_ID })], error: null },
+      document_classifications: { data: null, error: { message: 'canceling statement due to statement timeout' } },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await get('?doc_type=receipt')
+    // A statement timeout is the retryable 503; no page is answered.
+    expect(res.status).toBe(503)
+    const body = await res.json()
+    expect(body.data).toBeUndefined()
+    expect(body.error.code).toEqual(expect.any(String))
+  })
+
+  it.each(['invoice', 'booked', 'receipt,other'])('400 on doc_type=%s, which is neither a type, a folder nor untyped', async (value) => {
+    const client = makeClient({ company_members: MEMBER })
+    mockServiceClient.mockReturnValue(client)
+    const res = await get(`?doc_type=${encodeURIComponent(value)}`)
+    expect(res.status).toBe(400)
+    expect((await res.json()).error.code).toBe('VALIDATION_ERROR')
+    expect(docCalls(client)).toEqual([])
+  })
+})
+
 describe('GET /api/v1/companies/:companyId/documents/:id', () => {
   const get = (id = DOC_ID) => getDocument(request(`${BASE}/${id}`, { method: 'GET' }), docParams(id))
 
@@ -211,6 +308,7 @@ describe('GET /api/v1/companies/:companyId/documents/:id', () => {
       journal_entry_id: JE_ID,
       transaction_ids: [TX_ID],
       inbox_item_id: '22222222-2222-4222-8222-222222222222',
+      doc_type: null,
     })
     // Metadata only without include: no part is read or answered.
     for (const part of ['text', 'reading', 'links', 'arrivals', 'notice']) expect(body.data).not.toHaveProperty(part)
@@ -237,6 +335,26 @@ describe('GET /api/v1/companies/:companyId/documents/:id', () => {
     expect(body.data.reading).toBeUndefined()
     // The page read is the company's own.
     expect(client.calls).toContainEqual({ table: 'document_pages', method: 'eq', args: ['company_id', COMPANY_ID] })
+  })
+
+  it('names the type a booked document keeps on its classification, in the metadata and the reading alike', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      document_attachments: { data: docRow({ journal_entry_id: JE_ID, admission_state: 'admitted' }), error: null },
+      document_classifications: [
+        { data: [{ document_id: DOC_ID, doc_type: 'receipt' }], error: null },
+        {
+          data: { doc_type: 'receipt', confidence: 1, relevance: 'relevant', decided_by: 'human', model: null, language: 'sv', is_multi_document: false, summary: null, created_at: '2026-09-03T08:00:00Z' },
+          error: null,
+        },
+      ],
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await getDocument(request(`${BASE}/${DOC_ID}?include=reading`, { method: 'GET' }), docParams())
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.doc_type).toBe('receipt')
+    expect(body.data.reading.doc_type).toBe('receipt')
   })
 
   it('400 on an unknown include part or a max_chars out of range', async () => {

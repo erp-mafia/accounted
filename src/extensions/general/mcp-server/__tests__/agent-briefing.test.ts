@@ -812,6 +812,26 @@ describe('capabilities digest', () => {
     }
   }
 
+  // In the Bolaget rollout unless a test says otherwise, so each digest
+  // below shows only what its test is about.
+  beforeEach(() => {
+    vi.stubEnv('BOLAGET_COMPANY_IDS', COMPANY)
+  })
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  it('names Avtal och åtaganden under year-end when the rollout does not name the company', async () => {
+    vi.stubEnv('BOLAGET_COMPANY_IDS', '')
+    const supabase = withCapabilityReads({ entityType: 'aktiebolag', paysSalaries: null, grants: ALL_GRANTS })
+    const result = (await tool().execute({}, COMPANY, 'user-1', supabase as never, { type: 'api_key' })) as {
+      capabilities?: unknown
+    }
+    expect(result.capabilities).toEqual([
+      { id: 'year-end', status: 'active', reasons: [], parts: [{ id: 'commitments', status: 'off', reasons: ['switched_on_per_company'] }] },
+    ])
+  })
+
   it('lists only the modules that are not active, as id, status and reasons', async () => {
     const supabase = withCapabilityReads({
       entityType: 'enskild_firma',

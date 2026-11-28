@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { computeFiscalPeriod } from '../compute-fiscal-period'
+import { computeFiscalPeriod, isDeclaredFirstFiscalYearName } from '../compute-fiscal-period'
 
 describe('computeFiscalPeriod', () => {
   beforeEach(() => {
@@ -52,6 +52,18 @@ describe('computeFiscalPeriod', () => {
     expect(result.startStr).toBe('2026-03-14')
     expect(result.endStr).toBe('2026-12-31')
     expect(result.periodName).toBe('Första räkenskapsåret 2026')
+  })
+
+  it('names a first year so the deadline schedule knows no year came before it', () => {
+    const first = computeFiscalPeriod({
+      entity_type: 'aktiebolag',
+      is_first_fiscal_year: true,
+      first_year_start: '2026-04-01',
+      first_year_end: '2026-12-31',
+    })
+    expect(isDeclaredFirstFiscalYearName(first.periodName)).toBe(true)
+    const ordinary = computeFiscalPeriod({ entity_type: 'aktiebolag', fiscal_year_start_month: 1 })
+    expect(isDeclaredFirstFiscalYearName(ordinary.periodName)).toBe(false)
   })
 
   it('allows a mid-month start date only for the first year (BFL 3 kap.)', () => {

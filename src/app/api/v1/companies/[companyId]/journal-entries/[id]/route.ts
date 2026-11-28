@@ -224,7 +224,7 @@ registerEndpoint({
     'Only status=draft can be cancelled. Anything posted returns 409 CANNOT_CANCEL_NON_DRAFT with details.currentStatus; storno it instead.',
     'No voucher number is released or burned: drafts never held one, so the unbroken series BFL 5 kap 7 § requires is untouched and there is no gap to document. The cancelled header stays visible via GET /{id} and via the list endpoint with status=cancelled.',
     'A draft in a locked or closed period, or behind the company lock date, returns PERIOD_LOCKED: unlock the period first rather than retrying.',
-    'A draft that holds documents returns 409 DRAFT_HAS_DOCUMENTS with details.documents: once cancelled its documents could never be linked to another verifikat, so book the draft instead.',
+    'A draft that holds documents returns 409 DRAFT_HAS_DOCUMENTS with details.documents: once cancelled its documents could never be linked to another verifikat. The user deletes the draft in Accounted instead (Bokföring › the verifikat › Fler alternativ › Radera utkast), which keeps the documents so they can be linked to another verifikat, or books the draft.',
     'Idempotency-Key is optional here (unlike the other journal-entries writes) because the call is idempotent by construction: a second DELETE returns the same cancelled entry.',
   ],
   example: {

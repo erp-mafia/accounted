@@ -41,10 +41,11 @@ function accountLabel(account: CashAccount): string {
  * Saves per row on change, no separate save button: each row is one field on
  * one account, and the bank-transaction booking dialog reads it live.
  *
- * The picker is the same closed list as the manual verifikat form: the fixed
- * Swedish presets plus every letter the company already uses. A free A-Z list
- * would let a typo start an undocumented series (BFNAR 2013:2 p. 9.2-9.15
- * wants the series in use enumerated in the systemdokumentation).
+ * The picker is the same list as the manual verifikat form: the Swedish
+ * presets, then every other letter A-Z (buildVoucherSeriesOptions). Each
+ * letter numbers on its own, and the systemdokumentation lists every series
+ * in use (BFNAR 2013:2 p. 9.2-9.15), so a letter outside the presets is
+ * documented too.
  */
 export function VoucherSeriesPerCashAccountForm({ settings }: Props) {
   const t = useTranslations('settings_voucher_series')
@@ -70,22 +71,11 @@ export function VoucherSeriesPerCashAccountForm({ settings }: Props) {
   // dialog with the reason, never a second copy of the rule here.
   const [removeTarget, setRemoveTarget] = useState<CashAccount | null>(null)
 
-  // Presets first, then any configured or already-assigned letter the presets
-  // do not cover, so a Select never renders blank on a value it does not offer.
-  // Names come from the company's own voucher_series_labels, presets as fallback.
+  // Presets first, then every other letter A-Z. Names come from the
+  // company's own voucher_series_labels, presets as fallback.
   const seriesOptions = useMemo(
-    () =>
-      buildVoucherSeriesOptions(settings.voucher_series_labels, [
-        settings.default_voucher_series,
-        ...Object.values(settings.default_voucher_series_per_source_type ?? {}),
-        ...cashAccounts.map((a) => a.voucher_series),
-      ]),
-    [
-      settings.voucher_series_labels,
-      settings.default_voucher_series,
-      settings.default_voucher_series_per_source_type,
-      cashAccounts,
-    ],
+    () => buildVoucherSeriesOptions(settings.voucher_series_labels),
+    [settings.voucher_series_labels],
   )
 
   /** PATCH one account's override, then refresh the shared cash-account cache. */

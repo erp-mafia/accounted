@@ -30,6 +30,14 @@ const assetDifferencesMock = vi.fn(async (): Promise<unknown[]> => [])
 vi.mock('@/lib/bokslut/assets/register-ledger-tie-out', () => ({
   assetRegisterDifferences: (...args: unknown[]) => assetDifferencesMock(...(args as [])),
 }))
+// The bank rows booked twice are read in the database (covered in
+// tests/pg/bank-rows-booked-twice.pg.test.ts and
+// __tests__/bank-rows-booked-twice.test.ts); here it answers "none" unless a
+// test says otherwise.
+const bookedTwiceMock = vi.fn(async (): Promise<unknown[]> => [])
+vi.mock('@/lib/bokslut/bank-rows-booked-twice', () => ({
+  bankRowsBookedTwice: (...args: unknown[]) => bookedTwiceMock(...(args as [])),
+}))
 // The EF declaration preview refuses every form but the NE filer itself; the
 // aggregator must only call it for that form, with the form it resolved.
 vi.mock('@/lib/bokslut/enskild-firma/ef-declaration-preview', () => ({
@@ -683,5 +691,63 @@ describe('buildBokslutReadinessReport: asset register reminder', () => {
     const failed = await buildBokslutReadinessReport(supabase(), 'company-1', 'user-1', 'fp-1')
     expect(failed.reminders.find((r) => r.code === 'asset_register_mismatch')).toBeUndefined()
     expect(failed.ready).toBe(agree.ready)
+  })
+})
+
+describe('buildBokslutReadinessReport: bank rows booked twice', () => {
+  const supabase = () =>
+    makeSupabase({ period: { data: PERIOD, error: null }, settings: { data: { entity_type: 'aktiebolag' }, error: null } })
+  const voucher = (n: number, series = 'A') => ({ journal_entry_id: `je-${series}${n}`, voucher_series: series, voucher_number: n })
+  const bookedTwice = (row: string, kept: number, extras: ReturnType<typeof voucher>[]) => ({
+    transaction_id: row,
+    kept: voucher(kept),
+    extras,
+  })
+
+  beforeEach(() => {
+    vi.mocked(validateYearEndReadiness).mockResolvedValue(baseValidation())
+    vi.mocked(getReconciliationStatus).mockResolvedValue(RECON_CLEAN as never)
+    listAccountsMock.mockResolvedValue([])
+  })
+
+  it('counts the bank rows, names the first three extra copies by voucher and links to the first', async () => {
+    bookedTwiceMock.mockResolvedValueOnce([
+      bookedTwice('tx-1', 40, [voucher(41), voucher(44)]),
+      bookedTwice('tx-2', 12, [voucher(13)]),
+      bookedTwice('tx-3', 2, [voucher(7, 'B')]),
+    ])
+
+    const report = await buildBokslutReadinessReport(supabase(), 'company-1', 'user-1', 'fp-1')
+
+    const reminder = report.reminders.find((r) => r.code === 'bank_row_booked_twice')
+    expect(reminder).toMatchObject({ severity: 'warning', href: '/bookkeeping/je-A13' })
+    expect(reminder?.message).toBe(
+      '3 banktransaktioner är bokförda mer än en gång med samma rader: verifikat A13, A41, A44 (och 1 till) är extra kopior. Återför varje extra kopia med en storno, så att bankkontot stämmer med banken.',
+    )
+    expect(bookedTwiceMock).toHaveBeenCalledWith(expect.anything(), 'company-1', 'fp-1')
+    // A reminder, never a blocker.
+    expect(report.ready).toBe(true)
+    expect(report.blockers).toEqual([])
+  })
+
+  it('says it of one bank row and one extra copy', async () => {
+    bookedTwiceMock.mockResolvedValueOnce([bookedTwice('tx-1', 11, [voucher(12)])])
+
+    const report = await buildBokslutReadinessReport(supabase(), 'company-1', 'user-1', 'fp-1')
+
+    expect(report.reminders.find((r) => r.code === 'bank_row_booked_twice')?.message).toBe(
+      '1 banktransaktion är bokförd mer än en gång med samma rader: verifikat A12 är en extra kopia. Återför den med en storno, så att bankkontot stämmer med banken.',
+    )
+  })
+
+  it('stays silent when no row is booked twice, and when the read fails', async () => {
+    const none = await buildBokslutReadinessReport(supabase(), 'company-1', 'user-1', 'fp-1')
+    expect(none.reminders.find((r) => r.code === 'bank_row_booked_twice')).toBeUndefined()
+
+    bookedTwiceMock.mockRejectedValueOnce(new Error('down'))
+    const failed = await buildBokslutReadinessReport(supabase(), 'company-1', 'user-1', 'fp-1')
+    expect(failed.reminders.find((r) => r.code === 'bank_row_booked_twice')).toBeUndefined()
+    expect(failed.ready).toBe(none.ready)
+    expect(failed.reconciliation).toEqual(none.reconciliation)
   })
 })

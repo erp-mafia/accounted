@@ -5,6 +5,7 @@
  * so a company without Kivra sending switched on is refused before anything
  * is staged. The dry run never reads a personnummer.
  */
+import { sendingNotActiveRefusal } from '@/lib/digital-mailboxes/sending-not-active'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createTableMockSupabase } from '@/tests/helpers'
 
@@ -75,11 +76,13 @@ describe('gnubok_send_payslips: channel kivra', () => {
   })
 
   it('refuses while the company has not switched on Kivra sending, and stages nothing', async () => {
-    mocks.payslipMailboxBlock.mockResolvedValue('DIGITAL_MAILBOX_SENDING_NOT_ACTIVE')
+    mocks.payslipMailboxBlock.mockResolvedValue(sendingNotActiveRefusal('kivra', null))
     const { supabase, findCall } = setup()
 
     await expect(call({ salary_run_id: RUN_ID, channel: 'kivra' }, supabase)).rejects.toMatchObject({
       code: 'DIGITAL_MAILBOX_SENDING_NOT_ACTIVE',
+      details: { channel: 'kivra', state: 'off' },
+      remediation: { description: expect.stringMatching(/^details\.state off:/) },
     })
     expect(findCall('pending_operations', 'insert')).toBeUndefined()
   })

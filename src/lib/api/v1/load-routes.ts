@@ -301,6 +301,8 @@ import '@/app/api/v1/companies/[companyId]/skatteverket/agi/validate-individuppg
 import '@/app/api/v1/companies/[companyId]/skattekonto/sync/route'
 // Operation registry, wave 3: documents, transactions, rättelse, filing.
 import '@/app/api/v1/companies/[companyId]/documents/[id]/route'
+// What an archived document is (documents.set-type, Dokument's "Ändra typ").
+import '@/app/api/v1/companies/[companyId]/documents/[id]/type/route'
 import '@/app/api/v1/companies/[companyId]/inbox-items/route'
 import '@/app/api/v1/companies/[companyId]/inbox-items/[id]/route'
 import '@/app/api/v1/companies/[companyId]/inbox-items/[id]/unmatch-transaction/route'
@@ -308,6 +310,8 @@ import '@/app/api/v1/companies/[companyId]/inbox-items/removed/route'
 import '@/app/api/v1/companies/[companyId]/inbox-items/[id]/restore/route'
 import '@/app/api/v1/companies/[companyId]/inbox-items/[id]/convert/route'
 import '@/app/api/v1/companies/[companyId]/inbox-items/[id]/purchase-category/route'
+// The archive searched by text and file name (documents.search, gnubok_search_records' answer).
+import '@/app/api/v1/companies/[companyId]/documents/search/route'
 import '@/app/api/v1/companies/[companyId]/transactions/[id]/attach-document/route'
 import '@/app/api/v1/companies/[companyId]/transactions/[id]/detach-document/route'
 import '@/app/api/v1/companies/[companyId]/transactions/[id]/refresh-exchange-rate/route'

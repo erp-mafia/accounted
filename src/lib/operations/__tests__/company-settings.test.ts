@@ -96,6 +96,22 @@ describe('settings operations: field split', () => {
     expect(field.description).toMatch(/length digit/i)
   })
 
+  it('lets the API and MCP read and write the first förfallodag of debiterad preliminärskatt, in the tax profile', () => {
+    expect(keys(settingsUpdateTaxProfile.input)).toContain('preliminary_tax_first_due_date')
+    expect(keys(settingsUpdate.input)).not.toContain('preliminary_tax_first_due_date')
+    expect(TAX_RELEVANT_FIELDS as readonly string[]).toContain('preliminary_tax_first_due_date')
+    expect(
+      toSettingsResource('c1', { preliminary_tax_first_due_date: '2027-02-12' } as never).preliminary_tax_first_due_date,
+    ).toBe('2027-02-12')
+    expect(toSettingsResource('c1', {} as never).preliminary_tax_first_due_date).toBeNull()
+    const field = (settingsUpdateTaxProfile.input as unknown as z.ZodObject<z.ZodRawShape>).shape
+      .preliminary_tax_first_due_date as z.ZodType
+    expect(field.safeParse('2027-02-12').success).toBe(true)
+    expect(field.safeParse(null).success).toBe(true)
+    expect(field.safeParse('2027-02-30').success).toBe(false)
+    expect(field.description).toMatch(/förfallodag/)
+  })
+
   it('lets the API and MCP read and write the send order', () => {
     expect(keys(settingsUpdate.input)).toContain('invoice_send_order')
     expect(toSettingsResource('c1', { invoice_send_order: ['peppol', 'email'] } as never).invoice_send_order).toEqual(['peppol', 'email'])

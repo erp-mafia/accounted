@@ -1,4 +1,6 @@
 import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
+import { isKronorCurrency } from '@/lib/bookkeeping/currency-utils'
+import { roundOre } from '@/lib/money'
 import type { Invoice, CompanySettings } from '@/types'
 
 /**
@@ -59,6 +61,21 @@ export function getDisplayTotal(
     roundingDelta: Math.round((rounded - invoice.total) * 100) / 100,
     applies: true,
   }
+}
+
+/**
+ * Whether öresavrundning can have changed what a document's own verifikat
+ * booked: a kronor total with öre, whatever the rounding setting says (an
+ * issuance edited by hand or imported books it either way). The gate for the
+ * reads that ask what that verifikat booked of the öre; any other document
+ * books and carries its exact total, so the read costs nothing for nothing.
+ * Read off the total, not only the remainder: a part payment can leave
+ * whole kronor open while 151x still carries the issue's öre.
+ */
+export function hasOreToRound(document: { currency?: string | null; total?: number | string | null }): boolean {
+  if (!isKronorCurrency(document.currency) || document.total == null) return false
+  const total = Number(document.total)
+  return Number.isFinite(total) && !Number.isInteger(roundOre(total))
 }
 
 type AmountToPayShape = InvoiceTotalShape & {

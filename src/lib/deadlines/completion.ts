@@ -82,6 +82,43 @@ const notFound = (deadlineId: string): Failure => ({
   details: { deadline_id: deadlineId },
 })
 
+/**
+ * The company's deadline by id while it is still on its list. A dismissed
+ * system deadline is hidden everywhere (lib/deadlines/open.ts), so it is not
+ * found; neither is a malformed id, which is answered without a read. Shared
+ * with the removal (lib/deadlines/removal.ts).
+ */
+export async function findListedDeadline<Row>(
+  ctx: Ctx,
+  deadlineId: string,
+  columns: string,
+): Promise<{ ok: true; row: Row } | Failure> {
+  if (!isUuid(deadlineId)) return notFound(deadlineId)
+  const { data, error } = await ctx.supabase
+    .from('deadlines')
+    .select(columns)
+    .eq('id', deadlineId)
+    .eq('company_id', ctx.companyId)
+    .is('dismissed_at', null)
+    .maybeSingle()
+  if (error) return failed(error)
+  if (!data) return notFound(deadlineId)
+  return { ok: true, row: data as unknown as Row }
+}
+
+/** Which deadline a dry run is about: the head of every preview here and in the removal. */
+export function deadlinePreviewHead(
+  row: Pick<Deadline, 'id' | 'title' | 'due_date' | 'tax_deadline_type' | 'tax_period'>,
+): Record<string, unknown> {
+  return {
+    deadline_id: row.id,
+    title: row.title,
+    due_date: row.due_date,
+    tax_deadline_type: row.tax_deadline_type ?? null,
+    tax_period: row.tax_period ?? null,
+  }
+}
+
 export interface DeadlineCompletion {
   deadline: Deadline
   /** False when the deadline already had the requested state and nothing was written. */
@@ -99,18 +136,9 @@ export async function setDeadlineCompletion(
   { dryRun, protectConfirmed = false }: { dryRun: boolean; protectConfirmed?: boolean },
 ): Promise<OperationOutcome<DeadlineCompletion>> {
   const { supabase, companyId } = ctx
-  if (!isUuid(input.deadlineId)) return notFound(input.deadlineId)
-
-  const { data: found, error: readError } = await supabase
-    .from('deadlines')
-    .select(DEADLINE_SELECT)
-    .eq('id', input.deadlineId)
-    .eq('company_id', companyId)
-    .is('dismissed_at', null)
-    .maybeSingle()
-  if (readError) return failed(readError)
-  const existing = found as Deadline | null
-  if (!existing) return notFound(input.deadlineId)
+  const found = await findListedDeadline<Deadline>(ctx, input.deadlineId, DEADLINE_SELECT)
+  if (!found.ok) return found
+  const existing = found.row
 
   const wasCompleted = Boolean(existing.is_completed)
   const target = input.isCompleted ?? !wasCompleted
@@ -124,11 +152,7 @@ export async function setDeadlineCompletion(
       ok: true,
       dryRun: true,
       preview: {
-        deadline_id: existing.id,
-        title: existing.title,
-        due_date: existing.due_date,
-        tax_deadline_type: existing.tax_deadline_type ?? null,
-        tax_period: existing.tax_period ?? null,
+        ...deadlinePreviewHead(existing),
         current: { is_completed: wasCompleted, completed_at: existing.completed_at ?? null },
         is_completed: target,
         effect: !changed ? 'unchanged' : target ? 'mark_completed' : 'mark_not_completed',

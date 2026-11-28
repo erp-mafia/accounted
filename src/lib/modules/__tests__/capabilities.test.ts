@@ -4,13 +4,14 @@
  * exist. The resolver is pure, so every rule is pinned here without a
  * database; the loader is checked against a per-table mock.
  */
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { CAPABILITY, type CapabilityKey } from '@/lib/entitlements/keys'
 import {
   AVAILABILITY_STATUSES,
   CAPABILITY_REASONS,
   PACKAGE_REASONS,
+  PART_REASONS,
   capabilityDigest,
   capabilityInputsFromEntitlements,
   capabilitySurface,
@@ -43,6 +44,16 @@ function inputs(overrides: Partial<CapabilityInputs> = {}): CapabilityInputs {
 
 const allBut = (...keys: CapabilityKey[]) => new Set(MODULE_KEYS.filter((k) => !keys.includes(k)))
 
+/** Avtal och åtaganden, a part of year-end switched on company by company, when it is on. */
+const COMMITMENTS_ON = {
+  id: 'commitments',
+  name: 'Agreements and commitments',
+  name_sv: 'Avtal och åtaganden',
+  status: 'active',
+  reasons: [],
+  resolution: null,
+}
+
 function moduleOf(result: ReturnType<typeof resolveCapabilities>, id: string): ModuleCapability {
   const found = result.modules.find((m) => m.id === id)
   if (!found) throw new Error(`no module ${id}`)
@@ -71,6 +82,7 @@ describe('resolveCapabilities', () => {
         status: 'active',
         reasons: [],
         resolution: null,
+        parts: def.id === 'year-end' ? [COMMITMENTS_ON] : [],
         package: packageForModule(def.id),
         availability: 'on',
       })
@@ -225,6 +237,41 @@ describe('capabilityDigest', () => {
     // company formation); a typical company lists zero to three modules.
     expect(JSON.stringify(digest).length).toBeLessThan(2_200)
   })
+
+  it('lists an active module whose rollout part is off, with that part', () => {
+    expect(capabilityDigest(resolveCapabilities(inputs({ rolloutParts: { commitments: false } })))).toEqual([
+      { id: 'year-end', status: 'active', reasons: [], parts: [{ id: 'commitments', status: 'off', reasons: ['switched_on_per_company'] }] },
+    ])
+  })
+})
+
+describe('resolveCapabilities: a part switched on company by company', () => {
+  it('reports Avtal och åtaganden off with the way to get it when the rollout does not name the company, and year-end stays active', () => {
+    const yearEnd = moduleOf(resolveCapabilities(inputs({ rolloutParts: { commitments: false } })), 'year-end')
+    expect(yearEnd).toMatchObject({ status: 'active', reasons: [], resolution: null })
+    expect(yearEnd.parts).toEqual([
+      {
+        ...COMMITMENTS_ON,
+        status: 'off',
+        reasons: ['switched_on_per_company'],
+        resolution:
+          'Agreements and commitments is switched on company by company and is not on for this company: write to support@accounted.se to have it switched on.',
+      },
+    ])
+    for (const r of yearEnd.parts[0].reasons) expect(PART_REASONS).toContain(r)
+  })
+
+  it('reports it on when the rollout names the company, or when that is not known', () => {
+    expect(moduleOf(resolveCapabilities(inputs({ rolloutParts: { commitments: true } })), 'year-end').parts).toEqual([COMMITMENTS_ON])
+    expect(moduleOf(resolveCapabilities(inputs()), 'year-end').parts).toEqual([COMMITMENTS_ON])
+  })
+
+  it('tells a self-host where the switch is instead of writing to support', () => {
+    const yearEnd = moduleOf(resolveCapabilities(inputs({ selfHosted: true, rolloutParts: { commitments: false } })), 'year-end')
+    expect(yearEnd.parts[0].resolution).toBe(
+      'Agreements and commitments is switched on company by company: add the company id to BOLAGET_COMPANY_IDS on this instance.',
+    )
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -247,6 +294,27 @@ const COMPANY_ID = '11111111-1111-4111-8111-111111111111'
 const ACTIVE_GRANTS = MODULE_KEYS.map((key) => ({ capability_key: key, expires_at: null, source: 'stripe', team_id: null }))
 
 describe('loadCompanyCapabilities', () => {
+  // The company is in the Bolaget rollout unless a test says otherwise, so
+  // the digests below show only what each test is about.
+  beforeEach(() => {
+    vi.stubEnv('BOLAGET_COMPANY_IDS', COMPANY_ID)
+  })
+
+  it('reports Avtal och åtaganden off for a company the rollout does not name, on for one it names', async () => {
+    const tables = {
+      companies: { data: { jurisdiction: 'SE', ledger_currency: 'SEK', entity_type: 'aktiebolag' } },
+      company_settings: { data: { entity_type: 'aktiebolag', pays_salaries: false } },
+      company_capability_config: { data: [] },
+    }
+    const named = await loadCompanyCapabilities(mockSupabase(tables, { data: ACTIVE_GRANTS }).supabase, COMPANY_ID)
+    expect(capabilityDigest(named!)).toEqual([])
+    vi.stubEnv('BOLAGET_COMPANY_IDS', '22222222-2222-4222-8222-222222222222')
+    const other = await loadCompanyCapabilities(mockSupabase(tables, { data: ACTIVE_GRANTS }).supabase, COMPANY_ID)
+    expect(capabilityDigest(other!)).toEqual([
+      { id: 'year-end', status: 'active', reasons: [], parts: [{ id: 'commitments', status: 'off', reasons: ['switched_on_per_company'] }] },
+    ])
+  })
+
   it('reads the company, its profile, its settings, the grants and the config, and resolves them', async () => {
     const { supabase, calls } = mockSupabase(
       {
@@ -604,7 +672,7 @@ describe('publishedCapabilities', () => {
     expect(published.profile).toEqual(result.profile)
     expect(published.modules).toHaveLength(MODULES.length)
     for (const m of published.modules) {
-      expect(Object.keys(m)).toEqual(['id', 'kind', 'name', 'name_sv', 'summary', 'depends_on', 'status', 'reasons', 'resolution'])
+      expect(Object.keys(m)).toEqual(['id', 'kind', 'name', 'name_sv', 'summary', 'depends_on', 'status', 'reasons', 'resolution', 'parts'])
     }
     expect(published.modules.find((m) => m.id === 'payroll')).toMatchObject({
       status: 'unsupported',

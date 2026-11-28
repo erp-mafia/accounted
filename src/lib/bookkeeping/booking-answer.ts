@@ -23,6 +23,12 @@ export interface BookedEntry {
    * the door does not say.
    */
   underlag_archived?: boolean
+  /**
+   * Whether the verifikat was marked "Inget underlag krävs" as the form asked
+   * (POST /api/bookkeeping/journal-entries answers it, top level, only when
+   * asked). false: posted, but the mark failed.
+   */
+  no_document_required?: boolean
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -39,13 +45,15 @@ function entryFields(value: Record<string, unknown>): Omit<BookedEntry, 'id'> {
 /** The entry a booking answer names, or `{ id: null }` when it names none. */
 export function bookedEntryOf(answer: unknown): BookedEntry {
   if (!isRecord(answer)) return { id: null }
-  const underlag =
-    typeof answer.underlag_archived === 'boolean' ? { underlag_archived: answer.underlag_archived } : {}
+  const flags = {
+    ...(typeof answer.underlag_archived === 'boolean' ? { underlag_archived: answer.underlag_archived } : {}),
+    ...(typeof answer.no_document_required === 'boolean' ? { no_document_required: answer.no_document_required } : {}),
+  }
   const data = isRecord(answer.data) ? answer.data : null
   // book-direct: the entry is nested under data.journal_entry.
   const nested = data && isRecord(data.journal_entry) ? data.journal_entry : null
-  if (nested && typeof nested.id === 'string') return { id: nested.id, ...entryFields(nested), ...underlag }
-  if (data && typeof data.id === 'string') return { id: data.id, ...entryFields(data), ...underlag }
+  if (nested && typeof nested.id === 'string') return { id: nested.id, ...entryFields(nested), ...flags }
+  if (data && typeof data.id === 'string') return { id: data.id, ...entryFields(data), ...flags }
   const top = typeof answer.journal_entry_id === 'string' ? answer.journal_entry_id : null
-  return { id: top, ...(data ? entryFields(data) : {}), ...underlag }
+  return { id: top, ...(data ? entryFields(data) : {}), ...flags }
 }

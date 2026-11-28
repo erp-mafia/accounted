@@ -3,6 +3,7 @@ import { OWED_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { dbError } from '@/lib/errors/db-error'
 import { invoiceDisplayNumber } from '@/lib/invoices/display'
+import type { LateInterestInvoiceRef } from '@/lib/invoices/late-interest-chargeable'
 import { calculateLatePaymentInterest, getAnnualInterestRate, getConsumerRateCeilingAt } from '@/lib/invoices/late-payment-interest'
 import { roundOre } from '@/lib/money'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
@@ -26,6 +27,11 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
  * its payment date, so a partly late invoice is charged only for the part
  * that was late. An open invoice accrues on its remaining amount up to the
  * as-of date. Amounts stay in the invoice's currency.
+ *
+ * A räntefaktura (is_late_interest_invoice) is never listed: it charges
+ * interest and earns none itself, so no interest is ever charged on
+ * interest. A late-paid invoice names the räntefaktura that already charges
+ * its interest (late_interest_invoice_id); a cancelled one charges nothing.
  */
 
 /** journal_entries.source_type of a verifikat that records a customer payment made in Accounted. */
@@ -42,6 +48,7 @@ export const PAYMENT_SOURCE_TYPES: ReadonlySet<string> = new Set([
 export interface LatePaidInvoice {
   invoice_id: string
   invoice_number: string
+  customer_id: string | null
   customer_name: string | null
   currency: string
   due_date: string
@@ -52,6 +59,10 @@ export interface LatePaidInvoice {
   /** Days late of the latest late payment. */
   days_late: number
   interest: number
+  /** Paid in full: the interest is final, so a räntefaktura can charge it. */
+  fully_paid: boolean
+  /** The räntefaktura that charges this interest; null when none does. */
+  interest_invoice: LateInterestInvoiceRef | null
 }
 
 export interface OverdueOpenInvoice {
@@ -100,7 +111,17 @@ interface InvoiceRow {
   credited_invoice_id: string | null
   total?: number | string | null
   remaining_amount?: number | string | null
+  customer_id?: string | null
+  late_interest_invoice_id?: string | null
+  is_late_interest_invoice?: boolean | null
   customer: { name: string | null; customer_type?: string | null } | null
+}
+
+interface LateInterestInvoiceRow {
+  id: string
+  invoice_number: string | null
+  external_invoice_number: string | null
+  status: string
 }
 
 interface PaymentRow {
@@ -113,8 +134,16 @@ interface PaymentRow {
 }
 
 function isChargeableInvoice(invoice: InvoiceRow | null): invoice is InvoiceRow {
-  return !!invoice && invoice.document_type === 'invoice' && !isCreditNoteDocument(invoice)
+  return (
+    !!invoice &&
+    invoice.document_type === 'invoice' &&
+    !isCreditNoteDocument(invoice) &&
+    invoice.is_late_interest_invoice !== true
+  )
 }
+
+const INVOICE_COLUMNS =
+  'id, invoice_number, external_invoice_number, due_date, currency, status, document_type, credited_invoice_id, total, remaining_amount, customer_id, late_interest_invoice_id, is_late_interest_invoice, customer:customers(name, customer_type)'
 
 export async function getLatePaymentInterestReport(
   supabase: SupabaseClient,
@@ -135,7 +164,7 @@ export async function getLatePaymentInterestReport(
     supabase
       .from('invoice_payments')
       .select(
-        'id, invoice_id, payment_date, amount, journal_entry:journal_entries!journal_entry_id(source_type), invoice:invoices!inner(id, invoice_number, external_invoice_number, due_date, currency, status, document_type, credited_invoice_id, total, customer:customers(name, customer_type))',
+        `id, invoice_id, payment_date, amount, journal_entry:journal_entries!journal_entry_id(source_type), invoice:invoices!inner(${INVOICE_COLUMNS})`,
       )
       .eq('company_id', companyId)
       .not('journal_entry_id', 'is', null)
@@ -147,9 +176,7 @@ export async function getLatePaymentInterestReport(
   const openInvoices = await fetchAllRows<InvoiceRow>(({ from, to }) =>
     supabase
       .from('invoices')
-      .select(
-        'id, invoice_number, external_invoice_number, due_date, currency, status, document_type, credited_invoice_id, total, remaining_amount, customer:customers(name, customer_type)',
-      )
+      .select(INVOICE_COLUMNS)
       .eq('company_id', companyId)
       .eq('document_type', 'invoice')
       .in('status', OWED_INVOICE_STATUSES)
@@ -157,6 +184,23 @@ export async function getLatePaymentInterestReport(
       .gt('remaining_amount', 0)
       .order('id', { ascending: true })
       .range(from, to) as unknown as PromiseLike<{ data: InvoiceRow[] | null; error: { message: string } | null }>,
+  )
+
+  // The company's räntefakturor: which one charges a late-paid invoice. A
+  // cancelled one charges nothing, so its invoices can be charged again.
+  const lateInterestInvoices = await fetchAllRows<LateInterestInvoiceRow>(({ from, to }) =>
+    supabase
+      .from('invoices')
+      .select('id, invoice_number, external_invoice_number, status')
+      .eq('company_id', companyId)
+      .eq('is_late_interest_invoice', true)
+      .order('id', { ascending: true })
+      .range(from, to) as unknown as PromiseLike<{ data: LateInterestInvoiceRow[] | null; error: { message: string } | null }>,
+  )
+  const chargingInvoices = new Map<string, LateInterestInvoiceRef>(
+    lateInterestInvoices
+      .filter((row) => row.status !== 'cancelled')
+      .map((row) => [row.id, { id: row.id, invoice_number: invoiceDisplayNumber(row), status: row.status }]),
   )
 
   const paidLate = new Map<string, LatePaidInvoice>()
@@ -177,6 +221,7 @@ export async function getLatePaymentInterestReport(
     const row = paidLate.get(invoice.id) ?? {
       invoice_id: invoice.id,
       invoice_number: invoiceDisplayNumber(invoice),
+      customer_id: invoice.customer_id ?? null,
       customer_name: invoice.customer?.name ?? null,
       currency: invoice.currency,
       due_date: invoice.due_date,
@@ -184,6 +229,10 @@ export async function getLatePaymentInterestReport(
       last_payment_date: payment.payment_date,
       days_late: days,
       interest: 0,
+      fully_paid: invoice.status === 'paid',
+      interest_invoice: invoice.late_interest_invoice_id
+        ? (chargingInvoices.get(invoice.late_interest_invoice_id) ?? null)
+        : null,
     }
     row.paid_late_amount = roundOre(row.paid_late_amount + amount)
     row.interest = roundOre(row.interest + interest)

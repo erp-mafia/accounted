@@ -167,6 +167,7 @@ import {
   inboxItemsMatchTransaction,
 } from './inbox-matches'
 import { inboxItemsSetPurchaseCategory } from './inbox-purchase-category'
+import { documentsSearch } from './document-search'
 import {
   transactionsBulkBook,
   transactionsDelete,
@@ -175,6 +176,7 @@ import {
   transactionsRefreshExchangeRate,
   transactionsUpdate,
 } from './transactions'
+import { exchangeRatesGet } from './exchange-rates'
 import {
   importsBankUndo,
   importsOpeningBalanceReviewAcknowledge,
@@ -224,7 +226,7 @@ import {
 import { vatCheckReviewsMark } from './vat-check-reviews'
 import { vatMomsredovisningMarksMark, vatMomsredovisningMarksWithdraw } from './vat-momsredovisning-marks'
 import { agiFilingsMark } from './agi-filings'
-import { deadlinesComplete, deadlinesList } from './deadlines'
+import { deadlinesComplete, deadlinesDelete, deadlinesList } from './deadlines'
 import { counterpartyTemplatesRename, counterpartyTemplatesUpdate } from './counterparty-templates'
 import {
   arsredovisningAddSignatory,
@@ -429,9 +431,11 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   paymentsSigningLink,
   // changed supplier bank details: MCP stages the approval, a person gives it in the web UI
   supplierPayeesConfirm,
-  // documents (set-type is MCP only: Dokument's own route calls the same service)
+  // documents (Dokument's own routes call the same services)
   documentsList,
   documentsGet,
+  // the archive's search (v1; MCP keeps its listed gnubok_search_records, both call lib/arkiv/search.ts searchArchive)
+  documentsSearch,
   documentsDelete,
   documentsSetType,
   transactionsAttachDocument,
@@ -457,6 +461,8 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   transactionsLinkJournalEntry,
   transactionsMatchBatch,
   transactionsBulkBook,
+  // exchange-rates (MCP only: the app's forms read the same lookup through /api/currency/rate)
+  exchangeRatesGet,
   // imports
   importsBankUndo,
   importsSieUndo,
@@ -513,6 +519,8 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   // deadlines (v1 and MCP: the dashboard ticks a deadline through the same service)
   deadlinesList,
   deadlinesComplete,
+  // MCP only: the dashboard removes a deadline through the same service.
+  deadlinesDelete,
   // counterparty-templates (MCP only: Bokföringsregler and the settings panel
   // change a rule through the same service)
   counterpartyTemplatesRename,

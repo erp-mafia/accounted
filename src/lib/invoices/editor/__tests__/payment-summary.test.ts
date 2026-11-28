@@ -344,4 +344,14 @@ describe('paymentTermsTexts', () => {
     expect(paymentTermsTexts(settings, 'en')).toEqual(['Payment within 30 days.', 'Dröjsmålsränta enligt räntelagen.'])
     expect(paymentTermsTexts(settings, 'sv')).toEqual(['Betalning inom 30 dagar.', 'Dröjsmålsränta enligt räntelagen.'])
   })
+
+  it('leaves the late-payment terms out on a räntefaktura, as its PDF does', () => {
+    const settings = {
+      invoice_credit_terms_text: 'Betalning inom 30 dagar.',
+      invoice_late_fee_text: 'Dröjsmålsränta enligt räntelagen.',
+      invoice_late_fee_text_en: 'Interest on late payment.',
+    }
+    expect(paymentTermsTexts(settings, 'sv', { lateInterestInvoice: true })).toEqual(['Betalning inom 30 dagar.'])
+    expect(paymentTermsTexts(settings, 'en', { lateInterestInvoice: true })).toEqual(['Betalning inom 30 dagar.'])
+  })
 })

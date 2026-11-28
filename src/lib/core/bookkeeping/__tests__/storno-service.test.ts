@@ -109,11 +109,15 @@ vi.mock('@/lib/core/bookkeeping/correction-bank-leg', () => ({
   assertCorrectionKeepsBankAccount: (...args: unknown[]) => mockAssertBankAccount(...args),
 }))
 
-// The invoice payment rows follow the correction (correction-payment-relink.test.ts
-// covers the queries). Consumes no queued result.
-const mockRelinkPaymentRows = vi.fn(async () => undefined)
+// The invoice payment rows and the records the verifikat books (the invoice,
+// the inbox item, the utlägg) follow the correction
+// (correction-payment-relink.test.ts covers the queries). Neither consumes a
+// queued result.
+const mockRelinkPaymentRows = vi.fn(async (): Promise<string | undefined> => undefined)
+const mockRelinkBookedRecords = vi.fn(async (): Promise<string | undefined> => undefined)
 vi.mock('@/lib/core/bookkeeping/correction-payment-relink', () => ({
   relinkPaymentRowsToEntry: (...args: unknown[]) => mockRelinkPaymentRows(...(args as [])),
+  relinkBookedRecordsToEntry: (...args: unknown[]) => mockRelinkBookedRecords(...(args as [])),
 }))
 
 import { correctEntry } from '../storno-service'
@@ -347,6 +351,7 @@ describe('correctEntry', () => {
       expect(mockIsStandingStorno).toHaveBeenCalledWith(supabase, 'company-1', 'orig-1', 'reversal-1')
       // No compare-and-set on the original, no relink out of its year.
       expect(mockRelinkPaymentRows).not.toHaveBeenCalled()
+      expect(mockRelinkBookedRecords).not.toHaveBeenCalled()
       expect(supabase.rpc).not.toHaveBeenCalledWith('relink_documents_to_correction', expect.anything())
       expect(vi.mocked(supabase.from).mock.calls.map(([table]) => table)).not.toContain('transactions')
       expect(resultIdx).toBe(11)
@@ -354,6 +359,7 @@ describe('correctEntry', () => {
       expect(result.corrected.id).toBe('corrected-1')
       expect(result).not.toHaveProperty('transactionRelinkError')
       expect(result).not.toHaveProperty('documentRelinkError')
+      expect(result).not.toHaveProperty('recordRelinkError')
     })
 
     it('keeps the person\'s own text and puts the reference after it', async () => {
@@ -1076,12 +1082,42 @@ describe('correctEntry', () => {
       await correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', correctedLines)
 
       expect(mockRelinkPaymentRows).toHaveBeenCalledTimes(1)
-      expect(mockRelinkPaymentRows).toHaveBeenCalledWith(
-        supabase,
-        'company-1',
-        expect.objectContaining({ id: 'orig-1' }),
-        'corrected-1',
-      )
+      expect(mockRelinkPaymentRows).toHaveBeenCalledWith(supabase, 'company-1', 'orig-1', 'corrected-1')
+    })
+
+    // The records the original books follow as well, each by its own
+    // verifikat pointer: the corrected verifikat is the one that books them now.
+    it('hands the original and the corrected entry to the relink of the records it books', async () => {
+      setupResults()
+      const supabase = makeClient()
+      await correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', correctedLines)
+
+      expect(mockRelinkBookedRecords).toHaveBeenCalledTimes(1)
+      expect(mockRelinkBookedRecords).toHaveBeenCalledWith(supabase, 'company-1', 'orig-1', 'corrected-1')
+    })
+
+    it('keeps the posted correction when the relink of the records it books fails', async () => {
+      setupResults()
+      mockRelinkBookedRecords.mockResolvedValueOnce('KONTANTMETOD_CARRY_LINK_LOCKED')
+      const supabase = makeClient()
+      const result = await correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', correctedLines)
+
+      expect(result.reversal.id).toBe('reversal-1')
+      expect(result.corrected.id).toBe('corrected-1')
+      // The failure is on the result, like the bank row and underlag relinks.
+      expect(result.recordRelinkError).toBe('KONTANTMETOD_CARRY_LINK_LOCKED')
+      // The underlag still follows: the relinks do not depend on each other.
+      expect(supabase.rpc).toHaveBeenCalledWith('relink_documents_to_correction', expect.anything())
+    })
+
+    it('surfaces a payment row relink failure on the result the same way', async () => {
+      setupResults()
+      mockRelinkPaymentRows.mockResolvedValueOnce('permission denied for table invoice_payments')
+      const supabase = makeClient()
+      const result = await correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', correctedLines)
+
+      expect(result.corrected.id).toBe('corrected-1')
+      expect(result.recordRelinkError).toBe('permission denied for table invoice_payments')
     })
 
     it('surfaces a junction relink failure on the result instead of throwing (correction chain stays traceable)', async () => {

@@ -473,6 +473,7 @@ const SETTINGS_FIELDS: Record<string, string> = {
   kontrolluppgifter_enabled: 'Kontrolluppgifter',
   fyllnadsinbetalning_enabled: 'Fyllnadsinbetalning',
   preliminary_tax_monthly: 'Preliminärskatt per månad',
+  preliminary_tax_first_due_date: 'Första förfallodag för debiterad preliminärskatt',
   entity_type: 'Företagsform',
   org_number: 'Organisationsnummer',
   company_name: 'Företagsnamn',
