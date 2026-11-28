@@ -76,16 +76,20 @@ export async function readAgiPaymentPeriodConflict(
   // The run the declaration was built from: its correction and the run it
   // corrects are the same pay, not another payment. A row whose run is gone
   // covers no live run, so any live run of the month refuses it.
-  let run: { id: string; corrects_run_id: string | null } = { id: declaration.salary_run_id ?? '', corrects_run_id: null }
+  let run: { id: string; corrects_run_id: string | null; status?: string } = {
+    id: declaration.salary_run_id ?? '',
+    corrects_run_id: null,
+  }
   if (declaration.salary_run_id) {
-    const { data, error } = await supabase
-      .from('salary_runs')
-      .select('id, corrects_run_id')
+    const { data, error } = await (severalRuns
+      ? supabase.from('salary_runs').select('id, corrects_run_id, status')
+      : supabase.from('salary_runs').select('id, corrects_run_id')
+    )
       .eq('id', declaration.salary_run_id)
       .eq('company_id', companyId)
       .maybeSingle()
     if (error) return { ok: false, error }
-    if (data) run = data as { id: string; corrects_run_id: string | null }
+    if (data) run = data as { id: string; corrects_run_id: string | null; status?: string }
   }
 
   const agiPeriod = { periodYear: declaration.period_year, periodMonth: declaration.period_month }
@@ -116,7 +120,11 @@ export async function readAgiPaymentPeriodConflict(
     // one-run rule; every other covered run must be one of the live others.
     const coveredOthers = covered.filter((id) => id !== run.id)
     const liveOthers = others.runs.map((other) => other.id)
+    // A holder back in draft pays out nothing yet; a corrected one stands
+    // for its correction, as in the one-run rule.
+    const holderCounts = run.status !== 'draft'
     const exact =
+      holderCounts &&
       covered.includes(run.id) &&
       coveredOthers.length === liveOthers.length &&
       liveOthers.every((id) => coveredOthers.includes(id))

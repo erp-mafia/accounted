@@ -356,6 +356,11 @@ export function decideMonthAgiWrite(
   return 'update_own'
 }
 
+/** Whether two lists name the same runs. */
+function sameRunSet(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && b.every((id) => a.includes(id))
+}
+
 /** Why the runs of a month cannot be summed into one declaration. */
 type MonthRunsRefusalReason = 'same_employee' | 'different_rates' | 'regional_support' | 'correction_pending' | 'awaiting_signature'
 
@@ -1143,13 +1148,31 @@ export async function generateAgiDeclaration(
   if (isSalaryExtraRunsEnabled(companyId) && run.status !== 'corrected') {
     const month = await readMonthRunsForAgi(supabase, companyId, run as AgiSourceRun, agiPeriod)
     if (!month.ok) return month
+    const built = new Map<string, { parsedRows: SalaryRunEmployeeRow[]; employeeData: AGIEmployeeData[] }>([
+      [run.id as string, { parsedRows, employeeData }],
+    ])
     for (const other of month.others) {
-      const built = await buildRunDeclarationRows(supabase, companyId, other, agiPeriod)
-      if (!built.ok) return built
-      parsedRows = [...parsedRows, ...built.parsedRows]
-      employeeData = [...employeeData, ...built.employeeData]
+      let rows: RunDeclarationRows
+      try {
+        rows = await buildRunDeclarationRows(supabase, companyId, other, agiPeriod)
+      } catch (err) {
+        // A malformed row on another run of the month refuses like one on
+        // this run would be named, not as a server error.
+        if (err instanceof AGIIncompleteDataError) {
+          return { ok: false, code: 'AGI_INCOMPLETE_DATA', details: { missing_fields: err.missingFields, message: err.message } }
+        }
+        throw err
+      }
+      if (!rows.ok) return rows
+      built.set(other.id, rows)
     }
-    monthRuns = [run as AgiSourceRun, ...month.others]
+    // One order whichever run generates (payout day, then id), so the same
+    // month always gives the same XML.
+    monthRuns = [run as AgiSourceRun, ...month.others].sort(
+      (a, b) => a.payment_date.localeCompare(b.payment_date) || a.id.localeCompare(b.id),
+    )
+    parsedRows = monthRuns.flatMap((r) => built.get(r.id)?.parsedRows ?? [])
+    employeeData = monthRuns.flatMap((r) => built.get(r.id)?.employeeData ?? [])
     // One person on two runs of the month (weekly pay) is step 2, not
     // built: the IU would have to sum two payslips. The roster doors refuse
     // it (extra-runs.ts); a month that has it anyway is refused here.
@@ -1471,7 +1494,12 @@ export async function generateAgiDeclaration(
       // its runs. The submit reads the row of the run it submits
       // (declaration-prep.ts), so this run takes it over, nothing else
       // changed and agi_generated_at left as it is.
-      if (monthRuns && target.row.salary_run_id !== run.id) {
+      // The runs it covers changed (a run with nothing to declare joined):
+      // written below, so the coverage follows.
+      const coverageChanged =
+        monthRuns !== null &&
+        !sameRunSet(target.row.salary_run_ids ?? (target.row.salary_run_id ? [target.row.salary_run_id] : []), monthRunIds ?? [])
+      if (!coverageChanged && monthRuns && target.row.salary_run_id !== run.id) {
         const { data: moved, error: moveError } = await supabase
           .from('agi_declarations')
           .update({ salary_run_id: run.id })
@@ -1482,7 +1510,7 @@ export async function generateAgiDeclaration(
         if (moveError) return { ok: false, code: 'DATABASE_ERROR', details: moveError }
         if (((moved ?? []) as unknown[]).length === 0) continue
       }
-      return storedAnswer(target.row, false)
+      if (!coverageChanged) return storedAnswer(target.row, false)
     }
 
     const written = await writeAgiDeclaration(supabase, target, keys, content)

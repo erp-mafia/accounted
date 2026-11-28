@@ -20,6 +20,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { addMonthsIso, previousMonthEndIso } from '@/lib/dates/iso'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { readOtherRunsPaidInPeriod } from '@/lib/deadlines/agi-period-runs'
 import { isSalaryExtraRunsEnabled } from '@/lib/env/salary-extra-runs-switch'
 import { agiReportingPeriod, formatAgiPeriodDashed } from './agi/reporting-period'
@@ -100,16 +101,29 @@ export async function findRosterClashes(
   employeeIds: readonly string[],
 ): Promise<{ ok: true; clashes: RosterClash[] } | { ok: false; error: unknown }> {
   if (siblings.length === 0 || employeeIds.length === 0) return { ok: true, clashes: [] }
-  const { data, error } = await supabase
-    .from('salary_run_employees')
-    .select('employee_id, salary_run_id')
-    .eq('company_id', companyId)
-    .in('salary_run_id', siblings.map((run) => run.id))
-    .in('employee_id', [...employeeIds])
-  if (error) return { ok: false, error }
+  // Every page: a truncated answer would read as no clash.
+  let data: Array<{ employee_id: string; salary_run_id: string }>
+  try {
+    data = await fetchAllRows<{ employee_id: string; salary_run_id: string }>(({ from, to }) =>
+      supabase
+        .from('salary_run_employees')
+        .select('employee_id, salary_run_id')
+        .eq('company_id', companyId)
+        .in('salary_run_id', siblings.map((run) => run.id))
+        .in('employee_id', [...employeeIds])
+        .order('employee_id', { ascending: true })
+        .order('salary_run_id', { ascending: true })
+        .range(from, to) as unknown as PromiseLike<{
+        data: Array<{ employee_id: string; salary_run_id: string }> | null
+        error: { message: string } | null
+      }>,
+    )
+  } catch (error) {
+    return { ok: false, error }
+  }
   const byId = new Map(siblings.map((run) => [run.id, run]))
   const clashes: RosterClash[] = []
-  for (const row of (data ?? []) as Array<{ employee_id: string; salary_run_id: string }>) {
+  for (const row of data) {
     const run = byId.get(row.salary_run_id)
     if (run) clashes.push({ employee_id: row.employee_id, run })
   }

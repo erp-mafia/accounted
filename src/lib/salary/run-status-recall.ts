@@ -229,6 +229,22 @@ export async function unapproveSalaryRun(
     }
   }
 
+  // The month's declaration of several runs is left covering no run before
+  // the status moves: the safe direction if the flip then fails (it only
+  // waits to be generated again), and a failed clear stops the recall.
+  if (staleAgi && keepMonthDeclaration) {
+    const { error: uncoverError } = await supabase
+      .from('agi_declarations')
+      .update({ salary_run_ids: [] })
+      .eq('id', staleAgi.id)
+      .eq('company_id', companyId)
+      .in('status', AGI_STALE_STATUSES)
+    if (uncoverError) {
+      log.error('month AGI declaration uncover failed', uncoverError as Error)
+      return { ok: false, code: 'SALARY_RUN_UNAPPROVE_FAILED' }
+    }
+  }
+
   // Clear payment-file tracking too: a previously generated file would show
   // as current after re-approval even though the amounts may change. Whether
   // the file already reached the bank is outside the app's knowledge: the UI
@@ -280,17 +296,7 @@ export async function unapproveSalaryRun(
   // since the read. A rejected declaration is kept: it documents the
   // rejection.
   let deletedAgiDeclarationId: string | null = null
-  if (staleAgi && keepMonthDeclaration) {
-    const { error: uncoverError } = await supabase
-      .from('agi_declarations')
-      .update({ salary_run_ids: [] })
-      .eq('id', staleAgi.id)
-      .eq('company_id', companyId)
-      .in('status', AGI_STALE_STATUSES)
-    if (uncoverError) {
-      log.warn('month AGI declaration uncover failed', { agiDeclarationId: staleAgi.id, error: uncoverError.message })
-    }
-  } else if (staleAgi) {
+  if (staleAgi && !keepMonthDeclaration) {
     const { data: deletedRows, error: deleteError } = await supabase
       .from('agi_declarations')
       .delete()

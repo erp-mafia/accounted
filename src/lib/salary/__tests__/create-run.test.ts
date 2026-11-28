@@ -23,7 +23,7 @@ const STANDARD_SETTINGS = {
 function chain(result: { data?: unknown; error?: unknown }) {
   const promise = Promise.resolve({ data: null, error: null, ...result })
   const c: Record<string, unknown> = {}
-  for (const m of ['select', 'eq', 'neq', 'gte', 'lte', 'order', 'limit', 'in', 'or']) {
+  for (const m of ['select', 'eq', 'neq', 'gte', 'lte', 'order', 'limit', 'in', 'or', 'range']) {
     c[m] = () => c
   }
   c.single = () => promise

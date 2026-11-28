@@ -411,6 +411,14 @@ function windowLockingRun(runs: CompanyRun[], date: string, employeeRuns?: Reado
       return date >= window.start && date <= window.end
     })
     if (own) return LOCKING.includes(own.status) ? own : null
+    // Paid only by a corrected version of the window's run: the correction
+    // rules decide (newDayWindowRun), never another group's run.
+    const paidByCorrectedVersion = runs.some((run) => {
+      if (run.status !== 'corrected' || !employeeRuns.has(run.id)) return false
+      const window = windowOf(run)
+      return date >= window.start && date <= window.end
+    })
+    if (paidByCorrectedVersion) return null
   }
   for (const run of runs) {
     if (!LOCKING.includes(run.status)) continue

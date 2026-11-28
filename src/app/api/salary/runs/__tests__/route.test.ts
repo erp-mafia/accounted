@@ -309,6 +309,17 @@ describe('POST /api/salary/runs — one-click creation', () => {
     expect(body.error.details.reason).toBe('not_enabled')
   })
 
+  it('refuses an extra run that names no period', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    authed(supabase)
+    enqueueMany([{ data: null }])
+
+    const response = await POST(post({ extra_run: true }), { params: Promise.resolve({}) } as never)
+
+    expect(response.status).toBe(400)
+    expect(createSalaryRunWithEmployees).not.toHaveBeenCalled()
+  })
+
   it('refuses a non-boolean extra_run with 400', async () => {
     const { supabase } = createQueuedMockSupabase()
     authed(supabase)

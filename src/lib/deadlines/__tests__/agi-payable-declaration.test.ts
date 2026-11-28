@@ -35,7 +35,9 @@ const OTHER_LIVE = {
 function salaryRuns(own: Record<string, unknown> | null, live: Array<Record<string, unknown>>, errors: { own?: unknown; live?: unknown } = {}) {
   return (calls: Chain) => {
     const select = calls.find((c) => c.method === 'select')?.args[0]
-    if (select === 'id, corrects_run_id') return errors.own ? { data: null, error: errors.own } : { data: own }
+    if (select === 'id, corrects_run_id' || select === 'id, corrects_run_id, status') {
+      return errors.own ? { data: null, error: errors.own } : { data: own }
+    }
     return errors.live ? { data: null, error: errors.live } : { data: live }
   }
 }
@@ -202,6 +204,15 @@ describe('readAgiPaymentPeriodConflict: several runs in one month', () => {
     })
     const result = await readAgiPaymentPeriodConflict(db.supabase as never, COMPANY, UNFILED)
     expect(result).toMatchObject({ ok: true, conflict: { code: 'AGI_PAYMENT_PERIOD_CONFLICT', details: { other_runs: [] } } })
+  })
+
+  it('refuses a declaration whose holder went back to draft', async () => {
+    db = createTableMockSupabase({
+      salary_runs: salaryRuns({ ...OWN_RUN, status: 'draft' }, [OTHER_LIVE]),
+      agi_declarations: () => ({ data: { salary_run_ids: ['run-own', 'run-other'] } }),
+    })
+    const result = await readAgiPaymentPeriodConflict(db.supabase as never, COMPANY, UNFILED)
+    expect(result).toMatchObject({ ok: true, conflict: { code: 'AGI_PAYMENT_PERIOD_CONFLICT' } })
   })
 
   it('refuses a declaration a recall left covering no run', async () => {

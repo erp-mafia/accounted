@@ -135,7 +135,7 @@ export async function buildSimCompany(plan: SimPlan, key: AnswerKey, options: Bu
   installSimClock()
   // The company pays one month in two runs (generate.ts, earlyPay): several
   // runs in one month are switched on for it.
-  process.env.SALARY_EXTRA_RUNS_COMPANY_IDS ??= '*'
+  process.env.SALARY_EXTRA_RUNS_COMPANY_IDS = '*'
   setSimDay(SIM_COMPANY.firstDay)
   await ensurePayrollYears(supabase)
   const companyId = await createCompany(supabase, userId)

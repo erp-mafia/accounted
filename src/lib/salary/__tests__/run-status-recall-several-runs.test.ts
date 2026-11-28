@@ -51,8 +51,8 @@ describe('unapproveSalaryRun: a run of a month with several runs', () => {
       // The month's declaration, taken over by this run after the month was
       // filed and paid for the other run.
       { data: [{ id: 'agi-1', status: 'generated', salary_run_id: 'run-c', salary_run_ids: ['run-a', 'run-c'] }] },
+      { data: null }, // the declaration left covering no run, before the status moves
       { data: { id: 'run-c', status: 'review' } }, // the status flip
-      { data: null }, // the declaration's covered runs
     ])
 
     const result = await unapproveSalaryRun(context(supabase), 'run-c')
@@ -75,6 +75,20 @@ describe('unapproveSalaryRun: a run of a month with several runs', () => {
 
     expect(result).toMatchObject({ ok: true, data: { deletedAgiDeclarationId: 'agi-2' } })
     expect(findCall('agi_declarations', 'delete')).toBeDefined()
+  })
+
+  it('stops the recall when the declaration cannot be cleared', async () => {
+    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: APPROVED },
+      { data: [{ id: 'agi-1', status: 'generated', salary_run_id: 'run-c', salary_run_ids: ['run-a', 'run-c'] }] },
+      { error: { message: 'boom' } },
+    ])
+
+    const result = await unapproveSalaryRun(context(supabase), 'run-c')
+
+    expect(result).toMatchObject({ ok: false, code: 'SALARY_RUN_UNAPPROVE_FAILED' })
+    expect(findCall('salary_runs', 'update')).toBeUndefined()
   })
 
   it('refuses while the month\'s filed declaration covers the run', async () => {

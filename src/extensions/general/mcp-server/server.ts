@@ -21433,14 +21433,19 @@ export const tools: McpTool[] = [
               .map((r) => `run ${r.run_number ?? 1} paid ${r.payment_date} (${r.status}, salary_run_id ${r.id})`)
               .join('; ')
             throw codedRefusal('SALARY_RUN_SEVERAL_IN_PERIOD', `The period has ${list.length} salary runs: ${named}.`, {
-              description: 'Call again with the salary_run_id of the run you mean.',
-              tool: 'gnubok_get_salary_run',
-              args: { salary_run_id: list[0].id },
+              description: 'Ask which run is meant, then call gnubok_get_salary_run with its salary_run_id.',
             })
           }
           data = (list[0] as Record<string, unknown> | undefined) ?? null
         } else {
           const { data: row, error } = await periodQuery.maybeSingle()
+          // More than one row: a company that had several runs in one month
+          // and left the list. Named by id, like above.
+          if ((error as { code?: string } | null)?.code === 'PGRST116') {
+            throw codedRefusal('SALARY_RUN_SEVERAL_IN_PERIOD', 'The period has several salary runs.', {
+              description: 'Find them with gnubok_list_salary_runs, ask which is meant, and call gnubok_get_salary_run with its salary_run_id.',
+            })
+          }
           if (error) throw dbError(error)
           data = row as Record<string, unknown> | null
         }

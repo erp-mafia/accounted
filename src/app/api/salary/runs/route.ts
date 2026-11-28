@@ -82,6 +82,16 @@ export const POST = withRouteContext(
       .eq('company_id', companyId)
       .maybeSingle()
 
+    // An extra run is asked for a period that has a run: it names it.
+    if (body.extra_run && (!body.period_year || !body.period_month)) {
+      return errorResponseFromCode('VALIDATION_ERROR', log, {
+        requestId,
+        messageSv: 'Ange period_year och period_month för en extra lönekörning.',
+        messageEn: 'Name period_year and period_month for an extra salary run.',
+        details: { field: 'period_month' },
+      })
+    }
+
     let periodYear = body.period_year
     let periodMonth = body.period_month
     if (!periodYear || !periodMonth) {
