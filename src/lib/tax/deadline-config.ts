@@ -31,6 +31,12 @@ export interface CompanySettingsForDeadlines {
   moms_period: MomsPeriod | null
   f_skatt: boolean
   preliminary_tax_monthly: number | null
+  /**
+   * The first förfallodag of the debiterad preliminärskatt (YYYY-MM-DD), from
+   * Skatteverket's decision: the f_skatt rows start in its month. Null or
+   * undefined: every month gets its row.
+   */
+  preliminary_tax_first_due_date?: string | null
   vat_registered: boolean
   pays_salaries: boolean
   // null = never attested; the generator falls back to pays_salaries so
@@ -753,13 +759,20 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
       // 12th in August, January-only 17th (62 kap. 3-4 §§ SFL and
       // Skatteverket's published storföretag calendar).
       const storforetag = settings.vat_registered && settings.vat_taxable_base_over_40m
+      // A company whose first debitering comes later (F-skatt approved during
+      // the year) owes nothing before the first förfallodag of Skatteverket's
+      // decision. Compared by month: each month has one förfallodag, so the
+      // date's month is the first row whatever day was typed.
+      const firstMonth = settings.preliminary_tax_first_due_date?.slice(0, 7) ?? null
       const instances: DeadlineInstance[] = []
       for (let month = 0; month < 12; month++) {
+        const period = `${year}-${String(month + 1).padStart(2, '0')}`
+        if (firstMonth !== null && period < firstMonth) continue
         instances.push({
           day: month === 0 || (month === 7 && !storforetag) ? 17 : 12,
           month,
           year,
-          period: `${year}-${String(month + 1).padStart(2, '0')}`,
+          period,
           periodLabel: getMonthLabel(month, year),
         })
       }

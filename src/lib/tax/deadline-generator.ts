@@ -99,6 +99,7 @@ export const TAX_RELEVANT_FIELDS = [
   'moms_period',
   'f_skatt',
   'preliminary_tax_monthly',
+  'preliminary_tax_first_due_date',
   'vat_registered',
   'pays_salaries',
   'employer_registered',
@@ -120,7 +121,7 @@ export const TAX_RELEVANT_FIELDS = [
 ] as const
 
 export const DEADLINE_SETTINGS_SELECT =
-  'company_id, entity_type, moms_period, f_skatt, preliminary_tax_monthly, vat_registered, pays_salaries, employer_registered, employer_seasonal, fiscal_year_start_month, vat_taxable_base_over_40m, vat_has_eu_trade, vat_filing_method, periodisk_sammanstallning_enabled, periodisk_sammanstallning_period, periodisk_sammanstallning_filing_method, kontrolluppgifter_enabled, rot_rut_enabled, oss_enabled, ioss_enabled, intrastat_enabled, punktskatt_enabled, fyllnadsinbetalning_enabled' as const
+  'company_id, entity_type, moms_period, f_skatt, preliminary_tax_monthly, preliminary_tax_first_due_date, vat_registered, pays_salaries, employer_registered, employer_seasonal, fiscal_year_start_month, vat_taxable_base_over_40m, vat_has_eu_trade, vat_filing_method, periodisk_sammanstallning_enabled, periodisk_sammanstallning_period, periodisk_sammanstallning_filing_method, kontrolluppgifter_enabled, rot_rut_enabled, oss_enabled, ioss_enabled, intrastat_enabled, punktskatt_enabled, fyllnadsinbetalning_enabled' as const
 
 export function hasTaxRelevantFields(body: Record<string, unknown>): boolean {
   return TAX_RELEVANT_FIELDS.some((field) => Object.prototype.hasOwnProperty.call(body, field))
@@ -138,6 +139,7 @@ export function toDeadlineSettings(
     moms_period: settings.moms_period ?? null,
     f_skatt: settings.f_skatt ?? true,
     preliminary_tax_monthly: settings.preliminary_tax_monthly ?? null,
+    preliminary_tax_first_due_date: settings.preliminary_tax_first_due_date ?? null,
     vat_registered: settings.vat_registered ?? false,
     pays_salaries: settings.pays_salaries ?? false,
     employer_registered: settings.employer_registered ?? null,

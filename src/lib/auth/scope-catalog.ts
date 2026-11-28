@@ -508,6 +508,8 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_withdraw_not_momsredovisning: 'bookkeeping:write',
   gnubok_mark_agi_period_filed: 'payroll:write',
   gnubok_complete_deadline: 'bookkeeping:write',
+  // Remove a deadline from the list (lib/deadlines/removal.ts), the scope of ticking one off.
+  gnubok_delete_deadline: 'bookkeeping:write',
   // Rename, pause, resume or always review a learned booking rule (lib/operations/counterparty-templates.ts).
   gnubok_rename_counterparty_template: 'bookkeeping:write',
   gnubok_update_counterparty_template: 'bookkeeping:write',

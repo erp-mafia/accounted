@@ -191,6 +191,7 @@ function toUpdatePayload(c: CompanySettingsChanges) {
     tax_contact_email: c.tax_contact_email,
     fiscal_year_start_month: c.fiscal_year_start_month,
     preliminary_tax_monthly: c.preliminary_tax_monthly,
+    preliminary_tax_first_due_date: c.preliminary_tax_first_due_date,
     aktiekapital: c.aktiekapital,
     antal_aktier: c.antal_aktier,
     employer_registered: c.employer_registered,
@@ -865,7 +866,8 @@ export async function withEntityTypeFallback<T extends SettingsRow>(
 /**
  * The columns of the settings.get read, but the recent one getCompanySettings
  * reads beside them while their migrations may still be on their way:
- * invoice_ocr_length_digit (20261123152500) and invoice_send_order. A column moves in here once its
+ * invoice_ocr_length_digit (20261123152500), invoice_send_order and
+ * preliminary_tax_first_due_date (20261128001000). A column moves in here once its
  * migration is applied everywhere: the read without the recent columns must
  * still return every setting that is stored.
  */
@@ -881,7 +883,7 @@ const SETTINGS_READ_COLUMNS =
 export async function getCompanySettings(ctx: OperationContext): Promise<OperationOutcome<SettingsRow>> {
   let read = await ctx.supabase
     .from('company_settings')
-    .select(`${SETTINGS_READ_COLUMNS}, invoice_ocr_length_digit, invoice_send_order`)
+    .select(`${SETTINGS_READ_COLUMNS}, invoice_ocr_length_digit, invoice_send_order, preliminary_tax_first_due_date`)
     .eq('company_id', ctx.companyId)
     .maybeSingle()
   if (isMissingColumnError(read.error)) {

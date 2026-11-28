@@ -591,6 +591,12 @@ export interface CompanySettings {
 
   // Preliminary tax
   preliminary_tax_monthly: number | null
+  /**
+   * First förfallodag of the debiterad preliminärskatt per Skatteverket's
+   * decision (YYYY-MM-DD). No F-skatt payment deadline is generated for a
+   * month before it. Null: none.
+   */
+  preliminary_tax_first_due_date?: string | null
 
   // Share capital per Bolagsverket (aktiekapital note in the annual report).
   // Kvotvärde is derived as aktiekapital / antal_aktier, never stored.

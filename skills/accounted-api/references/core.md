@@ -1386,6 +1386,7 @@ Response `200`:
     periodisk_sammanstallning_filing_method: string | null,
     accounting_method: string | null,
     bookkeeping_locked_through: string | null,
+    preliminary_tax_first_due_date: string | null,
     ore_rounding: boolean | null,
     invoice_show_ocr: boolean | null,
     invoice_ocr_length_digit: boolean | null,
@@ -1671,6 +1672,7 @@ Response `200`:
     periodisk_sammanstallning_filing_method: string | null,
     accounting_method: string | null,
     bookkeeping_locked_through: string | null,
+    preliminary_tax_first_due_date: string | null,
     ore_rounding: boolean | null,
     invoice_show_ocr: boolean | null,
     invoice_ocr_length_digit: boolean | null,
@@ -1858,6 +1860,7 @@ Response `200`:
     periodisk_sammanstallning_filing_method: string | null,
     accounting_method: string | null,
     bookkeeping_locked_through: string | null,
+    preliminary_tax_first_due_date: string | null,
     ore_rounding: boolean | null,
     invoice_show_ocr: boolean | null,
     invoice_ocr_length_digit: boolean | null,
@@ -2124,6 +2127,7 @@ Patches the settings that decide how the books are kept and declared: VAT regist
 **Pitfalls:**
 - Only an owner or admin of the company may change settings: other members get 403 FORBIDDEN.
 - Saving regenerates the system tax deadlines for this year and next; completed deadlines keep their status.
+- preliminary_tax_first_due_date removes the open F-skatt deadlines due from today until its month; one already past due stays: remove it under Deadlines in the app or with accounted_delete_deadline.
 - vat_registered=true needs vat_number (SE + 12 digits) and moms_period, stored or sent.
 - vat_registered=false also turns off vat_taxable_base_over_40m, vat_has_eu_trade and periodisk_sammanstallning_enabled.
 - vat_taxable_base_over_40m requires moms_period=monthly; periodisk sammanställning requires VAT registration and EU trade.
@@ -2161,6 +2165,7 @@ Request body:
   fyllnadsinbetalning_enabled?: boolean,
   fiscal_year_start_month?: number,
   preliminary_tax_monthly?: number | null,
+  preliminary_tax_first_due_date?: string | null,
   pays_salaries?: boolean,
   employer_registered?: boolean | null,
   employer_seasonal?: boolean,
@@ -2241,6 +2246,7 @@ Response `200`:
     periodisk_sammanstallning_filing_method: string | null,
     accounting_method: string | null,
     bookkeeping_locked_through: string | null,
+    preliminary_tax_first_due_date: string | null,
     ore_rounding: boolean | null,
     invoice_show_ocr: boolean | null,
     invoice_ocr_length_digit: boolean | null,
