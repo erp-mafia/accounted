@@ -3,12 +3,13 @@ import type { ArticleType, Currency, Customer, DeductionType, InvoiceDocumentTyp
 import {
   deriveInvoiceVatHeader,
   explainVatTreatment,
+  outsideScopeLineRefusal,
   resolveInvoiceVatRules,
   type InvoiceVatOverride,
   type InvoiceVatTreatmentOverride,
   type InvoiceVatWarning,
 } from '@/lib/invoices/vat-rules'
-import { isZeroRatedInvoiceTreatment } from '@/lib/bookkeeping/invoice-line-vat-treatment'
+import { isOutsideScopeInvoiceTreatment, isZeroRatedInvoiceTreatment } from '@/lib/bookkeeping/invoice-line-vat-treatment'
 import { isInvoiceLinePostingAccount, isZeroVatOnlyPostingAccount } from '@/lib/invoices/posting-account'
 import { normalizeCountryCode } from '@/lib/vat/country-codes'
 import { normalizeDeliveryAddress, type InvoiceDeliveryAddress } from '@/lib/invoices/delivery-address'
@@ -354,6 +355,13 @@ export async function buildInvoiceWriteData(params: {
   }
   const vatRules = resolved.rules
   const allowedRates = new Set(resolved.permittedRates.map((r) => r.rate))
+  // No Swedish VAT and no ruta (outside_scope) only for lines that are not a
+  // supply: today dröjsmålsränta, so each priced line names its
+  // interest-income account.
+  if (isOutsideScopeInvoiceTreatment(vatRules.treatment)) {
+    const lineRefusal = outsideScopeLineRefusal(items)
+    if (lineRefusal) return { ok: false, code: 'INVOICE_VAT_TREATMENT_OUTSIDE_SCOPE_LINE', details: lineRefusal }
+  }
 
   // Periodisering guards. The line schema already validates the period shape;
   // here we gate the flows where deferral has no meaning: cash method
@@ -378,7 +386,7 @@ export async function buildInvoiceWriteData(params: {
     if (documentType !== 'invoice') {
       return { ok: false, code: 'INVOICE_CREATE_ACCRUAL_INVALID', details: { reason: 'document_type', documentType } }
     }
-    if (isZeroRatedInvoiceTreatment(vatRules.treatment)) {
+    if (isZeroRatedInvoiceTreatment(vatRules.treatment) || isOutsideScopeInvoiceTreatment(vatRules.treatment)) {
       return { ok: false, code: 'INVOICE_CREATE_ACCRUAL_INVALID', details: { reason: 'vat_treatment', vatTreatment: vatRules.treatment } }
     }
     // Fail closed (accounted#58): an unreadable method must not let a

@@ -11,6 +11,7 @@ import {
   findSettingsWithStaleUpcomingDeadlines,
   generateTaxDeadlinesForUser,
   getExpectedUpcomingDeadlineKeys,
+  hasTaxRelevantFields,
   shouldRegenerateTaxDeadlines,
   toDeadlineSettings,
 } from '../deadline-generator'
@@ -2048,5 +2049,75 @@ describe('across the new year: last year\'s periods that fall due this year (crm
 
     expect(findSettingsMissingUpcomingDeadlines(settingsRows, held, [], JANUARY)).toEqual([])
     expect(findSettingsWithStaleUpcomingDeadlines(settingsRows, held, [], JANUARY)).toEqual([])
+  })
+})
+
+/**
+ * A company approved for F-skatt during the year whose first debitering is
+ * due later: no F-skatt payment row for a month before the first förfallodag
+ * in Skatteverket's decision. Today is 27 November 2026; the first
+ * förfallodag is 12 February 2027.
+ */
+describe('the first förfallodag of debiterad preliminärskatt', () => {
+  const FIRST_DUE = { ...SETTINGS, preliminary_tax_first_due_date: '2027-02-12', fiscal_years: [] }
+  const YEARS = [2026, 2027]
+  const TODAY = new Date(2026, 10, 27, 12)
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(TODAY)
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  const fSkattPeriods = (rows: ReadonlyArray<Record<string, unknown>>) =>
+    rows.filter((row) => row.tax_deadline_type === 'f_skatt').map((row) => row.tax_period)
+
+  it('is a tax setting: saving it, or clearing it, regenerates the deadlines', () => {
+    expect(hasTaxRelevantFields({ preliminary_tax_first_due_date: '2027-02-12' })).toBe(true)
+    expect(hasTaxRelevantFields({ preliminary_tax_first_due_date: null })).toBe(true)
+  })
+
+  it('reaches the generator from a stored settings row', () => {
+    expect(toDeadlineSettings(FIRST_DUE).preliminary_tax_first_due_date).toBe('2027-02-12')
+    expect(toDeadlineSettings({ ...SETTINGS, preliminary_tax_first_due_date: undefined }).preliminary_tax_first_due_date).toBeNull()
+  })
+
+  it('generates F-skatt rows from that month on and leaves every other deadline as it was', async () => {
+    const { supabase, getInsertPayload } = makeRecordingSupabase()
+    await generateTaxDeadlinesForUser(supabase, 'company-1', FIRST_DUE, YEARS)
+    const rows = getInsertPayload()!
+
+    expect(fSkattPeriods(rows)[0]).toBe('2027-02')
+    expect(fSkattPeriods(rows).every((period) => String(period) >= '2027-02')).toBe(true)
+
+    const without = makeRecordingSupabase()
+    await generateTaxDeadlinesForUser(without.supabase, 'company-1', { ...SETTINGS, fiscal_years: [] }, YEARS)
+    const before = without.getInsertPayload()!
+    expect(fSkattPeriods(before)).toEqual(expect.arrayContaining(['2026-12', '2027-01', '2027-02']))
+    // Only F-skatt rows differ.
+    const others = (list: ReadonlyArray<Record<string, unknown>>) =>
+      list.filter((row) => row.tax_deadline_type !== 'f_skatt').map((row) => `${row.tax_deadline_type}:${row.tax_period}`)
+    expect(others(rows)).toEqual(others(before))
+  })
+
+  it('the nightly repair agrees: an open row before that month is stale, the regenerated set is not', () => {
+    const settingsRow = { company_id: 'company-1', ...FIRST_DUE }
+    const regenerated = Array.from(getExpectedUpcomingDeadlineKeys(FIRST_DUE, YEARS, TODAY), (key, index) => {
+      const [type, period, dueDate] = key.split(':')
+      return { id: `row-${index}`, company_id: 'company-1', tax_deadline_type: type, tax_period: period, due_date: dueDate, is_completed: false, dismissed_at: null }
+    })
+    const december = { id: 'row-december', company_id: 'company-1', tax_deadline_type: 'f_skatt', tax_period: '2026-12', due_date: '2026-12-14', is_completed: false, dismissed_at: null }
+
+    expect(regenerated.some((row) => row.tax_deadline_type === 'f_skatt' && row.tax_period < '2027-02')).toBe(false)
+    expect(findSettingsMissingUpcomingDeadlines([settingsRow], regenerated, YEARS, TODAY)).toEqual([])
+    expect(findSettingsWithStaleUpcomingDeadlines([settingsRow], regenerated, YEARS, TODAY)).toEqual([])
+    expect(findSettingsWithStaleUpcomingDeadlines([settingsRow], [...regenerated, december], YEARS, TODAY)).toEqual([settingsRow])
+    // A completed December row is history: never stale, never replaced.
+    expect(
+      findSettingsWithStaleUpcomingDeadlines([settingsRow], [...regenerated, { ...december, is_completed: true }], YEARS, TODAY),
+    ).toEqual([])
   })
 })

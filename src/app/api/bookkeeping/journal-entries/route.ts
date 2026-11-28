@@ -27,6 +27,8 @@ import {
 import { MAX_ROWS_PER_REQUEST } from '@/lib/lists/collect-pages'
 import { countUnderlagForJournalEntries } from '@/lib/core/documents/underlag-counts'
 import { gateReviewedVatSettlement, reviewedVatSettlementRaceLost } from '@/lib/reports/vat-settlement-booking'
+import { setNoDocumentRequired } from '@/lib/bookkeeping/no-doc-required'
+import type { OperationContext } from '@/lib/operations/types'
 
 // Query params are hand-parsed with per-param clamping/regex validation (see
 // each param's comment) rather than a Zod schema; response shapes are legacy
@@ -406,6 +408,34 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
   return listResponse(data, count)
 })
 
+/**
+ * Mark a verifikat this request has posted "Inget underlag krävs", through
+ * the same function as POST /journal-entries/[id]/no-document-required (its
+ * audit_log trigger records who set it). True when the mark is stored; a
+ * refusal or a throw is logged and answered false, never thrown: the
+ * verifikat is already posted.
+ */
+async function markPostedNoDocumentRequired(
+  ctx: OperationContext,
+  journalEntryId: string,
+  reason: string | null,
+): Promise<boolean> {
+  try {
+    const outcome = await setNoDocumentRequired(ctx, journalEntryId, reason)
+    if (outcome.ok) return true
+    ctx.log.error('posted verifikat could not be marked no-document-required', undefined, {
+      journal_entry_id: journalEntryId,
+      code: outcome.code,
+    })
+    return false
+  } catch (err) {
+    ctx.log.error('posted verifikat could not be marked no-document-required', err as Error, {
+      journal_entry_id: journalEntryId,
+    })
+    return false
+  }
+}
+
 export const POST = withRouteContext(
   'bookkeeping.journal_entries.create',
   async (request, ctx) => {
@@ -419,6 +449,7 @@ export const POST = withRouteContext(
   const {
     acknowledged_warnings: acknowledgedWarnings,
     vat_settlement_period: vatSettlementPeriod,
+    no_document_required: noDocumentRequired,
     ...validBody
   } = validation.data
   let body = validBody
@@ -483,6 +514,18 @@ export const POST = withRouteContext(
         { journalEntryId: entry.id, entryDate: body.entry_date, lines: body.lines },
         log,
       )
+    }
+    // "Inget underlag krävs" chosen in the form: marked on the verifikat just
+    // posted, answered beside it. The verifikat stands either way, so a mark
+    // that failed is no_document_required: false next to the entry, never a
+    // failed booking the form would send again.
+    if (!asDraft && noDocumentRequired) {
+      const marked = await markPostedNoDocumentRequired(
+        { supabase, companyId, userId: user.id, log },
+        entry.id,
+        noDocumentRequired.reason || null,
+      )
+      return NextResponse.json({ data: entry, no_document_required: marked })
     }
     return NextResponse.json({ data: entry })
   } catch (err) {

@@ -19,6 +19,7 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getConnection } from '@/lib/digital-mailboxes/connections'
+import { isActiveSender, sendingNotActiveRefusal, type SendingNotActiveRefusal } from '@/lib/digital-mailboxes/sending-not-active'
 import { payslipEmployerContact, personnummer12, phoneToE164 } from '@/lib/digital-mailboxes/identifiers'
 import { getDigitalMailboxProviders } from '@/lib/digital-mailboxes/providers'
 import type { DigitalMailboxProviderId, PayslipEmployer, PayslipStatement } from '@/lib/digital-mailboxes/types'
@@ -120,21 +121,27 @@ export function payslipStatement(
   }
 }
 
-/** Why the mailbox channel cannot run for this company, or null. */
+/**
+ * Why the mailbox channel cannot run for this company, or null. Sending that
+ * is not active says where it stands (sendingNotActiveRefusal: off, waiting
+ * for the provider's approval, or declined), with its own message and next step.
+ */
+export type PayslipMailboxBlock =
+  | { code: 'DIGITAL_MAILBOX_NOT_CONFIGURED' | 'DIGITAL_MAILBOX_EMPLOYER_CONTACT_MISSING' }
+  | SendingNotActiveRefusal
+
 export async function payslipMailboxBlock(
   supabase: SupabaseClient,
   companyId: string,
   provider: DigitalMailboxProviderId,
-): Promise<
-  'DIGITAL_MAILBOX_NOT_CONFIGURED' | 'DIGITAL_MAILBOX_SENDING_NOT_ACTIVE' | 'DIGITAL_MAILBOX_EMPLOYER_CONTACT_MISSING' | null
-> {
+): Promise<PayslipMailboxBlock | null> {
   const sender = getDigitalMailboxProviders()[provider]?.sender
-  if (!sender) return 'DIGITAL_MAILBOX_NOT_CONFIGURED'
+  if (!sender) return { code: 'DIGITAL_MAILBOX_NOT_CONFIGURED' }
   const connection = await getConnection(supabase, companyId, provider)
-  if (connection?.send_state !== 'active' || !connection.tenant_ref) return 'DIGITAL_MAILBOX_SENDING_NOT_ACTIVE'
+  if (!isActiveSender(connection)) return sendingNotActiveRefusal(provider, connection)
   if (sender.payslipNeedsEmployerContact) {
     const contact = await loadEmployerContact(supabase, companyId)
-    if (!payslipEmployerContact({ name: '', orgNumber: '', ...contact })) return 'DIGITAL_MAILBOX_EMPLOYER_CONTACT_MISSING'
+    if (!payslipEmployerContact({ name: '', orgNumber: '', ...contact })) return { code: 'DIGITAL_MAILBOX_EMPLOYER_CONTACT_MISSING' }
   }
   return null
 }

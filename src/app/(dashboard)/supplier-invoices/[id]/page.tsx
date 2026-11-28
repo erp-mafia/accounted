@@ -81,6 +81,7 @@ import { SupplierPaymentDialog } from '@/components/supplier-invoices/SupplierPa
 import { PaymentReferenceDialog } from '@/components/supplier-invoices/PaymentReferenceDialog'
 import { ChangeSupplierDialog } from '@/components/supplier-invoices/ChangeSupplierDialog'
 import { supplierChangeRowRefusal } from '@/lib/supplier-invoices/change-supplier-rules'
+import { DueDateDialog } from '@/components/supplier-invoices/DueDateDialog'
 import { SupplierInvoiceAttestPanel, useSupplierInvoiceAttest } from '@/components/supplier-invoices/SupplierInvoiceAttestPanel'
 import { useAttestPolicyOn } from '@/components/supplier-invoices/use-attest-policy-on'
 import { listContextKey } from '@/lib/navigation/list-context'
@@ -254,6 +255,7 @@ export default function SupplierInvoiceDetailPage() {
   const [isBankDialogOpen, setIsBankDialogOpen] = useState(false)
   const [isOcrDialogOpen, setIsOcrDialogOpen] = useState(false)
   const [isChangeSupplierOpen, setIsChangeSupplierOpen] = useState(false)
+  const [isDueDateDialogOpen, setIsDueDateDialogOpen] = useState(false)
   // Betala via banken is offered where bank payments are switched on for the
   // company (GET /api/payments/availability), beside the payment file.
   const [bankPaymentsAvailable, setBankPaymentsAvailable] = useState(false)
@@ -672,6 +674,9 @@ export default function SupplierInvoiceDetailPage() {
   // The OCR can be added or corrected until the invoice is paid: a payee
   // under hard OCR control refuses a payment without it.
   const ocrEditable = canWrite && isUnsettledSupplierInvoiceStatus(invoice.status) && !invoice.is_credit_note
+  // The due date moves on the statuses the header rule takes
+  // (lib/supplier-invoices/update-header.ts): registered, approved, overdue.
+  const dueDateEditable = canWrite && isUnsettledSupplierInvoiceStatus(invoice.status)
   async function changeLineAccount(itemId: string, account: string) {
     try {
       const res = await fetch(`/api/supplier-invoices/${params.id}/items/${itemId}`, {
@@ -1079,6 +1084,16 @@ export default function SupplierInvoiceDetailPage() {
         </span>
         <span>
           {t('due_date_label')} <span className="tabular-nums text-foreground">{formatDate(invoice.due_date)}</span>
+          {dueDateEditable && (
+            <button
+              type="button"
+              onClick={() => setIsDueDateDialogOpen(true)}
+              aria-label={t('due_date_dialog_title')}
+              className="ml-1.5 text-muted-foreground underline-offset-2 hover:underline"
+            >
+              {t('due_date_edit')}
+            </button>
+          )}
         </span>
         <span>
           {t('arrival_number_label')} <span className="tabular-nums text-foreground">#{invoice.arrival_number}</span>
@@ -1423,6 +1438,15 @@ export default function SupplierInvoiceDetailPage() {
             if (!open) setIsOcrDialogOpen(false)
           }}
           onSaved={() => void fetchInvoice()}
+        />
+      )}
+      {isDueDateDialogOpen && (
+        <DueDateDialog
+          invoice={invoice}
+          onOpenChange={(open) => {
+            if (!open) setIsDueDateDialogOpen(false)
+          }}
+          onSaved={() => void Promise.all([fetchInvoice(), mutateLifecycle()])}
         />
       )}
       <DestructiveConfirmDialog {...confirmDialogProps} />

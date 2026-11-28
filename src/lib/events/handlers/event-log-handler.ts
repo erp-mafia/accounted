@@ -22,6 +22,8 @@ const INTERNAL_PERSISTED_EVENT_TYPES: CoreEventType[] = [
   'document.deleted',
   'invoice.draft_deleted',
   'invoice.cancelled',
+  // Ångra kreditering: who undid a credit, and on what basis (lib/invoices/uncredit-invoice.ts).
+  'invoice.uncredited',
   'transaction.synced',
   'article.deleted',
   'invoice.match_confirmed',

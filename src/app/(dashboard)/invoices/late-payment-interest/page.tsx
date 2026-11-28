@@ -1,14 +1,18 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
 import { PercentBadgeIcon } from '@/components/icons'
+import { CreateLateInterestInvoicesDialog } from '@/components/invoices/CreateLateInterestInvoicesDialog'
+import { Button } from '@/components/ui/button'
 import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { PageHeader } from '@/components/ui/page-header'
 import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { TD_CLASS, TH_CLASS } from '@/components/ui/dry-table'
+import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { isLateInterestChargeable } from '@/lib/invoices/late-interest-chargeable'
 import type { LatePaymentInterestReport } from '@/lib/invoices/late-payment-interest-report'
 import { cn, formatCurrency, formatDate, formatRowAmount } from '@/lib/utils'
 
@@ -18,17 +22,21 @@ const NUM_TD = cn(TD_CLASS, 'text-right tabular-nums')
 
 /**
  * Dröjsmålsränta (accounted#38): the interest each customer invoice paid
- * late has earned, and what each overdue unpaid invoice has accrued, as the
- * basis for a räntefaktura. Reads only; nothing is booked or sent from here.
- * Only payments booked in Accounted count (see late-payment-interest-report.ts).
- * Linked from the invoice list's top bar.
+ * late has earned, and what each overdue unpaid invoice has accrued. Skapa
+ * räntefaktura makes one unnumbered draft per customer for the invoices paid
+ * in full and not yet charged (lib/invoices/late-interest-invoices.ts);
+ * nothing is sent or booked from here. Only payments booked in Accounted
+ * count (see late-payment-interest-report.ts). Linked from the invoice
+ * list's top bar.
  */
 export default function LatePaymentInterestPage() {
   const t = useTranslations('latePaymentInterest')
   const tNav = useTranslations('nav')
   const locale = useLocale() === 'en' ? 'en' : 'sv'
+  const { canWrite } = useCanWrite()
   const [report, setReport] = useState<LatePaymentInterestReport | null>(null)
   const [loadFailed, setLoadFailed] = useState(false)
+  const [createOpen, setCreateOpen] = useState(false)
 
   const load = useCallback(async () => {
     setLoadFailed(false)
@@ -50,6 +58,7 @@ export default function LatePaymentInterestPage() {
     `${(rate * 100).toLocaleString(locale === 'en' ? 'en-GB' : 'sv-SE', { maximumFractionDigits: 2 })} %`
 
   const empty = report && report.paid_late.length === 0 && report.overdue_open.length === 0
+  const chargeable = useMemo(() => (report ? report.paid_late.filter(isLateInterestChargeable) : []), [report])
 
   return (
     <div className="space-y-8">
@@ -91,7 +100,14 @@ export default function LatePaymentInterestPage() {
       {report && !empty && (
         <>
           <section className="space-y-3">
-            <h2 className={SECTION_HEADING_CLASS}>{t('paid_late_heading')}</h2>
+            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+              <h2 className={SECTION_HEADING_CLASS}>{t('paid_late_heading')}</h2>
+              {chargeable.length > 0 && (
+                <Button variant="outline" onClick={() => setCreateOpen(true)} disabled={!canWrite}>
+                  {t('create_button')}
+                </Button>
+              )}
+            </div>
             <p className="text-xs text-muted-foreground">{t('paid_late_scope')}</p>
             {report.paid_late.length === 0 ? (
               <p className="text-[13px] text-muted-foreground">{t('paid_late_empty')}</p>
@@ -107,6 +123,7 @@ export default function LatePaymentInterestPage() {
                       <th className={NUM_TH}>{t('col_days_late')}</th>
                       <th className={NUM_TH}>{t('col_paid_late_amount')}</th>
                       <th className={NUM_TH}>{t('col_interest')}</th>
+                      <th className={TH_CLASS}>{t('col_interest_invoice')}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -125,6 +142,15 @@ export default function LatePaymentInterestPage() {
                         <td className={NUM_TD}>{row.days_late}</td>
                         <td className={NUM_TD}>{formatRowAmount(row.paid_late_amount, row.currency)}</td>
                         <td className={NUM_TD}>{formatRowAmount(row.interest, row.currency)}</td>
+                        <td className={cn(TD_CLASS, 'tabular-nums')}>
+                          {row.interest_invoice ? (
+                            <Link href={`/invoices/${row.interest_invoice.id}`} className="underline-offset-4 hover:underline">
+                              {row.interest_invoice.invoice_number}
+                            </Link>
+                          ) : !row.fully_paid ? (
+                            <span className="text-muted-foreground">{t('interest_invoice_not_fully_paid')}</span>
+                          ) : null}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -139,6 +165,7 @@ export default function LatePaymentInterestPage() {
                           <td className={cn(NUM_TD, 'border-b-0 font-medium')}>
                             {formatCurrency(total.paid_late_interest, total.currency)}
                           </td>
+                          <td className={cn(TD_CLASS, 'border-b-0')} />
                         </tr>
                       ))}
                   </tfoot>
@@ -202,6 +229,13 @@ export default function LatePaymentInterestPage() {
           </section>
         </>
       )}
+
+      <CreateLateInterestInvoicesDialog
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        rows={chargeable}
+        onCreated={() => void load()}
+      />
     </div>
   )
 }

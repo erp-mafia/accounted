@@ -264,6 +264,25 @@ describe('link_invoice_to_voucher: an invoice whose issue verifikat booked the Ã
     expect(await reskontraAnd1510([invoiceId], [issueId, part, rest])).toEqual({ reskontra: 0, ledger: 0 })
   })
 
+  it('after a part payment that leaves whole kronor open, the rest that clears 1510 settles in full (20261127121500)', async () => {
+    const company = await seedCompany()
+    const up = await roundedUp(company)
+    const upPart = await payment(company, 499.75)
+    expect(await link(company, up.invoiceId, upPart)).toMatchObject({ ok: true, invoice_status: 'partially_paid', remaining_amount: 500 })
+    // 1510 carries 500,25: on main the 500,25 that clears it was refused as more than the 500 open.
+    const upRest = await payment(company, 500.25)
+    expect(await link(company, up.invoiceId, upRest)).toMatchObject({ ok: true, invoice_status: 'paid', payment_amount: 500 })
+    expect(await reskontraAnd1510([up.invoiceId], [up.issueId, upPart, upRest])).toEqual({ reskontra: 0, ledger: 0 })
+
+    const down = await roundedDown(company)
+    const downPart = await payment(company, 400.4)
+    expect(await link(company, down.invoiceId, downPart)).toMatchObject({ ok: true, invoice_status: 'partially_paid', remaining_amount: 600 })
+    // 1510 carries 599,60: on main the 599,60 that clears it was taken as a part payment and 0,40 stayed open.
+    const downRest = await payment(company, 599.6)
+    expect(await link(company, down.invoiceId, downRest)).toMatchObject({ ok: true, invoice_status: 'paid', payment_amount: 600 })
+    expect(await reskontraAnd1510([down.invoiceId], [down.issueId, downPart, downRest])).toEqual({ reskontra: 0, ledger: 0 })
+  })
+
   it('an invoice whose 1510 carries the remainder still refuses the rounded payment', async () => {
     const company = await seedCompany()
     const { invoiceId } = await exact(company)

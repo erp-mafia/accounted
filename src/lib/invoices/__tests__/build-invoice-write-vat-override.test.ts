@@ -15,6 +15,7 @@ import {
   DOMESTIC_REVERSE_CHARGE_NOTICE,
   EU_GOODS_SUPPLY_NOTICE,
   EXPORT_GOODS_NOTICE_SV,
+  OUTSIDE_SCOPE_NOTICE_SV,
   type InvoiceVatOverride,
 } from '@/lib/invoices/vat-rules'
 import type { Customer, InvoiceDocumentType } from '@/types'
@@ -318,6 +319,75 @@ describe('buildInvoiceWriteData: domestic reverse charge for construction servic
     expect(cleared).toMatchObject({
       ok: true,
       invoiceFields: { vat_treatment: 'standard_25', moms_ruta: '05', reverse_charge_text: null, vat_treatment_override: null },
+    })
+  })
+})
+
+describe('buildInvoiceWriteData: outside the scope of Swedish VAT (a räntefaktura)', () => {
+  const interestLine = { description: 'Dröjsmålsränta faktura 1042', quantity: 1, unit: 'st', unit_price: 68.49, revenue_account: '8313' }
+
+  async function buildWithChart(customer: Customer, input: Omit<InvoiceWriteInput, keyof typeof header>, chart: string[]) {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { vat_registered: true }, error: null })
+    enqueue({ data: chart.map((account_number) => ({ account_number })), error: null })
+    return buildInvoiceWriteData({
+      supabase: supabase as unknown as SupabaseClient,
+      companyId: 'company-1',
+      customer,
+      documentType: 'invoice',
+      input: { ...header, ...input } as InvoiceWriteInput,
+    })
+  }
+
+  it.each([
+    ['a Swedish buyer', swedishBuyer],
+    ['an EU buyer with a validated number', germanBuyer],
+  ])('%s: 0 % lines on 8313, no ruta, the outside-scope notice, stored statement', async (_label, customer) => {
+    const result = await buildWithChart(customer, { vat_treatment: 'outside_scope', items: [{ ...interestLine }] }, ['8313'])
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.invoiceFields).toMatchObject({
+      vat_treatment: 'outside_scope',
+      vat_rate: 0,
+      moms_ruta: null,
+      reverse_charge_text: OUTSIDE_SCOPE_NOTICE_SV,
+      subtotal: 68.49,
+      vat_amount: 0,
+      total: 68.49,
+      vat_treatment_override: 'outside_scope',
+      delivery_country: null,
+    })
+    expect(result.items[0]).toMatchObject({ vat_rate: 0, vat_amount: 0, revenue_account: '8313' })
+    expect(result.warnings).toEqual([])
+  })
+
+  it('refuses a priced line that is not on an interest-income account', async () => {
+    const result = await buildWithChart(
+      swedishBuyer,
+      {
+        vat_treatment: 'outside_scope',
+        items: [{ ...interestLine }, { ...interestLine, revenue_account: null }, { ...interestLine, revenue_account: '3001' }],
+      },
+      ['8313', '3001'],
+    )
+    expect(result).toEqual({ ok: false, code: 'INVOICE_VAT_TREATMENT_OUTSIDE_SCOPE_LINE', details: { rows: [2, 3] } })
+  })
+
+  it('refuses a Swedish rate: interest carries no VAT', async () => {
+    const result = await buildWithChart(swedishBuyer, { vat_treatment: 'outside_scope', items: [{ ...interestLine, vat_rate: 25 }] }, ['8313'])
+    expect(result).toMatchObject({ ok: false, code: 'INVOICE_CREATE_VAT_RULE_VIOLATION', details: { attemptedRate: 25, allowedRates: [0] } })
+  })
+
+  it('refuses periodisering', async () => {
+    const result = await buildWithChart(
+      swedishBuyer,
+      { vat_treatment: 'outside_scope', items: [{ ...interestLine, accrual_period_start: '2026-10-01', accrual_period_end: '2027-03-31' }] },
+      ['8313'],
+    )
+    expect(result).toMatchObject({
+      ok: false,
+      code: 'INVOICE_CREATE_ACCRUAL_INVALID',
+      details: { reason: 'vat_treatment', vatTreatment: 'outside_scope' },
     })
   })
 })

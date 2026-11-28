@@ -185,6 +185,44 @@ export function isBuiltInRedirectUri(uri: string): boolean {
 }
 
 /**
+ * Gemini's callback and its twins: the same user-bound id on Google's relay
+ * under /r/ and /a/, on the production host and on its -test and -sandbox
+ * hosts. Gemini custom apps register all six in one request (the body
+ * BerriAI/litellm issue 46640 and emergent-company/emergent.memory issue 411
+ * captured, Oct and Nov 2026) and sign in through the production /r/ one,
+ * the only form the built-in pattern admits. The twins are never admitted:
+ * Google documents none of them, so nobody can say who receives a code there.
+ */
+const GEMINI_RELAY_CALLBACK =
+  /^https:\/\/oauth-redirect(?:-test|-sandbox)?\.googleusercontent\.com\/[ar]\/(user_bound_custom-mcp-[A-Za-z0-9_-]+)$/
+
+/** The user-bound id of a Gemini relay callback, or null for any other URI. */
+function geminiRelayId(uri: unknown): string | null {
+  if (typeof uri !== 'string') return null
+  return GEMINI_RELAY_CALLBACK.exec(uri)?.[1] ?? null
+}
+
+/**
+ * The redirect URIs a dynamic registration keeps; /register checks each one.
+ * From a set that holds an admitted Gemini callback, Google's twins of it are
+ * dropped: RFC 7591 section 3.2.1 lets the server replace requested metadata,
+ * and the answer lists only what was kept. Every other URI stays, so an
+ * unknown one still refuses the whole registration, and a set without the
+ * admitted callback is refused by its twins as before.
+ */
+export function registrableRedirectUris(uris: readonly unknown[]): unknown[] {
+  const isGemini = (u: unknown) => typeof u === 'string' && builtInRedirectProvider(u) === 'gemini'
+  // Only a twin of an admitted callback is dropped: a relay callback with
+  // another id stays, so it refuses the registration as any unknown URI does.
+  const admittedIds = new Set(uris.filter(isGemini).map(geminiRelayId).filter((id) => id !== null))
+  if (admittedIds.size === 0) return [...uris]
+  return uris.filter((u) => {
+    const id = geminiRelayId(u)
+    return isGemini(u) || id === null || !admittedIds.has(id)
+  })
+}
+
+/**
  * Origins a built-in callback is known to forward the browser to before it
  * answers. The consent page posts a form, and a browser that enforces CSP
  * form-action re-checks every hop of the redirect chain, so an onward hop to

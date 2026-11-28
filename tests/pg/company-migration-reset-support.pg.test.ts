@@ -8,7 +8,7 @@ import { insertAuthUser, insertCompanyMember, seedCompany } from './fixtures'
  *
  * Locks in:
  *   - support_reset_company_for_migration is the service role's alone;
- *   - it resets a company older than 30 days with a closed year, which the
+ *   - it resets a company older than 90 days with a closed year, which the
  *     owner's own reset refuses, archives the source and records the support
  *     case in the reset reason;
  *   - every other blocker stands (a live bank connection still refuses);
@@ -28,7 +28,7 @@ interface ResetResult {
 async function oldClosedCompany() {
   const seeded = await seedCompany({ isClosed: true })
   await getPool().query(
-    `UPDATE public.companies SET created_at = now() - interval '45 days' WHERE id = $1`,
+    `UPDATE public.companies SET created_at = now() - interval '100 days' WHERE id = $1`,
     [seeded.companyId],
   )
   return seeded

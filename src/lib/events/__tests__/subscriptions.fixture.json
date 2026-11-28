@@ -126,6 +126,9 @@
     "event-log",
     "webhooks"
   ],
+  "invoice.uncredited": [
+    "event-log"
+  ],
   "journal_entry.committed": [
     "event-log",
     "webhooks"

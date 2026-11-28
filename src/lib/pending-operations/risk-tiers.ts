@@ -170,6 +170,9 @@ const RISK_TIERS = {
   // A tick on a deadline, or its undo (crm#1848): a reminder, no verifikat,
   // period or filing.
   complete_deadline: 'low',
+  // A deadline off the list: deleted when added by hand, dismissed when
+  // generated. A reminder: no verifikat, period or filing.
+  delete_deadline: 'low',
   // A learned booking rule (categorization_templates): renamed, paused,
   // resumed or set to always ask for a review. Changes proposals from then
   // on, never a verifikat; each change is undone in one call.

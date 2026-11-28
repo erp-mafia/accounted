@@ -442,6 +442,8 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_book_collection_settlement: 'bookkeeping:write',
   // Kundförlust (served while CUSTOMER_LOSS_ENABLED is set).
   gnubok_record_customer_loss: 'invoices:write',
+  // Riksbanken's SEK rate for a currency on a date (lib/operations/exchange-rates.ts).
+  gnubok_get_exchange_rate: 'reports:read',
   gnubok_list_inventory_counts: 'reports:read',
   gnubok_get_inventory_count: 'reports:read',
   gnubok_save_inventory_count: 'bookkeeping:write',
@@ -507,6 +509,8 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_withdraw_not_momsredovisning: 'bookkeeping:write',
   gnubok_mark_agi_period_filed: 'payroll:write',
   gnubok_complete_deadline: 'bookkeeping:write',
+  // Remove a deadline from the list (lib/deadlines/removal.ts), the scope of ticking one off.
+  gnubok_delete_deadline: 'bookkeeping:write',
   // Rename, pause, resume or always review a learned booking rule (lib/operations/counterparty-templates.ts).
   gnubok_rename_counterparty_template: 'bookkeeping:write',
   gnubok_update_counterparty_template: 'bookkeeping:write',

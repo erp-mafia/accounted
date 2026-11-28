@@ -50,7 +50,7 @@ export const GET = withRouteContext(
         // ore_rounding: the card prints the amount the invoice list prints
         // (lib/bookkeeping/invoice-rounding.ts getDisplayTotal).
         .select(
-          'id, invoice_number, external_invoice_number, invoice_date, due_date, status, total, currency, ore_rounding, remaining_amount, paid_at, document_type, credited_invoice_id, is_self_billed, quote_status, valid_until',
+          'id, invoice_number, external_invoice_number, invoice_date, due_date, status, total, currency, ore_rounding, remaining_amount, paid_at, document_type, credited_invoice_id, credit_undone_at, is_self_billed, quote_status, valid_until',
         )
         .eq('customer_id', id)
         .eq('company_id', companyId)

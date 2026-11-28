@@ -144,6 +144,7 @@ import {
   paymentsVerificationStart,
 } from './payment-orders'
 import { paymentsCompanyGiroNumbers, paymentsLookupCreditor } from './bankgiro-lookup'
+import { companyLookupGet } from './company-lookup'
 import { supplierPayeesConfirm } from './supplier-payees'
 import {
   documentsDelete,
@@ -168,6 +169,7 @@ import {
   inboxItemsMatchTransaction,
 } from './inbox-matches'
 import { inboxItemsSetPurchaseCategory } from './inbox-purchase-category'
+import { documentsSearch } from './document-search'
 import {
   transactionsBulkBook,
   transactionsDelete,
@@ -176,6 +178,7 @@ import {
   transactionsRefreshExchangeRate,
   transactionsUpdate,
 } from './transactions'
+import { exchangeRatesGet } from './exchange-rates'
 import {
   importsBankUndo,
   importsOpeningBalanceReviewAcknowledge,
@@ -225,7 +228,7 @@ import {
 import { vatCheckReviewsMark } from './vat-check-reviews'
 import { vatMomsredovisningMarksMark, vatMomsredovisningMarksWithdraw } from './vat-momsredovisning-marks'
 import { agiFilingsMark } from './agi-filings'
-import { deadlinesComplete, deadlinesList } from './deadlines'
+import { deadlinesComplete, deadlinesDelete, deadlinesList } from './deadlines'
 import { counterpartyTemplatesRename, counterpartyTemplatesUpdate } from './counterparty-templates'
 import {
   arsredovisningAddSignatory,
@@ -424,6 +427,8 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   // Bankgiro Lookup (premium, behind OPENPAYMENTS_BANKGIRO_LOOKUP): reads only.
   paymentsLookupCreditor,
   paymentsCompanyGiroNumbers,
+  // The public company register by organisationsnummer (v1; the register is the TIC extension's service, MCP keeps gnubok_lookup_company).
+  companyLookupGet,
   paymentsAvailability,
   paymentsUsage,
   paymentsVerification,
@@ -434,6 +439,8 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   // documents (Dokument's own routes call the same services)
   documentsList,
   documentsGet,
+  // the archive's search (v1; MCP keeps its listed gnubok_search_records, both call lib/arkiv/search.ts searchArchive)
+  documentsSearch,
   documentsDelete,
   documentsSetType,
   transactionsAttachDocument,
@@ -459,6 +466,8 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   transactionsLinkJournalEntry,
   transactionsMatchBatch,
   transactionsBulkBook,
+  // exchange-rates (MCP only: the app's forms read the same lookup through /api/currency/rate)
+  exchangeRatesGet,
   // imports
   importsBankUndo,
   importsSieUndo,
@@ -515,6 +524,8 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   // deadlines (v1 and MCP: the dashboard ticks a deadline through the same service)
   deadlinesList,
   deadlinesComplete,
+  // MCP only: the dashboard removes a deadline through the same service.
+  deadlinesDelete,
   // counterparty-templates (MCP only: Bokföringsregler and the settings panel
   // change a rule through the same service)
   counterpartyTemplatesRename,

@@ -11,6 +11,11 @@
  * snapshot and pinned exactly beside it, so the snapshot file stays byte
  * for byte what it was: every other field of the response is unchanged, and
  * a company without a stored profile publishes the implicit Standard.
+ *
+ * The rollout parts add one field per module, `parts`, taken out the same
+ * way and pinned beside the snapshot: empty for every module but year-end,
+ * whose Avtal och åtaganden is off for a company outside the rollout
+ * (BOLAGET_COMPANY_IDS is empty here).
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -41,6 +46,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   vi.unstubAllEnvs()
   vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', '')
+  vi.stubEnv('BOLAGET_COMPANY_IDS', '')
 })
 
 describe('GET /api/v1/companies/:companyId/capabilities for each representative company', () => {
@@ -63,8 +69,26 @@ describe('GET /api/v1/companies/:companyId/capabilities for each representative 
     )
     expect(res.status).toBe(200)
     const body = await res.json()
-    const { profile, ...unchanged } = body.data
+    const { profile, modules, ...rest } = body.data as { profile: unknown; modules: Array<{ id: string; parts: unknown[] }> }
+    const unchanged = { ...rest, modules: modules.map(({ parts: _parts, ...m }) => m) }
     expect(unchanged).toMatchSnapshot()
+    for (const m of modules) {
+      expect(m.parts, m.id).toEqual(
+        m.id === 'year-end'
+          ? [
+              {
+                id: 'commitments',
+                name: 'Agreements and commitments',
+                name_sv: 'Avtal och åtaganden',
+                status: 'off',
+                reasons: ['switched_on_per_company'],
+                resolution:
+                  'Agreements and commitments is switched on company by company and is not on for this company: write to support@accounted.se to have it switched on.',
+              },
+            ]
+          : [],
+      )
+    }
     expect(profile).toEqual({
       id: 'standard',
       version: 1,

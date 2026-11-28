@@ -117,3 +117,26 @@ export interface RegistryHint {
   address: { street: string | null; postalCode: string | null; city: string | null } | null
   registration: { fTax: boolean | null; vat: boolean | null }
 }
+
+/**
+ * The organisationsnummer lookup an extension provides to core, by this name
+ * in Extension.services (the TIC extension today): core never imports the
+ * extension, so the operation that serves it (lib/operations/company-lookup.ts)
+ * finds the provider through the extension registry
+ * (./registry-lookup.ts).
+ */
+export const LOOKUP_COMPANY_SERVICE = 'lookupCompanyByOrgNumber'
+
+/**
+ * Why the register gave no answer: not_configured (no provider, or the
+ * provider has no credentials), rate_limited (the provider's quota or the
+ * lookup budget spent), timeout, registry_error (any other failure).
+ */
+export const REGISTRY_UNAVAILABLE_REASONS = ['not_configured', 'rate_limited', 'timeout', 'registry_error'] as const
+export type RegistryUnavailableReason = (typeof REGISTRY_UNAVAILABLE_REASONS)[number]
+
+/** What the provider's lookup answers: never throws for the register's own failures. */
+export type RegistryLookupOutcome =
+  | { status: 'found'; result: CompanyLookupResult }
+  | { status: 'not_found' }
+  | { status: 'unavailable'; reason: RegistryUnavailableReason }

@@ -132,7 +132,8 @@ export default function ByraKpiView({
   const handleEnter = async (companyId: string) => {
     if (pendingId) return
     setPendingId(companyId)
-    const result = await performCompanySwitch(companyId, { destination: '/' })
+    // Lands on the person's start page in the company (lib/company/start-page.ts).
+    const result = await performCompanySwitch(companyId)
     if (result?.error) {
       setPendingId(null)
       // The same sentences as the company switcher, as on the client list.

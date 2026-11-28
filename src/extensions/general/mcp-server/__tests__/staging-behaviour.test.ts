@@ -1207,6 +1207,14 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
       deadlines: { title: 'Skicka underlag till revisorn', due_date: '2026-11-20', is_completed: false, completed_at: null, status: 'upcoming', dismissed_at: null },
     },
   },
+  // A generated preliminary-tax deadline for a month before the first
+  // debitering, taken off the list (dismissed, since it is generated).
+  gnubok_delete_deadline: {
+    args: { deadline_id: SOME_UUID },
+    rows: {
+      deadlines: { title: 'Betala preliminärskatt december 2026', due_date: '2026-12-14', source: 'system', is_completed: false, tax_deadline_type: 'f_skatt', tax_period: '2026-12', dismissed_at: null },
+    },
+  },
   // Utlägg (expense claims): an aktiebolag owner's open claim on 2893, nothing
   // on a payslip, both payout accounts in the chart, an unbooked SEK outflow
   // equal to the claim for the bank match.

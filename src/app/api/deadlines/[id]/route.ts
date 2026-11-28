@@ -3,6 +3,8 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { CreateDeadlineSchema } from '@/lib/api/schemas'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { removeDeadline } from '@/lib/deadlines/removal'
+import { sessionFailureResponse } from '@/lib/operations/session'
 
 // Sparse update: every Create field, optional. Validated - the previous
 // implementation type-asserted the raw JSON, so malformed values reached
@@ -94,68 +96,20 @@ export const PUT = withRouteContext<{ params: Promise<{ id: string }> }>(
  * DELETE /api/deadlines/[id]
  * Delete a user deadline, or durably dismiss a system-generated one.
  *
- * System rows are soft-dismissed instead of hard-deleted: the nightly
- * backfill cron treats a missing upcoming system row as a repair case and
- * recreates it within 24 hours, so a hard delete silently undoes itself.
- * A dismissed row stays in the table (hidden from every surface) and
- * satisfies the generator and backfill the same way a completed row does.
+ * The rule (a system row is dismissed, never deleted, so the nightly repair
+ * does not recreate it) is lib/deadlines/removal.ts, shared with
+ * gnubok_delete_deadline.
  */
 export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
   'deadline.delete',
   async (_request, ctx, { params }) => {
     const { id } = await params
-    const { supabase, companyId } = ctx
+    const { supabase, companyId, log, requestId } = ctx
 
-    const { data: existing, error: fetchError } = await supabase
-      .from('deadlines')
-      .select('id, source')
-      .eq('id', id)
-      .eq('company_id', companyId)
-      .maybeSingle()
-
-    if (fetchError) {
-      return NextResponse.json({ error: getUserErrorMessage(fetchError) }, { status: 500 })
-    }
-    if (!existing) {
-      return NextResponse.json({ error: 'Deadline not found' }, { status: 404 })
-    }
-
-    if (existing.source === 'system') {
-      const { data: dismissedRows, error: dismissError } = await supabase
-        .from('deadlines')
-        .update({ dismissed_at: new Date().toISOString() })
-        .eq('id', id)
-        .eq('company_id', companyId)
-        .eq('source', 'system')
-        .select('id')
-
-      if (dismissError) {
-        return NextResponse.json({ error: getUserErrorMessage(dismissError) }, { status: 500 })
-      }
-      // The row can vanish between lookup and update (generator cleanup
-      // during a concurrent regeneration); report 404 rather than a
-      // phantom success that persisted nothing.
-      if (!dismissedRows || dismissedRows.length === 0) {
-        return NextResponse.json({ error: 'Deadline not found' }, { status: 404 })
-      }
-      return NextResponse.json({ success: true, dismissed: true })
-    }
-
-    const { error, count } = await supabase
-      .from('deadlines')
-      .delete({ count: 'exact' })
-      .eq('id', id)
-      .eq('company_id', companyId)
-
-    if (error) {
-      return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
-    }
-    // Zero rows = wrong id / another company's deadline - not a success.
-    if (count === 0) {
-      return NextResponse.json({ error: 'Deadline not found' }, { status: 404 })
-    }
-
-    return NextResponse.json({ success: true })
+    const outcome = await removeDeadline({ supabase, companyId }, id, { dryRun: false })
+    if (!outcome.ok) return sessionFailureResponse(outcome, log, requestId)
+    if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
+    return NextResponse.json(outcome.data.effect === 'dismissed' ? { success: true, dismissed: true } : { success: true })
   },
   { requireWrite: true, uuidParams: { id: 'DEADLINE_NOT_FOUND' } },
 )

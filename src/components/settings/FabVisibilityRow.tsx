@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useId, useState } from 'react'
+import { useCallback, useId, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
 import { Switch } from '@/components/ui/switch'
@@ -8,6 +8,7 @@ import { AttnLine } from '@/components/ui/attn-line'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { SettingsRow, SettingsRowEnd } from '@/components/settings/SettingsRows'
+import { useStoredPreference, type StoredPreferences } from '@/components/settings/use-stored-preference'
 import { saveFabHidden, storedFabHidden, type FabKind } from '@/lib/ui-state/fab-preference'
 
 // Per-user toggle for the floating button bottom-right, a row of Ditt konto
@@ -23,67 +24,20 @@ export function FabVisibilityRow({ support = false }: { support?: boolean }) {
   const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const router = useRouter()
-  // null = the value is not known: still loading, or the read failed (loadError).
-  const [hideFab, setHideFab] = useState<boolean | null>(null)
-  // detail === null: transient, so the line carries a retry. A detail sentence
-  // means the user has to act (an expired session) and a retry cannot help.
-  const [loadError, setLoadError] = useState<{ detail: string | null } | null>(null)
-  const [reloadKey, setReloadKey] = useState(0)
   const [saving, setSaving] = useState(false)
   const errorId = useId()
   const title = t(support ? 'fab_support_title' : 'fab_title')
   const kind: FabKind = support ? 'support' : 'assistant'
 
-  // A settings row that cannot read its own value must not render one.
-  // Defaulting to false on a failed GET drew a loaded-looking, interactive
-  // switch in the "assistant button visible" position whatever the stored
-  // preference was, and here that claim is contradicted on screen: the button
-  // is server-rendered from the same column in the dashboard layout, so an
-  // empty corner sat next to a switch insisting it was on.
-  //
-  // So the unknown value stays unknown: the switch keeps its disabled state and
-  // one line says the value could not be read. 401/403 is the only case where
-  // the reason changes what the user must do, so that message (from the same
-  // status map the save path uses) replaces the retry instead of sitting next
-  // to it; everything else is transient and the retry is the whole answer.
-  useEffect(() => {
-    let cancelled = false
-
-    async function load() {
-      setLoadError(null)
-      try {
-        const res = await fetch('/api/user/preferences')
-        if (!res.ok) {
-          // Not-JSON bodies (an HTML error page, an empty 502) leave null, and
-          // getErrorMessage falls back to the status map.
-          const body = await res.json().catch(() => null)
-          if (cancelled) return
-          const sessionGone = res.status === 401 || res.status === 403
-          setHideFab(null)
-          setLoadError({
-            detail: sessionGone
-              ? getErrorMessage(body, { statusCode: res.status, locale: errorLocale })
-              : null,
-          })
-          return
-        }
-        // A 200 whose body will not parse is a failed read too: let it land in
-        // the catch below rather than become a fabricated `false`.
-        const body = await res.json()
-        if (!cancelled) setHideFab(storedFabHidden(kind, body?.data))
-      } catch {
-        if (!cancelled) {
-          setHideFab(null)
-          setLoadError({ detail: null })
-        }
-      }
-    }
-
-    void load()
-    return () => {
-      cancelled = true
-    }
-  }, [reloadKey, errorLocale, kind])
+  // The unknown value stays unknown (use-stored-preference.ts): defaulting to
+  // false on a failed GET drew an interactive switch in the "assistant button
+  // visible" position whatever the stored preference was, and here that claim
+  // is contradicted on screen: the button is server-rendered from the same
+  // column in the dashboard layout, so an empty corner sat next to a switch
+  // insisting it was on. The switch keeps its disabled state and one line
+  // says the value could not be read.
+  const pickHidden = useCallback((data: StoredPreferences) => storedFabHidden(kind, data), [kind])
+  const { value: hideFab, setValue: setHideFab, loadError, retry } = useStoredPreference(pickHidden)
 
   // Rolling the switch back is necessary but not sufficient: a switch that
   // flips and flips again reads as a broken control, not as a refused save, so
@@ -141,7 +95,7 @@ export function FabVisibilityRow({ support = false }: { support?: boolean }) {
             action={
               loadError.detail
                 ? undefined
-                : { label: t('fab_load_retry'), onClick: () => setReloadKey((k) => k + 1) }
+                : { label: t('fab_load_retry'), onClick: retry }
             }
           >
             {loadError.detail

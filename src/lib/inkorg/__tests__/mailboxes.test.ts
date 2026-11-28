@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import type { ConnectionSummary } from '@/lib/digital-mailboxes/connections'
 import { billoLeftOutForKivra, mailboxEntries } from '../mailboxes'
 
 const ALL = { whatsapp: true, mail: true, kivra: true, billo: true }
@@ -49,25 +50,57 @@ describe('mailboxEntries', () => {
 })
 
 describe('billoLeftOutForKivra', () => {
-  const answered = { read: 'ready' as const, kivraCompanyMailbox: 'none' as const, kivraConnected: false, billoConnected: false }
+  const available = { receive: true, send: true }
+  const connection = (provider: 'kivra' | 'billo', receive_state: 'off' | 'pending' | 'active' | 'ended'): ConnectionSummary => ({
+    provider,
+    receive_state,
+    receive_connected_at: null,
+    last_synced_at: null,
+    send_state: 'off',
+    send_activated_at: null,
+    send_request: null,
+    last_error: null,
+    last_error_at: null,
+    postal_address: null,
+  })
+  const answered = (
+    kivra: { company_mailbox?: 'has' | 'none' | 'unknown'; receive?: 'off' | 'pending' | 'active' | 'ended' } = {},
+    billo: { receive?: 'off' | 'pending' | 'active' | 'ended' } = {},
+  ) => ({
+    status: 'ready' as const,
+    providers: {
+      kivra: { available, connection: kivra.receive ? connection('kivra', kivra.receive) : null, company_mailbox: kivra.company_mailbox },
+      billo: { available, connection: billo.receive ? connection('billo', billo.receive) : null },
+    },
+  })
 
   it('leaves Billo out for a company that already has its mailbox at Kivra, or has connected Kivra', () => {
-    expect(billoLeftOutForKivra({ ...answered, kivraCompanyMailbox: 'has' })).toBe(true)
-    expect(billoLeftOutForKivra({ ...answered, kivraCompanyMailbox: null, kivraConnected: true })).toBe(true)
+    expect(billoLeftOutForKivra(answered({ company_mailbox: 'has' }))).toBe(true)
+    expect(billoLeftOutForKivra(answered({ receive: 'active' }))).toBe(true)
+    expect(billoLeftOutForKivra(answered({ receive: 'pending' }))).toBe(true)
   })
 
   it('offers Billo where Kivra does not have the company, or cannot say', () => {
-    expect(billoLeftOutForKivra(answered)).toBe(false)
-    expect(billoLeftOutForKivra({ ...answered, kivraCompanyMailbox: 'unknown' })).toBe(false)
-    expect(billoLeftOutForKivra({ ...answered, kivraCompanyMailbox: null })).toBe(false)
+    expect(billoLeftOutForKivra(answered({ company_mailbox: 'none' }))).toBe(false)
+    expect(billoLeftOutForKivra(answered({ company_mailbox: 'unknown' }))).toBe(false)
+    expect(billoLeftOutForKivra(answered())).toBe(false)
   })
 
   it('keeps a connected Billo listed whatever Kivra says', () => {
-    expect(billoLeftOutForKivra({ ...answered, kivraCompanyMailbox: 'has', billoConnected: true })).toBe(false)
+    expect(billoLeftOutForKivra(answered({ company_mailbox: 'has' }, { receive: 'active' }))).toBe(false)
+    expect(billoLeftOutForKivra(answered({ receive: 'active' }, { receive: 'pending' }))).toBe(false)
+  })
+
+  it('reads a connection that ended as not connected', () => {
+    // A Billo that was disconnected leaves its row: Kivra connected still leaves Billo out.
+    expect(billoLeftOutForKivra(answered({ receive: 'active' }, { receive: 'ended' }))).toBe(true)
+    expect(billoLeftOutForKivra(answered({ company_mailbox: 'has' }, { receive: 'off' }))).toBe(true)
+    // A Kivra that was disconnected does not hide Billo.
+    expect(billoLeftOutForKivra(answered({ company_mailbox: 'none', receive: 'ended' }))).toBe(false)
   })
 
   it('holds Billo back until the answer is in, and lists it when the read failed', () => {
-    expect(billoLeftOutForKivra({ ...answered, read: 'loading' })).toBe(true)
-    expect(billoLeftOutForKivra({ ...answered, read: 'failed', kivraCompanyMailbox: 'has' })).toBe(false)
+    expect(billoLeftOutForKivra({ status: 'loading' })).toBe(true)
+    expect(billoLeftOutForKivra({ status: 'failed' })).toBe(false)
   })
 })

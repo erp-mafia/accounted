@@ -45,6 +45,13 @@ export function approxWidthPt(word: string): number {
  * shown) is about 200pt; a full-width box is about 495pt. The article number
  * column is about 43pt at its narrowest. The budgets sit well under those so
  * an estimate error still lands inside the column.
+ *
+ * A private person's document adds the two incl-VAT columns
+ * (inclVatColumnsShown): at their narrowest the description is then about
+ * 163pt and the article number about 39pt, still no narrower than the
+ * budgets, and a token estimated at a budget (10pt plus 10%) prints narrower
+ * than it at 9pt. Their two-line headings make the table header about 27pt,
+ * 7pt over TABLE_HEADER_HEIGHT_PT, well inside the line caps' margins below.
  */
 export const DESCRIPTION_COLUMN_PT = 160
 export const FULL_WIDTH_BOX_PT = 440

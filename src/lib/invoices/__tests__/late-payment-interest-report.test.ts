@@ -18,6 +18,9 @@ function invoice(overrides: Record<string, unknown> = {}) {
     status: 'paid',
     document_type: 'invoice',
     credited_invoice_id: null,
+    customer_id: 'cust-1',
+    late_interest_invoice_id: null,
+    is_late_interest_invoice: false,
     customer: { name: 'Kund AB' },
     ...overrides,
   }
@@ -35,11 +38,17 @@ function payment(overrides: Record<string, unknown> = {}) {
   }
 }
 
-function run(payments: unknown[], openInvoices: unknown[] = [], override: number | null = null) {
+function run(
+  payments: unknown[],
+  openInvoices: unknown[] = [],
+  override: number | null = null,
+  lateInterestInvoices: unknown[] = [],
+) {
   enqueueMany([
     { data: { reminder_interest_rate_override: override } },
     { data: payments },
     { data: openInvoices },
+    { data: lateInterestInvoices },
   ])
   return getLatePaymentInterestReport(client, 'company-1', AS_OF)
 }
@@ -55,6 +64,7 @@ describe('getLatePaymentInterestReport', () => {
       {
         invoice_id: 'inv-1',
         invoice_number: '1042',
+        customer_id: 'cust-1',
         customer_name: 'Kund AB',
         currency: 'SEK',
         due_date: '2026-09-01',
@@ -62,6 +72,8 @@ describe('getLatePaymentInterestReport', () => {
         last_payment_date: '2026-09-21',
         days_late: 20,
         interest: 68.49,
+        fully_paid: true,
+        interest_invoice: null,
       },
     ])
     expect(report.rate).toBeCloseTo(0.1, 6)
@@ -177,6 +189,57 @@ describe('getLatePaymentInterestReport', () => {
     ])
     expect(report.totals.map((t) => t.currency)).toEqual(['EUR', 'SEK'])
     expect(report.paid_late.find((r) => r.currency === 'EUR')?.interest).toBe(5.48)
+  })
+
+  it('never lists a räntefaktura: it earns no interest of its own', async () => {
+    const lateInterest = invoice({ id: 'rf-1', invoice_number: '1060', is_late_interest_invoice: true, status: 'sent', remaining_amount: 68.49 })
+    const report = await run(
+      [payment({ id: 'p-rf', invoice_id: 'rf-1', invoice: { ...lateInterest, status: 'paid' } })],
+      [lateInterest],
+      null,
+      [{ id: 'rf-1', invoice_number: '1060', external_invoice_number: null, status: 'sent' }],
+    )
+    expect(report.paid_late).toEqual([])
+    expect(report.overdue_open).toEqual([])
+    expect(report.totals).toEqual([])
+  })
+
+  it('names the räntefaktura that charges an invoice, its number or the draft label', async () => {
+    const report = await run(
+      [
+        payment({ invoice: invoice({ late_interest_invoice_id: 'rf-1' }) }),
+        payment({ id: 'p-2', invoice_id: 'inv-2', invoice: invoice({ id: 'inv-2', late_interest_invoice_id: 'rf-2' }) }),
+      ],
+      [],
+      null,
+      [
+        { id: 'rf-1', invoice_number: '1060', external_invoice_number: null, status: 'sent' },
+        { id: 'rf-2', invoice_number: null, external_invoice_number: null, status: 'draft' },
+      ],
+    )
+    const byInvoice = Object.fromEntries(report.paid_late.map((row) => [row.invoice_id, row.interest_invoice]))
+    expect(byInvoice['inv-1']).toEqual({ id: 'rf-1', invoice_number: '1060', status: 'sent' })
+    expect(byInvoice['inv-2']).toEqual({ id: 'rf-2', invoice_number: '(Utkast)', status: 'draft' })
+    expect(findCalls('invoices', 'eq')).toContainEqual(['is_late_interest_invoice', true])
+  })
+
+  it('reads a cancelled räntefaktura as charging nothing', async () => {
+    const report = await run(
+      [payment({ invoice: invoice({ late_interest_invoice_id: 'rf-1' }) })],
+      [],
+      null,
+      [{ id: 'rf-1', invoice_number: '1060', external_invoice_number: null, status: 'cancelled' }],
+    )
+    expect(report.paid_late[0].interest_invoice).toBeNull()
+  })
+
+  it('says whether the invoice is paid in full, so its interest is final', async () => {
+    const report = await run([
+      payment(),
+      payment({ id: 'p-part', invoice_id: 'inv-part', invoice: invoice({ id: 'inv-part', status: 'partially_paid' }) }),
+    ])
+    const byInvoice = Object.fromEntries(report.paid_late.map((row) => [row.invoice_id, row.fully_paid]))
+    expect(byInvoice).toEqual({ 'inv-1': true, 'inv-part': false })
   })
 
   it('surfaces a database error instead of an empty list', async () => {

@@ -974,7 +974,7 @@ From 60 days back by default (from, to narrow it). status expected: not seen yet
 **Do not use for:** Supplier invoices or bank payments (they have their own lists).
 
 **Pitfalls:**
-- COMMITMENTS_UNAVAILABLE: Avtal och åtaganden is not switched on for this company yet.
+- COMMITMENTS_UNAVAILABLE: Avtal och åtaganden is switched on company by company and is not on for this company (GET /capabilities says so under the year-end module); support switches it on, and a self-hosted instance lists the company in BOLAGET_COMPANY_IDS.
 - AGREEMENT_NOT_FOUND: agreement_id is not an agreement of the company.
 
 | Parameter | In | Type | Required | Notes |
@@ -1043,7 +1043,7 @@ Both the agreements registered by hand (origin manual) and the ones the archive 
 **Do not use for:** Booking payments (the agreements never post) or reading the agreement text (read the linked document).
 
 **Pitfalls:**
-- COMMITMENTS_UNAVAILABLE: Avtal och åtaganden is not switched on for this company yet.
+- COMMITMENTS_UNAVAILABLE: Avtal och åtaganden is switched on company by company and is not on for this company (GET /capabilities says so under the year-end module); support switches it on, and a self-hosted instance lists the company in BOLAGET_COMPANY_IDS.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -1134,7 +1134,7 @@ With amount and period, the expected payments a year ahead are written and compa
 **Do not use for:** Booking anything (agreements never post) or changing an agreement the archive read from a document (origin derived).
 
 **Pitfalls:**
-- COMMITMENTS_UNAVAILABLE: Avtal och åtaganden is not switched on for this company yet.
+- COMMITMENTS_UNAVAILABLE: Avtal och åtaganden is switched on company by company and is not on for this company (GET /capabilities says so under the year-end module); support switches it on, and a self-hosted instance lists the company in BOLAGET_COMPANY_IDS.
 - VALIDATION_ERROR: an amount needs a period, and ends_on cannot be before starts_on.
 - COMMITMENTS_REFERENCE_NOT_FOUND: counterparty_party_id or document_id is not the company's (details.field).
 
@@ -1280,7 +1280,7 @@ Send only the fields that change; null clears one. Payments already matched or m
 **Do not use for:** Ending an agreement (POST /agreements/{id}/end) or an agreement the archive read from a document.
 
 **Pitfalls:**
-- COMMITMENTS_UNAVAILABLE: Avtal och åtaganden is not switched on for this company yet.
+- COMMITMENTS_UNAVAILABLE: Avtal och åtaganden is switched on company by company and is not on for this company (GET /capabilities says so under the year-end module); support switches it on, and a self-hosted instance lists the company in BOLAGET_COMPANY_IDS.
 - AGREEMENT_DERIVED: the agreement was read from an archived document; correct the reading there.
 - AGREEMENT_NOT_FOUND
 
@@ -1420,7 +1420,7 @@ ended_on defaults to today; an earlier ends_on stays. Ending twice answers the s
 **Do not use for:** Removing an agreement that never existed (end it with the day it started) or an agreement the archive read from a document.
 
 **Pitfalls:**
-- COMMITMENTS_UNAVAILABLE: Avtal och åtaganden is not switched on for this company yet.
+- COMMITMENTS_UNAVAILABLE: Avtal och åtaganden is switched on company by company and is not on for this company (GET /capabilities says so under the year-end module); support switches it on, and a self-hosted instance lists the company in BOLAGET_COMPANY_IDS.
 - AGREEMENT_DERIVED
 - AGREEMENT_NOT_FOUND
 
@@ -1694,7 +1694,7 @@ Example response `200`:
 Sets one deadline completed (is_completed true) or open again (false), as the checkbox under Deadlines in the app does. Only the tick changes: no verifikat, period or filing is touched and nothing is sent to Skatteverket. Asking for the state the deadline already has changes nothing (changed false). Dry-runnable.
 
 **Use when:** The work a deadline stands for is done (or was ticked off by mistake) and it should leave (or return to) the open list.
-**Do not use for:** A moms or AGI filing made outside Accounted: record the filing instead (moms: POST /reports/vat-declaration/filings or accounted_mark_vat_period_filed; AGI: accounted_mark_agi_period_filed), which completes the deadline with the filing date.
+**Do not use for:** A moms or AGI filing made outside Accounted: record the filing instead (moms: POST /reports/vat-declaration/filings or accounted_mark_vat_period_filed; AGI: accounted_mark_agi_period_filed), which completes the deadline with the filing date. A deadline for an obligation the company does not have: remove it (accounted_delete_deadline).
 
 **Pitfalls:**
 - DEADLINE_NOT_FOUND for an id that is not one of the company's listed deadlines (GET /deadlines, accounted_list_deadlines), including one the company removed.
@@ -4977,7 +4977,7 @@ applies is false for a legal form that prepares no årsredovisning (an enskild f
 **Do not use for:** Consolidated accounts (koncernredovisning is not prepared here).
 
 **Pitfalls:**
-- COMMITMENTS_UNAVAILABLE: Avtal och åtaganden is not switched on for this company yet.
+- COMMITMENTS_UNAVAILABLE: Avtal och åtaganden is switched on company by company and is not on for this company (GET /capabilities says so under the year-end module); support switches it on, and a self-hosted instance lists the company in BOLAGET_COMPANY_IDS.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -5045,7 +5045,7 @@ counterparty_registered_office (säte) and counterparty_org_number go into the k
 **Do not use for:** Individual shareholders (the aktiebok) or an enskild firma (no group structure).
 
 **Pitfalls:**
-- COMMITMENTS_UNAVAILABLE: Avtal och åtaganden is not switched on for this company yet.
+- COMMITMENTS_UNAVAILABLE: Avtal och åtaganden is switched on company by company and is not on for this company (GET /capabilities says so under the year-end module); support switches it on, and a self-hosted instance lists the company in BOLAGET_COMPANY_IDS.
 - GROUP_LINKS_NOT_FOR_LEGAL_FORM: only companies that prepare an årsredovisning have a group structure here.
 - GROUP_LINK_COMPANY_NOT_IN_TEAM: linked_company_id must be another company in the same team.
 
@@ -5154,7 +5154,7 @@ Send only the fields that change; null clears one. Dry-runnable.
 **Do not use for:** Removing history: an ended relation keeps its row with valid_to.
 
 **Pitfalls:**
-- COMMITMENTS_UNAVAILABLE: Avtal och åtaganden is not switched on for this company yet.
+- COMMITMENTS_UNAVAILABLE: Avtal och åtaganden is switched on company by company and is not on for this company (GET /capabilities says so under the year-end module); support switches it on, and a self-hosted instance lists the company in BOLAGET_COMPANY_IDS.
 - GROUP_LINK_NOT_FOUND
 - GROUP_LINKS_NOT_FOR_LEGAL_FORM
 
@@ -5602,7 +5602,7 @@ Rows are dated (valid_from, valid_to); the note texts count the rows that hold o
 **Do not use for:** Loans themselves (agreements of kind loan).
 
 **Pitfalls:**
-- COMMITMENTS_UNAVAILABLE: Avtal och åtaganden is not switched on for this company yet.
+- COMMITMENTS_UNAVAILABLE: Avtal och åtaganden is switched on company by company and is not on for this company (GET /capabilities says so under the year-end module); support switches it on, and a self-hosted instance lists the company in BOLAGET_COMPANY_IDS.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -5676,7 +5676,7 @@ amount is the mortgage amount (pantbrev, företagsinteckning), the book value of
 **Do not use for:** The loan itself (POST /agreements, kind loan; link it with agreement_id).
 
 **Pitfalls:**
-- COMMITMENTS_UNAVAILABLE: Avtal och åtaganden is not switched on for this company yet.
+- COMMITMENTS_UNAVAILABLE: Avtal och åtaganden is switched on company by company and is not on for this company (GET /capabilities says so under the year-end module); support switches it on, and a self-hosted instance lists the company in BOLAGET_COMPANY_IDS.
 - COMMITMENTS_REFERENCE_NOT_FOUND: in_favour_of_party_id, agreement_id or document_id is not the company's (details.field).
 
 | Parameter | In | Type | Required | Notes |
@@ -5781,7 +5781,7 @@ Send only the fields that change; null clears one. Dry-runnable.
 **Do not use for:** Removing history: a released security keeps its row with valid_to.
 
 **Pitfalls:**
-- COMMITMENTS_UNAVAILABLE: Avtal och åtaganden is not switched on for this company yet.
+- COMMITMENTS_UNAVAILABLE: Avtal och åtaganden is switched on company by company and is not on for this company (GET /capabilities says so under the year-end module); support switches it on, and a self-hosted instance lists the company in BOLAGET_COMPANY_IDS.
 - SECURITY_NOT_FOUND
 
 | Parameter | In | Type | Required | Notes |
