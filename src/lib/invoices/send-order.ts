@@ -99,19 +99,39 @@ export function isAlwaysOnWay(way: SendOrderWay): boolean {
 }
 
 /**
+ * Kivra and Billo are one kind of way, the customer's digital mailbox: a
+ * company sends through one of them, so an order holds at most one.
+ */
+export function isMailboxWay(way: SendOrderWay): boolean {
+  return way === 'kivra' || way === 'billo'
+}
+
+/** The first mailbox way that is on stays on; any later one is switched off. */
+function keepOneMailboxWay(rows: readonly SendOrderRow[]): SendOrderRow[] {
+  let seen = false
+  return rows.map((row) => {
+    if (!row.on || !isMailboxWay(row.way)) return row
+    if (seen) return { ...row, on: false }
+    seen = true
+    return row
+  })
+}
+
+/**
  * The rows to start from: with a saved order its ways first, in its order and
  * on, then the other available ways, off; without one every available way in
  * the recommended order, on. A saved way the company cannot use any more is
- * left out, and e-post is on even where a saved order left it out.
+ * left out, e-post is on even where a saved order left it out, and of Kivra
+ * and Billo only the first is on. The ways that are on come first.
  */
 export function initialSendOrderRows(available: readonly SendOrderWay[], saved: readonly SendOrderWay[] | null): SendOrderRow[] {
-  if (!saved) return available.map((way) => ({ way, on: true }))
-  const kept = saved.filter((way) => available.includes(way))
+  const kept = saved ? saved.filter((way) => available.includes(way)) : [...available]
   const alwaysOn = available.filter((way) => isAlwaysOnWay(way) && !kept.includes(way))
-  const on = [...kept, ...alwaysOn]
+  const rows = keepOneMailboxWay([...kept, ...alwaysOn].map((way) => ({ way, on: true })))
+  const on = rows.filter((row) => row.on)
   return [
-    ...on.map((way) => ({ way, on: true })),
-    ...available.filter((way) => !on.includes(way)).map((way) => ({ way, on: false })),
+    ...on,
+    ...available.filter((way) => !on.some((row) => row.way === way)).map((way) => ({ way, on: false })),
   ]
 }
 
@@ -125,10 +145,20 @@ export function moveSendOrderRow(rows: readonly SendOrderRow[], way: SendOrderWa
   return next
 }
 
-/** A way switched on or off; e-post stays on. */
+/**
+ * A way switched on or off; e-post stays on. Switching Kivra or Billo on
+ * switches the other off, and the one switched on takes its place in the order.
+ */
 export function toggleSendOrderRow(rows: readonly SendOrderRow[], way: SendOrderWay): SendOrderRow[] {
-  if (isAlwaysOnWay(way)) return [...rows]
-  return rows.map((row) => (row.way === way ? { ...row, on: !row.on } : row))
+  const index = rows.findIndex((row) => row.way === way)
+  if (index < 0 || isAlwaysOnWay(way)) return [...rows]
+  if (rows[index].on) return rows.map((row) => (row.way === way ? { ...row, on: false } : row))
+  const next = rows.map((row) => (row.way === way ? { ...row, on: true } : row))
+  const replaced = isMailboxWay(way) ? rows.findIndex((row) => row.on && isMailboxWay(row.way)) : -1
+  if (replaced < 0) return next
+  next[replaced] = { way, on: true }
+  next[index] = { way: rows[replaced].way, on: false }
+  return next
 }
 
 /** The order the rows stand for: the ways switched on, top to bottom. */

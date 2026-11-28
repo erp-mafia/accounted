@@ -22540,6 +22540,7 @@
     "save_failed": "Could not save the order",
     "always": "Always",
     "move": "Move {way}",
-    "saved_toast": "Order saved"
+    "saved_toast": "Order saved",
+    "mailbox_swapped": "{on} is now used instead of {off}"
   }
 }

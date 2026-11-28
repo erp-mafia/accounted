@@ -22540,6 +22540,7 @@
     "save_failed": "Kunde inte spara ordningen",
     "always": "Alltid",
     "move": "Flytta {way}",
-    "saved_toast": "Ordningen sparad"
+    "saved_toast": "Ordningen sparad",
+    "mailbox_swapped": "{on} används nu i stället för {off}"
   }
 }

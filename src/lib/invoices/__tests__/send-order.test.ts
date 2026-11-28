@@ -8,6 +8,7 @@ import {
   hasOrderToChoose,
   initialSendOrderRows,
   isAlwaysOnWay,
+  isMailboxWay,
   isValidSendOrder,
   moveSendOrderRow,
   orderOfRows,
@@ -118,6 +119,37 @@ describe('the order list', () => {
     expect(orderOfRows(all)).toEqual(['email'])
     expect(isAlwaysOnWay('email')).toBe(true)
     expect(isAlwaysOnWay('kivra')).toBe(false)
+  })
+
+  it('starts with only the first of Kivra and Billo on, and the ways that are on first', () => {
+    expect(initialSendOrderRows(['peppol', 'kivra', 'billo', 'email'], null)).toEqual([
+      { way: 'peppol', on: true },
+      { way: 'kivra', on: true },
+      { way: 'email', on: true },
+      { way: 'billo', on: false },
+    ])
+    expect(orderOfRows(initialSendOrderRows(['peppol', 'kivra', 'billo', 'email'], ['billo', 'kivra', 'email']))).toEqual([
+      'billo',
+      'email',
+    ])
+  })
+
+  it('switches Kivra off when Billo is switched on, Billo taking its place, and the other way round', () => {
+    const rows = initialSendOrderRows(['peppol', 'kivra', 'billo', 'email'], null)
+    const billo = toggleSendOrderRow(rows, 'billo')
+    expect(billo).toEqual([
+      { way: 'peppol', on: true },
+      { way: 'billo', on: true },
+      { way: 'email', on: true },
+      { way: 'kivra', on: false },
+    ])
+    expect(orderOfRows(toggleSendOrderRow(billo, 'kivra'))).toEqual(['peppol', 'kivra', 'email'])
+  })
+
+  it('leaves the other mailbox off when one is switched off', () => {
+    const rows = initialSendOrderRows(['kivra', 'billo', 'email'], null)
+    expect(orderOfRows(toggleSendOrderRow(rows, 'kivra'))).toEqual(['email'])
+    expect([isMailboxWay('kivra'), isMailboxWay('billo'), isMailboxWay('peppol'), isMailboxWay('email')]).toEqual([true, true, false, false])
   })
 
   it('offers e-faktura and each mailbox only where the company can use it, and email always', () => {

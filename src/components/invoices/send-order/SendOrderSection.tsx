@@ -66,7 +66,8 @@ interface SendOrderListProps {
 
 /**
  * The ways as a list to drag: position, mark, name and what it is, and a
- * switch (e-post has none: it is always on). A drop, an arrow key on a
+ * switch (e-post has none: it is always on; Kivra and Billo switch each
+ * other off). A drop, an arrow key on a
  * handle or a switch saves at once, and the toast's Ångra puts back the
  * order that was there before.
  */
@@ -93,7 +94,7 @@ function SendOrderList({ available, saved, canEdit }: SendOrderListProps) {
   const wayLine = (way: SendOrderWay) =>
     way === 'peppol' ? t('line_peppol') : way === 'email' ? t('line_email') : t('line_mailbox')
 
-  async function store(next: SendOrderRow[]) {
+  async function store(next: SendOrderRow[], title: string = t('saved_toast')) {
     const order = orderOfRows(next)
     if (sameOrder(order, shownRef.current)) return
     const before = storedRef.current
@@ -105,7 +106,7 @@ function SendOrderList({ available, saved, canEdit }: SendOrderListProps) {
     storedRef.current = order
     shownRef.current = order
     toast({
-      title: t('saved_toast'),
+      title,
       action: (
         <ToastAction altText={tCommon('undo')} onClick={() => void restore(before)}>
           {tCommon('undo')}
@@ -125,9 +126,16 @@ function SendOrderList({ available, saved, canEdit }: SendOrderListProps) {
     setRows(back)
   }
 
-  function change(next: SendOrderRow[]) {
+  function change(next: SendOrderRow[], title?: string) {
     setRows(next)
-    void store(next)
+    void store(next, title)
+  }
+
+  // A switch; turning Kivra or Billo on turns the other off, and the toast says so.
+  function toggle(way: SendOrderWay) {
+    const next = toggleSendOrderRow(rows, way)
+    const replaced = rows.find((row) => row.way !== way && row.on && next.some((n) => n.way === row.way && !n.on))
+    change(next, replaced ? t('mailbox_swapped', { on: wayName(way), off: wayName(replaced.way) }) : undefined)
   }
 
   const onWays = orderOfRows(rows)
@@ -171,7 +179,7 @@ function SendOrderList({ available, saved, canEdit }: SendOrderListProps) {
                 <Switch
                   checked={row.on}
                   disabled={!canEdit}
-                  onCheckedChange={() => change(toggleSendOrderRow(rows, row.way))}
+                  onCheckedChange={() => toggle(row.way)}
                   aria-label={t('use_way', { way: name })}
                 />
               )}
