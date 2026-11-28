@@ -20,6 +20,7 @@ import { isoDay, sweepBankRowsAfterSIEImport } from './sie-post-import-sweep'
 import { diagnoseUntransferredResults, learnFromCompletedSIEImport, vouchersForLearning } from './sie-import-learning'
 import { booksMatchFilePreviousYear, continuityNotices, diagnoseCarriedForwardDifferences,
   storedOpeningBalances } from './sie-continuity'
+import { bookFileResultTransfer, resultTransferNotice } from './sie-result-transfer'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import type { CommitActor } from '@/lib/bookkeeping/actor-context'
 import { postingPort } from '@/lib/posting/port'
@@ -154,8 +155,21 @@ async function finalize(supabase: SupabaseClient, job: SIEJob, deadline: number,
   // year whose file held no vouchers is missing its bookkeeping.
   const yearStart = isoDay(job.fiscal_year_start)
   const yearEnd = parsed.stats.fiscalYearEnd
-  const {differences:ibDifferences,fileOpeningOff} = diagnoses ? await carriedForwardContinuity(supabase,job,mappings)
+  const {differences:carried,fileOpeningOff} = diagnoses ? await carriedForwardContinuity(supabase,job,mappings)
     : {differences:[],fileOpeningOff:false}
+  // Last year's result still on 2099 where the file's #IB has moved it: the
+  // year-end's omföring, booked for the submitter and said, instead of a
+  // difference to reconcile (sie-result-transfer.ts).
+  const submitter = sieJobCommitActor(job)
+  const resultTransfer = carried.length ? await bookFileResultTransfer(supabase,{companyId:job.company_id,
+    fiscalPeriodId:job.fiscal_period_id,userId:job.user_id,actor:submitter ? {...submitter,userId:job.user_id} : null,
+    differences:carried}) : null
+  const ibDifferences = resultTransfer ? [] : carried
+  if (resultTransfer) {
+    const told = resultTransferNotice(resultTransfer)
+    warnings.push(told.text)
+    notices.push(told.notice)
+  }
   const continuity = continuityNotices({differences:ibDifferences,fileOpeningOff,
     noVouchers:diagnoses && parsed.stats.totalVouchers === 0 && yearStart && yearEnd && yearEnd < todayIsoStockholm()
       ? {from:yearStart,to:yearEnd} : null})
@@ -171,7 +185,7 @@ async function finalize(supabase: SupabaseClient, job: SIEJob, deadline: number,
     accountRenames:renames.slice(0,200),vouchers:{total:parsed.stats.totalVouchers,imported:Number(job.manifest.preparedEntries),
       skippedEmpty:skipped.empty,skippedSingleLine:skipped.singleLine,skippedUnbalanced:skipped.unbalanced,skippedUnmapped:skipped.unmapped},
     openingBalanceRounding:rounding || null,migrationAdjustment:{created:!!adjustment,entryId:adjustment?.id ?? null,
-      deltaAccounts:Number(job.manifest.migrationAdjustmentAccounts ?? 0)},
+      deltaAccounts:Number(job.manifest.migrationAdjustmentAccounts ?? 0)},...(resultTransfer ? {resultTransfer} : {}),
     voucherSeriesUsed:[...new Set(entries.map(e=>e.series))],voucherNumberRanges:computeVoucherNumberRanges(voucherMap),
     // Full mapping is retained in per-chunk receipts. Bound the final RPC.
     voucherNumberMapping:voucherMap.slice(0,200),
@@ -183,6 +197,7 @@ async function finalize(supabase: SupabaseClient, job: SIEJob, deadline: number,
     details:{fiscalYear:documentation.fiscalYear,skippedVouchers:skipped,
       openingBalanceSkipped:job.manifest.prior_activity && options.importOpeningBalances ? 'prior_activity' : undefined,
       openingBalanceDifferences:ibDifferences.length ? ibDifferences.slice(0,200) : undefined,
+      resultTransfer:resultTransfer ?? undefined,
       migrationAdjustment:{created:!!adjustment,accountsAdjusted:Number(job.manifest.migrationAdjustmentAccounts ?? 0)},
       untransferredResults:untransferred.results.length ? untransferred.results : undefined,
       ...(appending && job.base_import_id ? {append:{baseImportId:job.base_import_id,

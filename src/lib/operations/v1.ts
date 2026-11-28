@@ -172,6 +172,7 @@ export function v1OperationHandler(op: AnyOperation) {
         companyId: ctx.companyId!,
         userId: ctx.userId,
         log: ctx.log,
+        ...(ctx.apiKeyId ? { apiKeyId: ctx.apiKeyId } : {}),
       }
       const input = parsed.data as Record<string, unknown>
       if (ctx.stage) return v1StageResponse(op, opCtx, input, ctx, agentReason)

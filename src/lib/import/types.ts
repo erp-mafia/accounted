@@ -425,6 +425,14 @@ export interface ImportResultDetails {
   openingBalanceDifferences?: OpeningBalanceDifference[]
 
   /**
+   * With openingBalanceSkipped: the omföring of last year's result that was
+   * all the opening balance differed from the file's #IB by, booked by the
+   * import or found already booked (sie-result-transfer.ts). Its two
+   * accounts are then not in openingBalanceDifferences.
+   */
+  resultTransfer?: SIEResultTransfer
+
+  /**
    * Non-latest fiscal years whose P&L doesn't net to zero - their result
    * was never transferred to equity (omföring av årets resultat saknas).
    * Each corrupts every later derived opening balance by exactly pl_net,
@@ -666,6 +674,24 @@ export interface OpeningBalanceDifference {
   difference: number
 }
 
+/**
+ * The verifikat that moves last year's result off the result account the way
+ * the file's #IB has moved it (sie-result-transfer.ts).
+ */
+export interface SIEResultTransfer {
+  entryId: string
+  /** "A12" style. */
+  voucher: string
+  /** The verifikat's date: the fiscal year's first day. */
+  date: string
+  /** The result account it moves off (aktiebolag 2099). */
+  from: string
+  /** Where the file's #IB carries the result (aktiebolag 2098 or 2091). */
+  to: string
+  /** The amount moved, positive. */
+  amount: number
+}
+
 /** An account where the file's own #IB 0 differs from its #UB -1: the source changed the opening balance without a voucher. */
 export interface SourceOpeningBalanceEdit {
   account: string
@@ -760,6 +786,9 @@ export interface MigrationDocumentation {
     deltaAccounts: number
     entryId: string | null
   }
+  // The omföring of last year's result the file's #IB explained (a
+  // continuation import, sie-result-transfer.ts). Absent when there was none.
+  resultTransfer?: SIEResultTransfer
 
   // Voucher number mapping.
   // Per-voucher series is preserved from the source SIE file (e.g., Fortnox uses

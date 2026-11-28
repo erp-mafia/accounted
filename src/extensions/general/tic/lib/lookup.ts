@@ -1,8 +1,13 @@
 import { searchCompaniesByName, searchCompanyByOrgNumber } from './tic-client'
-import type { TicCallContext } from '@/lib/tic-budget/budget'
+import { toTicCallPurpose, type TicCallContext } from '@/lib/tic-budget/budget'
 import { isLensDocumentCeased } from './lens-status'
-import type { TICCompanyDocument } from './tic-types'
-import type { CompanyLookupResult, CompanySearchHit } from '@/lib/company-lookup/types'
+import { TICAPIError, type TICCompanyDocument } from './tic-types'
+import type {
+  CompanyLookupResult,
+  CompanySearchHit,
+  RegistryLookupOutcome,
+  RegistryUnavailableReason,
+} from '@/lib/company-lookup/types'
 import { normalizeOrgNumber, registrationNumberKey } from '@/lib/invariants/org-number'
 
 /**
@@ -132,6 +137,37 @@ export async function lookupCompanyByOrgNumber(
   const doc = await searchCompanyByOrgNumber(orgNumber, ctx)
   if (!doc) return null
   return mapDocumentToLookupResult(doc)
+}
+
+/** A TIC failure as the reason core names it (lib/company-lookup/types.ts). */
+function unavailableReason(code: string | undefined): RegistryUnavailableReason {
+  if (code === 'NOT_CONFIGURED') return 'not_configured'
+  if (code === 'RATE_LIMIT_EXCEEDED') return 'rate_limited'
+  if (code === 'TIMEOUT') return 'timeout'
+  return 'registry_error'
+}
+
+/**
+ * The lookup as core asks for it (the extension's LOOKUP_COMPANY_SERVICE,
+ * behind POST /api/v1/companies/{companyId}/company-lookup): the register's
+ * own failures, a spent budget among them, are an `unavailable` answer with
+ * the reason, never a throw. The charge's purpose and subject come from core
+ * untyped, so they are read here.
+ */
+export async function lookupCompanyOutcome(
+  orgNumber: string,
+  charge: { purpose?: unknown; subject?: unknown } = {}
+): Promise<RegistryLookupOutcome> {
+  try {
+    const result = await lookupCompanyByOrgNumber(orgNumber, {
+      purpose: toTicCallPurpose(charge.purpose),
+      subject: typeof charge.subject === 'string' ? charge.subject : null,
+    })
+    return result ? { status: 'found', result } : { status: 'not_found' }
+  } catch (error) {
+    if (error instanceof TICAPIError) return { status: 'unavailable', reason: unavailableReason(error.code) }
+    throw error
+  }
 }
 
 /** Maximum hits the onboarding chip row shows for a name search. */

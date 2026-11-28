@@ -272,6 +272,37 @@ describe('GET /api/supplier-invoices/[id]', () => {
     expect(eqCalls.filter((c) => c[0] === 'company_id')).toHaveLength(2)
   })
 
+  it('names the inbox item a credited invoice can be registered again from', async () => {
+    enqueue({
+      data: { id: 'si-1', status: 'credited', is_credit_note: false, credited_invoice_id: null, registration_journal_entry_id: null, items: [], payments: [] },
+      error: null,
+    })
+    // Its credit stands: a live credit note, no verifikat needed (the original never reached the books).
+    enqueue({ data: [{ credited_invoice_id: 'si-1', registration_journal_entry_id: null }], error: null })
+    enqueue({ data: { id: 'item-1' }, error: null })
+
+    const { status, body } = await parseJsonResponse<{ data: { register_again_inbox_item_id: string | null } }>(
+      await getRequest('si-1'),
+    )
+    expect(status).toBe(200)
+    expect(body.data.register_again_inbox_item_id).toBe('item-1')
+    expect(findCalls('invoice_inbox_items', 'eq')).toEqual([
+      ['company_id', 'company-1'],
+      ['created_supplier_invoice_id', 'si-1'],
+    ])
+  })
+
+  it('names none for a credit note, which never releases its document', async () => {
+    enqueue({
+      data: { id: 'cn-1', status: 'credited', is_credit_note: true, credited_invoice_id: null, items: [], payments: [] },
+      error: null,
+    })
+
+    const { body } = await parseJsonResponse<{ data: { register_again_inbox_item_id: string | null } }>(await getRequest('cn-1'))
+    expect(body.data.register_again_inbox_item_id).toBeNull()
+    expect(findCalls('invoice_inbox_items', 'eq')).toEqual([])
+  })
+
   it('leaves credited_original null on an ordinary invoice without a second query', async () => {
     enqueue({ data: { id: 'si-1', is_credit_note: false, credited_invoice_id: null, items: [], payments: [] }, error: null })
 

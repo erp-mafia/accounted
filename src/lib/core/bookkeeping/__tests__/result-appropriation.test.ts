@@ -41,7 +41,12 @@ vi.mock('../period-service', () => ({
   findNextPeriod: vi.fn(),
 }))
 
-import { generateResultAppropriation, previewResultAppropriation } from '../result-appropriation-service'
+import {
+  generateResultAppropriation,
+  planResultAppropriation,
+  postResultAppropriation,
+  previewResultAppropriation,
+} from '../result-appropriation-service'
 import { getOpeningBalances } from '@/lib/reports/opening-balances'
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
 import { fetchEntryLines } from '@/lib/bookkeeping/entry-lines'
@@ -243,6 +248,48 @@ describe('generateResultAppropriation', () => {
     expect(input.lines).toContainEqual(
       expect.objectContaining({ account_number: '2098', debit_amount: 0, credit_amount: 80000 })
     )
+  })
+})
+
+describe('planResultAppropriation onto balanserat resultat (an SIE file\'s #IB carries it on 2091)', () => {
+  it('moves the same amount off 2099, onto 2091 instead of 2098, and posts it as the close does', async () => {
+    results = [AB, NO_EXISTING, PERIOD]
+    mockOpeningBalance([{ account_number: '2099', debit: 0, credit: 48211.37 }])
+
+    const plan = await planResultAppropriation(makeClient() as never, 'c1', 'p1', { to: 'retained' })
+
+    expect(plan).toMatchObject({ resultAccount: '2099', priorResultAccount: '2091', net: 48211.37, amount: 48211.37 })
+    expect(plan!.lines).toEqual([
+      expect.objectContaining({ account_number: '2099', debit_amount: 48211.37, credit_amount: 0 }),
+      expect.objectContaining({ account_number: '2091', debit_amount: 0, credit_amount: 48211.37 }),
+    ])
+
+    await postResultAppropriation(makeClient() as never, 'c1', 'u1', plan!)
+    const input = vi.mocked(createJournalEntry).mock.calls[0][3] as {
+      description: string
+      entry_date: string
+      source_type: string
+      fiscal_period_id: string
+    }
+    expect(input).toMatchObject({
+      description: 'Omföring av föregående års resultat (2099 → 2091)',
+      entry_date: '2025-01-01',
+      source_type: 'result_appropriation',
+      fiscal_period_id: 'p1',
+    })
+  })
+
+  it('moves a loss onto 2091 the other way round', async () => {
+    results = [AB, NO_EXISTING, PERIOD]
+    mockOpeningBalance([{ account_number: '2099', debit: 1204.5, credit: 0 }])
+
+    const plan = await planResultAppropriation(makeClient() as never, 'c1', 'p1', { to: 'retained' })
+
+    expect(plan).toMatchObject({ priorResultAccount: '2091', net: -1204.5, amount: 1204.5, direction: 'loss' })
+    expect(plan!.lines).toEqual([
+      expect.objectContaining({ account_number: '2091', debit_amount: 1204.5, credit_amount: 0 }),
+      expect.objectContaining({ account_number: '2099', debit_amount: 0, credit_amount: 1204.5 }),
+    ])
   })
 })
 

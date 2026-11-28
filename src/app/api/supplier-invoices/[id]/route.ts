@@ -6,6 +6,7 @@ import { deleteSupplierInvoice } from '@/lib/supplier-invoices/manage'
 import { updateSupplierInvoiceHeader } from '@/lib/supplier-invoices/update-header'
 import { sessionFailureResponse } from '@/lib/operations/session'
 import { unlinkablePaymentIds, type UnlinkablePaymentRow } from '@/lib/invoices/supplier-voucher-unlink'
+import { releasesItsUnderlag, releasesItsUnderlagNow } from '@/lib/supplier-invoices/released-underlag'
 
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'supplier_invoice.get',
@@ -46,11 +47,27 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   const payments = (invoice.payments ?? []) as Array<UnlinkablePaymentRow & Record<string, unknown>>
   const unlinkable = new Set(await unlinkablePaymentIds(supabase, companyId, invoice, payments))
 
+  // A credited invoice's underlag can be registered again
+  // (released-underlag.ts): the page starts from the inbox item it came from,
+  // while that item still names this invoice. A hint: the conversion decides.
+  let registerAgainInboxItemId: string | null = null
+  if (releasesItsUnderlag(invoice) && (await releasesItsUnderlagNow(supabase, companyId, invoice))) {
+    const { data: item } = await supabase
+      .from('invoice_inbox_items')
+      .select('id')
+      .eq('company_id', companyId)
+      .eq('created_supplier_invoice_id', id)
+      .limit(1)
+      .maybeSingle()
+    registerAgainInboxItemId = (item as { id: string } | null)?.id ?? null
+  }
+
   return NextResponse.json({
     data: {
       ...invoice,
       payments: payments.map((p) => (unlinkable.has(p.id) ? { ...p, can_unlink_voucher: true } : p)),
       credited_original: creditedOriginal,
+      register_again_inbox_item_id: registerAgainInboxItemId,
     },
   })
   },

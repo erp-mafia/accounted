@@ -47,7 +47,7 @@ vi.mock('@/lib/invoices/pdf-render-helpers', async () => {
   }
 })
 
-import { buildInvoicePaymentQrImage, countPdfPages, renderInvoicePdfBuffer } from '@/lib/invoices/render-invoice-pdf'
+import { buildInvoicePaymentQrImage, countPdfPages, renderInvoiceDocument, renderInvoicePdfBuffer } from '@/lib/invoices/render-invoice-pdf'
 
 const company = (overrides: Partial<CompanySettings> = {}) =>
   makeCompanySettings({
@@ -273,5 +273,54 @@ describe('countPdfPages', () => {
       company: company(),
     })
     expect(result.pageCount).toBe(2)
+  })
+})
+
+describe('renderInvoiceDocument: the payment area stays on the summary page', () => {
+  type Placement = { finePrintCanFollow?: boolean; summaryPage?: number; paymentAreaPage?: number }
+  const props = () => ({ invoice: sentInvoice(), customer: makeCustomer(), items: [], company: company() })
+
+  /** A template whose layout, as react-pdf would record it, is given per render. */
+  function laidOut(...renders: Array<Placement & { pdf: string }>) {
+    renders.forEach(({ pdf, ...placed }) => {
+      mocks.InvoicePDF.mockImplementationOnce((p: { placement?: Placement }) => {
+        Object.assign(p.placement ?? {}, placed)
+        return pdf
+      })
+    })
+    mocks.renderToBuffer.mockImplementation((element: string) => Promise.resolve(Buffer.from(element)))
+  }
+
+  it('renders once when the payment area is on the summary page', async () => {
+    laidOut({ pdf: 'one', finePrintCanFollow: true, summaryPage: 1, paymentAreaPage: 1 })
+    const result = await renderInvoiceDocument(props())
+    expect(result.buffer.toString()).toBe('one')
+    expect(result.paymentAreaPage).toBeUndefined()
+    expect(mocks.InvoicePDF).toHaveBeenCalledTimes(1)
+  })
+
+  it('renders once when the fine print travels with the payment area, wherever that lands', async () => {
+    laidOut({ pdf: 'short', finePrintCanFollow: false, summaryPage: 1, paymentAreaPage: 2 })
+    expect((await renderInvoiceDocument(props())).buffer.toString()).toBe('short')
+    expect(mocks.InvoicePDF).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the payment area on the summary page and moves a long fine print after it', async () => {
+    laidOut(
+      { pdf: 'pushed', finePrintCanFollow: true, summaryPage: 1, paymentAreaPage: 2 },
+      { pdf: 'moved', finePrintCanFollow: true, summaryPage: 1, paymentAreaPage: 1 },
+    )
+    const result = await renderInvoiceDocument(props())
+    expect(result).toEqual({ buffer: Buffer.from('moved'), paymentAreaPage: 1 })
+    expect(templateProps()).toMatchObject({ paymentAreaPage: 1 })
+  })
+
+  it('keeps the first render when the summary ends too low to hold the payment area', async () => {
+    laidOut(
+      { pdf: 'pushed', finePrintCanFollow: true, summaryPage: 1, paymentAreaPage: 2 },
+      { pdf: 'moved', finePrintCanFollow: true, summaryPage: 1, paymentAreaPage: 2 },
+    )
+    const result = await renderInvoiceDocument(props())
+    expect(result).toEqual({ buffer: Buffer.from('pushed') })
   })
 })
