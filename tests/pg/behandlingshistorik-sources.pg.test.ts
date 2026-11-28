@@ -292,7 +292,7 @@ describe('behandlingshistorik_sources', () => {
     // The rows come whole, as select * did.
     const row = got.find((r) => r.id === audit.lateReverse)!
     expect(Object.keys(row).sort()).toEqual(
-      ['action', 'actor_id', 'actor_label', 'actor_type', 'company_id', 'created_at', 'description', 'id', 'new_state', 'old_state', 'record_id', 'table_name', 'user_id'],
+      ['action', 'actor_id', 'actor_label', 'actor_type', 'company_id', 'created_at', 'description', 'id', 'new_state', 'old_state', 'record_id', 'table_name', 'trace_id', 'user_id'],
     )
     expect(row).toMatchObject({ action: 'REVERSE', table_name: 'journal_entries', record_id: e.e2, new_state: { status: 'reversed' } })
   })

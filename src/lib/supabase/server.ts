@@ -7,6 +7,7 @@ import {
 import { clientIpFromHeaders } from '@/lib/supabase/auth-forwarding'
 import { userSessionFetch } from '@/lib/supabase/auth-call-budget'
 import { withActorHeader } from '@/lib/supabase/actor-header'
+import { withTraceHeader } from '@/lib/supabase/trace-header'
 import { withEmptyPagePastEnd } from '@/lib/supabase/page-past-end'
 import { withShortGatewayErrorPage } from '@/lib/supabase/gateway-error-page'
 
@@ -47,7 +48,8 @@ const safeKey = isBuildPlaceholder ? 'placeholder' : key
  * (lib/supabase/auth-call-budget.ts). A counted page past the last row reads
  * as an empty page, not a 416 (lib/supabase/page-past-end.ts), and a
  * gateway's HTML error page as one short message
- * (lib/supabase/gateway-error-page.ts).
+ * (lib/supabase/gateway-error-page.ts). Its PostgREST requests carry the
+ * request's trace id, which the audit log keeps (lib/supabase/trace-header.ts).
  */
 export async function createClient() {
   const cookieStore = await cookies()
@@ -59,7 +61,7 @@ export async function createClient() {
     safeUrl,
     safeKey,
     {
-      global: { fetch: withShortGatewayErrorPage(withEmptyPagePastEnd(sessionFetch)) },
+      global: { fetch: withShortGatewayErrorPage(withEmptyPagePastEnd(withTraceHeader(sessionFetch))) },
       cookieOptions: supabaseAuthCookieOptions(requestProtocol),
       cookies: {
         getAll() {
@@ -103,10 +105,11 @@ export function createServiceClient() {
   // ensures the service role key is used for authorization,
   // properly bypassing RLS on every query.
   // Without a session the audit log reads who acts from the request's
-  // actor header (lib/supabase/actor-header.ts).
+  // actor header (lib/supabase/actor-header.ts); with or without one, it
+  // keeps the request's trace id (lib/supabase/trace-header.ts).
   return createServerClient(
     safeUrl,
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    { cookies: { getAll: () => [], setAll: () => {} }, global: { fetch: withShortGatewayErrorPage(withEmptyPagePastEnd(withActorHeader())) } }
+    { cookies: { getAll: () => [], setAll: () => {} }, global: { fetch: withShortGatewayErrorPage(withEmptyPagePastEnd(withActorHeader(withTraceHeader()))) } }
   )
 }

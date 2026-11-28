@@ -132,6 +132,14 @@ describe('classifyBankLineDecision', () => {
     expect(out.suggestions[1]).not.toHaveProperty('evidence')
   })
 
+  it('keeps the version of the counterpart rule that offered it', () => {
+    const out = classifyBankLineDecision({
+      proposals: [{ ...counterparty, seen_count: 4, rule_mode: 'propose', template_version: 3 }],
+      final: final(),
+    })
+    expect(out.suggestions[0].evidence).toEqual({ seen_count: 4, rule_mode: 'propose', template_version: 3 })
+  })
+
   it("bands the acted-on suggestion by the direct-booking policy, on the proposal as offered", () => {
     const on = { enabled: true }
     const habit = { ...counterparty, seen_count: 3, rule_mode: 'propose' as const }

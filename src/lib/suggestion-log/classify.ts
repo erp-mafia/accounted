@@ -61,6 +61,8 @@ export interface LoggedSuggestion {
 export interface SuggestionEvidence {
   seen_count?: number
   rule_mode?: string
+  /** The version of the counterpart rule that offered it (categorization_templates.version). */
+  template_version?: number
   rule_own?: boolean
   rule_requires_review?: boolean
   /** Set only when true: a person set the rule to always ask. */
@@ -142,6 +144,7 @@ function evidenceOf(p: BookingProposal): SuggestionEvidence | undefined {
   const evidence: SuggestionEvidence = {
     ...(p.seen_count !== undefined ? { seen_count: p.seen_count } : {}),
     ...(p.rule_mode !== undefined ? { rule_mode: p.rule_mode } : {}),
+    ...(p.template_version !== undefined ? { template_version: p.template_version } : {}),
     ...(p.rule_own !== undefined ? { rule_own: p.rule_own } : {}),
     ...(p.rule_requires_review !== undefined ? { rule_requires_review: p.rule_requires_review } : {}),
     ...(p.rule_always_review ? { rule_always_review: true as const } : {}),
