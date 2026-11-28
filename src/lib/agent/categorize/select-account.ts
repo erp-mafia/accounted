@@ -140,6 +140,12 @@ export interface AccountCandidate {
   /** Human descriptor shown to the model, e.g. 'Förbrukningsinventarier'. */
   label: string
   vatTreatment: VatTreatment | null
+  /**
+   * The candidate's moms is unknown (a learned counterpart's moms of no one
+   * rate, vat_unknown): its null treatment is no reading of none, and a pick
+   * of it books only through a review that states the underlag's moms.
+   */
+  vatUnknown?: boolean
   source: 'counterparty_template' | 'mapping_rule' | 'history' | 'pattern'
   /** Deterministic confidence in [0,1]. */
   confidence: number

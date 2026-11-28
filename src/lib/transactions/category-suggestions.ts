@@ -1,6 +1,7 @@
 import { suggestCategory } from '@/lib/tax/expense-warnings'
 import { getExpenseAccountForCategory } from '@/lib/bookkeeping/category-mapping'
 import {
+  reviewsUnknownVat,
   namesCounterparty,
   normalizeCounterpartyName,
   formatCounterpartyName,
@@ -8,10 +9,11 @@ import {
   toCounterpartyTemplateId,
 } from '@/lib/bookkeeping/counterparty-templates'
 import { BOOKING_TEMPLATES, findMatchingTemplates, getTemplateById, templateAppliesToForm, type BookingTemplate } from '@/lib/bookkeeping/booking-templates'
-import { proposalFromTemplate, type BookingProposal } from '@/lib/bookkeeping/proposal'
+import { accountProposal, categoryForAccount, proposalFromTemplate, slateAccount, withUnknownVat, type BookingProposal } from '@/lib/bookkeeping/proposal'
 import { isSkatteverketPayment } from '@/lib/bookkeeping/skatteverket-payment'
 import { isCashLedger, mappingRuleAccount } from '@/lib/bookkeeping/bank-leg'
 import { ruleReviewFlags } from './direct-booking'
+import type { VatRegistration } from '@/lib/bookkeeping/vat-registration'
 import type {
   Transaction,
   TransactionCategory,
@@ -463,21 +465,89 @@ function templateForAccount(account: string, direction: 'expense' | 'income', en
 export function buildCounterpartySuggestion(
   template: CategorizationTemplate,
   confidence: number,
-  opts: { directionMismatch?: boolean } = {},
+  opts: {
+    directionMismatch?: boolean
+    /** The row's signed amount: a template with unknown moms is proposed on its account in the row's direction. */
+    amount?: number
+    entityType?: EntityType
+    vatRegistered?: VatRegistration
+  } = {},
 ): SuggestedTemplate {
-  const proposal = counterpartyProposal(template, confidence)
+  if (opts.amount !== undefined && reviewsUnknownVat(template, opts.vatRegistered)) {
+    return unknownVatProposal(template, confidence, opts.amount, opts.entityType, opts.directionMismatch)
+  }
+  const proposal = counterpartyProposal(template, confidence, opts.vatRegistered)
   if (!opts.directionMismatch) return proposal
   return {
     ...proposal,
     debit_account: proposal.credit_account,
     credit_account: proposal.debit_account,
-    description_sv: `${template.occurrence_count} tidigare bokföringar åt andra hållet: trolig återbetalning`,
+    description_sv: refundDescription(template),
     requires_review: true,
     direction_mismatch: true,
   }
 }
 
-function counterpartyProposal(template: CategorizationTemplate, confidence: number): SuggestedTemplate {
+/**
+ * A learned counterpart whose moms is no one rate (reviewsUnknownVat), as the
+ * booking on its account the review books with the underlag's moms
+ * (withUnknownVat). Its own replay books no moms line for that moms
+ * (buildMultiLineMappingResult skips a moms line without a rate), and the
+ * review of a template booking cannot state one: proposed as the template,
+ * Bokför booked the row without moms.
+ */
+function unknownVatProposal(
+  template: CategorizationTemplate,
+  confidence: number,
+  amount: number,
+  entityType?: EntityType,
+  directionMismatch?: boolean,
+): SuggestedTemplate {
+  const learned = counterpartyProposal(template, confidence)
+  const account = slateAccount(learned)
+  const proposal = accountProposal({
+    id: learned.template_id,
+    source: 'counterparty',
+    account,
+    label: learned.name_sv,
+    category: categoryForAccount(account, entityType, template.category),
+    vat_treatment: null,
+    amount,
+    confidence,
+    description: learned.description_sv,
+  })
+  return withUnknownVat({
+    ...proposal,
+    seen_count: learned.seen_count,
+    rule_mode: learned.rule_mode,
+    ...ruleReviewFlags(template),
+    group: 'counterparty',
+    risk_level: learned.risk_level,
+    default_dimensions: learned.default_dimensions,
+    // The account books in the row's direction already; the refund is said.
+    ...(directionMismatch
+      ? {
+          description_sv: refundDescription(template),
+          direction_mismatch: true,
+        }
+      : {}),
+  })
+}
+
+/** What a learned counterpart says of a row that moves against its direction. */
+function refundDescription(template: Pick<CategorizationTemplate, 'occurrence_count'>): string {
+  return `${template.occurrence_count} tidigare bokföringar åt andra hållet: trolig återbetalning`
+}
+
+function counterpartyProposal(
+  template: CategorizationTemplate,
+  confidence: number,
+  vatRegistered?: VatRegistration,
+): SuggestedTemplate {
+  // Moms of no one rate (reviewsUnknownVat): the template books none of its
+  // own, so the underlag's moms is stated in a review, never assumed to be
+  // none. A company known not to be VAT-registered books no moms at all.
+  const vatUnknown = reviewsUnknownVat(template, vatRegistered)
   return {
     template_id: toCounterpartyTemplateId(template.id),
     source: 'counterparty',
@@ -493,12 +563,13 @@ function counterpartyProposal(template: CategorizationTemplate, confidence: numb
     confidence,
     description_sv: `${template.occurrence_count} tidigare bokföringar`,
     risk_level: 'NONE',
-    requires_review: false,
+    requires_review: vatUnknown,
+    ...(vatUnknown ? { vat_unknown: true } : {}),
     line_pattern: template.line_pattern ?? null,
     // Single-line templates book net expense + input VAT from this treatment
     // (buildMappingResultFromCounterpartyTemplate); the review dialog needs it
     // to preview the same verifikation.
-    vat_treatment: template.vat_treatment ?? null,
+    vat_treatment: template.vat_treatment === 'unknown' ? null : (template.vat_treatment ?? null),
     default_dimensions:
       template.default_dimensions && Object.keys(template.default_dimensions).length > 0
         ? template.default_dimensions

@@ -373,15 +373,41 @@ describe('categorizeTransaction: after the booking', () => {
       expect.objectContaining({ id: TX_ID }),
       expect.objectContaining({ debit_account: '5410' }),
       'user_approved',
-      { bookedOnTemplateId: 'tmpl-1' },
+      // The company's registration rides along: a booking without moms
+      // corrects a rated template only for a VAT-registered company.
+      { bookedOnTemplateId: 'tmpl-1', vatRegistered: true },
     )
+  })
+
+  it('refuses to book a template whose moms is unknown as the template: its replay has no moms line for it', async () => {
+    const template = makeCategorizationTemplate({
+      id: 'tmpl-1',
+      company_id: COMPANY_ID,
+      debit_account: '5410',
+      credit_account: '1930',
+      vat_treatment: 'unknown',
+      vat_account: '2641',
+    })
+    const { supabase } = ledger({ categorization_templates: { data: template, error: null } })
+
+    const outcome = await categorizeTransaction(
+      supabase as never,
+      'user-1',
+      COMPANY_ID,
+      TX_ID,
+      { is_business: true, counterparty_template_id: 'tmpl-1' },
+      live,
+    )
+
+    expect(outcome).toMatchObject({ ok: false, code: 'TX_CATEGORIZE_TEMPLATE_VAT_UNKNOWN' })
+    expect(createTxJE).not.toHaveBeenCalled()
   })
 
   it('names no template to the learner for a category booking', async () => {
     const booked = await categorizeTransaction(ledger().supabase as never, 'user-1', COMPANY_ID, TX_ID, business, live)
 
     expect(booked.ok).toBe(true)
-    expect(vi.mocked(upsertCounterpartyTemplate).mock.calls[0]?.[5]).toEqual({ bookedOnTemplateId: undefined })
+    expect(vi.mocked(upsertCounterpartyTemplate).mock.calls[0]?.[5]).toEqual({ bookedOnTemplateId: undefined, vatRegistered: true })
   })
 })
 

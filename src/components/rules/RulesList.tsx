@@ -55,6 +55,7 @@ export function oneClickText(t: (key: string, values?: Record<string, number>) =
     import: 'one_click_import',
     paused: 'one_click_paused',
     proposed: 'one_click_proposed',
+    vat_unknown: 'one_click_vat_unknown',
   }
   return t(keys[oneClick.kind])
 }

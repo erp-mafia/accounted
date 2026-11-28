@@ -388,6 +388,14 @@ export type VatTreatment =
   | 'exempt'            // VAT exempt
   | 'outside_scope'     // No Swedish VAT: not a supply made in Sweden (dröjsmålsränta on a räntefaktura, no ruta)
 
+/**
+ * The moms a learned counterparty template stores: a treatment, or 'unknown'
+ * for moms its bookings carried that is no one Swedish rate of the net (a
+ * mixed invoice). Such a template books no moms of its own and is never
+ * booked without a review (lib/bookkeeping/counterparty-templates.ts).
+ */
+export type TemplateVatTreatment = VatTreatment | 'unknown'
+
 // Accounting method (bokföringsmetod)
 export type AccountingMethod = 'accrual' | 'cash'
 
@@ -2764,7 +2772,7 @@ export interface CategorizationTemplate {
   counterparty_aliases: string[]
   debit_account: string
   credit_account: string
-  vat_treatment: VatTreatment | null
+  vat_treatment: TemplateVatTreatment | null
   vat_account: string | null
   category: TransactionCategory | null
   line_pattern: LinePatternEntry[] | null
