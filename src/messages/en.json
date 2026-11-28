@@ -1121,7 +1121,7 @@
     "client_id_label": "Client ID",
     "client_secret_label": "Client secret",
     "connect": "Connect store",
-    "connect_hint": "Create an app in Shopify's Dev Dashboard with the read_orders scope, install it on the store, and paste the app's client ID and client secret here. A scope added in a new app version only applies once the change is approved on the store. The credentials are stored encrypted and you can disconnect at any time, here or by removing the app in Shopify.",
+    "connect_hint": "Create an app in Shopify's Dev Dashboard with the read_orders scope, install it on the store, and paste the app's client ID and client secret here. If the store uses Shopify Payments, also give the app read_shopify_payments_payouts and read_shopify_payments_accounts, and each payout is proposed on its bank row. A scope added in a new app version only applies once the change is approved on the store. The credentials are stored encrypted and you can disconnect at any time, here or by removing the app in Shopify.",
     "unnamed_store": "Shopify store",
     "connected_toast_title": "Shopify connected",
     "connected_toast_description": "The store's paid orders and refunds are now fetched every night.",

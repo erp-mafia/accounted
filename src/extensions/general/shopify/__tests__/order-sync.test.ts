@@ -15,6 +15,11 @@ vi.mock('@/lib/webshop-orders/ingest', () => ({
   upsertWebshopOrders: vi.fn(),
 }))
 
+const syncShopifyPayouts = vi.fn()
+vi.mock('../lib/payout-sync', () => ({
+  syncShopifyPayouts: (...args: unknown[]) => syncShopifyPayouts(...args),
+}))
+
 import { upsertWebshopOrders } from '@/lib/webshop-orders/ingest'
 import type { WebshopOrderUpsert } from '@/lib/webshop-orders/types'
 import { encryptCredential } from '../lib/credentials'
@@ -196,6 +201,7 @@ beforeEach(() => {
   })
   listOrdersPage.mockResolvedValue(page([]))
   vi.mocked(upsertWebshopOrders).mockResolvedValue({ ...emptyUpsertResult })
+  syncShopifyPayouts.mockResolvedValue({ stored: 0, skipped: 0, scopeMissing: false })
 })
 
 describe('frozen external_id formats', () => {
@@ -969,6 +975,30 @@ describe('syncShopifyOrders', () => {
     )
   })
 
+  it('reads the store\'s payouts after its orders, for the same company and shop', async () => {
+    const { client } = makeSupabaseMock()
+    syncShopifyPayouts.mockResolvedValueOnce({ stored: 2, skipped: 1, scopeMissing: false })
+    const summary = await syncShopifyOrders(client, makeConnection())
+    expect(summary.payouts).toEqual({ stored: 2, skipped: 1, scopeMissing: false })
+    expect(syncShopifyPayouts).toHaveBeenCalledWith(
+      client,
+      { shopDomain: 'minbutik.myshopify.com', accessToken: 'token-1' },
+      expect.objectContaining({ companyId: 'company-1', userId: 'user-1', shopScope: 'minbutik.myshopify.com' }),
+      expect.anything(),
+    )
+  })
+
+  it('keeps the order feed when payouts cannot be read, and never revokes for them', async () => {
+    const { client, updates } = makeSupabaseMock()
+    listOrdersPage.mockResolvedValueOnce(page([makeOrder()]))
+    syncShopifyPayouts.mockRejectedValueOnce(new Error('REVOKED'))
+    const summary = await syncShopifyOrders(client, makeConnection())
+    expect(summary.revoked).toBeFalsy()
+    expect(summary.fetched).toBe(1)
+    expect(summary.payouts).toBeUndefined()
+    expect(updates.find((u) => u.table === 'shopify_connections' && u.values.status === 'revoked')).toBeUndefined()
+  })
+
   it('stops before fetching when the deadline is already reached', async () => {
     const { client } = makeSupabaseMock()
     const summary = await syncShopifyOrders(
@@ -979,6 +1009,7 @@ describe('syncShopifyOrders', () => {
     )
     expect(summary.deadlineReached).toBe(true)
     expect(listOrdersPage).not.toHaveBeenCalled()
+    expect(syncShopifyPayouts).not.toHaveBeenCalled()
   })
 
   it('stops between pages on deadline with the processed pages cursored', async () => {

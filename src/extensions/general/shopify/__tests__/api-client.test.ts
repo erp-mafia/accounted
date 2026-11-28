@@ -4,6 +4,7 @@ import {
   exchangeAccessToken,
   shopifyGraphQL,
   listOrdersPage,
+  listPayoutsPage,
   isRevokedCredentialsError,
   testConnectionAndFetchShopInfo,
   fetchGrantedScopes,
@@ -533,5 +534,37 @@ describe('fetchGrantedScopes', () => {
 
     fetchMock.mockResolvedValueOnce(jsonResponse({}, 401))
     await expect(fetchGrantedScopes(SESSION)).resolves.toBeNull()
+  })
+})
+
+describe('listPayoutsPage', () => {
+  it('reads the payouts issued since a day, oldest first, one page at a time', async () => {
+    const node = { legacyResourceId: '1', issuedAt: '2026-11-04T10:00:00Z', status: 'PAID', transactionType: 'DEPOSIT', net: { amount: '10.00', currencyCode: 'SEK' }, summary: {} }
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ data: { shopifyPaymentsAccount: { payouts: { pageInfo: { hasNextPage: true, endCursor: 'c1' }, nodes: [node] } } } }),
+    )
+    const page = await listPayoutsPage(SESSION, { issuedOnOrAfter: '2026-10-24', after: null })
+    expect(page).toEqual({ kind: 'page', payouts: [node], hasNextPage: true, endCursor: 'c1' })
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1].body)) as { query: string; variables: Record<string, unknown> }
+    expect(body.query).toContain('sortKey: ISSUED_AT')
+    expect(body.variables).toMatchObject({ after: null, query: 'issued_at:>=2026-10-24' })
+  })
+
+  it('answers no_account for a store without Shopify Payments', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ data: { shopifyPaymentsAccount: null } }))
+    expect(await listPayoutsPage(SESSION, { issuedOnOrAfter: '2026-10-24', after: null })).toEqual({ kind: 'no_account' })
+  })
+
+  it('answers scope_missing, not revoked, when the app lacks the payout scopes', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ errors: [{ message: 'Access denied for shopifyPaymentsAccount field.', extensions: { code: 'ACCESS_DENIED' } }] }),
+    )
+    expect(await listPayoutsPage(SESSION, { issuedOnOrAfter: '2026-10-24', after: null })).toEqual({ kind: 'scope_missing' })
+  })
+
+  it('passes any other failure on', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({}, 401))
+    const error = await listPayoutsPage(SESSION, { issuedOnOrAfter: '2026-10-24', after: null }).catch((e) => e)
+    expect(isRevokedCredentialsError(error)).toBe(true)
   })
 })

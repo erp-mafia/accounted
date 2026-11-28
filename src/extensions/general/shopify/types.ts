@@ -158,3 +158,40 @@ export interface ShopifyShopInfo {
   /** ISO 4217 shop currency. */
   currency: string | null
 }
+
+/** A MoneyV2 the payout queries read. */
+export interface ShopifyMoney {
+  amount: string
+  currencyCode?: string
+}
+
+/**
+ * A Shopify Payments payout (ShopifyPaymentsPayout) with its summary per
+ * transaction type: gross and fee for charges, refunds, adjustments,
+ * reserved funds, retried payouts and advances. Read with
+ * read_shopify_payments_payouts (and read_shopify_payments_accounts for the
+ * account it hangs on); payout-sync.ts turns it into a payout record.
+ */
+export interface ShopifyPayout {
+  legacyResourceId: string
+  issuedAt: string
+  /** SCHEDULED, IN_TRANSIT, PAID, FAILED, CANCELED. */
+  status: string
+  /** DEPOSIT into the bank account, or WITHDRAWAL back to Shopify Payments. */
+  transactionType: string
+  net: Required<ShopifyMoney>
+  summary: {
+    adjustmentsFee: ShopifyMoney
+    adjustmentsGross: ShopifyMoney
+    advanceFees: ShopifyMoney
+    advanceGross: ShopifyMoney
+    chargesFee: ShopifyMoney
+    chargesGross: ShopifyMoney
+    refundsFee: ShopifyMoney
+    refundsFeeGross: ShopifyMoney
+    reservedFundsFee: ShopifyMoney
+    reservedFundsGross: ShopifyMoney
+    retriedPayoutsFee: ShopifyMoney
+    retriedPayoutsGross: ShopifyMoney
+  }
+}

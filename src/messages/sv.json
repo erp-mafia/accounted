@@ -1121,7 +1121,7 @@
     "client_id_label": "Klient-ID (client ID)",
     "client_secret_label": "Klienthemlighet (client secret)",
     "connect": "Anslut butik",
-    "connect_hint": "Skapa en app i Shopifys Dev Dashboard med behörigheten read_orders, installera den i butiken och klistra in appens klient-ID och klienthemlighet här. Lägger du till en behörighet i en ny appversion måste ändringen godkännas på butiken innan den gäller. Uppgifterna lagras krypterade och du kan när som helst koppla från här eller ta bort appen i Shopify.",
+    "connect_hint": "Skapa en app i Shopifys Dev Dashboard med behörigheten read_orders, installera den i butiken och klistra in appens klient-ID och klienthemlighet här. Använder butiken Shopify Payments: ge appen även read_shopify_payments_payouts och read_shopify_payments_accounts, så föreslås varje utbetalning på sin bankrad. Lägger du till en behörighet i en ny appversion måste ändringen godkännas på butiken innan den gäller. Uppgifterna lagras krypterade och du kan när som helst koppla från här eller ta bort appen i Shopify.",
     "unnamed_store": "Shopify-butik",
     "connected_toast_title": "Shopify anslutet",
     "connected_toast_description": "Butikens betalda ordrar och återbetalningar hämtas nu varje natt.",
