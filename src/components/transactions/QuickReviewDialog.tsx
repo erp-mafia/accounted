@@ -27,7 +27,7 @@ import { linkDocuments, formatFailedDocumentNames } from '@/lib/documents/link-d
 import { ChevronDownIcon } from '@/components/icons'
 import { resolveTemplateAccountsForEntity } from '@/lib/bookkeeping/proposal-lines'
 import type { ProposalLine } from '@/lib/bookkeeping/proposal-lines'
-import { accountProposal, booksSwedishInputVat, businessAccount, carriedCategory, categorizeBodyFor, inReverseChargeBox, PROPOSAL_REVERSE_CHARGE_KINDS, reverseChargeBoxDispute, reverseChargeBoxesOf, reverseChargeBoxNumber, reverseChargeKindOf, templateBehind, withAccount, withReverseChargeKind, type BookingProposal, type DisputedVat } from '@/lib/bookkeeping/proposal'
+import { accountProposal, withUnknownVat, booksSwedishInputVat, businessAccount, carriedCategory, categorizeBodyFor, inReverseChargeBox, PROPOSAL_REVERSE_CHARGE_KINDS, reverseChargeBoxDispute, reverseChargeBoxesOf, reverseChargeBoxNumber, reverseChargeKindOf, templateBehind, withAccount, withReverseChargeKind, type BookingProposal, type DisputedVat } from '@/lib/bookkeeping/proposal'
 import { booksReverseChargePurchase } from '@/lib/bookkeeping/category-mapping'
 import { DEFAULT_REVERSE_CHARGE_KIND, type ReverseChargeKind } from '@/lib/bookkeeping/vat-entries'
 import { vatCodeRuleForAccount } from '@/lib/bookkeeping/voucher-line-vat-code'
@@ -347,7 +347,7 @@ export default function QuickReviewDialog({
   const takeAssistantPick = useCallback((pick: AssistantPick, opts: { auto: boolean; fromDocument?: boolean }) => {
     setProposal((p) => {
       if (!opts.auto) setPrevious(p)
-      return accountProposal({
+      const taken = accountProposal({
         id: `assistant:${transaction?.id ?? ''}`,
         source: 'assistant',
         account: pick.account,
@@ -364,6 +364,8 @@ export default function QuickReviewDialog({
         amount: amountForLegs,
         has_underlag: opts.fromDocument || !!transaction?.document_id,
       })
+      // A pick whose moms is unknown stays the review of the underlag's moms.
+      return pick.vatUnknown ? withUnknownVat(taken) : taken
     })
   }, [amountForLegs, transaction?.id, transaction?.document_id])
 
@@ -1068,8 +1070,10 @@ export default function QuickReviewDialog({
               // and neither is a clearing: the till's record says the money
               // is already booked, so a read that books it as revenue only
               // offers its pick. Nor is a learned pair opened in its own box,
-              // which was a learned booking before it opened.
-              autoApply={!isTemplateBooking && !isPersonChoice(proposal) && !docRead && !boxDispute && !inOwnBox && proposal.source !== 'clearing'}
+              // which was a learned booking before it opened, nor a learned
+              // counterpart whose moms is unknown: its review states the
+              // underlag's moms, which a pick on its own would replace.
+              autoApply={!isTemplateBooking && !isPersonChoice(proposal) && !docRead && !boxDispute && !inOwnBox && proposal.source !== 'clearing' && !proposal.vat_unknown}
               onProposal={setAiProposal}
               onTake={takeAssistantPick}
             />

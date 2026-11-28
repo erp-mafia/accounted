@@ -9541,7 +9541,7 @@ export const tools: McpTool[] = [
         .from('open_bank_rows')
         .select(
           'id, date, description, amount, currency, merchant_name, reference, is_business, category, cash_account_id, ' +
-          'counterparty_org_number, instructed_amount, instructed_currency, balance_after, is_enriched, potential_match_method, ' +
+          'counterparty_org_number, billing_country, card_country, instructed_amount, instructed_currency, balance_after, is_enriched, potential_match_method, ' +
           'counterparty_account, counterparty_iban, original_description, external_id, provider_transaction_id, ' + SUGGESTION_POINTER_COLUMNS,
           { count: 'exact' },
         )
@@ -14275,7 +14275,12 @@ export const tools: McpTool[] = [
                 p.booking.kind === 'template'
                   ? templateSkattekontoAccount(businessAccount(p), skattekontoAccount)
                   : businessAccount(p),
-              vat_treatment: p.booking.kind === 'account' ? p.booking.vat_treatment : (p.vat_treatment ?? null),
+              // A counterpart whose moms is no one rate says so, never
+              // 'exempt': categorize_args is then null, and the agent books
+              // the underlag's moms itself.
+              vat_treatment: p.vat_unknown
+                ? 'unknown'
+                : p.booking.kind === 'account' ? p.booking.vat_treatment : (p.vat_treatment ?? null),
               categorize_args: categorizeArgsFor(p, entityType, skattekontoAccount),
             }
           })
@@ -14304,8 +14309,9 @@ export const tools: McpTool[] = [
         }
       }
 
-      // A Stripe sale carries neither moms nor the buyer's country: it leads
-      // with how Stripe sales are booked, the verifikat that booked the
+      // A Stripe sale carries no moms (the buyer's countries, when Stripe
+      // states them, ride on the row apart): it leads with how Stripe sales
+      // are booked, the verifikat that booked the
       // latest one, and where the moms comes from (./stripe-sales.ts). A
       // failed read of that verifikat is logged and only leaves it out.
       const stripeSales = (transactions as Transaction[]).filter(isStripeSaleRow)

@@ -9,7 +9,8 @@ import AgentAvatar from '@/components/agent/AgentAvatar'
 import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
 import { useAssistantReadsAvailable } from '@/contexts/CompanyContext'
 import { getAccountName } from '@/lib/bookkeeping/client-account-names'
-import { firstSentence, type AssistantRead } from '@/lib/agent/categorize/read-shape'
+import { firstSentence, readLeavesMomsUnknown, type AssistantRead } from '@/lib/agent/categorize/read-shape'
+import { UNKNOWN_VAT_REVIEW_TREATMENT } from '@/lib/bookkeeping/proposal'
 import type { ReverseChargeKind } from '@/lib/bookkeeping/vat-entries'
 import type { TransactionCategory, VatTreatment } from '@/types'
 
@@ -37,6 +38,8 @@ export interface AssistantPick {
   reverseChargeKind?: ReverseChargeKind | null
   category: TransactionCategory | null
   label: string
+  /** The pick is a candidate whose moms is unknown (readLeavesMomsUnknown): it books with the underlag's moms. */
+  vatUnknown?: boolean
 }
 
 type State =
@@ -69,9 +72,13 @@ interface Props {
 export function pickFromRead(read: AssistantRead): AssistantPick | null {
   if (!read.account) return null
   const label = read.candidates.find((c) => c.account === read.account)?.label ?? getAccountName(read.account)
+  // Unknown moms is no reading of none: the pick keeps the rate its review
+  // replaces with the underlag's moms.
+  const vatUnknown = readLeavesMomsUnknown(read)
   return {
     account: read.account,
-    vat: read.vat_treatment ?? 'none',
+    vat: vatUnknown ? UNKNOWN_VAT_REVIEW_TREATMENT : (read.vat_treatment ?? 'none'),
+    ...(vatUnknown ? { vatUnknown: true } : {}),
     reverseChargeKind: read.reverse_charge_kind ?? null,
     category: read.category,
     label,

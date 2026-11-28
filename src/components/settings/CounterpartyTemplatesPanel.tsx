@@ -48,6 +48,7 @@ export function CounterpartyTemplatesPanel() {
     reverse_charge: t('vat_reverse_charge'),
     export: t('vat_export'),
     exempt: t('vat_exempt'),
+    unknown: t('vat_unknown'),
   }
 
   const [templates, setTemplates] = useState<CategorizationTemplate[]>([])

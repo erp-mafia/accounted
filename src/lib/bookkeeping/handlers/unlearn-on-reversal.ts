@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { unlearnCounterpartyTemplate, type UnlearnOutcome } from '@/lib/bookkeeping/counterparty-templates'
+import { readVatRegistration } from '@/lib/bookkeeping/vat-registration'
 import { eventBus } from '@/lib/events/bus'
 import { isMomsAccount } from '@/lib/reports/vat-declaration'
 import type { EventPayload } from '@/lib/events/types'
@@ -166,5 +167,7 @@ export async function unlearnReversedBankBooking(
     if (error) throw new Error(`reversed bank booking: verifikat lines read failed: ${error.message}`)
     lines = (data ?? []) as VerifikatLine[]
   }
-  return unlearnCounterpartyTemplate(supabase, companyId, transaction, lines)
+  // Registered or not decides whether a booking without moms says anything
+  // against the moms the template holds (contradictsLearnedMoms).
+  return unlearnCounterpartyTemplate(supabase, companyId, transaction, lines, await readVatRegistration(supabase, companyId))
 }

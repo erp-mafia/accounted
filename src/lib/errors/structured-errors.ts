@@ -1154,6 +1154,13 @@ const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
     message_en:
       "The document's VAT cannot be used for this booking: it is more than 25 % VAT on the amount, or the booking has no rate-based VAT line. Book with the proposal's VAT instead, or choose Edit lines and enter the VAT yourself.",
   },
+  TX_CATEGORIZE_TEMPLATE_VAT_UNKNOWN: {
+    httpStatus: 400,
+    message_sv:
+      'Mallens moms är okänd: tidigare bokningar hade moms som inte är 25, 12 eller 6 procent av beloppet. Bokför på kontot med momsen som underlaget anger.',
+    message_en:
+      "The learned template's VAT is unknown: earlier bookings carried VAT that is not 25, 12 or 6 % of the amount. Book on its account (account_override with a category) with vat_treatment and the document's vat_amount instead of counterparty_template_id.",
+  },
   TRANSACTION_TITLE_LOCKED: {
     httpStatus: 409,
     message_sv:

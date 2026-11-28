@@ -4,7 +4,7 @@ import { useEffect, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import Link from 'next/link'
 import useSWR from 'swr'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { ChevronDownIcon, XMarkIcon, type Icon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
@@ -93,6 +93,7 @@ export function TransactionDrawer({
   onClose,
 }: TransactionDrawerProps) {
   const t = useTranslations('tx_inbox_card')
+  const locale = useLocale()
   const giroText = useGiroText()
   const isIncome = transaction.amount > 0
   // Pointer plus junction anchors: a row split over several verifikat has
@@ -132,6 +133,19 @@ export function TransactionDrawer({
   // rate (the bank's own on a SEK account, else the amounts' ratio: there
   // exchange_rate is the Riksbanken SEK rate), and the balance after.
   const orgNumber = transaction.counterparty_org_number ? formatOrgNumberDisplay(transaction.counterparty_org_number) : null
+  // A Stripe sale's two countries, by billing address and by card, each on
+  // its own line: they can differ, and the moms needs to see when they do.
+  const country = (code: string | null | undefined): string | null => {
+    if (!code) return null
+    try {
+      return `${new Intl.DisplayNames([locale], { type: 'region' }).of(code) ?? code} (${code})`
+    } catch {
+      // A code the runtime cannot name still shows, as the code itself.
+      return code
+    }
+  }
+  const billingCountry = country(transaction.billing_country)
+  const cardCountry = country(transaction.card_country)
   const instructed =
     transaction.instructed_amount != null && transaction.instructed_currency && transaction.instructed_currency !== transaction.currency
       ? { amount: transaction.instructed_amount, currency: transaction.instructed_currency }
@@ -314,7 +328,7 @@ export function TransactionDrawer({
 
         {/* Only when there is a fact to show: a heading over nothing reads as
             something missing. */}
-        {(accountLabel || originalName || transaction.original_description || giroCounterparty || counterpartyIban || methodLabel || booked || skvCounterpartDate || isPreMigration || extra || orgNumber || instructed || balanceAfter || (transaction.currency !== 'SEK' && transaction.amount_sek != null)) && (
+        {(accountLabel || originalName || transaction.original_description || giroCounterparty || counterpartyIban || methodLabel || booked || skvCounterpartDate || isPreMigration || extra || orgNumber || billingCountry || cardCountry || instructed || balanceAfter || (transaction.currency !== 'SEK' && transaction.amount_sek != null)) && (
         <div className="px-5 py-3">
           <p className="mb-1.5 text-xs font-semibold text-muted-foreground">{t('drawer_details')}</p>
           <dl className="grid grid-cols-[110px_1fr] gap-x-3 gap-y-1.5 text-xs">
@@ -338,6 +352,8 @@ export function TransactionDrawer({
               ? fact(t('drawer_amount_fx'), <span className="tabular-nums">{formatCurrency(transaction.amount_sek)}</span>)
               : null}
             {fact(t('drawer_org_number'), orgNumber)}
+            {fact(t('drawer_billing_country'), billingCountry)}
+            {fact(t('drawer_card_country'), cardCountry)}
             {instructed
               ? fact(
                   t('drawer_instructed_amount'),

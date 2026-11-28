@@ -106,6 +106,12 @@ describe('ruleOneClick: the Ett klick column (accounted#130)', () => {
     expect(ruleOneClick({ ...rule, mode: 'proposed' }, ON)).toEqual({ kind: 'proposed' })
   })
 
+  it('says no for a rule whose moms is unknown, however often it was booked', () => {
+    expect(ruleOneClick({ ...rule, vat_treatment: 'unknown' }, ON)).toEqual({ kind: 'vat_unknown' })
+    expect(ruleOneClick({ ...rule, mode: 'auto', occurrence_count: 40, vat_treatment: 'unknown' }, ON)).toEqual({ kind: 'vat_unknown' })
+    expect(ruleOneClick({ ...rule, vat_treatment: 'standard_25' }, ON)).toEqual({ kind: 'yes' })
+  })
+
   it('agrees with the 3 the transactions page books after, not the 5 the old help text said', () => {
     // A confirmed rule seen three times books with one click; the autopilot's five is another step.
     expect(ruleOneClick({ ...rule, occurrence_count: 3 }, ON).kind).toBe('yes')
