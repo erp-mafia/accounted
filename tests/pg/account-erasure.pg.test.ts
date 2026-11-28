@@ -208,6 +208,7 @@ const RETAINED = new Set([
   'pos_sales_days.booked_by',
   'webshop_orders.manually_booked_by',
   'webshop_orders.user_id',
+  'webshop_payouts.user_id',
   // Payroll, expenses and filings
   'agi_declarations.submitted_by',
   'agi_declarations.user_id',
