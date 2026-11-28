@@ -1,7 +1,7 @@
 import { suggestCategory } from '@/lib/tax/expense-warnings'
 import { getExpenseAccountForCategory } from '@/lib/bookkeeping/category-mapping'
 import {
-  hasUnknownVat,
+  reviewsUnknownVat,
   namesCounterparty,
   normalizeCounterpartyName,
   formatCounterpartyName,
@@ -9,10 +9,11 @@ import {
   toCounterpartyTemplateId,
 } from '@/lib/bookkeeping/counterparty-templates'
 import { BOOKING_TEMPLATES, findMatchingTemplates, getTemplateById, templateAppliesToForm, type BookingTemplate } from '@/lib/bookkeeping/booking-templates'
-import { proposalFromTemplate, type BookingProposal } from '@/lib/bookkeeping/proposal'
+import { accountProposal, categoryForAccount, proposalFromTemplate, slateAccount, withUnknownVat, type BookingProposal } from '@/lib/bookkeeping/proposal'
 import { isSkatteverketPayment } from '@/lib/bookkeeping/skatteverket-payment'
 import { isCashLedger, mappingRuleAccount } from '@/lib/bookkeeping/bank-leg'
 import { ruleReviewFlags } from './direct-booking'
+import type { VatRegistration } from '@/lib/bookkeeping/vat-registration'
 import type {
   Transaction,
   TransactionCategory,
@@ -464,9 +465,18 @@ function templateForAccount(account: string, direction: 'expense' | 'income', en
 export function buildCounterpartySuggestion(
   template: CategorizationTemplate,
   confidence: number,
-  opts: { directionMismatch?: boolean } = {},
+  opts: {
+    directionMismatch?: boolean
+    /** The row's signed amount: a template with unknown moms is proposed on its account in the row's direction. */
+    amount?: number
+    entityType?: EntityType
+    vatRegistered?: VatRegistration
+  } = {},
 ): SuggestedTemplate {
-  const proposal = counterpartyProposal(template, confidence)
+  if (opts.amount !== undefined && reviewsUnknownVat(template, opts.vatRegistered)) {
+    return unknownVatProposal(template, confidence, opts.amount, opts.entityType)
+  }
+  const proposal = counterpartyProposal(template, confidence, opts.vatRegistered)
   if (!opts.directionMismatch) return proposal
   return {
     ...proposal,
@@ -478,10 +488,53 @@ export function buildCounterpartySuggestion(
   }
 }
 
-function counterpartyProposal(template: CategorizationTemplate, confidence: number): SuggestedTemplate {
-  // Moms of no one rate (hasUnknownVat): the template books none of its own,
-  // so the underlag's moms is stated in a review, never assumed to be none.
-  const vatUnknown = hasUnknownVat(template)
+/**
+ * A learned counterpart whose moms is no one rate (reviewsUnknownVat), as the
+ * booking on its account the review books with the underlag's moms
+ * (withUnknownVat). Its own replay books no moms line for that moms
+ * (buildMultiLineMappingResult skips a moms line without a rate), and the
+ * review of a template booking cannot state one: proposed as the template,
+ * Bokför booked the row without moms.
+ */
+function unknownVatProposal(
+  template: CategorizationTemplate,
+  confidence: number,
+  amount: number,
+  entityType?: EntityType,
+): SuggestedTemplate {
+  const learned = counterpartyProposal(template, confidence)
+  const account = slateAccount(learned)
+  const proposal = accountProposal({
+    id: learned.template_id,
+    source: 'counterparty',
+    account,
+    label: learned.name_sv,
+    category: categoryForAccount(account, entityType, template.category),
+    vat_treatment: null,
+    amount,
+    confidence,
+    description: learned.description_sv,
+  })
+  return withUnknownVat({
+    ...proposal,
+    seen_count: learned.seen_count,
+    rule_mode: learned.rule_mode,
+    ...ruleReviewFlags(template),
+    group: 'counterparty',
+    risk_level: learned.risk_level,
+    default_dimensions: learned.default_dimensions,
+  })
+}
+
+function counterpartyProposal(
+  template: CategorizationTemplate,
+  confidence: number,
+  vatRegistered?: VatRegistration,
+): SuggestedTemplate {
+  // Moms of no one rate (reviewsUnknownVat): the template books none of its
+  // own, so the underlag's moms is stated in a review, never assumed to be
+  // none. A company known not to be VAT-registered books no moms at all.
+  const vatUnknown = reviewsUnknownVat(template, vatRegistered)
   return {
     template_id: toCounterpartyTemplateId(template.id),
     source: 'counterparty',

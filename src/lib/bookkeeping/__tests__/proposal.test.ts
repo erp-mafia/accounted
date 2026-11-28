@@ -299,6 +299,8 @@ describe('categorizeArgsFor', () => {
       description_sv: '', risk_level: 'NONE', requires_review: true, vat_treatment: null, vat_unknown: true, seen_count: 7,
     }
     expect(categorizeArgsFor(p)).toBeNull()
+    // A box the assistant's read disputes is still said after the unknown moms.
+    expect(whyTextSv({ ...p, read_reverse_charge_kind: 'non_eu_services', line_pattern: [{ account: '2641', type: 'vat', side: 'debit' } as never] })).toContain('assistentens läsning säger att säljaren finns utomlands')
     expect(categorizeArgsFor({ ...p, vat_unknown: undefined, requires_review: false })).toMatchObject({ account_override: '5010', vat_treatment: 'exempt' })
     expect(whyTextSv(p)).toBe(
       'Bokförd så 7 gånger tidigare, men momsen på motpartens bokningar är inte 25, 12 eller 6 % av beloppet och går inte att föreslå: bokför momsen som underlaget anger (vat_amount), inte som momsfri',

@@ -3,7 +3,7 @@ import { gatherCandidates } from './candidates'
 import { gatherUnderlag } from './underlag'
 import { selectAccount, type AccountCandidate, type AccountSelection } from './select-account'
 import { getAccountName } from '@/lib/bookkeeping/client-account-names'
-import { accountProposal, categoryForAccount, type BookingProposal } from '@/lib/bookkeeping/proposal'
+import { accountProposal, categoryForAccount, withUnknownVat, type BookingProposal } from '@/lib/bookkeeping/proposal'
 export { categoryForAccount }
 import { isSandboxCompany } from '@/lib/sandbox/guard'
 import { hasCapability } from '@/lib/entitlements/has-capability'
@@ -154,9 +154,14 @@ export function assistantSuggestionFromRead(
 ): BookingProposal | null {
   if (!read.account) return null
   const account = read.account
-  const label = read.candidates.find((c) => c.account === account)?.label ?? getAccountName(account)
+  const candidate = read.candidates.find((c) => c.account === account)
+  const label = candidate?.label ?? getAccountName(account)
   const category = categoryForAccount(account, entityType, read.category)
-  return accountProposal({
+  // A pick of a candidate whose moms is unknown, with nothing read in its
+  // place (no reverse charge, no purchase abroad): the review states the
+  // underlag's moms. Passed on as null it was read as 'exempt' below.
+  const vatUnknown = read.from_candidate && candidate?.vatUnknown === true && read.vat_treatment == null
+  const proposal = accountProposal({
     id: `assistant:${tx.id}`,
     source: 'assistant',
     account,
@@ -173,6 +178,7 @@ export function assistantSuggestionFromRead(
     description: firstSentence(read.reasoning),
     has_underlag: read.has_underlag,
   })
+  return vatUnknown ? withUnknownVat(proposal) : proposal
 }
 
 export interface PlannedRead {

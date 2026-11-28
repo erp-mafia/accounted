@@ -69,6 +69,33 @@ describe('buildCounterpartySuggestion', () => {
     expect(s.requires_review).toBe(true)
   })
 
+  it('on a row, a template whose moms is unknown is proposed on its account, so the review books the underlag\'s moms', () => {
+    const s = buildCounterpartySuggestion(
+      makeTemplate({ debit_account: '5010', vat_treatment: 'unknown', vat_account: '2641', occurrence_count: 7, mode: 'auto' }),
+      0.9,
+      { amount: -725, entityType: 'aktiebolag', vatRegistered: true },
+    )
+    // An account booking: the dialog shows the moms and offers the
+    // document's (applyVatAmountOverride needs a rate-based line); the
+    // template's own replay has no moms line for unknown moms.
+    expect(s.booking).toMatchObject({ kind: 'account', account: '5010', vat_treatment: 'standard_25' })
+    expect(s).toMatchObject({ source: 'counterparty', vat_unknown: true, requires_review: true, seen_count: 7, debit_account: '5010' })
+    expect(categorizeBodyFor(s)).toMatchObject({ account_override: '5010', vat_treatment: 'standard_25' })
+    expect(categorizeBodyFor(s)).not.toHaveProperty('counterparty_template_id')
+    expect(categorizeBodyFor(s, { vatAmount: 125 })).toMatchObject({ vat_amount: 125 })
+  })
+
+  it('a company known not to be VAT-registered books no moms: its unknown-moms template stays the template, unflagged', () => {
+    const s = buildCounterpartySuggestion(
+      makeTemplate({ debit_account: '5010', vat_treatment: 'unknown', vat_account: '2641' }),
+      0.9,
+      { amount: -725, vatRegistered: false },
+    )
+    expect(s.booking.kind).toBe('counterparty')
+    expect(s).not.toHaveProperty('vat_unknown')
+    expect(s.requires_review).toBe(false)
+  })
+
   it('a template without moms, or at a rate, carries no unknown flag', () => {
     expect(buildCounterpartySuggestion(makeTemplate(), 0.9)).not.toHaveProperty('vat_unknown')
     expect(buildCounterpartySuggestion(makeTemplate({ vat_treatment: 'standard_25', vat_account: '2641' }), 0.9)).not.toHaveProperty('vat_unknown')

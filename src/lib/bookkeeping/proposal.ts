@@ -272,6 +272,32 @@ export function accountProposal(input: {
   }
 }
 
+/**
+ * The rate a proposal whose moms is unknown (vat_unknown) opens its review
+ * with. Not a reading of the moms: a rate-based moms line is what the review
+ * replaces with the underlag's moms (applyVatAmountOverride), and the person
+ * states the moms before it books (booksWithoutReview). Proposed without
+ * one, the row booked as if it carried no moms.
+ */
+export const UNKNOWN_VAT_REVIEW_TREATMENT = 'standard_25' as const satisfies VatTreatment
+
+/**
+ * An account proposal whose moms is unknown: booked through a review with the
+ * underlag's moms (UNKNOWN_VAT_REVIEW_TREATMENT), never with none and never
+ * without a person.
+ */
+export function withUnknownVat(p: BookingProposal): BookingProposal {
+  if (p.booking.kind !== 'account') return p
+  const { reverse_charge_kind: _box, ...booking } = p.booking
+  return {
+    ...p,
+    booking: { ...booking, vat_treatment: UNKNOWN_VAT_REVIEW_TREATMENT },
+    vat_treatment: UNKNOWN_VAT_REVIEW_TREATMENT,
+    requires_review: true,
+    vat_unknown: true,
+  }
+}
+
 /** The basis box travels only with the treatment it belongs to. */
 function kindFor(
   vat: VatTreatment,
@@ -719,10 +745,10 @@ export function clearingReasonSv(e: ClearingEvidence): string {
 
 /** The why in Swedish, for surfaces without the UI's message catalog (the MCP tool). */
 export function whyTextSv(p: BookingProposal): string {
-  const why = sourceWhySv(p)
-  if (p.vat_unknown) {
-    return `${why}, men momsen på motpartens bokningar är inte 25, 12 eller 6 % av beloppet och går inte att föreslå: bokför momsen som underlaget anger (vat_amount), inte som momsfri`
-  }
+  // Unknown moms is said first; a box the read disputes is said after it.
+  const why = p.vat_unknown
+    ? `${sourceWhySv(p)}, men momsen på motpartens bokningar är inte 25, 12 eller 6 % av beloppet och går inte att föreslå: bokför momsen som underlaget anger (vat_amount), inte som momsfri`
+    : sourceWhySv(p)
   const box = reverseChargeBoxDispute(p)
   if (!box) {
     return p.reverse_charge_box_unconfirmed

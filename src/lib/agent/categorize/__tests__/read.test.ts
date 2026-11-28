@@ -76,6 +76,24 @@ describe('assistantSuggestionFromRead', () => {
       description_sv: 'Stripe fakturerar från Irland.',
     })
   })
+  it('a pick of a candidate whose moms is unknown is reviewed with the underlag\'s moms, never read as exempt', () => {
+    const s = assistantSuggestionFromRead(
+      read({
+        account: '5010',
+        vat_treatment: null,
+        reverse_charge: false,
+        from_candidate: true,
+        confidence: 0.9,
+        has_underlag: true,
+        candidates: [{ account: '5010', label: 'Lokalhyra', vatTreatment: null, vatUnknown: true, source: 'counterparty_template', confidence: 0.9 }],
+      }),
+      { id: 'tx-1', amount: -725 },
+      'aktiebolag',
+    )
+    expect(s).toMatchObject({ vat_unknown: true, requires_review: true, booking: { kind: 'account', account: '5010', vat_treatment: 'standard_25' } })
+    expect(s?.booking).not.toMatchObject({ vat_treatment: 'exempt' })
+  })
+
   it('puts an income account on the credit side', () => {
     const s = assistantSuggestionFromRead(read({ account: '3001', vat_treatment: 'standard_25', candidates: [] }), { id: 'tx-1', amount: 1000 })
     expect(s).toMatchObject({ debit_account: '1930', credit_account: '3001', booking: { kind: 'account', account: '3001', category: 'income_services' } })

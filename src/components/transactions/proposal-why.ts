@@ -18,8 +18,9 @@ export function useProposalWhy(): (p: BookingProposal) => string {
   return (p) => {
     const why = whyKeyFor(p)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const text = t(why.key as any, why.values)
-    if (p.vat_unknown) return `${text} · ${t('rec_why_vat_unknown')}`
+    const base = t(why.key as any, why.values)
+    // Unknown moms first; a disputed or unconfirmed box still follows it.
+    const text = p.vat_unknown ? `${base} · ${t('rec_why_vat_unknown')}` : base
     if (reverseChargeBoxDispute(p)) return `${text} · ${t('rec_why_box_disputed')}`
     return p.reverse_charge_box_unconfirmed ? `${text} · ${t('rec_why_box_unconfirmed')}` : text
   }

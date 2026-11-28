@@ -68,6 +68,7 @@ import {
   type VerifikatTemplateShape,
 } from '@/lib/bookkeeping/counterparty-templates'
 import { clearsAnInvoice } from '@/lib/bookkeeping/invoice-clearing'
+import { readVatRegistration, type VatRegistration } from '@/lib/bookkeeping/vat-registration'
 import { BANK_LEG_PLACEHOLDER, isCashLedger } from '@/lib/bookkeeping/bank-leg'
 import { ledgerLineAmountIn } from '@/lib/bookkeeping/ledger-line-amount'
 import { isSkatteverketPayment } from '@/lib/bookkeeping/skatteverket-payment'
@@ -238,9 +239,10 @@ async function learn(
   const earlier = teaching === 'automatic' && learnable.length > 0
     ? await readEarlierLinks(supabase, companyId, learnable)
     : new Map<string, LearnableLink[]>()
+  const vatRegistered = learnable.length > 0 ? await readVatRegistration(supabase, companyId) : undefined
 
   for (const link of learnable) {
-    results.set(link.transactionId, await teach(supabase, companyId, link, teaching, earlier))
+    results.set(link.transactionId, await teach(supabase, companyId, link, teaching, earlier, vatRegistered))
   }
 
   const counts: Record<string, number> = {}
@@ -257,11 +259,13 @@ async function teach(
   link: LearnableLink,
   teaching: LinkTeaching,
   earlier: Map<string, LearnableLink[]>,
+  vatRegistered: VatRegistration,
 ): Promise<LinkLearningResult> {
   if (teaching === 'explicit') {
     // As a categorize booking: one occurrence, a correction when the stored
-    // template books otherwise (insertOrUpdateTemplate decides).
-    const written = await insertOrUpdateTemplate(supabase, companyId, upsertParams(link, 1, 'user_approved'))
+    // template books otherwise (insertOrUpdateTemplate decides), the
+    // company's VAT registration read as categorize reads it.
+    const written = await insertOrUpdateTemplate(supabase, companyId, upsertParams(link, 1, 'user_approved', vatRegistered))
     return { outcome: written ? 'learned' : 'write_failed' }
   }
 
@@ -275,11 +279,11 @@ async function teach(
     // for a template without. insertOrUpdateTemplate then counts
     // it and never reads it as a correction.
     // The stored pattern stays: the matcher's link only counts.
-    const counted = { ...upsertParams(link, 1, 'auto_learned'), linePattern: undefined }
+    const counted = { ...upsertParams(link, 1, 'auto_learned', vatRegistered), linePattern: undefined }
     if (
       templateAccountSet(existing) !== link.shape.accountSet ||
       !samePairButBankLedger(existing, link.shape.debitAccount, link.shape.creditAccount) ||
-      learnsOtherMoms(existing, upsertParams(link, 1, 'auto_learned'))
+      learnsOtherMoms(existing, upsertParams(link, 1, 'auto_learned', vatRegistered))
     ) {
       return { outcome: 'conflicts_template' }
     }
@@ -297,11 +301,16 @@ async function teach(
   )
   if (!repeated) return { outcome: 'awaiting_repetition' }
   // Both links are the evidence.
-  const written = await insertOrUpdateTemplate(supabase, companyId, upsertParams(link, 2, 'auto_learned'), null)
+  const written = await insertOrUpdateTemplate(supabase, companyId, upsertParams(link, 2, 'auto_learned', vatRegistered), null)
   return { outcome: written ? 'learned' : 'write_failed' }
 }
 
-function upsertParams(link: LearnableLink, occurrenceCount: number, source: CategorizationTemplateSource): TemplateUpsertParams {
+function upsertParams(
+  link: LearnableLink,
+  occurrenceCount: number,
+  source: CategorizationTemplateSource,
+  vatRegistered: VatRegistration,
+): TemplateUpsertParams {
   const { debitAccount, creditAccount, vatTreatment, vatAccount, linePattern } = link.shape
   return {
     counterpartyName: link.key,
@@ -316,6 +325,7 @@ function upsertParams(link: LearnableLink, occurrenceCount: number, source: Cate
     confidence: calculateConfidence(occurrenceCount),
     lastSeenDate: link.date,
     source,
+    vatRegistered,
   }
 }
 

@@ -72,6 +72,7 @@ function world(input: {
   templates?: Row[]
   junction?: Row[]
   supplierInvoicePayments?: Row[]
+  vatRegistered?: boolean | null
 }) {
   return createRowsMockSupabase(
     {
@@ -84,6 +85,9 @@ function world(input: {
       invoice_payments: [],
       supplier_invoices: [],
       supplier_invoice_payments: input.supplierInvoicePayments ?? [],
+      ...(input.vatRegistered !== undefined
+        ? { company_settings: [{ company_id: COMPANY, vat_registered: input.vatRegistered }] }
+        : {}),
     },
     writes,
   ).supabase
@@ -135,6 +139,24 @@ describe('explicit links teach at once', () => {
       vat_treatment: 'standard_25',
       line_pattern: null,
     })
+  })
+
+  it('for a VAT-registered company, linking a verifikat without moms onto a 25 % template corrects it, as a categorize booking does', async () => {
+    const template = {
+      id: 'tmpl-1', company_id: COMPANY, counterparty_name: 'kontorsbolaget', counterparty_aliases: [],
+      debit_account: '6110', credit_account: '1930', vat_treatment: 'standard_25', vat_account: '2641',
+      line_pattern: null, occurrence_count: 5, confidence: 0.9, is_active: true, mode: 'propose', corrections: 0, source: 'user_approved',
+    }
+    const supabase = world({
+      rows: [bankRow('tx-1', 'je-1', { amount: -1000, original_description: 'Kontorsbolaget', description: 'Kontorsbolaget' })],
+      entries: [verifikat('je-1', [['6110', 1000, 0], ['1930', 0, 1000]])],
+      templates: [template],
+      vatRegistered: true,
+    })
+
+    await learnFromBankLink(supabase as never, COMPANY, { transactionId: 'tx-1', journalEntryId: 'je-1' }, 'explicit')
+
+    expect(templateWrites()[0]).toMatchObject({ method: 'update', row: { vat_treatment: null, occurrence_count: 1, corrections: 1 } })
   })
 
   it('learns a card row with the bank placeholder on its bank leg', async () => {

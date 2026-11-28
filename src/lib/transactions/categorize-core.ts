@@ -66,6 +66,7 @@ import {
   loadCounterpartyTemplateMatch,
   momsKindOfTemplate,
   momsKindOfTreatment,
+  reviewsUnknownVat,
   type MomsKind,
 } from '@/lib/bookkeeping/counterparty-templates'
 import {
@@ -716,6 +717,12 @@ export async function buildCategorizeMapping(
     const match = await loadCounterpartyTemplateMatch(supabase, companyId, input.counterparty_template_id)
     if (!match) {
       return refuse('NOT_FOUND', { resource: 'counterparty_template', id: input.counterparty_template_id })
+    }
+    // Unknown moms has no line of its own in the replay: booked as the
+    // template it would go in without moms. It books on its account with the
+    // underlag's moms (the proposal for it, withUnknownVat).
+    if (reviewsUnknownVat(match.template, vatRegistered)) {
+      return refuse('TX_CATEGORIZE_TEMPLATE_VAT_UNKNOWN', { counterparty_template_id: input.counterparty_template_id })
     }
     mappingResult = buildMappingResultFromCounterpartyTemplate(match, transaction, entityType, vatRegistered)
     bookedByTemplate = { by: { counterparty_template_id: input.counterparty_template_id }, moms: momsKindOfTemplate(match.template) }
