@@ -127,6 +127,19 @@ describe('POST /api/bookkeeping/no-doc-required/bulk-missing', () => {
     expect(call![2]).toEqual({ cause: driverError })
   })
 
+  it('leaves imported verifikat out unless the list includes them: their underlag is in the earlier system', async () => {
+    enqueue({ data: { ok: true, total_count: 3, ids: ['a'] }, error: null })
+    enqueue({ data: { ok: true, total_count: 5, ids: ['a'] }, error: null })
+    await POST(makeReq({ dry_run: true }), { params: Promise.resolve({}) })
+    await POST(makeReq({ dry_run: true, include_imported: true }), { params: Promise.resolve({}) })
+    expect(rpcCalls().map(([, args]) => args.p_include_imported)).toEqual([false, true])
+  })
+
+  it('returns 400 for a non-boolean include_imported', async () => {
+    const res = await POST(makeReq({ include_imported: 'yes' }), { params: Promise.resolve({}) })
+    expect((await parseJsonResponse(res)).status).toBe(400)
+  })
+
   it('writes nothing when nothing matches the filters', async () => {
     enqueue({ data: { ok: true, total_count: 0, ids: [] }, error: null })
     const res = await POST(makeReq({ reason: 'Importerad' }))

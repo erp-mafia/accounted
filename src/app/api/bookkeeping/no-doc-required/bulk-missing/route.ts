@@ -34,6 +34,9 @@ const BulkMissingSchema = z.object({
   date_from: isoDate.nullable().optional(),
   date_to: isoDate.nullable().optional(),
   search: z.string().max(200).nullable().optional(),
+  // Also the imported verifikat whose underlag is in the earlier system,
+  // as the list shows them with "Även importerade" on.
+  include_imported: z.boolean().optional(),
   reason: z.string().trim().max(200).nullable().optional(),
   // When true, only count the matching verifikat (no writes) so the UI can
   // confirm the scope before the user commits.
@@ -71,6 +74,7 @@ export const POST = withRouteContext(
       dateFrom: validation.data.date_from ?? null,
       dateTo: validation.data.date_to ?? null,
       search: validation.data.search ?? null,
+      includeImported: validation.data.include_imported === true,
     }
     let missingIds: string[]
     try {

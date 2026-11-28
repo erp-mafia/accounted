@@ -287,6 +287,9 @@ const READ_ONLY_RPCS = new Set([
   // save_bank_account_selection runs at approval.
   'read_bank_configuration',
   'cash_account_booked_rows',
+  // The verifikat list's missing-underlag filter: STABLE, the dry run of
+  // gnubok_mark_no_document_required_by_filter counts the set it would mark.
+  'list_verifikat_missing_underlag',
 ])
 
 /**
@@ -1015,6 +1018,11 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
   },
   // Every synthesized id "belongs" to the company as a posted verifikat.
   gnubok_mark_no_document_required: { args: { reason: 'Avskrivning enligt plan' } },
+  // The list's Markera alla for an agent: the dry run counts the missing set.
+  gnubok_mark_no_document_required_by_filter: {
+    args: { series: 'C', reason: 'Bokslutsposter' },
+    rows: { 'rpc:list_verifikat_missing_underlag': { ok: true, total_count: 3, ids: [SOME_UUID] } },
+  },
   // Deferred Bokför (#967): a sent/registered, unbooked invoice under
   // faktureringsmetoden in an open, unlocked year. The preview builds the
   // real generator's lines, which reads the fiscal period and writes nothing.

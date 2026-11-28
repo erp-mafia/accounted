@@ -355,8 +355,8 @@ describe('list_verifikat_missing_underlag', () => {
   it('is not executable by anon', async () => {
     const { rows } = await getPool().query<{ anon: boolean; authenticated: boolean }>(
       `SELECT
-         has_function_privilege('anon', 'public.list_verifikat_missing_underlag(uuid, uuid, text, date, date, text, text, integer, text[], integer, integer)', 'EXECUTE') AS anon,
-         has_function_privilege('authenticated', 'public.list_verifikat_missing_underlag(uuid, uuid, text, date, date, text, text, integer, text[], integer, integer)', 'EXECUTE') AS authenticated`,
+         has_function_privilege('anon', 'public.list_verifikat_missing_underlag(uuid, uuid, text, date, date, text, text, integer, text[], integer, integer, boolean)', 'EXECUTE') AS anon,
+         has_function_privilege('authenticated', 'public.list_verifikat_missing_underlag(uuid, uuid, text, date, date, text, text, integer, text[], integer, integer, boolean)', 'EXECUTE') AS authenticated`,
     )
     expect(rows[0]).toEqual({ anon: false, authenticated: true })
   })
@@ -610,7 +610,7 @@ describe('list_verifikat_missing_underlag sorted by Belopp', () => {
     const { rows } = await getPool().query<{ per_row: boolean; set: boolean; definition: string }>(
       `SELECT to_regprocedure('public.display_amount(public.journal_entries)') IS NOT NULL AS per_row,
               to_regprocedure('public.verifikat_display_amounts(uuid, uuid[])') IS NOT NULL AS set,
-              pg_get_functiondef('public.list_verifikat_missing_underlag(uuid, uuid, text, date, date, text, text, integer, text[], integer, integer)'::regprocedure) AS definition`,
+              pg_get_functiondef('public.list_verifikat_missing_underlag(uuid, uuid, text, date, date, text, text, integer, text[], integer, integer, boolean)'::regprocedure) AS definition`,
     )
     expect({ per_row: rows[0].per_row, set: rows[0].set }).toEqual({ per_row: false, set: true })
     // No body of the rule of its own: the amounts come from the set function.

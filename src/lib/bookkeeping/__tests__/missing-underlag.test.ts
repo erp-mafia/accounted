@@ -107,7 +107,15 @@ describe('listMissingUnderlagPage (crm#1390)', () => {
       p_order: ['entry_date.desc', 'voucher_series.desc', 'voucher_number.desc', 'id.desc'],
       p_limit: 20,
       p_offset: 40,
+      // Imported verifikat keep their underlag in the earlier system.
+      p_include_imported: false,
     })
+  })
+
+  it('asks for the imported verifikat only when the filter includes them', async () => {
+    enqueue({ data: { ok: true, total_count: 0, ids: [] }, error: null })
+    await listMissingUnderlagPage(client, 'company-1', { includeImported: true }, { limit: 20 })
+    expect(rpcArgs(0)).toMatchObject({ p_include_imported: true })
   })
 
   it('sends an escaped ILIKE pattern, plus series+number for a voucher-label search', async () => {

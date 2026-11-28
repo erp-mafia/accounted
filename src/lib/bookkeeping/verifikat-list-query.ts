@@ -14,6 +14,8 @@
  *   q                     the search text
  *   corrections=all|hide  storno and omförda verifikat (collapse is the default)
  *   missing=true          Visa saknade underlag
+ *   imported=true         with it, also the imported verifikat whose underlag
+ *                         is in the earlier system (underlagInEarlierSystem)
  *   scope=all|<period id> this visit's own year, in place of the sidebar's
  *   page=3                1-based
  *
@@ -43,6 +45,11 @@ export interface VerifikatListQuery {
   correctionView: VerifikatCorrectionView
   missingOnly: boolean
   /**
+   * With missingOnly, also the imported verifikat without an underlag here,
+   * whose underlag is kept in the earlier system: left out unless asked for.
+   */
+  includeImported: boolean
+  /**
    * The visit's own year scope: periodId null is all years, a period id that
    * räkenskapsår. null follows the app-wide year in the sidebar.
    */
@@ -59,11 +66,12 @@ export const DEFAULT_VERIFIKAT_LIST_QUERY: Readonly<VerifikatListQuery> = {
   search: '',
   correctionView: 'collapse',
   missingOnly: false,
+  includeImported: false,
   visitScope: null,
   page: 0,
 }
 
-const VIEW_KEYS = ['status', 'series', 'from', 'to', 'q', 'corrections', 'missing', 'scope', 'page'] as const
+const VIEW_KEYS = ['status', 'series', 'from', 'to', 'q', 'corrections', 'missing', 'imported', 'scope', 'page'] as const
 const ARRIVAL_KEYS = ['missingUnderlag', 'gaps'] as const
 
 const SERIES_LETTER_RE = /^[A-Z]$/
@@ -90,6 +98,8 @@ export function readVerifikatListQuery(params: QueryReader): VerifikatListQuery 
   else if (isUuid(gaps)) visitScope = { periodId: gaps }
 
   const mode: VerifikatListMode = params.get('status') === 'draft' ? 'drafts' : 'committed'
+  // Posted verifikat only, as the list's own switch to Utkast does.
+  const missingOnly = mode === 'committed' && (params.get('missing') === 'true' || arrivedMissing)
   return {
     mode,
     series: SERIES_LETTER_RE.test(series) ? series : null,
@@ -97,8 +107,8 @@ export function readVerifikatListQuery(params: QueryReader): VerifikatListQuery 
     dateTo: isSaneDateString(to) ? to : '',
     search: params.get('q')?.trim() ?? '',
     correctionView: corrections === 'all' || corrections === 'hide' ? corrections : 'collapse',
-    // Posted verifikat only, as the list's own switch to Utkast does.
-    missingOnly: mode === 'committed' && (params.get('missing') === 'true' || arrivedMissing),
+    missingOnly,
+    includeImported: missingOnly && params.get('imported') === 'true',
     visitScope,
     page: PAGE_RE.test(page) ? Number(page) - 1 : 0,
   }
@@ -122,6 +132,7 @@ export function writeVerifikatListQuery(
   if (query.search) params.set('q', query.search)
   if (query.correctionView !== 'collapse') params.set('corrections', query.correctionView)
   if (query.missingOnly) params.set('missing', 'true')
+  if (query.missingOnly && query.includeImported) params.set('imported', 'true')
   if (query.visitScope) params.set('scope', query.visitScope.periodId ?? 'all')
   if (query.page > 0) params.set('page', String(query.page + 1))
   return params

@@ -626,7 +626,7 @@ describe('resolveAgentWorklist: what a verifikat booked', () => {
 
   // crm#1582: ~180 SIE-imported purchases whose underlag the former byrå kept
   // on paper were sent to a mail search that could never find them.
-  it('sends no mail search for an imported verifikat: it points at the waiver for underlag kept with the earlier books', async () => {
+  it('sends no mail search for an imported verifikat: its underlag is in the earlier system, so nothing is missing', async () => {
     const imported = (n: number, description: string, gross: number) => ({ ...verifikat(n, description, gross), source_type: 'import' })
     const item = await worklist(
       [
@@ -645,7 +645,8 @@ describe('resolveAgentWorklist: what a verifikat booked', () => {
 
     for (const n of [41, 42, 43]) {
       expect(item(n)).toMatchObject({ mail_searchable: false, portal: null, underlag_on: null })
-      expect(item(n).next_step).toContain(`"${UNDERLAG_ARCHIVED_ELSEWHERE_REASON}"`)
+      expect(item(n).next_step).toContain('underlaget finns där bokföringen fördes tidigare')
+      expect(item(n).next_step).toContain('behöver ingen markering')
     }
     // The same purchase booked in Accounted is still worth a mail search.
     expect(item(44)).toMatchObject({ mail_searchable: true })

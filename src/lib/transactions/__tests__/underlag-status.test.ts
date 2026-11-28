@@ -21,7 +21,20 @@ describe('computeJeUnderlagStatus', () => {
       new Set(),
       new Set(),
     )
-    expect(result).toEqual({ 'je-1': 'missing', 'je-2': 'missing', 'je-3': 'missing' })
+    expect(result).toEqual({ 'je-1': 'missing', 'je-2': 'missing', 'je-3': 'imported' })
+  })
+
+  it('an imported verifikat without a document here has its underlag in the earlier system, never missing', () => {
+    const result = computeJeUnderlagStatus(
+      [
+        { id: 'je-1', source_type: 'import' },
+        { id: 'je-2', source_type: 'import' },
+        { id: 'je-3', source_type: 'import' },
+      ],
+      new Set(['je-2']),
+      new Set(['je-3']),
+    )
+    expect(result).toEqual({ 'je-1': 'imported', 'je-2': 'has', 'je-3': 'none' })
   })
 
   it('flags an inbox booking without a document (#1317)', () => {

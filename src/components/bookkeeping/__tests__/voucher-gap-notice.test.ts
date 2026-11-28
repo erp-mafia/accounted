@@ -37,15 +37,17 @@ describe('JournalEntryList attn slot', () => {
     expect(LIST).toMatch(/unexplainedGapCount === 0 &&\s+entries\.some\(\(e\) => e\.source_type === 'import'\)/)
   })
 
-  it('counts imported rows missing underlag with the same predicate the chip used', () => {
+  it('counts imported rows without underlag here with the same predicate the row mark uses', () => {
     expect(LIST).toContain(
-      "entries.filter((e) => e.source_type === 'import' && isEligibleForExempt(e)).length",
+      "entries.filter((e) => underlagInEarlierSystem(e.source_type) && isEligibleForExempt(e)).length",
     )
     expect(LIST).toContain("t('import_missing_attn_page', { count: importedMissingCount })")
   })
 
-  it('keeps the per-row chip for every needs-doc source type except import', () => {
+  it('gives an imported row its own quiet status and every other needs-doc row the chip', () => {
     // The fragment holds the chip and its phone-width glyph (phone-width-lists.test.ts).
-    expect(LIST).toMatch(/entry\.source_type !== 'import' && \(\s+<>\s+<Badge variant="warning"/)
+    expect(LIST).toMatch(/underlagInEarlierSystem\(entry\.source_type\) \? \(/)
+    expect(LIST).toContain("t('imported_underlag_indicator_tooltip')")
+    expect(LIST).toMatch(/\) : \(\s+<>\s+<Badge variant="warning"/)
   })
 })

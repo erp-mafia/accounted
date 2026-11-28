@@ -39,7 +39,9 @@ type TransactionsResult = {
 
 async function verifikatSurface(companyId: string): Promise<string[]> {
   const { rows } = await getPool().query<{ r: VerifikatResult }>(
-    `SELECT public.verifikat_without_documents($1, NULL, 0, 100, 0) AS r`,
+    // Imported verifikat included: this pins the reference rule, which holds
+    // for them as for every other entry (they are left out by default).
+    `SELECT public.verifikat_without_documents($1, NULL, 0, 100, 0, p_include_imported => true) AS r`,
     [companyId],
   )
   expect(rows[0].r.ok).toBe(true)
@@ -48,7 +50,7 @@ async function verifikatSurface(companyId: string): Promise<string[]> {
 
 async function transactionsSurface(companyId: string): Promise<string[]> {
   const { rows } = await getPool().query<{ r: TransactionsResult }>(
-    `SELECT public.transactions_without_documents($1, NULL, 100, 0) AS r`,
+    `SELECT public.transactions_without_documents($1, NULL, 100, 0, p_include_imported => true) AS r`,
     [companyId],
   )
   expect(rows[0].r.ok).toBe(true)
@@ -229,7 +231,7 @@ describe('customer-invoice hänvisning silences "Underlag saknas" (#2298)', () =
 
   it('the verifikat list filter (list_verifikat_missing_underlag) reaches the same verdict (crm#1390)', async () => {
     const { rows } = await getPool().query<{ r: { ok: boolean; total_count: number; ids: string[] } }>(
-      `SELECT public.list_verifikat_missing_underlag($1, p_limit => 1000) AS r`,
+      `SELECT public.list_verifikat_missing_underlag($1, p_limit => 1000, p_include_imported => true) AS r`,
       [companyId],
     )
     expect(rows[0].r.ok).toBe(true)

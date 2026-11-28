@@ -9661,7 +9661,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_list_transactions_without_documents',
     keywords: ['underlag', 'kvitto', 'saknar underlag'],
     title: 'List Transactions Missing Receipts',
-    description: 'List booked bank transactions whose verifikat lacks an underlag. Strict subset of gnubok_list_verifikat_without_documents (same document truth, waivers respected): use that tool for full coverage incl. imported/manual verifikat.',
+    description: 'List booked bank transactions whose verifikat lacks an underlag. Strict subset of gnubok_list_verifikat_without_documents (same document truth, waivers respected). Imported verifikat keep their underlag in the earlier system: left out unless include_imported.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -9669,6 +9669,7 @@ export const tools: McpTool[] = [
         limit: { type: 'number', description: 'Max results to return, 1-100 (default 20)' },
         offset: { type: 'number', description: 'Number of results to skip for pagination (default 0)' },
         since: { type: 'string', description: 'Optional ISO date (YYYY-MM-DD). Only return transactions on or after this date.' },
+        include_imported: { type: 'boolean', description: 'Also imported verifikat (SIE, a migration) without an underlag here. Default false: their underlag is kept in the earlier system, so they are not missing (BFL 5 kap 7 §: the verifikation says where it is).' },
       },
     },
     outputSchema: paginatedSchema('transactions', {
@@ -9709,6 +9710,9 @@ export const tools: McpTool[] = [
         p_since: since,
         p_limit: limit,
         p_offset: offset,
+        // An imported verifikat's underlag is kept in the earlier system:
+        // left out unless asked for (underlagInEarlierSystem).
+        p_include_imported: args.include_imported === true,
       })
       if (error) throw dbError(error)
 
@@ -9785,7 +9789,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_list_verifikat_without_documents',
     keywords: ['verifikat', 'verifikation', 'saknar underlag'],
     title: 'List Verifikat Missing Documents',
-    description: 'List posted verifikat that genuinely lack an underlag: needs-doc source types only, current document versions, user waivers respected. Superset of gnubok_list_transactions_without_documents (covers imported/manual too). Newest first, paginated.',
+    description: 'List posted verifikat that genuinely lack an underlag: needs-doc source types, current document versions, waivers respected. Imported verifikat keep their underlag in the earlier system: left out unless include_imported. Newest first, paginated.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -9795,6 +9799,7 @@ export const tools: McpTool[] = [
         since: { type: 'string', description: 'Optional ISO date (YYYY-MM-DD). Only return entries on or after this date.' },
         until: { type: 'string', description: 'Optional ISO date (YYYY-MM-DD). Only return entries on or before this date.' },
         min_amount: { type: 'number', description: 'Optional minimum gross_amount to filter low-value entries. Default 0.' },
+        include_imported: { type: 'boolean', description: 'Also imported verifikat (SIE, a migration) without an underlag here. Default false: their underlag is kept in the earlier system, so they are not missing (BFL 5 kap 7 §: the verifikation says where it is).' },
       },
     },
     outputSchema: paginatedSchema('verifikat', {
@@ -9839,6 +9844,9 @@ export const tools: McpTool[] = [
         p_limit: limit,
         p_offset: offset,
         ...(until ? { p_until: until } : {}),
+        // An imported verifikat's underlag is kept in the earlier system:
+        // left out unless asked for (underlagInEarlierSystem).
+        p_include_imported: args.include_imported === true,
       })
       if (error) throw dbError(error)
 

@@ -55,10 +55,10 @@ type TransactionsResult = {
   transactions?: Array<{ id: string; transaction_id: string; journal_entry_id: string }>
 }
 
-async function verifikatSurface(companyId: string): Promise<VerifikatResult> {
+async function verifikatSurface(companyId: string, includeImported = false): Promise<VerifikatResult> {
   const { rows } = await getPool().query<{ r: VerifikatResult }>(
-    `SELECT public.verifikat_without_documents($1, NULL, 0, 100, 0) AS r`,
-    [companyId],
+    `SELECT public.verifikat_without_documents($1, NULL, 0, 100, 0, p_include_imported => $2) AS r`,
+    [companyId, includeImported],
   )
   return rows[0].r
 }
@@ -68,10 +68,10 @@ async function verifikatSurface(companyId: string): Promise<VerifikatResult> {
  * crm#1390): the same predicate narrowed by the list's filters, none here.
  * Every id of the set, sorted, for a set comparison with the badge's RPC.
  */
-async function missingListIds(companyId: string): Promise<{ total: number; ids: string[] }> {
+async function missingListIds(companyId: string, includeImported = false): Promise<{ total: number; ids: string[] }> {
   const { rows } = await getPool().query<{ r: { ok: boolean; total_count: number; ids: string[] } }>(
-    `SELECT public.list_verifikat_missing_underlag($1, p_limit => 1000) AS r`,
-    [companyId],
+    `SELECT public.list_verifikat_missing_underlag($1, p_limit => 1000, p_include_imported => $2) AS r`,
+    [companyId, includeImported],
   )
   expect(rows[0].r.ok).toBe(true)
   return { total: rows[0].r.total_count, ids: [...rows[0].r.ids].sort() }
@@ -184,7 +184,7 @@ describe('document surfaces unification', () => {
   let jeBankWaived: string // bank tx JE, waived → NEITHER
   let jeBankStaleDoc: string // bank tx JE, only superseded doc version → BOTH
   let jeInvoiceCreated: string // doc-exempt source type → NEITHER
-  let jeImportNoDoc: string // import JE, no tx → verifikat surface only
+  let jeImportNoDoc: string // import JE, no tx → verifikat surface only, and only when asked for
   let jeSiRegWithDoc: string // SI registration JE holding the invoice doc directly → NEITHER
   let jeSiPaymentCovered: string // SI payment JE, doc on the SI (registration side) → NEITHER (BFL 5:7 hänvisning)
   let jeSiRegNoDoc: string // SI registration JE, SI has NO doc → verifikat surface
@@ -304,18 +304,32 @@ describe('document surfaces unification', () => {
     // reference alone is not underlag. jeSiPayUnanchored appears: the SI's
     // doc is not anchored to any entry, so it is deletable and cannot back a
     // posted verifikat. The covered SI entries do not appear.
+    // jeImportNoDoc is left out: an imported verifikat keeps its underlag in
+    // the earlier system (underlagInEarlierSystem), so it is not missing
+    // unless asked for.
     expect(ids).toEqual(
-      [jeBankNoDoc, jeBankStaleDoc, jeImportNoDoc, jeSiRegNoDoc, jeSiPayUnanchored].sort(),
+      [jeBankNoDoc, jeBankStaleDoc, jeSiRegNoDoc, jeSiPayUnanchored].sort(),
     )
-    expect(res.total_count).toBe(5)
+    expect(res.total_count).toBe(4)
     // Doc-exempt source type never appears even when undocumented.
     expect(ids).not.toContain(jeInvoiceCreated)
+
+    const withImported = await verifikatSurface(companyId, true)
+    expect((withImported.verifikat ?? []).map((v) => v.journal_entry_id).sort()).toEqual(
+      [jeBankNoDoc, jeBankStaleDoc, jeImportNoDoc, jeSiRegNoDoc, jeSiPayUnanchored].sort(),
+    )
+    expect(withImported.total_count).toBe(5)
   })
 
   it('the verifikat list filter finds the same set as the badge, arm by arm (crm#1390)', async () => {
-    const [badge, list] = await Promise.all([verifikatSurface(companyId), missingListIds(companyId)])
-    expect(list.ids).toEqual((badge.verifikat ?? []).map((v) => v.journal_entry_id).sort())
-    expect(list.total).toBe(badge.total_count)
+    for (const includeImported of [false, true]) {
+      const [badge, list] = await Promise.all([
+        verifikatSurface(companyId, includeImported),
+        missingListIds(companyId, includeImported),
+      ])
+      expect(list.ids).toEqual((badge.verifikat ?? []).map((v) => v.journal_entry_id).sort())
+      expect(list.total).toBe(badge.total_count)
+    }
   })
 
   it('supplier-invoice references with an anchored doc silence both FK paths and the partial-payment path', async () => {
@@ -375,10 +389,17 @@ describe('document surfaces unification', () => {
       expected.push(id)
       voucher++
     }
-    const res = await verifikatSurface(s.companyId)
+    // Asked for, the imported one too: the full needs-doc list.
+    const res = await verifikatSurface(s.companyId, true)
     expect((res.verifikat ?? []).map((v) => v.journal_entry_id).sort()).toEqual(expected.sort())
     // The verifikat list filter carries its own copy of the needs-doc list.
-    expect((await missingListIds(s.companyId)).ids).toEqual(expected.sort())
+    expect((await missingListIds(s.companyId, true)).ids).toEqual(expected.sort())
+    // By default every needs-doc type but import: its underlag is in the earlier system.
+    const byDefault = await verifikatSurface(s.companyId)
+    expect((byDefault.verifikat ?? []).map((v) => v.source_type).sort()).toEqual(
+      NEEDS_DOC_SOURCE_TYPES.filter((t) => t !== 'import').sort(),
+    )
+    expect((await missingListIds(s.companyId)).ids.length).toBe(NEEDS_DOC_SOURCE_TYPES.length - 1)
   })
 
   it('webshop_order: flagged without underlag, silenced by the archived orderunderlag (#1881)', async () => {

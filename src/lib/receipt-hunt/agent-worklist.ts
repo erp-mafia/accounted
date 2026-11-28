@@ -274,9 +274,10 @@ export const UNDERLAG_ARCHIVED_ELSEWHERE_REASON = 'Underlag arkiverat utanför A
 function nextStep(kind: NextStepKind, portal: AgentWorklistItem['portal']): string {
   switch (kind) {
     case 'imported':
-      // The reason is the one the waiver dialogs suggest
-      // (journal_list.no_doc_required_suggestion_archived_elsewhere).
-      return `Importerat verifikat: underlaget finns där bokföringen fördes tidigare. Ligger det kvar där, markera det Inget underlag krävs med orsaken "${UNDERLAG_ARCHIVED_ELSEWHERE_REASON}".`
+      // Its underlag is kept where the earlier books were kept, so it is not
+      // missing (underlagInEarlierSystem): no mark is needed. Only a list
+      // asked to include imported verifikat shows one.
+      return 'Importerat verifikat: underlaget finns där bokföringen fördes tidigare, så det saknas inte och behöver ingen markering.'
     case 'own_transfer':
       return 'Överföring mellan egna konton: kontoutdraget är underlaget, så det finns inget att hämta.'
     case 'not_mail':

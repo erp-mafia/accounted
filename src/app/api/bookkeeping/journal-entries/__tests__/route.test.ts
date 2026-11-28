@@ -1283,6 +1283,21 @@ describe('GET /api/bookkeeping/journal-entries', () => {
       expect(mockSupabase.from).not.toHaveBeenCalled()
     })
 
+    it('leaves imported verifikat out unless include_imported: their underlag is in the earlier system', async () => {
+      enqueue({ data: { ok: true, total_count: 0, ids: [] }, error: null })
+      enqueue({ data: { ok: true, total_count: 0, ids: [] }, error: null })
+
+      await GET(createMockRequest('/api/bookkeeping/journal-entries', {
+        searchParams: { missing_underlag: 'true', exclude_draft: 'true' },
+      }), { params: Promise.resolve({}) })
+      await GET(createMockRequest('/api/bookkeeping/journal-entries', {
+        searchParams: { missing_underlag: 'true', include_imported: 'true', exclude_draft: 'true' },
+      }), { params: Promise.resolve({}) })
+
+      const calls = mockSupabase.rpc.mock.calls.filter(([name]) => name === RPC) as unknown as [string, Record<string, unknown>][]
+      expect(calls.map(([, args]) => args.p_include_imported)).toEqual([false, true])
+    })
+
     it('takes this path instead of the include_related RPC when a period is selected', async () => {
       enqueue({ data: { ok: true, total_count: 0, ids: [] }, error: null })
 

@@ -190,6 +190,7 @@ import { importsDepositSpecification } from './deposit-specification'
 import {
   journalEntriesBatchNoDocumentRequired,
   journalEntriesClearNoDocumentRequired,
+  journalEntriesFilterNoDocumentRequired,
   journalEntriesCorrectMetadata,
   journalEntriesRattelseLog,
   journalEntriesRedate,
@@ -483,6 +484,7 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   journalEntriesSetNoDocumentRequired,
   journalEntriesClearNoDocumentRequired,
   journalEntriesBatchNoDocumentRequired,
+  journalEntriesFilterNoDocumentRequired,
   journalEntriesRattelseLog,
   // accrual-schedules (periodisering)
   accrualSchedulesCreate,
