@@ -292,6 +292,35 @@ describe('POST /api/user/ui-state', () => {
     expect(res.status).toBe(400)
   })
 
+  it('merges start_page per company, so choosing for one company keeps the others', async () => {
+    enqueue({
+      data: { ui_state: { start_page: { '11111111-1111-4111-8111-111111111111': 'bookkeeping' } } },
+    })
+    enqueue({ data: null })
+
+    const { status, body } = await parseJsonResponse<{
+      data: { ui_state: { start_page: Record<string, string> } }
+    }>(await POST(request({ start_page: { '22222222-2222-4222-8222-222222222222': 'supplier_invoices' } })))
+
+    expect(status).toBe(200)
+    expect(body.data.ui_state.start_page).toEqual({
+      '11111111-1111-4111-8111-111111111111': 'bookkeeping',
+      '22222222-2222-4222-8222-222222222222': 'supplier_invoices',
+    })
+  })
+
+  it('returns 400 for a start page that is not one of the choices', async () => {
+    for (const page of ['payroll', '/settings', 'https://evil.example/']) {
+      const res = await POST(request({ start_page: { '11111111-1111-4111-8111-111111111111': page } }))
+      expect(res.status).toBe(400)
+    }
+  })
+
+  it('returns 400 when a start_page key is not a company UUID', async () => {
+    const res = await POST(request({ start_page: { 'not-a-uuid': 'bookkeeping' } }))
+    expect(res.status).toBe(400)
+  })
+
   it('returns 500 when the upsert fails', async () => {
     enqueue({ data: null })
     enqueue({ data: null, error: { message: 'boom' } })

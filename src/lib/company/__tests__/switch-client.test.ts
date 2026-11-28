@@ -91,6 +91,27 @@ describe('performCompanySwitch', () => {
     expect(assign).toHaveBeenCalledWith('/')
   })
 
+  it("lands on the person's start page the switch route answers with", async () => {
+    fetchMock.mockResolvedValueOnce(json({ data: { company_id: COMPANY_ID, start_path: '/bookkeeping' } }))
+    await performCompanySwitch(COMPANY_ID)
+    expect(assign).toHaveBeenCalledWith('/bookkeeping')
+  })
+
+  it('lets an explicit destination win over the start page', async () => {
+    fetchMock.mockResolvedValueOnce(json({ data: { company_id: COMPANY_ID, start_path: '/bookkeeping' } }))
+    await performCompanySwitch(COMPANY_ID, { destination: '/settings/company' })
+    expect(assign).toHaveBeenCalledWith('/settings/company')
+  })
+
+  it('follows only a known start page: anything else lands on /', async () => {
+    for (const startPath of ['https://evil.example/', '//evil.example', '/settings', 42]) {
+      assign.mockClear()
+      fetchMock.mockResolvedValueOnce(json({ data: { company_id: COMPANY_ID, start_path: startPath } }))
+      await performCompanySwitch(COMPANY_ID)
+      expect(assign).toHaveBeenCalledWith('/')
+    }
+  })
+
   it.each([
     ['COMPANY_SWITCH_NOT_MEMBER', 403, 'not_member'],
     ['COMPANY_SWITCH_LOCKED', 403, 'company_locked'],

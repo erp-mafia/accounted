@@ -8,6 +8,7 @@ import {
   markCompanySwitchInFlight,
   markSelfSwitchTarget,
 } from '@/lib/company/tab-guard'
+import { isStartPagePath } from '@/lib/company/start-page'
 
 /**
  * Client-side company switch: persists the new active company through
@@ -15,11 +16,14 @@ import {
  * new company. Shared by CompanySwitcher (mobile sheet), the sidebar
  * user-menu flyout and the byrå cockpit so all use the exact same mechanism.
  *
- * `destination` (default '/') is where THIS tab lands after the switch: the
- * cockpit's soft switch (WL-09) enters a client directly on the target page
- * instead of bouncing via the start page. It is always a full-page load: the
- * hard navigation is what tears down React state, router cache, in-flight
- * fetches and blob URLs so nothing from the previous company survives.
+ * `destination` is where THIS tab lands after the switch: the cockpit's soft
+ * switch (WL-09) enters a client directly on the target page instead of
+ * bouncing via the start page. Without one the tab lands on the person's
+ * start page in the new company (lib/company/start-page.ts), which the switch
+ * route answers with: '/' unless they chose another. It is always a
+ * full-page load: the hard navigation is what tears down React state, router
+ * cache, in-flight fetches and blob URLs so nothing from the previous company
+ * survives.
  *
  * A plain fetch to a route handler, never a server action: an action that
  * sets cookies (the switch sets two) makes Next.js re-render the page being
@@ -41,14 +45,14 @@ export async function performCompanySwitch(
   // deliberate re-switch from a stale tab. Flag it around the request so the
   // patched fetch lets exactly this request through.
   markCompanySwitchInFlight(true)
-  let error: string | null
+  let persisted: { error: string } | { startPath: string }
   try {
-    error = await persistActiveCompany(companyId)
+    persisted = await persistActiveCompany(companyId)
   } finally {
     markCompanySwitchInFlight(false)
   }
-  if (error) {
-    return { error }
+  if ('error' in persisted) {
+    return { error: persisted.error }
   }
   // This tab's own switch: the broadcast below loops back into this tab's
   // CompanyTabSync (BroadcastChannel delivers to every same-name channel in
@@ -80,7 +84,7 @@ export async function performCompanySwitch(
   // Hard navigation: tears down React state, router cache, in-flight
   // fetches, blob URLs, etc. This is the whole point: nothing from the
   // previous company can survive the switch.
-  window.location.assign(options.destination ?? '/')
+  window.location.assign(options.destination ?? persisted.startPath)
 }
 
 /** The switch route's refusals, as the codes every caller already handles. */
@@ -90,12 +94,13 @@ const SWITCH_REFUSALS: Readonly<Record<string, string>> = {
 }
 
 /**
- * POST the switch. Null when the active company was saved, else the error
- * code performCompanySwitch returns. Success is read from the body, not the
+ * POST the switch. The start page to land on when the active company was
+ * saved (a known start page, else '/'), else the error code
+ * performCompanySwitch returns. Success is read from the body, not the
  * status alone: a 200 that does not name the company (a redirect followed to
  * a page) must not send the user on into the company they meant to leave.
  */
-async function persistActiveCompany(companyId: string): Promise<string | null> {
+async function persistActiveCompany(companyId: string): Promise<{ error: string } | { startPath: string }> {
   let res: Response
   try {
     res = await fetch(COMPANY_SWITCH_PATH, {
@@ -108,17 +113,21 @@ async function persistActiveCompany(companyId: string): Promise<string | null> {
     // have reached the server. Every caller turns this code into its own
     // "the switch failed, try again" message, so the user can retry instead
     // of facing a spinner that never stops.
-    return 'persist_failed'
+    return { error: 'persist_failed' }
   }
-  if (res.status === 401) return 'Unauthorized'
+  if (res.status === 401) return { error: 'Unauthorized' }
   const body = (await res.json().catch(() => null)) as {
-    data?: { company_id?: unknown } | null
+    data?: { company_id?: unknown; start_path?: unknown } | null
     error?: unknown
   } | null
-  if (res.ok && body?.data?.company_id === companyId) return null
+  if (res.ok && body?.data?.company_id === companyId) {
+    // Whitelisted: only a known start page is ever followed.
+    const startPath = body?.data?.start_path
+    return { startPath: isStartPagePath(startPath) ? startPath : '/' }
+  }
   const code =
     body?.error && typeof body.error === 'object' ? (body.error as { code?: unknown }).code : undefined
-  return (typeof code === 'string' && SWITCH_REFUSALS[code]) || 'persist_failed'
+  return { error: (typeof code === 'string' && SWITCH_REFUSALS[code]) || 'persist_failed' }
 }
 
 /**
