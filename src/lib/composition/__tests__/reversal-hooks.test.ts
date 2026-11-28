@@ -31,6 +31,7 @@ const leaves = vi.hoisted(() => ({
   releaseSupplierInvoiceRegistrationAfterReversal: vi.fn(async () => {}),
   assertInvoiceVerifikatReversible: vi.fn(async () => {}),
   assertSalaryRunVerifikatReversible: vi.fn(async () => {}),
+  assertExpenseClaimVerifikatReversible: vi.fn(async () => {}),
 }))
 
 vi.mock('@/lib/bookkeeping/payment-sync', async (importOriginal) => ({
@@ -70,6 +71,9 @@ vi.mock('@/lib/invoices/invoice-verifikat-reversal', () => ({
 vi.mock('@/lib/salary/run-verifikat-reversal', () => ({
   assertSalaryRunVerifikatReversible: leaves.assertSalaryRunVerifikatReversible,
 }))
+vi.mock('@/lib/expenses/claim-verifikat-reversal', () => ({
+  assertExpenseClaimVerifikatReversible: leaves.assertExpenseClaimVerifikatReversible,
+}))
 
 import { REVERSAL_HOOKS } from '../reversal-hooks'
 import { REVERSAL_MIRROR_REQUIRED, type ReversalHookAfterContext } from '@/lib/bookkeeping/reversal-hooks'
@@ -95,6 +99,7 @@ const HOOK_LEAVES: Record<string, string> = {
   'supplier-invoice-registration': 'supplier-invoices/registration-reversal',
   'customer-invoice-verifikat': 'invoices/invoice-verifikat-reversal',
   'salary-run-verifikat': 'salary/run-verifikat-reversal',
+  'expense-claim-verifikat': 'expenses/claim-verifikat-reversal',
 }
 
 /**
@@ -111,7 +116,6 @@ const KNOWN_UNMIRRORED: Partial<Record<JournalEntrySourceType, string>> = {
   webshop_order: 'webshop_orders.journal_entry_id',
   credit_note: 'invoices.journal_entry_id (the credit note row)',
   supplier_credit_note: 'supplier_invoices.registration_journal_entry_id (the credit note row)',
-  expense_claim: 'expense_claims.journal_entry_id',
   accrual: 'accrual_schedule_installments.journal_entry_id, status posted',
 }
 
@@ -283,6 +287,20 @@ describe('reversal hook list: each hook wraps its function unchanged', () => {
   it('salary-run-verifikat: the stornos of Korrigera lönekörning pass without the check', async () => {
     await hook('salary-run-verifikat').beforeReversal!({ ...ctx, salaryRunCorrection: true })
     expect(leaves.assertSalaryRunVerifikatReversible).not.toHaveBeenCalled()
+  })
+
+  it('expense-claim-verifikat: before only, assertExpenseClaimVerifikatReversible(supabase, companyId, entry.id)', async () => {
+    expect(hook('expense-claim-verifikat').afterReversal).toBeUndefined()
+    await hook('expense-claim-verifikat').beforeReversal!(ctx)
+    expect(leaves.assertExpenseClaimVerifikatReversible).toHaveBeenCalledExactlyOnceWith(supabase, 'company-1', 'entry-1')
+  })
+
+  it('expense-claim-verifikat: the storno of Ta bort on the claim passes without the check, and only that one', async () => {
+    await hook('expense-claim-verifikat').beforeReversal!({ ...ctx, expenseClaimRemoval: true })
+    expect(leaves.assertExpenseClaimVerifikatReversible).not.toHaveBeenCalled()
+    // Korrigera lönekörning's option does not open it.
+    await hook('expense-claim-verifikat').beforeReversal!({ ...ctx, salaryRunCorrection: true })
+    expect(leaves.assertExpenseClaimVerifikatReversible).toHaveBeenCalledOnce()
   })
 
   it('passes a leaf refusal through untouched', async () => {

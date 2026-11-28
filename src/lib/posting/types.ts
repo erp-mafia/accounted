@@ -190,9 +190,15 @@ export interface ReverseJournalEntryRequest {
   /**
    * reverseEntry's own options, handed to it unchanged (collectionsRebook:
    * lib/collections/rebook.ts only; salaryRunCorrection:
-   * lib/salary/correct-run.ts only).
+   * lib/salary/correct-run.ts only; expenseClaimRemoval: deleteExpenseClaim
+   * in lib/expenses/expense-claims-service.ts only).
    */
-  options?: { allowDeepChain?: boolean; collectionsRebook?: boolean; salaryRunCorrection?: boolean }
+  options?: {
+    allowDeepChain?: boolean
+    collectionsRebook?: boolean
+    salaryRunCorrection?: boolean
+    expenseClaimRemoval?: boolean
+  }
   /** What the storno is to the event; 'reversal' when absent. */
   role?: Extract<BusinessEventEntryRole, 'reversal' | 'correction'>
 }
@@ -383,7 +389,12 @@ export interface PostingAdapter {
     userId: string
     entryId: string
     reversalDate?: string
-    options?: { allowDeepChain?: boolean; collectionsRebook?: boolean; salaryRunCorrection?: boolean }
+    options?: {
+      allowDeepChain?: boolean
+      collectionsRebook?: boolean
+      salaryRunCorrection?: boolean
+      expenseClaimRemoval?: boolean
+    }
     businessEvent?: BusinessEventLink
   }): Promise<JournalEntry>
   /** correctEntry or recordateEntry (lib/core/bookkeeping/storno-service.ts): the storno and the corrected verifikat. */

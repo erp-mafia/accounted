@@ -37,6 +37,10 @@ export const REVERSAL_HOOK_MISSING = 'REVERSAL_HOOK_MISSING' as const
 export const SI_REGISTRATION_STORNO_HAS_PAYMENTS = 'SI_REGISTRATION_STORNO_HAS_PAYMENTS' as const
 export const INVOICE_STORNO_ISSUED = 'INVOICE_STORNO_ISSUED' as const
 export const SALARY_RUN_STORNO_BOOKED = 'SALARY_RUN_STORNO_BOOKED' as const
+export const INVOICE_STORNO_WITHDRAWN = 'INVOICE_STORNO_WITHDRAWN' as const
+export const SI_REGISTRATION_STORNO_CREDITED = 'SI_REGISTRATION_STORNO_CREDITED' as const
+export const EXPENSE_CLAIM_STORNO_REGISTERED = 'EXPENSE_CLAIM_STORNO_REGISTERED' as const
+export const EXPENSE_CLAIM_STORNO_PAID = 'EXPENSE_CLAIM_STORNO_PAID' as const
 export const CURRENCY_REVALUATION_ALREADY_EXISTS = 'CURRENCY_REVALUATION_ALREADY_EXISTS' as const
 export const ASSET_DEPRECIATION_REFUSED = 'ASSET_DEPRECIATION_REFUSED' as const
 export const INVALID_MAPPING_RESULT = 'INVALID_MAPPING_RESULT' as const
@@ -362,6 +366,67 @@ export class BookedSalaryRunStornoError extends Error {
   constructor(public readonly salaryRunId: string) {
     super('The voucher belongs to a booked payroll run. Correct the payroll run instead.')
     this.name = 'BookedSalaryRunStornoError'
+  }
+}
+
+/**
+ * Raised before anything is written when the verifikat of a customer invoice
+ * (source_type invoice_created) would be reversed after the invoice was
+ * credited or written off as a kundförlust: the credit note or the kundförlust
+ * verifikat already took the sale out of the ledger, so a storno would take it
+ * out a second time (lib/invoices/invoice-verifikat-reversal.ts).
+ */
+export class WithdrawnInvoiceStornoError extends Error {
+  readonly code = INVOICE_STORNO_WITHDRAWN
+  constructor(
+    public readonly invoiceId: string,
+    public readonly invoiceStatus: string,
+  ) {
+    super('The voucher books a customer invoice that is already credited or written off. Its voucher is not reversed again.')
+    this.name = 'WithdrawnInvoiceStornoError'
+  }
+}
+
+/**
+ * Raised before anything is written when the registration verifikat of a
+ * supplier invoice (source_type supplier_invoice_registered) would be
+ * reversed while the invoice is credited: its credit note already took the
+ * purchase out of the ledger, so the crediting is undone first
+ * (lib/supplier-invoices/registration-reversal.ts).
+ */
+export class SupplierInvoiceRegistrationCreditedError extends Error {
+  readonly code = SI_REGISTRATION_STORNO_CREDITED
+  constructor(public readonly supplierInvoiceId: string) {
+    super('The supplier invoice this voucher registers is credited. Undo the credit first, then reverse the voucher.')
+    this.name = 'SupplierInvoiceRegistrationCreditedError'
+  }
+}
+
+/**
+ * Raised before anything is written when the verifikat of an expense claim
+ * (source_type expense_claim) would be reversed while the claim stands and is
+ * not yet repaid: Ta bort on the claim reverses the verifikat and removes the
+ * claim together (lib/expenses/claim-verifikat-reversal.ts).
+ */
+export class RegisteredExpenseClaimStornoError extends Error {
+  readonly code = EXPENSE_CLAIM_STORNO_REGISTERED
+  constructor(public readonly expenseClaimId: string) {
+    super('The voucher books an expense claim. Delete the claim instead, which reverses the voucher with it.')
+    this.name = 'RegisteredExpenseClaimStornoError'
+  }
+}
+
+/**
+ * Raised before anything is written when the verifikat of an expense claim
+ * (source_type expense_claim) would be reversed after the claim was paid out
+ * or put on a payslip past draft: Ta bort refuses such a claim, and the
+ * verifikat is corrected instead (lib/expenses/claim-verifikat-reversal.ts).
+ */
+export class PaidExpenseClaimStornoError extends Error {
+  readonly code = EXPENSE_CLAIM_STORNO_PAID
+  constructor(public readonly expenseClaimId: string) {
+    super('The voucher books an expense claim that is paid out or repaid with salary. Correct the voucher instead.')
+    this.name = 'PaidExpenseClaimStornoError'
   }
 }
 
@@ -1260,6 +1325,10 @@ export function isBookkeepingError(err: unknown): boolean {
     err instanceof SupplierInvoiceRegistrationHasPaymentsError ||
     err instanceof IssuedInvoiceStornoError ||
     err instanceof BookedSalaryRunStornoError ||
+    err instanceof WithdrawnInvoiceStornoError ||
+    err instanceof SupplierInvoiceRegistrationCreditedError ||
+    err instanceof RegisteredExpenseClaimStornoError ||
+    err instanceof PaidExpenseClaimStornoError ||
     err instanceof CurrencyRevaluationAlreadyExistsError ||
     err instanceof InvalidMappingResultError ||
     err instanceof TransactionMissingSekValueError ||
@@ -1516,6 +1585,27 @@ export function bookkeepingErrorResponse(err: unknown): NextResponse | null {
   if (err instanceof BookedSalaryRunStornoError) {
     return NextResponse.json(
       { error: { code: err.code, message: err.message, details: { salaryRunId: err.salaryRunId } } },
+      { status: 409 }
+    )
+  }
+
+  if (err instanceof WithdrawnInvoiceStornoError) {
+    return NextResponse.json(
+      { error: { code: err.code, message: err.message, details: { invoiceId: err.invoiceId, invoiceStatus: err.invoiceStatus } } },
+      { status: 409 }
+    )
+  }
+
+  if (err instanceof SupplierInvoiceRegistrationCreditedError) {
+    return NextResponse.json(
+      { error: { code: err.code, message: err.message, details: { supplierInvoiceId: err.supplierInvoiceId } } },
+      { status: 409 }
+    )
+  }
+
+  if (err instanceof RegisteredExpenseClaimStornoError || err instanceof PaidExpenseClaimStornoError) {
+    return NextResponse.json(
+      { error: { code: err.code, message: err.message, details: { expenseClaimId: err.expenseClaimId } } },
       { status: 409 }
     )
   }

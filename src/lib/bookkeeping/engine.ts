@@ -3009,6 +3009,14 @@ export async function reverseEntry(
      */
     salaryRunCorrection?: boolean
     /**
+     * Ta bort on an expense claim only (deleteExpenseClaim,
+     * lib/expenses/expense-claims-service.ts): lets the storno of the claim's
+     * verifikat through, since the claim is removed right after it. Every
+     * other caller leaves it unset, so the generic storno of such a verifikat
+     * stays refused while the claim stands (the expense claim's reversal hook).
+     */
+    expenseClaimRemoval?: boolean
+    /**
      * Posting port: the business event the storno answers, linked right
      * after the reversal's draft header and before its voucher number is
      * drawn (see CreateEntryOptions.businessEvent). Absent, nothing changes.
@@ -3144,6 +3152,8 @@ export async function reverseEntry(
     ...(collectionsRebook ? { leaveCollectedPaymentRows: true } : {}),
     // Korrigera lönekörning reverses all of the run's verifikat together.
     ...(options?.salaryRunCorrection === true ? { salaryRunCorrection: true } : {}),
+    // Ta bort on an expense claim reverses its verifikat and removes the claim.
+    ...(options?.expenseClaimRemoval === true ? { expenseClaimRemoval: true } : {}),
   }
   for (const hook of reversalHooks) {
     if (hook.beforeReversal) await hook.beforeReversal(reversalHookContext)

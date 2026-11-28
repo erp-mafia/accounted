@@ -37,6 +37,7 @@ import {
 } from '@/lib/supplier-invoices/registration-reversal'
 import { assertInvoiceVerifikatReversible } from '@/lib/invoices/invoice-verifikat-reversal'
 import { assertSalaryRunVerifikatReversible } from '@/lib/salary/run-verifikat-reversal'
+import { assertExpenseClaimVerifikatReversible } from '@/lib/expenses/claim-verifikat-reversal'
 
 export const REVERSAL_HOOKS: readonly ReversalHook[] = Object.freeze<ReversalHook[]>([
   // A reversed payment voucher puts the linked invoice or supplier invoice
@@ -138,10 +139,10 @@ export const REVERSAL_HOOKS: readonly ReversalHook[] = Object.freeze<ReversalHoo
       releaseComponentsAfterReversal(supabase, companyId, entry.id),
   },
   // A supplier invoice's registration verifikat: refused while the invoice
-  // has payments (checked before a voucher number is spent); once reversed,
-  // the invoice no longer points at it, so it reads not booked and Bokför
-  // books it again (lib/supplier-invoices/registration-reversal.ts). A
-  // registration no invoice points at passes untouched.
+  // is credited or has payments (checked before a voucher number is spent);
+  // once reversed, the invoice no longer points at it, so it reads not booked
+  // and Bokför books it again (lib/supplier-invoices/registration-reversal.ts).
+  // A registration no invoice points at passes untouched.
   {
     id: 'supplier-invoice-registration',
     module: 'supplier-invoices',
@@ -152,7 +153,8 @@ export const REVERSAL_HOOKS: readonly ReversalHook[] = Object.freeze<ReversalHoo
       releaseSupplierInvoiceRegistrationAfterReversal(supabase, companyId, entry.id),
   },
   // A customer invoice's verifikat: refused once the invoice is sent or
-  // paid, which is withdrawn with Kreditera instead
+  // paid, which is withdrawn with Kreditera instead, and once it is credited
+  // or written off, whose sale is out of the ledger already
   // (lib/invoices/invoice-verifikat-reversal.ts).
   {
     id: 'customer-invoice-verifikat',
@@ -171,6 +173,19 @@ export const REVERSAL_HOOKS: readonly ReversalHook[] = Object.freeze<ReversalHoo
     beforeReversal: async ({ supabase, companyId, entry, salaryRunCorrection }) => {
       if (salaryRunCorrection) return
       await assertSalaryRunVerifikatReversible(supabase, companyId, entry)
+    },
+  },
+  // An expense claim's verifikat: refused while the claim stands, since Ta
+  // bort on the claim reverses it and removes the claim together, and a paid
+  // claim's is corrected instead (lib/expenses/claim-verifikat-reversal.ts).
+  // Ta bort's own storno carries expenseClaimRemoval and passes.
+  {
+    id: 'expense-claim-verifikat',
+    module: 'expenses',
+    sourceTypes: ['expense_claim'],
+    beforeReversal: async ({ supabase, companyId, entry, expenseClaimRemoval }) => {
+      if (expenseClaimRemoval) return
+      await assertExpenseClaimVerifikatReversible(supabase, companyId, entry.id)
     },
   },
 ])

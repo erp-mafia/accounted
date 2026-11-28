@@ -416,7 +416,7 @@ describe('registerExpenseClaim', () => {
     const result = await registerExpenseClaim(sb, COMPANY, USER, INBOX_CLAIM_INPUT)
 
     expect(result).toEqual({ ok: false, code: 'INBOX_ITEM_BOOKED' })
-    expect(reverseEntryMock).toHaveBeenCalledWith(sb, COMPANY, USER, 'je-1')
+    expect(reverseEntryMock).toHaveBeenCalledWith(sb, COMPANY, USER, 'je-1', undefined, { expenseClaimRemoval: true })
     expect(findCall('expense_claims', 'delete')).toBeTruthy()
     expect(linkToJournalEntryMock).not.toHaveBeenCalled()
     expect(findCall('document_attachments', 'insert')).toBeUndefined()
@@ -797,7 +797,7 @@ describe('deleteExpenseClaim', () => {
     expect(findCall('salary_line_items', 'delete')).toBeTruthy()
     expect(findCall('salary_line_items', 'eq')).toEqual(['id', 'li-1'])
     expect(findCall('expense_claims', 'delete')).toBeTruthy()
-    expect(reverseEntryMock).toHaveBeenCalledWith(sb, COMPANY, USER, 'je-1')
+    expect(reverseEntryMock).toHaveBeenCalledWith(sb, COMPANY, USER, 'je-1', undefined, { expenseClaimRemoval: true })
   })
 
   it('stops before the storno when the draft line cannot be removed', async () => {
@@ -824,7 +824,7 @@ describe('deleteExpenseClaim', () => {
 
     const result = await deleteExpenseClaim(sb, COMPANY, USER, 'c1')
     expect(result).toEqual({ ok: true, reversal_entry_id: 'je-storno' })
-    expect(reverseEntryMock).toHaveBeenCalledWith(sb, COMPANY, USER, 'je-1')
+    expect(reverseEntryMock).toHaveBeenCalledWith(sb, COMPANY, USER, 'je-1', undefined, { expenseClaimRemoval: true })
     expect(findCall('expense_claims', 'delete')).toBeTruthy()
   })
 
@@ -840,7 +840,7 @@ describe('deleteExpenseClaim', () => {
     const result = await deleteExpenseClaim(sb, COMPANY, USER, 'c1')
     expect(result).toEqual({ ok: true, reversal_entry_id: 'je-storno' })
     expect(reverseEntryMock).toHaveBeenCalledTimes(1)
-    expect(reverseEntryMock).toHaveBeenCalledWith(sb, COMPANY, USER, 'je-correction')
+    expect(reverseEntryMock).toHaveBeenCalledWith(sb, COMPANY, USER, 'je-correction', undefined, { expenseClaimRemoval: true })
     // Read by the claim's own pointer: the original it was first booked as is not looked up.
     expect(findCalls('journal_entries', 'eq')).toContainEqual(['id', 'je-correction'])
     expect(findCalls('journal_entries', 'eq')).not.toContainEqual(['source_type', 'expense_claim'])
@@ -891,7 +891,7 @@ describe('deleteExpenseClaim', () => {
 
     const result = await deleteExpenseClaim(sb, COMPANY, USER, 'c1')
     expect(result).toEqual({ ok: true, reversal_entry_id: 'je-storno' })
-    expect(reverseEntryMock).toHaveBeenCalledWith(sb, COMPANY, USER, 'je-1')
+    expect(reverseEntryMock).toHaveBeenCalledWith(sb, COMPANY, USER, 'je-1', undefined, { expenseClaimRemoval: true })
     expect(findCall('expense_claims', 'delete')).toBeTruthy()
   })
 
