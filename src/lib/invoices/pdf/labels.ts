@@ -61,6 +61,10 @@ export const PDF_LABELS = {
     colUnitPrice: 'à-pris',
     colVat: 'Moms',
     colTotal: 'Belopp',
+    // After the ex-VAT columns on a document to a private person
+    // (inclVatColumnsShown): the same figures with the row's VAT.
+    colUnitPriceInclVat: 'à-pris\ninkl. moms',
+    colTotalInclVat: 'Belopp\ninkl. moms',
     discountLine: (percent: number) => `Rabatt ${percent} %`,
     // Totals
     subtotal: 'Delsumma:',
@@ -151,6 +155,8 @@ export const PDF_LABELS = {
     colUnitPrice: 'Unit price',
     colVat: 'VAT',
     colTotal: 'Amount',
+    colUnitPriceInclVat: 'Unit price\nincl. VAT',
+    colTotalInclVat: 'Amount\nincl. VAT',
     discountLine: (percent: number) => `Discount ${percent}%`,
     subtotal: 'Subtotal:',
     net: (rate: number) => `Net ${rate}%:`,
