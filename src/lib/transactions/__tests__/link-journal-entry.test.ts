@@ -385,6 +385,8 @@ describe('linkTransactionToJournalEntry: the payment plan', () => {
     enqueue({ data: rounded, error: null })
     enqueue({ data: { settlement_side: 'ar_credit', account_prefix: '151', entry_side: 'credit' }, error: null })
     enqueue({ data: lines, error: null })
+    // The sale-first plan reads the booking settings before the payment is planned.
+    enqueue({ data: { accounting_method: 'accrual', defer_invoice_booking: false }, error: null })
   }
   const link = (supabase: unknown) =>
     linkTransactionToJournalEntry(supabase as never, 'user-1', 'company-1', {

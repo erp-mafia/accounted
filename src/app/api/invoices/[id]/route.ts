@@ -195,7 +195,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
     // build.invoiceFields, so they are preserved. The .eq('status','draft')
     // guard turns a concurrent send/finalize into a 0-row update (race), rather
     // than silently rewriting a now-issued invoice.
-    // Öresavrundning is display-only and optional in the update body. Persist
+    // Öresavrundning is optional in the update body. Persist
     // it when the editor sent a value; otherwise strip it so a partial update
     // can't reset a draft's stored flag (build defaults an absent flag to null).
     const updateFields =

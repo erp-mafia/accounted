@@ -51,6 +51,7 @@ import { anchorCustomerInvoiceDocument } from '@/lib/core/documents/customer-inv
 import { releaseDoubtfulReserveAfterChange } from '@/lib/customer-loss/doubtful'
 import { documentCurrency, ledgerLineSideAmountIn } from '@/lib/bookkeeping/ledger-line-amount'
 import { carriedSekOf } from '@/lib/bookkeeping/ledger-carried-sek'
+import { bookedOreRounding } from '@/lib/bookkeeping/ore-rounding'
 import { isKronorCurrency } from '@/lib/bookkeeping/currency-utils'
 import type { SqlBusinessEventLink } from '@/lib/bookkeeping/business-event-link'
 import { postingPort } from '@/lib/posting/port'
@@ -342,6 +343,10 @@ interface VoucherPaymentRow {
  * `amount` is the stated share of the voucher that is this invoice's, in the
  * invoice's currency (see the module header); omitted, what the voucher has
  * left must fit inside the invoice's remainder.
+ *
+ * `options.saleReceivableSek`: the link books the invoice's sale first
+ * (sale-first.ts), so no verifikat carries it yet when this runs; the SEK the
+ * sale will put on 1510 (the plan's receivableSek) is what the link clears.
  */
 export async function validateVoucherForInvoiceLink(
   supabase: SupabaseClient,
@@ -349,6 +354,7 @@ export async function validateVoucherForInvoiceLink(
   invoice: Invoice & { customer?: Customer },
   journalEntryId: string,
   amount?: number | null,
+  options: { saleReceivableSek?: number } = {},
 ): Promise<ValidateResult> {
   // A stated share is a positive amount to the öre, judged first as in the RPC.
   const statedAmount = amount == null ? null : roundOre(amount)
@@ -567,10 +573,13 @@ export async function validateVoucherForInvoiceLink(
   // that has exactly what 151x carries for it left, as the RPC reads it
   // (20261126170500): with no share, or a share of the whole remainder or of
   // what 151x carries. A voucher with more or less left is judged on the
-  // remainder, as before.
+  // remainder, as before. A sale booked first carries what its plan puts on
+  // 1510, which the RPC reads off the sale once it is booked.
   const remaining = roundOre(remainingAmount)
   const receivable = settlement.side === 'ar_credit' && !sekFallback && isKronorCurrency(invoice.currency)
-    ? await bookedOreReceivable(supabase, companyId, invoice)
+    ? options.saleReceivableSek !== undefined
+      ? bookedOreRounding(remaining, options.saleReceivableSek) !== 0 ? options.saleReceivableSek : null
+      : await bookedOreReceivable(supabase, companyId, invoice)
     : null
   const clearsCarried = receivable !== null
     && Math.abs(arCreditTotal - receivable) <= AMOUNT_TOLERANCE
@@ -931,7 +940,9 @@ async function bookSaleBeforeVoucherLink(
   if (!row) return { ok: true, journalEntryId: null }
 
   const invoice = row as unknown as Invoice & { customer?: Customer }
-  const validation = await validateVoucherForInvoiceLink(supabase, companyId, invoice, params.journalEntryId, params.amount)
+  const validation = await validateVoucherForInvoiceLink(supabase, companyId, invoice, params.journalEntryId, params.amount, {
+    saleReceivableSek: plan.receivableSek,
+  })
   if (!validation.ok) return { ok: false, code: validation.code, details: validation.details }
 
   const booked = await bookSaleBeforeSettlement(opCtx, plan)

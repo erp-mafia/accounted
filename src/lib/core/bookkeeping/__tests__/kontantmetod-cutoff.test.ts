@@ -1573,6 +1573,32 @@ describe('buildKontantmetodCarryLines (årsomföring per invoice)', () => {
     expect(built.anchorSek).toBe(1750)
   })
 
+  it('carries an invoice with öresavrundning at its exact total: the öre stays the payment\'s', () => {
+    // 999,75 asking 1 000. The carry is the claim open on the balansdag, and
+    // every year-2 door clears it as carried; the paid-after rättelse below
+    // clears exactly the carried figure and keeps the payment's 3740 row, so
+    // the carry books the exact total and no 3740, as before.
+    const doc = customerDoc({ outstandingOwn: 999.75, customerShareOwn: 999.75 }, {
+      subtotal: 799.8, vat_amount: 199.95, total: 999.75, ore_rounding: true,
+      items: [customerItem({ unit_price: 799.8, line_total: 799.8, vat_amount: 199.95 })],
+    })
+    const built = buildKontantmetodCarryLines(doc, 'aktiebolag')
+    expect(built.mode).toBe('full')
+    expect(lineOn(built.lines, '1510')).toBe(999.75)
+    expect(built.lines.some((l) => l.account_number === '3740')).toBe(false)
+    expect(built.anchorSek).toBe(999.75)
+    // A customer who pays 1 000 after period end, before the cut-off posts:
+    // the rättelse clears the carried 999,75 and keeps the 0,25 on 3740.
+    const lines = buildPaidBeforePostingCorrectionLines({
+      side: 'customer',
+      reference: 'F-1',
+      carryLines: built.lines.map((l) => ({ ...l, currency: l.currency ?? null })) as never,
+      cashLines: [dr('1930', 1000), cr('3001', 799.8), cr('2611', 199.95), cr('3740', 0.25)],
+      paymentAmount: 999.75,
+    })
+    expect(shape(lines)).toEqual([['1510', 0, 999.75], ['1930', 1000, 0], ['3740', 0, 0.25]])
+  })
+
   it('keeps the currency metadata on 1510 for a foreign invoice', () => {
     // EUR 100 + 25 at 11.00: moms locked at the invoice rate.
     const doc = customerDoc({ outstandingOwn: 125, customerShareOwn: 125 }, {

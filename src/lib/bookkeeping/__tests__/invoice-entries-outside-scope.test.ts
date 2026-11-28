@@ -76,6 +76,8 @@ function makeInvoice(overrides: Partial<Invoice> = {}): Invoice {
     document_type: 'invoice',
     created_at: '2026-11-27T00:00:00Z',
     updated_at: '2026-11-27T00:00:00Z',
+    // The interest lines are the point here, not the öresavrundning.
+    ore_rounding: false,
     items: [makeItem()],
     ...overrides,
   } as Invoice
@@ -125,7 +127,9 @@ describe('the verifikat of a räntefaktura', () => {
       total_sek: -68.49,
       items: [makeItem({ unit_price: -68.49, line_total: -68.49 })],
     })
-    await createCreditNoteJournalEntry(null as never, 'company-1', 'user-1', creditNote, 'aktiebolag')
+    // The original's issue verifikat booked no öre: the credit reverses the exact total.
+    const noIssueOre = { rpc: async () => ({ data: [], error: null }) }
+    await createCreditNoteJournalEntry(noIssueOre as never, 'company-1', 'user-1', creditNote, 'aktiebolag')
     const input = mockedCreateEntry.mock.calls[0][3]
     expectInterestOnly(input, 'debit')
     expect(input.lines.find((l) => l.account_number === '1510')?.credit_amount).toBe(68.49)

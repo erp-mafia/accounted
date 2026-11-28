@@ -937,8 +937,9 @@ const CreateInvoiceBaseSchema = z.object({
   // ("Granska och skapa"). An unnumbered draft is not yet an issued faktura
   // (ML 17 kap 24§), so it can be hard-deleted with no gap in the number series.
   save_as_draft: z.boolean().optional(),
-  // Per-invoice öresavrundning toggle (display-only). Omitted → stored as null,
-  // which inherits company_settings.ore_rounding when rendering totals.
+  // Per-invoice öresavrundning toggle: the printed Att betala and the issue
+  // verifikat (1510 at it, the öre on 3740). Omitted → stored as null, which
+  // inherits company_settings.ore_rounding.
   ore_rounding: z.boolean().optional(),
   // Dimensions PR7: invoice-level bag applied to every generated journal line;
   // items[].dimensions merge over it per revenue line.

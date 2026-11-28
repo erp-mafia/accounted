@@ -399,3 +399,46 @@ describe('proposeSendLines: foreign currency without an exchange rate', () => {
     expect(lines.find((l) => l.account_number === '1510')?.debit_amount).toBe('14375')
   })
 })
+
+describe('proposeSendLines: the öresavrundning the issue books', () => {
+  const ore = (overrides: Parameters<typeof makeInvoiceInput>[0] = {}) =>
+    makeInvoiceInput({
+      total: 999.75,
+      subtotal: 799.8,
+      vat_amount: 199.95,
+      items: [makeItem({ unit_price: 799.8, line_total: 799.8, vat_amount: 199.95 })],
+      ...overrides,
+    })
+  const rows = (lines: ReturnType<typeof proposeSendLines>) => lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])
+
+  it('an invoice with the company\'s rounding on: Dr 1510 1 000 and the 3740 row', () => {
+    expect(rows(proposeSendLines({ invoice: ore(), entityType: 'aktiebolag', oreRounding: { company: { ore_rounding: true } } }))).toEqual([
+      ['1510', '1000', ''],
+      ['3001', '', '799.8'],
+      ['2611', '', '199.95'],
+      ['3740', '', '0.25'],
+    ])
+  })
+
+  it('rounding off, or none asked for: the exact total, no 3740 row', () => {
+    for (const oreRounding of [{ company: { ore_rounding: false } }, undefined]) {
+      const lines = proposeSendLines({ invoice: ore(), entityType: 'aktiebolag', oreRounding })
+      expect(lines.find((l) => l.account_number === '1510')?.debit_amount).toBe('999.75')
+      expect(lines.some((l) => l.account_number === '3740')).toBe(false)
+    }
+  })
+
+  it('a credit note that mirrors its original: Cr 1510 1 000, Dr 3740 0,25', () => {
+    const credit = ore({
+      credited_invoice_id: 'orig-1',
+      total: -999.75,
+      subtotal: -799.8,
+      vat_amount: -199.95,
+      items: [makeItem({ unit_price: -799.8, line_total: -799.8, vat_amount: -199.95 })],
+    })
+    const lines = proposeSendLines({ invoice: credit, entityType: 'aktiebolag', oreRounding: { mirror: true } })
+    const byAccount = Object.fromEntries(lines.map((l) => [l.account_number, l]))
+    expect(byAccount['1510'].credit_amount).toBe('1000')
+    expect(byAccount['3740'].debit_amount).toBe('0.25')
+  })
+})

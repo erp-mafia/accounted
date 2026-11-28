@@ -798,7 +798,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const [paymentPanelOpen, setPaymentPanelOpen] = useState(false)
   const [paymentPanelScope, setPaymentPanelScope] = useState<PaymentPanelScope>('all')
   const [accountingMethod, setAccountingMethod] = useState<'accrual' | 'cash'>('accrual')
-  // Öresavrundning is display-only. In edit mode the draft's stored flag wins;
+  // Öresavrundning: Att betala and the issue verifikat. In edit mode the draft's stored flag wins;
   // otherwise it defaults to the company-wide setting (loaded below).
   const [oreRounding, setOreRounding] = useState<boolean>(
     typeof initialOreRounding === 'boolean' ? initialOreRounding : true,
@@ -3838,6 +3838,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         items: confirmData.items,
         defaultDimensions: defaultDims,
         entityType,
+        oreRounding,
       }
     : null
   let confirmVoucher: ConfirmVoucher | null = null

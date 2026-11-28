@@ -18,6 +18,7 @@ import {
   buildCreditNoteLines,
   buildInvoiceRegistrationLines,
   type InvoiceRegistrationLinesSource,
+  type IssueOreRounding,
 } from './invoice-lines'
 import { roundOre } from '@/lib/money'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
@@ -34,6 +35,14 @@ export interface ProposeSendLinesInput {
    * share and that part, as issueCreditNote books it.
    */
   deductionBookedSek?: number | null
+  /**
+   * The öresavrundning the issue books (IssueOreRounding), as the server
+   * decides it: for an invoice its own choice, else the company setting; for
+   * a kreditfaktura { mirror: true } only when its original's issue verifikat
+   * booked the öre (creditMirrorsIssueOre). Absent: the exact total, no 3740
+   * row.
+   */
+  oreRounding?: IssueOreRounding
 }
 
 function toFormAmount(n: number): string {
@@ -45,10 +54,12 @@ function toFormAmount(n: number): string {
  * Propose journal entry lines for an invoice send (accrual method), or for a
  * credit note the reversal of them.
  *
- * Debit  1510 Kundfordringar [total incl VAT, minus ROT/RUT]
+ * Debit  1510 Kundfordringar [total incl VAT, minus ROT/RUT; the rounded
+ *                             "Att betala" with öresavrundning]
  * Debit  1513 Skatteverket   [ROT/RUT per item]
  * Credit 30xx Försäljning    [subtotal per rate and account]
  * Credit 26xx Utgående moms  [VAT per rate]
+ * Cr/Dr  3740 Öresavrundning [the rounding, when input.oreRounding books it]
  */
 export function proposeSendLines(input: ProposeSendLinesInput): FormLine[] {
   const { invoice, entityType } = input
@@ -64,8 +75,11 @@ export function proposeSendLines(input: ProposeSendLinesInput): FormLine[] {
   let lines: CreateJournalEntryLineInput[]
   try {
     lines = invoice.credited_invoice_id
-      ? buildCreditNoteLines(invoice, entityType, undefined, { deductionBookedSek: input.deductionBookedSek })
-      : buildInvoiceRegistrationLines(invoice, entityType)
+      ? buildCreditNoteLines(invoice, entityType, undefined, {
+          deductionBookedSek: input.deductionBookedSek,
+          oreRounding: input.oreRounding,
+        })
+      : buildInvoiceRegistrationLines(invoice, entityType, undefined, { oreRounding: input.oreRounding })
   } catch (err) {
     // A foreign invoice with no SEK source: the builders refuse rather than
     // relabel the foreign number as kronor, and the send itself is refused

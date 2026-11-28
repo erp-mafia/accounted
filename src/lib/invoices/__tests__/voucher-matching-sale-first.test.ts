@@ -224,6 +224,59 @@ describe('linkInvoiceToVoucher: sale first (defer_invoice_booking)', () => {
     expect(linkRpcCalls(supabase)).toEqual([])
   })
 
+  // 999,75 with öresavrundning: the sale the link books first puts 1 000 on
+  // 1510 and 0,25 on 3740, so the voucher that clears 1 000 is the payment of
+  // the whole invoice. Validated before the sale exists, the link must judge
+  // the voucher against what the sale will put on 1510 (receivableSek), as
+  // the RPC does once the sale is booked.
+  const ROUNDED_INVOICE = { ...UNBOOKED_INVOICE, total: 999.75, remaining_amount: 999.75 }
+  const ROUNDED_PLAN = {
+    ...REQUIRED_PLAN,
+    entry: {
+      ...SALE_ENTRY,
+      lines: [
+        { account_number: '1510', debit_amount: 1000, credit_amount: 0, line_description: null },
+        { account_number: '3001', debit_amount: 0, credit_amount: 799.8, line_description: null },
+        { account_number: '2611', debit_amount: 0, credit_amount: 199.95, line_description: null },
+        { account_number: '3740', debit_amount: 0, credit_amount: 0.25, line_description: null },
+      ],
+    },
+    receivableSek: 1000,
+  }
+
+  it('a sale that books the öre first: a voucher clearing 1 000 settles the 999,75 invoice in full', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    mockPlanById.mockResolvedValue(ROUNDED_PLAN)
+    enqueue({ data: ROUNDED_INVOICE })
+    enqueueValidLink(enqueue, 1000)
+    enqueueRpcOk(enqueue, 'paid')
+
+    const result = await linkInvoiceToVoucher(supabase as never, 'user-1', 'company-1', {
+      invoiceId: 'inv-1',
+      journalEntryId: 'je-pay',
+    })
+
+    expect(result.ok).toBe(true)
+    expect(mockBookSale).toHaveBeenCalledWith(expect.anything(), ROUNDED_PLAN)
+    expect(linkRpcCalls(supabase)).toHaveLength(1)
+  })
+
+  it('a sale that books the exact total first: the 1 000 voucher is still more than the invoice owes', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    mockPlanById.mockResolvedValue({ ...ROUNDED_PLAN, receivableSek: 999.75 })
+    enqueue({ data: ROUNDED_INVOICE })
+    enqueueValidLink(enqueue, 1000)
+
+    const result = await linkInvoiceToVoucher(supabase as never, 'user-1', 'company-1', {
+      invoiceId: 'inv-1',
+      journalEntryId: 'je-pay',
+    })
+
+    expect(result).toMatchObject({ ok: false, code: 'LINK_VOUCHER_AMOUNT_EXCEEDS_REMAINING' })
+    expect(mockBookSale).not.toHaveBeenCalled()
+    expect(linkRpcCalls(supabase)).toEqual([])
+  })
+
   it('an invoice that needs nothing first (booked at issue, kontantmetoden) links as before', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueueRpcOk(enqueue, 'paid')

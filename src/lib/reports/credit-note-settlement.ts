@@ -1,6 +1,7 @@
 import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
+import { isKronorCurrency } from '@/lib/bookkeeping/currency-utils'
 import { documentCurrency } from '@/lib/bookkeeping/ledger-line-amount'
-import { roundOre } from '@/lib/money'
+import { equalOre, roundOre } from '@/lib/money'
 
 /**
  * A kreditfaktura's credit used to pay another invoice (crm#1059).
@@ -67,13 +68,32 @@ function usedOn(link: CreditNoteLink): string {
  *  - kronor against a foreign credit note: at the credit note's own rate.
  * Any other pair cannot be read and uses nothing (null). One link never uses
  * more than the credit note's credit: anything above it is conversion noise.
+ *
+ * The credit is what the verifikat put on 151x: the total, and the öre a
+ * kreditfaktura mirrored from its original (1 000 for -999,75 credited as
+ * -1 000, issueOre). A kronor link that settled an invoice in full on what
+ * its 151x carried (link_invoice_to_voucher's settlement of an invoice whose
+ * issue booked the öre) wrote that invoice's remainder on its row, 999,75,
+ * while it took everything the verifikat had left, 1 000: the row plus that
+ * invoice's own issue öre. `usedBefore` is what the earlier rows naming the
+ * verifikat took of it, as the function counts its capacity.
  */
-function creditUsedBy(link: CreditNoteLink, note: CreditNoteSettlementRow): number | null {
-  const credit = Math.abs(Number(note.total) || 0)
+function creditUsedBy(
+  link: CreditNoteLink,
+  note: CreditNoteSettlementRow,
+  issueOre: ReadonlyMap<string, number> | undefined,
+  usedBefore: number,
+): number | null {
+  const credit = Math.abs(roundOre((Number(note.total) || 0) + (issueOre?.get(note.id) ?? 0)))
   if (link.payment_exchange_rate != null) return credit
   const amount = Number(link.amount) || 0
   const linkCurrency = documentCurrency(link.currency)
-  if (linkCurrency === documentCurrency(note.currency)) return Math.min(credit, amount)
+  if (linkCurrency === documentCurrency(note.currency)) {
+    const paidOre = isKronorCurrency(linkCurrency) ? (issueOre?.get(link.invoice_id) ?? 0) : 0
+    const carried = roundOre(amount + paidOre)
+    if (paidOre !== 0 && equalOre(roundOre(credit - usedBefore), carried)) return carried
+    return Math.min(credit, amount)
+  }
   const rate = Number(note.exchange_rate)
   return linkCurrency === 'SEK' && rate > 0 ? Math.min(credit, roundOre(amount / rate)) : null
 }
@@ -84,13 +104,18 @@ function creditUsedBy(link: CreditNoteLink, note: CreditNoteSettlementRow): numb
  * with a verifikat are ignored. With an `asOfDate` only the set-offs made by
  * then count (see usedOn).
  *
+ * `issueOre`: the öre each document's issue verifikat booked
+ * (fetchReskontraIssueOre), read by creditUsedBy: the credit notes' own and
+ * those of the invoices their links pay.
+ *
  * A verifikat that books more than one credit note cannot say whose credit a
  * link used, so those keep their whole credit, as before. The issuer posts
  * one verifikat per credit note; only imported data could share one.
  */
 export function creditNoteCreditUsed(
   rows: readonly CreditNoteSettlementRow[],
-  asOfDate?: string
+  asOfDate?: string,
+  issueOre?: ReadonlyMap<string, number>,
 ): Map<string, number> {
   const noteByEntry = new Map<string, CreditNoteSettlementRow | null>()
   const linksByEntry = new Map<string, readonly CreditNoteLink[]>()
@@ -103,10 +128,14 @@ export function creditNoteCreditUsed(
   const used = new Map<string, number>()
   for (const [entryId, note] of noteByEntry) {
     if (!note) continue
+    // What the rows before each link took of the verifikat, in id order.
+    let usedBefore = 0
     for (const link of linksByEntry.get(entryId) ?? []) {
       if (note.id === link.invoice_id) continue
+      const before = usedBefore
+      usedBefore = roundOre(usedBefore + (Number(link.amount) || 0))
       if (asOfDate && usedOn(link) > asOfDate) continue
-      const credit = creditUsedBy(link, note)
+      const credit = creditUsedBy(link, note, issueOre, before)
       if (credit === null) continue
       used.set(note.id, roundOre((used.get(note.id) ?? 0) + credit))
     }

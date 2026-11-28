@@ -39,6 +39,7 @@ import { resolveSendLabel } from '@/lib/invoices/editor/primary-action'
 import { DIGITAL_MAILBOX_PROVIDER_NAMES } from '@/lib/digital-mailboxes/sending-status'
 import { resolveEditorStatusLine } from '@/lib/invoices/editor/status-line'
 import { proposeCreditNoteSendLines } from '@/lib/invoices/editor/voucher-preview'
+import { creditPreviewMirrorsIssueOre } from '@/lib/bookkeeping/ledger-carried-sek'
 import { persistAndSend } from '@/lib/invoices/editor/send-sequence'
 import { creditedAmount, creditNoteNumber, creditNoteOriginalReference } from '@/lib/invoices/build-credit-note'
 import { buildCreditNoteItem } from '@/lib/invoices/build-credit-note-item'
@@ -165,6 +166,22 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
   // accounted#45: a deferred original that was never booked is booked first,
   // on its own date, then credited.
   const booksOriginalFirst = invoice ? creditBooksOriginalFirst(companySettings, invoice) : false
+  // The credit mirrors the öresavrundning the original's issue booked, or
+  // will book when the credit books it first (creditPreviewMirrorsIssueOre).
+  // Preview only: the credit decides again when it books.
+  const [mirrorsIssueOre, setMirrorsIssueOre] = useState(false)
+  useEffect(() => {
+    if (!invoice || !company?.id || !books) return
+    let cancelled = false
+    void creditPreviewMirrorsIssueOre(supabase, company.id, invoice, booksOriginalFirst, companySettings ?? null).then(
+      (mirrors) => {
+        if (!cancelled) setMirrorsIssueOre(mirrors)
+      },
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [supabase, invoice, company?.id, books, booksOriginalFirst, companySettings])
   const channelContext: ChannelContext = {
     documentType: 'invoice',
     canEmail,
@@ -452,7 +469,7 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
       // would show a reversal that is not the one booked.
       const entityType = companySettings?.entity_type ?? company?.entity_type
       const lines = isEntityType(entityType)
-        ? proposeCreditNoteSendLines({ ...invoice, customer: invoice.customer ?? undefined }, { entityType, today })
+        ? proposeCreditNoteSendLines({ ...invoice, customer: invoice.customer ?? undefined }, { entityType, today, mirrorsIssueOre })
         : []
       confirmVoucher =
         lines.length > 0
