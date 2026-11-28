@@ -636,6 +636,107 @@ describe('issueAndBookInvoice: kontantfaktura, paid at issue (crm#1281)', () => 
     expect(findCalls('invoices', 'update')).toEqual([])
   })
 
+  // crm#2324: card and Klarna money is a claim on the provider until the
+  // payout (1686, or the account the store books the method to), not 19xx.
+  it('pays it to 1686 without reading the stores', async () => {
+    enqueue({ data: [{ id: 'inv-1' }], error: null }) // CAS flip to sent
+    mockSettleInvoicePayment.mockResolvedValue({
+      ok: true,
+      newStatus: 'paid',
+      newPaidAmount: 1250,
+      newRemaining: 0,
+      journalEntryId: 'je-cash',
+      paidAt: '2026-10-17T12:00:00.000Z',
+    })
+
+    const result = await issueAndBookInvoice({
+      supabase: mockSupabase as never,
+      companyId: 'company-1',
+      userId: 'user-1',
+      invoice: paidDraft() as never,
+      settings,
+      log,
+      paidAtIssue: { settlementAccountNumber: '1686' },
+    })
+
+    expect(result).toEqual({ ok: true, journalEntryId: 'je-cash', partialFailures: [] })
+    expect(findCalls('webshop_store_settings', 'select')).toEqual([])
+    expect(mockSettleInvoicePayment).toHaveBeenCalledWith(
+      mockSupabase,
+      'company-1',
+      'user-1',
+      expect.objectContaining({ settlementAccountNumber: '1686', recognizeSaleAtPayment: true }),
+    )
+  })
+
+  it("pays it to an account a store books a payment method to, such as an own 1517 for Klarna", async () => {
+    enqueue({
+      data: [
+        { payment_method_account_map: { klarna: { mode: 'book', account: '1517' }, swish: { mode: 'book', account: '1930' } } },
+        { payment_method_account_map: { bacs: { mode: 'invoice' } } },
+      ],
+      error: null,
+    }) // the company's stores
+    enqueue({ data: [{ id: 'inv-1' }], error: null }) // CAS flip to sent
+    mockSettleInvoicePayment.mockResolvedValue({
+      ok: true,
+      newStatus: 'paid',
+      newPaidAmount: 1250,
+      newRemaining: 0,
+      journalEntryId: 'je-cash',
+      paidAt: '2026-10-17T12:00:00.000Z',
+    })
+
+    const result = await issueAndBookInvoice({
+      supabase: mockSupabase as never,
+      companyId: 'company-1',
+      userId: 'user-1',
+      invoice: paidDraft() as never,
+      settings,
+      log,
+      paidAtIssue: { settlementAccountNumber: '1517' },
+    })
+
+    expect(result).toEqual({ ok: true, journalEntryId: 'je-cash', partialFailures: [] })
+    expect(findCalls('webshop_store_settings', 'eq')).toEqual([['company_id', 'company-1']])
+    expect(mockSettleInvoicePayment).toHaveBeenCalledWith(
+      mockSupabase,
+      'company-1',
+      'user-1',
+      expect.objectContaining({ settlementAccountNumber: '1517' }),
+    )
+  })
+
+  it.each([
+    ['a revenue account', '3001'],
+    ['the kundfordran a kontantfaktura never has', '1510'],
+    ['a provider-looking account no store books to', '1518'],
+  ])('refuses %s before anything changes', async (_label, account) => {
+    enqueue({
+      data: [{ payment_method_account_map: { klarna: { mode: 'book', account: '1517' } } }],
+      error: null,
+    }) // the company's stores
+
+    const result = await issueAndBookInvoice({
+      supabase: mockSupabase as never,
+      companyId: 'company-1',
+      userId: 'user-1',
+      invoice: paidDraft() as never,
+      settings,
+      log,
+      paidAtIssue: { settlementAccountNumber: account },
+    })
+
+    expect(result).toEqual({
+      ok: false,
+      errorCode: 'INVOICE_PAID_AT_ISSUE_ACCOUNT_NOT_ALLOWED',
+      details: { account_number: account, provider_accounts: ['1517'] },
+    })
+    expect(mockEnsureInvoiceNumber).not.toHaveBeenCalled()
+    expect(mockSettleInvoicePayment).not.toHaveBeenCalled()
+    expect(findCalls('invoices', 'update')).toEqual([])
+  })
+
   it('restores the draft and answers with the refusal when the payment cannot be booked', async () => {
     enqueue({ data: [{ id: 'inv-1' }], error: null }) // CAS flip to sent
     mockSettleInvoicePayment.mockResolvedValue({
