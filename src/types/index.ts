@@ -2799,6 +2799,9 @@ export interface CategorizationTemplate {
   // A person set the rule to ask for a review on every booking (migration
   // 20261030131517): the row's one click and the Inkorg's open the review.
   always_review?: boolean
+  // How many times what the rule books has changed, from 1 (migration
+  // 20261128110000, raised by a trigger only). Absent before it ran.
+  version?: number
   created_at: string
   updated_at: string
 }
