@@ -6,7 +6,7 @@ import { deleteSupplierInvoice } from '@/lib/supplier-invoices/manage'
 import { updateSupplierInvoiceHeader } from '@/lib/supplier-invoices/update-header'
 import { sessionFailureResponse } from '@/lib/operations/session'
 import { unlinkablePaymentIds, type UnlinkablePaymentRow } from '@/lib/invoices/supplier-voucher-unlink'
-import { releasesItsUnderlag } from '@/lib/supplier-invoices/released-underlag'
+import { releasesItsUnderlag, releasesItsUnderlagNow } from '@/lib/supplier-invoices/released-underlag'
 
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'supplier_invoice.get',
@@ -51,7 +51,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   // (released-underlag.ts): the page starts from the inbox item it came from,
   // while that item still names this invoice. A hint: the conversion decides.
   let registerAgainInboxItemId: string | null = null
-  if (releasesItsUnderlag(invoice)) {
+  if (releasesItsUnderlag(invoice) && (await releasesItsUnderlagNow(supabase, companyId, invoice))) {
     const { data: item } = await supabase
       .from('invoice_inbox_items')
       .select('id')

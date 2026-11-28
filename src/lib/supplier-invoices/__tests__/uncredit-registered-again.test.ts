@@ -33,7 +33,11 @@ function tables(registeredAgain: { status: string } | null) {
       // Its credit note: no verifikat, so no storno is posted.
       { id: 'credit-1', company_id: 'company-1', is_credit_note: true, credited_invoice_id: 'inv-1', status: 'credited', registration_journal_entry_id: null, document_id: null },
       ...(registeredAgain
-        ? [{ id: 'inv-2', company_id: 'company-1', is_credit_note: false, status: registeredAgain.status, document_id: 'doc-copy' }]
+        ? [{ id: 'inv-2', company_id: 'company-1', is_credit_note: false, status: registeredAgain.status, registration_journal_entry_id: null, document_id: 'doc-copy' }]
+        : []),
+      // A credit of that registration, standing (it never reached the books).
+      ...(registeredAgain?.status === 'credited'
+        ? [{ id: 'credit-2', company_id: 'company-1', is_credit_note: true, credited_invoice_id: 'inv-2', status: 'credited', registration_journal_entry_id: null, document_id: null }]
         : []),
     ],
     document_attachments: [

@@ -37,7 +37,7 @@ beforeEach(() => {
 
 describe('Ångra kreditering and a registration of the same underlag', () => {
   it('a registration between the first check and the storno stops the undo before anything is written', async () => {
-    registeredAgainAs.mockResolvedValueOnce(null).mockResolvedValueOnce('inv-2')
+    registeredAgainAs.mockResolvedValueOnce(null).mockResolvedValueOnce({ supplier_invoice_id: 'inv-2' })
     const writes: { table: string; method: string; row: unknown }[] = []
     const mock = createRowsMockSupabase(rows(), writes)
     const outcome = await uncreditSupplierInvoice({ supabase: mock.supabase as never, companyId: 'company-1', userId: 'user-1', log }, 'inv-1')
@@ -47,7 +47,7 @@ describe('Ångra kreditering and a registration of the same underlag', () => {
   })
 
   it('one that slips in after the storno is logged with both invoices', async () => {
-    registeredAgainAs.mockResolvedValueOnce(null).mockResolvedValueOnce(null).mockResolvedValueOnce('inv-2')
+    registeredAgainAs.mockResolvedValueOnce(null).mockResolvedValueOnce(null).mockResolvedValueOnce({ supplier_invoice_id: 'inv-2' })
     reverseJournalEntry.mockResolvedValue({ id: 'je-storno' })
     const mock = createRowsMockSupabase(rows())
     const outcome = await uncreditSupplierInvoice({ supabase: mock.supabase as never, companyId: 'company-1', userId: 'user-1', log }, 'inv-1')
@@ -55,7 +55,7 @@ describe('Ångra kreditering and a registration of the same underlag', () => {
     expect((log as unknown as { error: ReturnType<typeof vi.fn> }).error).toHaveBeenCalledWith(
       expect.stringContaining('registered again while the credit was undone'),
       expect.any(Error),
-      { supplierInvoiceId: 'inv-1', registeredAgainAs: 'inv-2' },
+      { supplierInvoiceId: 'inv-1', registeredAgainAs: { supplier_invoice_id: 'inv-2' } },
     )
   })
 })

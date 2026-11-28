@@ -614,17 +614,34 @@ describe('POST /api/supplier-invoices', () => {
     const has = (chain: { method: string; args: unknown[] }[], method: string, ...args: unknown[]) =>
       chain.some((c) => c.method === method && args.every((arg, i) => c.args[i] === arg))
 
+    const original = {
+      id: 'si-credited',
+      status: 'credited',
+      is_credit_note: false,
+      credited_invoice_id: null,
+      registration_journal_entry_id: 'je-credited',
+      payment_journal_entry_id: null,
+    }
+    const hasIn = (chain: { method: string; args: unknown[] }[], column: string, value: string) =>
+      chain.some((c) => c.method === 'in' && c.args[0] === column && (c.args[1] as unknown[]).includes(value))
+
     function stubCreditedUse(createdInvoice: object, usedBy: object[]) {
-      setTable('document_attachments', {
-        data: { id: DOCUMENT_UUID, journal_entry_id: 'je-credited', entry: { status: 'posted' } },
-      })
+      setTable('document_attachments', (chain) =>
+        // The verifikat that hold these bytes, and the document itself.
+        has(chain, 'eq', 'entry.status', 'posted')
+          ? { data: [{ journal_entry_id: 'je-credited' }] }
+          : { data: { id: DOCUMENT_UUID, journal_entry_id: 'je-credited', sha256_hash: 'pdf' } },
+      )
+      // The kreditfaktura's verifikat stands.
+      setTable('journal_entries', { data: [{ id: 'je-cn', status: 'posted' }] })
       setTable('supplier_invoices', (chain) => {
         if (has(chain, 'insert')) return { data: createdInvoice }
         if (has(chain, 'update')) return { data: null }
-        if (has(chain, 'eq', 'registration_journal_entry_id', 'je-credited')) {
-          return { data: [{ id: 'si-credited', status: 'credited', is_credit_note: false }] }
-        }
+        if (has(chain, 'eq', 'is_credit_note', true)) return { data: [{ credited_invoice_id: 'si-credited', registration_journal_entry_id: 'je-cn' }] }
+        if (hasIn(chain, 'registration_journal_entry_id', 'je-credited')) return { data: [original] }
+        if (has(chain, 'in')) return { data: [] }
         if (has(chain, 'eq', 'document_id', DOCUMENT_UUID)) return { data: usedBy }
+        if (has(chain, 'eq', 'document.sha256_hash', 'pdf')) return { data: usedBy }
         return { data: null }
       })
     }
@@ -645,7 +662,7 @@ describe('POST /api/supplier-invoices', () => {
     it('is registered again, and the new verifikat gets a copy instead of the original', async () => {
       const createdInvoice = makeSupplierInvoice({ id: 'si-again', document_id: DOCUMENT_UUID })
       stubRegistration({ invoice: createdInvoice, arrival: 8 })
-      stubCreditedUse(createdInvoice, [{ id: 'si-credited', status: 'credited', is_credit_note: false }])
+      stubCreditedUse(createdInvoice, [original])
       mockCreateSupplierInvoiceRegistrationEntry.mockResolvedValue({ id: 'je-again' })
       mockLinkDocumentCopyToVoucher.mockResolvedValue({ ok: true, document: { id: 'copy-1' }, source_document_id: DOCUMENT_UUID, reused: false })
 
@@ -669,8 +686,8 @@ describe('POST /api/supplier-invoices', () => {
     it('a live invoice on the same document still refuses it as used', async () => {
       stubRegistration()
       stubCreditedUse(makeSupplierInvoice(), [
-        { id: 'si-credited', status: 'credited', is_credit_note: false },
-        { id: 'si-live', status: 'approved', is_credit_note: false },
+        original,
+        { id: 'si-live', status: 'approved', is_credit_note: false, registration_journal_entry_id: 'je-live' },
       ])
 
       const response = await POST(request())

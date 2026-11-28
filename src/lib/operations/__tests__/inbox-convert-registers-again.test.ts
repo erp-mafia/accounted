@@ -58,26 +58,38 @@ const BODY = CreateSupplierInvoiceSchema.parse({
 const has = (chain: { method: string; args: unknown[] }[], method: string, ...args: unknown[]) =>
   chain.some((c) => c.method === method && args.every((arg, i) => c.args[i] === arg))
 
+const hasIn = (chain: { method: string; args: unknown[] }[], column: string, value: string) =>
+  chain.some((c) => c.method === 'in' && c.args[0] === column && (c.args[1] as unknown[]).includes(value))
+
 /**
  * The credited invoice the item was registered as (si-credited, booked on
- * je-credited, where its document stays), and the one this conversion
- * inserts (si-new).
+ * je-credited, where its document doc-1 stays), its kreditfaktura cn-1 with
+ * the verifikat je-cn, and the invoice this conversion inserts (si-new).
  */
 function supplierInvoices(creditedStatus: string): TableMockResolver {
+  const original = {
+    id: 'si-credited',
+    status: creditedStatus,
+    is_credit_note: false,
+    credited_invoice_id: null,
+    registration_journal_entry_id: 'je-credited',
+    payment_journal_entry_id: null,
+  }
   return (chain) => {
     if (has(chain, 'insert')) return { data: { id: 'si-new', status: 'registered', registration_journal_entry_id: null, document_id: 'doc-1' } }
     if (has(chain, 'update')) return { data: null }
-    if (has(chain, 'eq', 'id', 'si-credited')) return { data: { id: 'si-credited', status: creditedStatus, is_credit_note: false } }
-    if (has(chain, 'eq', 'registration_journal_entry_id', 'je-credited')) {
-      return { data: [{ id: 'si-credited', status: creditedStatus, is_credit_note: false }] }
-    }
+    if (has(chain, 'eq', 'is_credit_note', true)) return { data: [{ credited_invoice_id: 'si-credited', registration_journal_entry_id: 'je-cn' }] }
+    if (hasIn(chain, 'registration_journal_entry_id', 'je-credited')) return { data: [original] }
+    if (has(chain, 'in')) return { data: [] }
+    if (has(chain, 'eq', 'document.sha256_hash', 'pdf')) return { data: [original] }
+    if (has(chain, 'eq', 'id', 'si-credited')) return { data: original }
     return { data: null }
   }
 }
 
 let db: ReturnType<typeof createTableMockSupabase>
 
-function setUp(options: { creditedStatus?: string; settings?: Record<string, unknown> } = {}) {
+function setUp(options: { creditedStatus?: string; creditVerifikat?: string; settings?: Record<string, unknown> } = {}) {
   db = createTableMockSupabase({
     invoice_inbox_items: (chain) =>
       has(chain, 'update')
@@ -93,6 +105,12 @@ function setUp(options: { creditedStatus?: string; settings?: Record<string, unk
     'rpc:get_next_arrival_number': { data: 43 },
     supplier_invoices: supplierInvoices(options.creditedStatus ?? 'credited'),
     supplier_invoice_items: { data: [{ id: 'line-1', sort_order: 0 }] },
+    // The kreditfaktura's verifikat, posted unless a test reverses it by hand.
+    journal_entries: { data: [{ id: 'je-cn', status: options.creditVerifikat ?? 'posted' }] },
+    document_attachments: (chain) =>
+      has(chain, 'eq', 'entry.status', 'posted')
+        ? { data: [{ journal_entry_id: 'je-credited' }] }
+        : { data: { id: 'doc-1', sha256_hash: 'pdf' } },
   })
 }
 
@@ -155,6 +173,15 @@ describe('an inbox item whose supplier invoice was credited', () => {
     expect(outcome.preview.registers_again).toEqual({ released_supplier_invoice_id: 'si-credited', copies_document: true })
     expect(db.payloads('supplier_invoices', 'insert')).toEqual([])
     expect(linkDocumentCopyToVoucher).not.toHaveBeenCalled()
+  })
+})
+
+describe('an inbox item whose kreditfaktura was reversed by hand', () => {
+  it('is refused as already converted: the registration books the purchase again', async () => {
+    setUp({ creditVerifikat: 'reversed' })
+    const outcome = await convert()
+    expect(outcome).toMatchObject({ ok: false, code: 'INBOX_ITEM_ALREADY_CONVERTED', details: { supplier_invoice_id: 'si-credited' } })
+    expect(db.payloads('supplier_invoices', 'insert')).toEqual([])
   })
 })
 

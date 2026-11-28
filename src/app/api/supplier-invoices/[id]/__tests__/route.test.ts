@@ -274,9 +274,11 @@ describe('GET /api/supplier-invoices/[id]', () => {
 
   it('names the inbox item a credited invoice can be registered again from', async () => {
     enqueue({
-      data: { id: 'si-1', status: 'credited', is_credit_note: false, credited_invoice_id: null, items: [], payments: [] },
+      data: { id: 'si-1', status: 'credited', is_credit_note: false, credited_invoice_id: null, registration_journal_entry_id: null, items: [], payments: [] },
       error: null,
     })
+    // Its credit stands: a live credit note, no verifikat needed (the original never reached the books).
+    enqueue({ data: [{ credited_invoice_id: 'si-1', registration_journal_entry_id: null }], error: null })
     enqueue({ data: { id: 'item-1' }, error: null })
 
     const { status, body } = await parseJsonResponse<{ data: { register_again_inbox_item_id: string | null } }>(

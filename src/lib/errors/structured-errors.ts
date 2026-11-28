@@ -8004,12 +8004,12 @@ const SUPPLIER_INVOICE_WAVE4: Record<string, StructuredErrorEntry> = {
   SI_UNCREDIT_REGISTERED_AGAIN: {
     httpStatus: 409,
     message_sv:
-      'Krediteringen går inte att ångra: underlaget har registrerats igen på en annan leverantörsfaktura. Kreditera den fakturan först om den ska bort.',
+      'Krediteringen går inte att ångra: underlaget har bokförts igen, på en annan leverantörsfaktura eller verifikation. Ta bort den bokföringen först om den ska bort.',
     message_en:
-      'The credit cannot be undone: its underlag was registered again as another supplier invoice (details.supplier_invoice_id). Undone, the credit would bring this invoice back beside that one and book the purchase twice. Credit that invoice first if it is the one to go.',
+      'The credit cannot be undone: its underlag is booked again, as another supplier invoice (details.supplier_invoice_id) or on another verifikat (details.journal_entry_id). Undone, the credit would book the purchase twice. Take that booking out first if it is the one to go.',
     remediation: {
       description:
-        'Do not retry. The invoice in details.supplier_invoice_id is the live registration of this underlag; credit it first (gnubok_credit_supplier_invoice) only if the person says that one is wrong.',
+        'Do not retry. details names what books this underlag now: credit that invoice (gnubok_credit_supplier_invoice) or reverse that verifikat, and only if the person says it is the wrong one.',
       tool: 'gnubok_credit_supplier_invoice',
     },
   },

@@ -27,6 +27,7 @@ import { convertInboxItemToSupplierInvoice } from '@/lib/operations/inbox-conver
 import { createSupplierInvoice } from '@/lib/supplier-invoices/create'
 import { creditSupplierInvoice } from '@/lib/supplier-invoices/credit'
 import { uncreditSupplierInvoice } from '@/lib/supplier-invoices/manage'
+import { reverseEntry } from '@/lib/bookkeeping/engine'
 import type { PendingOperation } from '@/types'
 import { seedCompany } from './fixtures'
 import { getPool } from './setup'
@@ -306,8 +307,26 @@ describe('a credited invoice releases its underlag', () => {
     expect(copy.id).not.toBe(documentId)
     expect(copy.journal_entry_id).toBe(registered.registration_journal_entry_id)
 
-    // Registered again, the document is held again: a third registration is refused.
-    const third = await createSupplierInvoice(ctx(s), { ...body(s.right), supplier_invoice_number: 'F-2042', document_id: registered.document_id } as never)
-    expect(third).toMatchObject({ ok: false })
+    // Registered again, the underlag is held again: a third registration from
+    // the original is refused, the new invoice named as its holder.
+    const third = await createSupplierInvoice(ctx(s), { ...body(s.right), supplier_invoice_number: 'F-2042', document_id: documentId } as never)
+    expect(third).toMatchObject({ ok: false, details: { reason: 'document_already_used' } })
+  })
+
+  it('a kreditfaktura whose verifikat was reversed by hand releases nothing: the registration books the purchase again', { timeout: 90_000 }, async () => {
+    const s = await seed()
+    const { documentId, item, wrongInvoice } = await registeredOnTheWrongSupplierAndCredited(s)
+    const { rows: credit } = await getPool().query<{ registration_journal_entry_id: string }>(
+      `SELECT registration_journal_entry_id::text FROM public.supplier_invoices WHERE credited_invoice_id = $1 AND is_credit_note`,
+      [wrongInvoice],
+    )
+    await runWithActor({ type: 'user' }, () => reverseEntry(s.supabase, s.companyId, s.userId, credit[0]!.registration_journal_entry_id))
+
+    const viaItem = await convertInboxItemToSupplierInvoice(ctx(s), item, body(s.right) as never, { emit: async () => {} })
+    expect(viaItem).toMatchObject({ ok: false, code: 'INBOX_ITEM_ALREADY_CONVERTED' })
+    const viaDocument = await createSupplierInvoice(ctx(s), { ...body(s.right), document_id: documentId } as never)
+    expect(viaDocument).toMatchObject({ ok: false, details: { reason: 'document_unavailable' } })
+    const { rows } = await getPool().query(`SELECT 1 FROM public.supplier_invoices WHERE supplier_id = $1`, [s.right])
+    expect(rows).toEqual([])
   })
 })

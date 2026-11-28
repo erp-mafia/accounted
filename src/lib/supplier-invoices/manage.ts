@@ -63,7 +63,7 @@ import {
   resolveUnsettledStatus,
 } from '@/lib/supplier-invoices/lifecycle'
 import { loadAttestPolicyOn } from '@/lib/supplier-invoices/attest-policy-read'
-import { registeredAgainAs } from '@/lib/supplier-invoices/released-underlag'
+import { registeredAgainAs, type UnderlagHolder } from '@/lib/supplier-invoices/released-underlag'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
@@ -507,20 +507,22 @@ export async function uncreditSupplierInvoice(
   }
 }
 
-/** SI_UNCREDIT_REGISTERED_AGAIN while another live invoice holds the credited invoice's underlag; fails closed. */
+/**
+ * SI_UNCREDIT_REGISTERED_AGAIN while something else books the credited
+ * invoice's underlag (a live invoice or verifikat, details name it); fails
+ * closed.
+ */
 async function registeredAgainRefusal(
   ctx: OperationContext,
-  original: { id: string; document_id: string | null },
+  original: { id: string; document_id?: string | null },
 ): Promise<Failure | null> {
-  let registeredAgain: string | null
+  let registeredAgain: UnderlagHolder | null
   try {
     registeredAgain = await registeredAgainAs(ctx.supabase, ctx.companyId, original)
   } catch (err) {
     return failed(err)
   }
-  return registeredAgain
-    ? { ok: false, code: 'SI_UNCREDIT_REGISTERED_AGAIN', details: { supplier_invoice_id: registeredAgain } }
-    : null
+  return registeredAgain ? { ok: false, code: 'SI_UNCREDIT_REGISTERED_AGAIN', details: { ...registeredAgain } } : null
 }
 
 /**
@@ -531,7 +533,7 @@ async function registeredAgainRefusal(
  */
 async function registeredAgainAfterRestore(
   ctx: OperationContext,
-  original: { id: string; document_id: string | null },
+  original: { id: string; document_id?: string | null },
 ): Promise<void> {
   try {
     const registeredAgain = await registeredAgainAs(ctx.supabase, ctx.companyId, original)
