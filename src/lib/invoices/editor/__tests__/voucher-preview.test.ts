@@ -306,7 +306,7 @@ describe('proposeCreditNoteSendLines', () => {
   }
 
   it('shows the 3740 row when the original booked its öresavrundning: Cr 1510 1 000, Dr 3740 0,25', () => {
-    const lines = proposeCreditNoteSendLines(rounded(), { entityType: 'aktiebolag', today: '2026-10-05', mirrorsIssueOre: true })
+    const lines = proposeCreditNoteSendLines(rounded(), { entityType: 'aktiebolag', today: '2026-10-05', issueOre: 0.25 })
     const byAccount = Object.fromEntries(lines.map((l) => [l.account_number, l]))
     expect(byAccount['1510'].credit_amount).toBe('1000')
     expect(byAccount['3740'].debit_amount).toBe('0.25')

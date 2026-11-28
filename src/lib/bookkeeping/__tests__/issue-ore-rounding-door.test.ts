@@ -73,7 +73,8 @@ function net(lines: CreateJournalEntryLineInput[], account: string): number {
 }
 
 async function issue(inv: Invoice): Promise<CreateJournalEntryLineInput[]> {
-  await createInvoiceJournalEntry(null as never, 'company-1', 'user-1', inv, 'aktiebolag')
+  const { supabase } = client()
+  await createInvoiceJournalEntry(supabase, 'company-1', 'user-1', inv, 'aktiebolag')
   return mockedCreateEntry.mock.calls.at(-1)![3].lines
 }
 
@@ -112,8 +113,17 @@ describe('createInvoiceJournalEntry: an invoice with öresavrundning books what 
   })
 })
 
-/** A client that answers the company setting read and the issue receivable RPC. */
-function client(opts: { companyOreRounding?: boolean | null; settingsError?: boolean; issueRows?: unknown[] } = {}) {
+/**
+ * A client that answers the company setting read, the 3740 row of the
+ * kontoplan (absent unless `account3740Active` says how it stands) and the
+ * issue receivable RPC.
+ */
+function client(opts: {
+  companyOreRounding?: boolean | null
+  settingsError?: boolean
+  account3740Active?: boolean
+  issueRows?: unknown[]
+} = {}) {
   const reads: string[] = []
   const rpc = vi.fn(async (name: string) => {
     reads.push(`rpc:${name}`)
@@ -124,10 +134,13 @@ function client(opts: { companyOreRounding?: boolean | null; settingsError?: boo
     const chain = {
       select: () => chain,
       eq: () => chain,
-      maybeSingle: async () =>
-        opts.settingsError
-          ? { data: null, error: { message: 'statement timeout', code: '57014' } }
-          : { data: opts.companyOreRounding === undefined ? null : { ore_rounding: opts.companyOreRounding }, error: null },
+      maybeSingle: async () => {
+        if (opts.settingsError) return { data: null, error: { message: 'statement timeout', code: '57014' } }
+        if (table === 'chart_of_accounts') {
+          return { data: opts.account3740Active === undefined ? null : { is_active: opts.account3740Active }, error: null }
+        }
+        return { data: opts.companyOreRounding === undefined ? null : { ore_rounding: opts.companyOreRounding }, error: null }
+      },
     }
     return chain
   })
@@ -140,7 +153,7 @@ describe('createInvoiceJournalEntry: the company setting when the invoice has no
     await createInvoiceJournalEntry(supabase, 'company-1', 'user-1', invoice({ ore_rounding: null }), 'aktiebolag')
     const lines = mockedCreateEntry.mock.calls.at(-1)![3].lines
     expect(net(lines, '1510')).toBe(1000)
-    expect(reads).toEqual(['company_settings'])
+    expect(reads).toEqual(['company_settings', 'chart_of_accounts'])
   })
 
   it('rounding off in the company: the exact total', async () => {
@@ -149,6 +162,40 @@ describe('createInvoiceJournalEntry: the company setting when the invoice has no
     const lines = mockedCreateEntry.mock.calls.at(-1)![3].lines
     expect(net(lines, '1510')).toBe(999.75)
     expect(lines.some((l) => l.account_number === '3740')).toBe(false)
+  })
+
+  it('3740 switched off in the kontoplan: the invoice still issues, at the exact total', async () => {
+    const { supabase } = client({ companyOreRounding: true, account3740Active: false })
+    await createInvoiceJournalEntry(supabase, 'company-1', 'user-1', invoice({ ore_rounding: null }), 'aktiebolag')
+    const lines = mockedCreateEntry.mock.calls.at(-1)![3].lines
+    expect(net(lines, '1510')).toBe(999.75)
+    expect(lines.some((l) => l.account_number === '3740')).toBe(false)
+  })
+
+  it('3740 active or not yet in the kontoplan (the engine seeds it): the rounding is booked', async () => {
+    for (const account3740Active of [true, undefined]) {
+      const { supabase } = client({ account3740Active })
+      await createInvoiceJournalEntry(supabase, 'company-1', 'user-1', invoice(), 'aktiebolag')
+      expect(net(mockedCreateEntry.mock.calls.at(-1)![3].lines, '1510')).toBe(1000)
+    }
+  })
+
+  it('a ROT/RUT invoice keeps the exact total and reads nothing', async () => {
+    const { supabase, reads } = client({ companyOreRounding: true })
+    await createInvoiceJournalEntry(
+      supabase, 'company-1', 'user-1',
+      invoice({
+        ore_rounding: null,
+        subtotal: 670, subtotal_sek: 670, vat_amount: 167.5, vat_amount_sek: 167.5, total: 837.5, total_sek: 837.5,
+        deduction_total: 418,
+        items: [item({ unit_price: 670, line_total: 670, vat_amount: 167.5, deduction_type: 'rut', deduction_amount: 418 })],
+      }),
+      'aktiebolag',
+    )
+    const lines = mockedCreateEntry.mock.calls.at(-1)![3].lines
+    expect(net(lines, '1510')).toBe(419.5)
+    expect(lines.some((l) => l.account_number === '3740')).toBe(false)
+    expect(reads).toEqual([])
   })
 
   it('a failed read books nothing on a guess', async () => {
@@ -173,8 +220,20 @@ describe('createInvoiceJournalEntry: the company setting when the invoice has no
       undefined,
       { descriptionPrefix: 'Självfaktura', numberOverride: 'S-9' },
     )
+    // EUR 99,75 with öre: öresavrundning is for kronor only.
+    await createInvoiceJournalEntry(
+      supabase, 'company-1', 'user-1',
+      invoice({
+        ore_rounding: null, currency: 'EUR', exchange_rate: 11.5,
+        subtotal: 79.8, subtotal_sek: 917.7, vat_amount: 19.95, vat_amount_sek: 229.43, total: 99.75, total_sek: 1147.13,
+        items: [item({ unit_price: 79.8, line_total: 79.8, vat_amount: 19.95 })],
+      }),
+      'aktiebolag',
+    )
+    const foreign = mockedCreateEntry.mock.calls.at(-1)![3].lines
+    expect(foreign.some((l) => l.account_number === '3740')).toBe(false)
     expect(reads).toEqual([])
-    const selfBilled = mockedCreateEntry.mock.calls.at(-1)![3].lines
+    const selfBilled = mockedCreateEntry.mock.calls.at(-2)![3].lines
     expect(net(selfBilled, '1510')).toBe(999.75)
     expect(selfBilled.some((l) => l.account_number === '3740')).toBe(false)
   })
@@ -217,6 +276,31 @@ describe('createCreditNoteJournalEntry: the credit mirrors what its original\'s 
     await createCreditNoteJournalEntry(supabase, 'company-1', 'user-1', credit(), 'aktiebolag', undefined, 'A-1')
     const lines = mockedCreateEntry.mock.calls.at(-1)![3].lines
     expect(net(lines, '1510')).toBe(-999.75)
+    expect(lines.some((l) => l.account_number === '3740')).toBe(false)
+  })
+
+  it('mirrors exactly what the original booked: 1 000,50 booked at 1 000 is credited 1 000 and 0,50', async () => {
+    const odd = credit({
+      subtotal: -800.4, subtotal_sek: -800.4, vat_amount: -200.1, vat_amount_sek: -200.1, total: -1000.5, total_sek: -1000.5,
+      items: [item({ unit_price: -800.4, line_total: -800.4, vat_amount: -200.1 })],
+    })
+    const { supabase } = client({ issueRows: [{ invoice_id: 'inv-1', sek: 1000, currency: 'SEK', total: 1000.5, deduction_total: 0 }] })
+    await createCreditNoteJournalEntry(supabase, 'company-1', 'user-1', odd, 'aktiebolag', undefined, 'A-1')
+    const lines = mockedCreateEntry.mock.calls.at(-1)![3].lines
+    // Not 1 001 and another 0,50: the pair nets to zero on 1510 and 3740.
+    expect(net(lines, '1510')).toBe(-1000)
+    expect(net(lines, '3740')).toBe(-0.5)
+  })
+
+  it('a credit of part of the original reverses its exact amounts', async () => {
+    const part = credit({
+      subtotal: -399.9, subtotal_sek: -399.9, vat_amount: -99.98, vat_amount_sek: -99.98, total: -499.88, total_sek: -499.88,
+      items: [item({ unit_price: -399.9, line_total: -399.9, vat_amount: -99.98 })],
+    })
+    const { supabase } = client({ issueRows: issued(1000) })
+    await createCreditNoteJournalEntry(supabase, 'company-1', 'user-1', part, 'aktiebolag', undefined, 'A-1')
+    const lines = mockedCreateEntry.mock.calls.at(-1)![3].lines
+    expect(net(lines, '1510')).toBe(-499.88)
     expect(lines.some((l) => l.account_number === '3740')).toBe(false)
   })
 

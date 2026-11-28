@@ -61,6 +61,17 @@ function formRow(overrides: Partial<DraftVoucherItem> & { description?: string }
 type Row = [account: string, debit: number, credit: number, dimensions: Record<string, string> | undefined]
 
 /** The verifikat the send books for these form rows. */
+/**
+ * The one read the booking makes here: whether 3740 is switched off in the
+ * kontoplan (it is not: no row, the engine seeds it).
+ */
+const KONTOPLAN_WITHOUT_ROWS = {
+  from: () => {
+    const chain = { select: () => chain, eq: () => chain, maybeSingle: async () => ({ data: null, error: null }) }
+    return chain
+  },
+}
+
 async function bookedRows(items: ReturnType<typeof formRow>[], defaultDims: Record<string, string>, oreRounding = false): Promise<Row[]> {
   const body = buildInvoiceWritePayload(
     {
@@ -99,7 +110,7 @@ async function bookedRows(items: ReturnType<typeof formRow>[], defaultDims: Reco
     invoice_number: '1043',
     items: build.items.map((row, i) => ({ ...row, id: `item-${i}`, invoice_id: 'invoice-1' })) as unknown as InvoiceItem[],
   } as unknown as Invoice
-  const entry = await buildInvoiceJournalEntryInput(null as never, COMPANY_ID, invoice, 'aktiebolag')
+  const entry = await buildInvoiceJournalEntryInput(KONTOPLAN_WITHOUT_ROWS as never, COMPANY_ID, invoice, 'aktiebolag')
   if (!entry) throw new Error('no entry')
   return entry.lines
     .filter((l) => roundOre(l.debit_amount) !== 0 || roundOre(l.credit_amount) !== 0)

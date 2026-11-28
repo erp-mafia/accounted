@@ -5,6 +5,7 @@ import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { fetchArLedgerInvoices, type ArLedgerInvoice } from '@/lib/reports/ar-ledger-invoices'
 import { creditNoteCreditUsed, outstandingWithCreditUsed } from '@/lib/reports/credit-note-settlement'
 import { fetchReskontraIssueOre, reskontraShownTotal, withIssueOre } from '@/lib/reports/reskontra-issue-ore'
+import type { IssueBookedFacts } from '@/lib/bookkeeping/ledger-carried-sek'
 import { fetchCreditedInvoiceIds, netCreditedPairs } from '@/lib/reports/credited-pairs'
 import {
   liveReceivableOutstanding,
@@ -67,7 +68,7 @@ export const GET = withRouteContext<{ params: Promise<{ customerId: string }> }>
     a.invoice_date < b.invoice_date ? -1 : a.invoice_date > b.invoice_date ? 1 : 0
   )
   // The öresavrundning each issue verifikat booked, as in generateARLedger.
-  let issueOre: Map<string, number>
+  let issueOre: Map<string, IssueBookedFacts>
   try {
     issueOre = await fetchReskontraIssueOre(supabase, companyId, population)
   } catch (error) {
@@ -83,7 +84,7 @@ export const GET = withRouteContext<{ params: Promise<{ customerId: string }> }>
       return [
         inv.id,
         outstandingWithCreditUsed(
-          withIssueOre(liveReceivableOutstanding(inv, outstanding, settled.get(inv.id)), outstanding, inv, issueOre.get(inv.id)),
+          withIssueOre(liveReceivableOutstanding(inv, outstanding, settled.get(inv.id)), outstanding, inv, issueOre.get(inv.id)?.ore),
           creditUsed.get(inv.id)
         ),
       ]
@@ -143,7 +144,7 @@ export const GET = withRouteContext<{ params: Promise<{ customerId: string }> }>
     due_date: string
   })[] = invoices.map((inv) => {
     const entry = entryMap.get(inv.id)
-    const total = reskontraShownTotal(inv, issueOre.get(inv.id))
+    const total = reskontraShownTotal(inv, issueOre.get(inv.id)?.ore)
     const outstanding = outstandingOf.get(inv.id) as number
     const isFx = inv.currency && inv.currency !== 'SEK'
     const hasRate = inv.exchange_rate != null && Number(inv.exchange_rate) > 0

@@ -38,8 +38,8 @@ export interface ProposeSendLinesInput {
   /**
    * The öresavrundning the issue books (IssueOreRounding), as the server
    * decides it: for an invoice its own choice, else the company setting; for
-   * a kreditfaktura { mirror: true } only when its original's issue verifikat
-   * booked the öre (creditMirrorsIssueOre). Absent: the exact total, no 3740
+   * a full kreditfaktura { mirror } with exactly the öre its original's issue
+   * verifikat booked (creditNoteIssueOre). Absent: the exact total, no 3740
    * row.
    */
   oreRounding?: IssueOreRounding

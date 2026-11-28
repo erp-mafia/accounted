@@ -27,6 +27,8 @@ import { equalOre, roundOre } from '@/lib/money'
  * (lib/reports/ar-ledger-invoices.ts), in id order.
  */
 export interface CreditNoteLink {
+  /** The payment row's own id. */
+  id?: string
   invoice_id: string
   journal_entry_id: string
   amount: number | string | null
@@ -57,6 +59,29 @@ function usedOn(link: CreditNoteLink): string {
   return invoiceDate > link.payment_date ? invoiceDate : link.payment_date
 }
 
+/** What creditUsedBy reads of an invoice's issue verifikat (IssueBookedFacts). */
+export interface IssueOreFact {
+  /** The öre its issue verifikat booked (issueBookedOre). */
+  ore: number
+  /** The invoice's total. */
+  total: number
+  /** Its payment rows, oldest first. */
+  payments: ReadonlyArray<{ id: string; journal_entry_id: string | null; amount: number }>
+}
+
+/**
+ * Whether `link` is the payment row that settled its invoice in full: its
+ * amount is what was left of the invoice's total after the rows before it.
+ * The row is found by its id, else by the verifikat it names.
+ */
+function settledInFull(link: CreditNoteLink, invoice: IssueOreFact): boolean {
+  let index = link.id ? invoice.payments.findIndex((row) => row.id === link.id) : -1
+  if (index < 0) index = invoice.payments.findIndex((row) => row.journal_entry_id === link.journal_entry_id)
+  if (index < 0) return false
+  const before = invoice.payments.slice(0, index).reduce((sum, row) => roundOre(sum + row.amount), 0)
+  return equalOre(Number(link.amount) || 0, roundOre(invoice.total - before))
+}
+
 /**
  * The credit one payment row used, in the credit note's currency. The credit
  * sits on the verifikat in kronor (buildCreditNoteLines writes the 1510 line
@@ -73,25 +98,29 @@ function usedOn(link: CreditNoteLink): string {
  * kreditfaktura mirrored from its original (1 000 for -999,75 credited as
  * -1 000, issueOre). A kronor link that settled an invoice in full on what
  * its 151x carried (link_invoice_to_voucher's settlement of an invoice whose
- * issue booked the öre) wrote that invoice's remainder on its row, 999,75,
- * while it took everything the verifikat had left, 1 000: the row plus that
- * invoice's own issue öre. `usedBefore` is what the earlier rows naming the
- * verifikat took of it, as the function counts its capacity.
+ * issue booked the öre, when the verifikat had exactly that left) wrote that
+ * invoice's remainder on its row, 999,75, while it took everything the
+ * verifikat had left, 1 000: the row plus that invoice's own issue öre. A
+ * link that paid part of the invoice took what its row says. `usedBefore` is
+ * what the earlier rows naming the verifikat took of it, as the function
+ * counts its capacity.
  */
 function creditUsedBy(
   link: CreditNoteLink,
   note: CreditNoteSettlementRow,
-  issueOre: ReadonlyMap<string, number> | undefined,
+  issueOre: ReadonlyMap<string, IssueOreFact> | undefined,
   usedBefore: number,
 ): number | null {
-  const credit = Math.abs(roundOre((Number(note.total) || 0) + (issueOre?.get(note.id) ?? 0)))
+  const credit = Math.abs(roundOre((Number(note.total) || 0) + (issueOre?.get(note.id)?.ore ?? 0)))
   if (link.payment_exchange_rate != null) return credit
   const amount = Number(link.amount) || 0
   const linkCurrency = documentCurrency(link.currency)
   if (linkCurrency === documentCurrency(note.currency)) {
-    const paidOre = isKronorCurrency(linkCurrency) ? (issueOre?.get(link.invoice_id) ?? 0) : 0
-    const carried = roundOre(amount + paidOre)
-    if (paidOre !== 0 && equalOre(roundOre(credit - usedBefore), carried)) return carried
+    const paid = isKronorCurrency(linkCurrency) ? issueOre?.get(link.invoice_id) : undefined
+    if (paid && settledInFull(link, paid)) {
+      const carried = roundOre(amount + paid.ore)
+      if (equalOre(roundOre(credit - usedBefore), carried)) return carried
+    }
     return Math.min(credit, amount)
   }
   const rate = Number(note.exchange_rate)
@@ -104,9 +133,9 @@ function creditUsedBy(
  * with a verifikat are ignored. With an `asOfDate` only the set-offs made by
  * then count (see usedOn).
  *
- * `issueOre`: the öre each document's issue verifikat booked
- * (fetchReskontraIssueOre), read by creditUsedBy: the credit notes' own and
- * those of the invoices their links pay.
+ * `issueOre`: the öre each document's issue verifikat booked, with its total
+ * and payment rows (fetchReskontraIssueOre), read by creditUsedBy: the credit
+ * notes' own and those of the invoices their links pay.
  *
  * A verifikat that books more than one credit note cannot say whose credit a
  * link used, so those keep their whole credit, as before. The issuer posts
@@ -115,7 +144,7 @@ function creditUsedBy(
 export function creditNoteCreditUsed(
   rows: readonly CreditNoteSettlementRow[],
   asOfDate?: string,
-  issueOre?: ReadonlyMap<string, number>,
+  issueOre?: ReadonlyMap<string, IssueOreFact>,
 ): Map<string, number> {
   const noteByEntry = new Map<string, CreditNoteSettlementRow | null>()
   const linksByEntry = new Map<string, readonly CreditNoteLink[]>()

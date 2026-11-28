@@ -17,12 +17,17 @@
 -- The settlement doors already clear what the ledger carries
 -- (document_carried_sek, bookedOreRounding in lib/bookkeeping/ore-rounding.ts).
 -- The kundreskontra reads this to count the öre the issue booked while the
--- customer's part is open, so it agrees with 1510; a kreditfaktura reads it
--- for its original to mirror the öre only when the original booked it. The
+-- customer's part is open, so it agrees with 1510; a full kreditfaktura reads
+-- it for its original to mirror exactly the öre the original booked. The
 -- comparison with the customer's share (issueBookedOre in
 -- lib/bookkeeping/ledger-carried-sek.ts) stays in TypeScript, so each row
 -- carries the invoice's currency, total and deduction beside the figure.
 -- Invoices without a live issue verifikat with 151x lines are not returned.
+--
+-- Each invoice also carries its payment rows, oldest first: a credit note's
+-- verifikat linked as payment of an invoice whose issue booked the öre took
+-- what 151x carried only when that link settled the invoice in full
+-- (creditUsedBy in lib/reports/credit-note-settlement.ts).
 --
 -- One json array, one object per invoice, as get_ar_ledger_invoices answers:
 -- a scalar result, so PostgREST's max-rows cap does not apply.
@@ -45,7 +50,17 @@ AS $function$
              'sek', r.sek,
              'currency', r.currency,
              'total', r.total,
-             'deduction_total', r.deduction_total
+             'deduction_total', r.deduction_total,
+             'payments', (
+               SELECT coalesce(json_agg(json_build_object(
+                        'id', p.id,
+                        'journal_entry_id', p.journal_entry_id,
+                        'amount', p.amount
+                      ) ORDER BY p.created_at, p.id), '[]'::json)
+                 FROM public.invoice_payments p
+                WHERE p.company_id = p_company_id
+                  AND p.invoice_id = r.id
+             )
            ) ORDER BY r.id),
            '[]'::json)
     FROM (
@@ -71,7 +86,7 @@ REVOKE ALL ON FUNCTION public.invoice_issue_receivable_sek(uuid, uuid[]) FROM PU
 GRANT EXECUTE ON FUNCTION public.invoice_issue_receivable_sek(uuid, uuid[]) TO authenticated, service_role;
 
 COMMENT ON FUNCTION public.invoice_issue_receivable_sek(uuid, uuid[]) IS
-  'What each invoice''s live issue verifikat put on 151x (1513 excluded), with its currency, total and deduction, for the öresavrundning its issue booked. Read by the kundreskontra and the kreditfaktura through fetchIssueBookedOre (lib/bookkeeping/ledger-carried-sek.ts). SECURITY INVOKER.';
+  'What each invoice''s live issue verifikat put on 151x (1513 excluded), with its currency, total, deduction and payment rows, for the öresavrundning its issue booked. Read by the kundreskontra and the kreditfaktura through fetchIssueBookedOre (lib/bookkeeping/ledger-carried-sek.ts). SECURITY INVOKER.';
 
 -- The column's comment said display-only; it now decides the issue verifikat too.
 COMMENT ON COLUMN public.invoices.ore_rounding IS

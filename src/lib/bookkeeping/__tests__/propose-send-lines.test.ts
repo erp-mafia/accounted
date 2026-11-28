@@ -436,7 +436,7 @@ describe('proposeSendLines: the öresavrundning the issue books', () => {
       vat_amount: -199.95,
       items: [makeItem({ unit_price: -799.8, line_total: -799.8, vat_amount: -199.95 })],
     })
-    const lines = proposeSendLines({ invoice: credit, entityType: 'aktiebolag', oreRounding: { mirror: true } })
+    const lines = proposeSendLines({ invoice: credit, entityType: 'aktiebolag', oreRounding: { mirror: 0.25 } })
     const byAccount = Object.fromEntries(lines.map((l) => [l.account_number, l]))
     expect(byAccount['1510'].credit_amount).toBe('1000')
     expect(byAccount['3740'].debit_amount).toBe('0.25')

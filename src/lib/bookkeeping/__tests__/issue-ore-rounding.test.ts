@@ -92,7 +92,7 @@ describe('buildInvoiceRegistrationLines: the issue verifikat books the öresavru
     expect(balanced(lines)).toBe(true)
   })
 
-  it('ROT/RUT: 1510 is the rounded total less the deduction, 1513 unchanged', () => {
+  it('ROT/RUT keeps the exact total: a refused deduction moves 1513 onto 1510 where no door follows it', () => {
     const rut = invoice({
       subtotal: 670,
       vat_amount: 167.5,
@@ -102,12 +102,11 @@ describe('buildInvoiceRegistrationLines: the issue verifikat books the öresavru
     })
     const exact = buildInvoiceRegistrationLines(rut, 'aktiebolag', null)
     const lines = buildInvoiceRegistrationLines(rut, 'aktiebolag', null, { oreRounding: ON })
-    expect(net(lines, '1513')).toBe(net(exact, '1513'))
+    expect(lines).toEqual(exact)
     expect(net(lines, '1513')).toBe(418)
-    expect(net(lines, '1510')).toBe(420)
-    expect(net(lines, '1510')).toBe(getAmountToPay(rut, { ore_rounding: true }).toPay)
-    expect(net(lines, '3740')).toBe(-0.5)
-    expect(balanced(lines)).toBe(true)
+    expect(net(lines, '1510')).toBe(419.5)
+    expect(lines.some((l) => l.account_number === '3740')).toBe(false)
+    expect(issueOreRoundingDelta(rut, 419.5, ON)).toBe(0)
   })
 
   it('moms and revenue are the same rows with and without the rounding: only 1510 and 3740 move', () => {
@@ -173,7 +172,7 @@ describe('buildCreditNoteLines: a credit of an original that booked its öresavr
 
   it('takes 1 000 off 1510 and gives the 0,25 back on 3740: the pair nets to zero', () => {
     const original = buildInvoiceRegistrationLines(invoice(), 'aktiebolag', null, { oreRounding: ON })
-    const reversal = buildCreditNoteLines(credit(), 'aktiebolag', 'A-1', { oreRounding: { mirror: true } })
+    const reversal = buildCreditNoteLines(credit(), 'aktiebolag', 'A-1', { oreRounding: { mirror: 0.25 } })
     expect(net(reversal, '1510')).toBe(-1000)
     expect(net(reversal, '3740')).toBe(0.25)
     expect(balanced(reversal)).toBe(true)
@@ -187,14 +186,35 @@ describe('buildCreditNoteLines: a credit of an original that booked its öresavr
       credit({ subtotal: -800.32, vat_amount: -200.08, total: -1000.4, items: [item({ unit_price: -800.32, line_total: -800.32, vat_amount: -200.08 })] }),
       'aktiebolag',
       'A-1',
-      { oreRounding: { mirror: true } },
+      { oreRounding: { mirror: -0.4 } },
     )
     const both = [...original, ...reversal]
     for (const account of ['1510', '3740', '3001', '2611']) expect(net(both, account)).toBe(0)
   })
 
+  it('takes back exactly what the original booked, not what rounding its total would give', () => {
+    // An imported or hand-edited original: 1 000,50 booked at 1 000 with Dr
+    // 3740 0,50 (rounding its total would give 1 001).
+    const originalLines = [
+      { account_number: '1510', debit_amount: 1000, credit_amount: 0 },
+      { account_number: '3740', debit_amount: 0.5, credit_amount: 0 },
+      { account_number: '3001', debit_amount: 0, credit_amount: 800.4 },
+      { account_number: '2611', debit_amount: 0, credit_amount: 200.1 },
+    ] as CreateJournalEntryLineInput[]
+    const reversal = buildCreditNoteLines(
+      credit({ subtotal: -800.4, vat_amount: -200.1, total: -1000.5, items: [item({ unit_price: -800.4, line_total: -800.4, vat_amount: -200.1 })] }),
+      'aktiebolag',
+      'A-1',
+      { oreRounding: { mirror: -0.5 } },
+    )
+    expect(net(reversal, '1510')).toBe(-1000)
+    expect(balanced(reversal)).toBe(true)
+    const both = [...originalLines, ...reversal]
+    for (const account of ['1510', '3740', '3001', '2611']) expect(net(both, account)).toBe(0)
+  })
+
   it('mirrors even when the credit\'s own flag or the company setting is off today', () => {
-    const reversal = buildCreditNoteLines(credit({ ore_rounding: false }), 'aktiebolag', 'A-1', { oreRounding: { mirror: true } })
+    const reversal = buildCreditNoteLines(credit({ ore_rounding: false }), 'aktiebolag', 'A-1', { oreRounding: { mirror: 0.25 } })
     expect(net(reversal, '1510')).toBe(-1000)
     expect(net(reversal, '3740')).toBe(0.25)
   })
@@ -237,7 +257,9 @@ describe('issueBookedOre: what the issue verifikat put on 1510 beyond the custom
     [999.75, 0, 1000, 0.25],
     [1000.4, 0, 1000, -0.4],
     [-999.75, 0, -1000, -0.25],
-    [837.5, 418, 420, 0.5],
+    // ROT/RUT reads as before, whatever its verifikat booked.
+    [837.5, 418, 420, 0],
+    [837.5, 418, 419.5, 0],
     [999.75, 0, 999.75, 0],
     [999.75, 0, 1500, 0],
     [999.75, 0, null, 0],

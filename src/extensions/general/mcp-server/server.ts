@@ -16653,21 +16653,24 @@ export const tools: McpTool[] = [
         throw new Error('Invoice is not in a matchable state (must be sent, overdue, or partially_paid)')
       }
 
+      // A deferring company's unbooked invoice (defer_invoice_booking) gets
+      // its sale booked first on approval, by the Bokför step: its dry run
+      // refuses here what approval would refuse, and the approver sees the
+      // sale verifikat (lib/invoices/sale-first.ts). Planned before the link
+      // is judged: no verifikat carries the sale yet, so the link clears what
+      // the sale will put on 1510, as the approval's own door judges it.
+      const salePlan = await planSaleBeforeSettlement({ supabase, companyId, userId, log }, invoice as SaleFirstInvoice)
+      if (!salePlan.ok) throwOutcomeFailure(salePlan)
+
       const validation = await validateVoucherForInvoiceLink(
         supabase,
         companyId,
         invoice as never,
         journalEntryId,
         amount,
+        salePlan.required ? { saleReceivableSek: salePlan.receivableSek } : {},
       )
       if (!validation.ok) throw voucherLinkRefusal(validation)
-
-      // A deferring company's unbooked invoice (defer_invoice_booking) gets
-      // its sale booked first on approval, by the Bokför step: its dry run
-      // refuses here what approval would refuse, and the approver sees the
-      // sale verifikat (lib/invoices/sale-first.ts).
-      const salePlan = await planSaleBeforeSettlement({ supabase, companyId, userId, log }, invoice as SaleFirstInvoice)
-      if (!salePlan.ok) throwOutcomeFailure(salePlan)
 
       const voucherLabel = validation.voucher.voucher_series && validation.voucher.voucher_number != null
         ? formatVoucher(validation.voucher)

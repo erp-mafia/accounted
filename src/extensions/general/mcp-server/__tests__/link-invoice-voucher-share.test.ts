@@ -107,7 +107,7 @@ describe('gnubok_link_invoice_to_voucher: a stated share', () => {
 
     const result = (await run(supabase, { amount: 1500 })) as { staged: boolean }
 
-    expect(mockValidate).toHaveBeenCalledWith(supabase, 'company-1', expect.objectContaining({ id: INV_ID }), JE_ID, 1500)
+    expect(mockValidate).toHaveBeenCalledWith(supabase, 'company-1', expect.objectContaining({ id: INV_ID }), JE_ID, 1500, {})
     expect(result.staged).toBe(true)
     const inserted = findCall('pending_operations', 'insert')![0] as {
       operation_type: string
@@ -135,7 +135,7 @@ describe('gnubok_link_invoice_to_voucher: a stated share', () => {
 
     await run(supabase)
 
-    expect(mockValidate).toHaveBeenCalledWith(supabase, 'company-1', expect.anything(), JE_ID, undefined)
+    expect(mockValidate).toHaveBeenCalledWith(supabase, 'company-1', expect.anything(), JE_ID, undefined, {})
     const inserted = findCall('pending_operations', 'insert')![0] as {
       title: string
       params: Record<string, unknown>

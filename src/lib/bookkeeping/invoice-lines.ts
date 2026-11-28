@@ -685,8 +685,9 @@ export function buildInvoiceRegistrationLines(
     ? Math.round(totalCredits * 100) / 100
     : headerToSekOrThrow(invoice.total, invoice.total_sek, invoice.currency, invoice.exchange_rate)
   const exactAmount = roundOre(debitAmount - rotRut.totalSek)
-  // Öresavrundning is for SEK only, so the delta is already kronor.
-  const rounding = issueOreRoundingDelta(invoice, exactAmount, options.oreRounding)
+  // Öresavrundning is for SEK only, so the delta is already kronor. A ROT/RUT
+  // invoice keeps the exact total (issueOreRoundingDelta).
+  const rounding = rotRut.totalSek !== 0 ? 0 : issueOreRoundingDelta(invoice, exactAmount, options.oreRounding)
   const arAmount = roundOre(exactAmount + rounding)
 
   lines.push({
@@ -708,14 +709,15 @@ export function buildInvoiceRegistrationLines(
 /**
  * How an issue verifikat books the öresavrundning the document states:
  *
- *   { company }      an invoice: its own ore_rounding, else the company's
- *                    setting, read by getDisplayTotal exactly as the PDF and
- *                    "Att betala" read it;
- *   { mirror: true } a kreditfaktura of an original whose issue verifikat
- *                    booked its öre (creditMirrorsIssueOre): it rounds because
- *                    the original did, whatever its own flag or the company
- *                    setting says today, so the pair nets to zero on 1510
- *                    and 3740.
+ *   { company }        an invoice: its own ore_rounding, else the company's
+ *                      setting, read by getDisplayTotal exactly as the PDF and
+ *                      "Att betala" read it;
+ *   { mirror: number } a full kreditfaktura of an original whose issue
+ *                      verifikat booked this öre on 1510 (issueBookedOre:
+ *                      0,25 for 999,75 booked at 1 000, -0,50 for 1 000,50
+ *                      booked at 1 000). The credit takes exactly that back,
+ *                      whatever its own flag or the company setting says
+ *                      today, so the pair nets to zero on 1510 and 3740.
  *
  * Absent, the lines carry the exact total: the kontantmetoden year-end carry,
  * and a kreditfaktura of an original booked at the exact total (every invoice
@@ -723,13 +725,14 @@ export function buildInvoiceRegistrationLines(
  */
 export type IssueOreRounding =
   | { company: Pick<CompanySettings, 'ore_rounding'> | null }
-  | { mirror: true }
+  | { mirror: number }
 
 /**
  * The öresavrundning an issue verifikat books on 1510 and 3740: the rounded
  * total less the exact one (getDisplayTotal's roundingDelta, signed: 0,25 for
- * 999,75 shown as 1 000, -0,40 for 1 000,40, -0,25 for a credit of -999,75),
- * 0 when none applies. Under faktureringsmetoden the receivable is booked when
+ * 999,75 shown as 1 000, -0,40 for 1 000,40), or for a mirroring kreditfaktura
+ * the negated öre its original booked (-0,25 for a credit of -999,75), 0 when
+ * none applies. Under faktureringsmetoden the receivable is booked when
  * the invoice is issued, at what the invoice claims (BFL 1 kap 2 § p. 7 and
  * 5 kap 2 §, BFNAR 2013:2 p. 3.4); 3740 carries no moms. Every settlement
  * door then clears what 1510 carries and books only the öre left
@@ -737,7 +740,11 @@ export type IssueOreRounding =
  * (lib/reports/reskontra-issue-ore.ts).
  *
  * Never for a received självfaktura (the buyer's document, booked as it
- * states it), and not when the rounded receivable would not keep its sign or
+ * states it), nor for a ROT/RUT invoice: a refused deduction moves part of
+ * 1513 back onto 1510 in a verifikat of its own, which the settlement doors'
+ * read of what 1510 carries (document_carried_sek) does not follow, so such
+ * an invoice keeps the exact total and its öre lands on 3740 at payment, as
+ * before. Not either when the rounded receivable would not keep its sign or
  * when the öre is past FX_SAME_DOCUMENT_LIMIT of it (an invoice of a few
  * kronor): the settlement doors read a gap that large as a rättelse of the
  * debt, not rounding, so such an invoice keeps the exact total and its öre
@@ -747,16 +754,20 @@ export type IssueOreRounding =
  * document's total.
  */
 export function issueOreRoundingDelta(
-  document: Pick<InvoiceRegistrationLinesSource, 'total' | 'currency' | 'ore_rounding' | 'is_self_billed'>,
+  document: Pick<InvoiceRegistrationLinesSource, 'total' | 'currency' | 'ore_rounding' | 'is_self_billed' | 'deduction_total'>,
   exactReceivableSek: number,
   oreRounding: IssueOreRounding | undefined,
 ): number {
-  if (!oreRounding || document.is_self_billed) return 0
-  const { applies, roundingDelta } =
-    'mirror' in oreRounding
-      ? getDisplayTotal({ ...document, ore_rounding: true }, null)
-      : getDisplayTotal(document, oreRounding.company)
-  const rounding = applies ? roundOre(roundingDelta) : 0
+  if (!oreRounding || document.is_self_billed || !isLedgerCurrency(document.currency)) return 0
+  let rounding: number
+  if ('mirror' in oreRounding) {
+    // What the original's verifikat booked (issueBookedOre, inside the öre band).
+    rounding = roundOre(-oreRounding.mirror)
+  } else {
+    if ((Number(document.deduction_total) || 0) > 0) return 0
+    const { applies, roundingDelta } = getDisplayTotal(document, oreRounding.company)
+    rounding = applies ? roundOre(roundingDelta) : 0
+  }
   if (rounding === 0) return 0
   const rounded = roundOre(exactReceivableSek + rounding)
   if (rounded === 0 || Math.sign(rounded) !== Math.sign(exactReceivableSek)) return 0
@@ -831,11 +842,11 @@ export function creditNoteDeductionSplit(
  * pending or refused was never booked and is not reversed. Undefined, null
  * or the whole share: the full reversal.
  *
- * options.oreRounding: { mirror: true } for a credit of an original whose
- * issue verifikat booked its öresavrundning (IssueOreRounding): 1510 is
- * credited the rounded amount and 3740 takes the öre back, so the original
- * and its full credit net to zero on both. Never on the two steps above: a
- * kontantmetod original has no issue verifikat that rounded.
+ * options.oreRounding: { mirror } for a full credit of an original whose
+ * issue verifikat booked that öresavrundning on 1510 (IssueOreRounding): 1510
+ * is credited what the original put there and 3740 takes exactly that öre
+ * back, so the original and its credit net to zero on both. Never on the two
+ * steps above: a kontantmetod original has no issue verifikat that rounded.
  */
 export function buildCreditNoteLines(
   creditNote: InvoiceRegistrationLinesSource,

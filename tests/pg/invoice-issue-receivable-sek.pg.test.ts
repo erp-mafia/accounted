@@ -224,7 +224,14 @@ async function rowFor(c: Company, invoiceId: string): Promise<InvoiceWithCustome
 /** The function's answer, as the superuser reads it. */
 async function answer(companyId: string, ids: string[]) {
   const { rows } = await pool().query('SELECT public.invoice_issue_receivable_sek($1, $2::uuid[]) AS data', [companyId, ids])
-  return rows[0].data as Array<{ invoice_id: string; sek: number; currency: string; total: number; deduction_total: number }>
+  return rows[0].data as Array<{
+    invoice_id: string
+    sek: number
+    currency: string
+    total: number
+    deduction_total: number
+    payments: Array<{ id: string; journal_entry_id: string | null; amount: number }>
+  }>
 }
 
 describe('invoice_issue_receivable_sek', () => {
@@ -238,8 +245,8 @@ describe('invoice_issue_receivable_sek', () => {
     const old = await issueOld(c, 799.8, 199.95)
     const rows = (await answer(c.companyId, [rounded.id, old.id])).sort((a, b) => Number(a.sek) - Number(b.sek))
     expect(rows).toEqual([
-      { invoice_id: old.id, sek: 999.75, currency: 'SEK', total: 999.75, deduction_total: 0 },
-      { invoice_id: rounded.id, sek: 1000, currency: 'SEK', total: 999.75, deduction_total: 0 },
+      { invoice_id: old.id, sek: 999.75, currency: 'SEK', total: 999.75, deduction_total: 0, payments: [] },
+      { invoice_id: rounded.id, sek: 1000, currency: 'SEK', total: 999.75, deduction_total: 0, payments: [] },
     ])
     // Read through the client: only the rounded one booked öre.
     const ore = await fetchIssueBookedOre(c.client, c.companyId, [rounded.id, old.id])
@@ -432,6 +439,34 @@ describe('the judge: kundreskontran against 1510 with the öresavrundning booked
     //   marked -0,25, batchA -0,25, batchB +0,40, paidByCredit -0,25; every
     //   credited invoice and its credit 0.
     expect(await ledger(c, ['3740'])).toBe(-0.3)
+  })
+
+  it('a mirrored credit linked with a share to a larger rounded invoice: what it used, the reskontra and 1510 agree', async () => {
+    const c = await company()
+    // A paid 999,75 issued as 1 000, credited in full: the credit is 1 000 on 1510.
+    const paid = await issueNew(c, 799.8, 199.95)
+    await bankMatch(c, paid.id, 1000)
+    const mirrored = await credit(c, paid.id, 799.8, 199.95)
+    expect(await ledger(c, ['1510'], undefined, [mirrored.entryId])).toBe(-1000)
+    // 1 249,75 issued as 1 250; the link states a share of 999,75: a part payment.
+    const larger = await issueNew(c, 999.8, 249.95)
+    const linked = await runWithActor({ type: 'user' }, () =>
+      linkInvoiceToVoucher(c.client, c.userId, c.companyId, { invoiceId: larger.id, journalEntryId: mirrored.entryId, amount: 999.75 }),
+    )
+    expect(linked).toMatchObject({ ok: true, result: { invoiceStatus: 'partially_paid' } })
+    const rows = await answer(c.companyId, [larger.id])
+    expect(rows[0]!.payments.map((p) => Number(p.amount))).toEqual([999.75])
+
+    // 1510: 1 250 less the credit's 1 000. The reskontra: 250,25 left on the
+    // invoice, 0,25 of credit left on the kreditfaktura.
+    const booked1510 = await ledger(c, ['1510', '1513'])
+    expect(booked1510).toBe(250)
+    const reconciliation = await generateARReconciliation(c.client, c.companyId, c.period)
+    expect(reconciliation).toMatchObject({ account_1510_balance: 250, ar_ledger_total: 250, difference: 0 })
+    const reskontra = await generateARLedger(c.client, c.companyId)
+    const byInvoice = new Map(reskontra.entries.flatMap((e) => e.invoices).map((row) => [row.invoice_id, row]))
+    expect(byInvoice.get(larger.id)?.outstanding).toBe(250.25)
+    expect(byInvoice.get(mirrored.id)?.outstanding).toBe(-0.25)
   })
 
   it('across a bokslut: open on the balansdag, paid after, the reskontra on that day is what 1510 carried', async () => {

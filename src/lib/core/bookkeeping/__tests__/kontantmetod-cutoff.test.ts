@@ -1588,7 +1588,10 @@ describe('buildKontantmetodCarryLines (årsomföring per invoice)', () => {
     expect(built.lines.some((l) => l.account_number === '3740')).toBe(false)
     expect(built.anchorSek).toBe(999.75)
     // A customer who pays 1 000 after period end, before the cut-off posts:
-    // the rättelse clears the carried 999,75 and keeps the 0,25 on 3740.
+    // the rättelse clears the carried 999,75 and keeps the 0,25 on 3740. The
+    // payment row says 999,75, what cleared the invoice in its currency: a
+    // door that books the öre on 3740 writes the remainder on the row, not
+    // the bank amount (lib/invoices/invoice-payment-row.ts: the amount applied).
     const lines = buildPaidBeforePostingCorrectionLines({
       side: 'customer',
       reference: 'F-1',

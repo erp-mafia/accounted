@@ -207,11 +207,11 @@ export function proposeCreditNoteSendLines(
     entityType: EntityType
     today: string
     /**
-     * The original's issue verifikat booked its öresavrundning
-     * (creditMirrorsIssueOre), or will when the credit books it first: the
-     * credit mirrors it.
+     * The öresavrundning the original's issue verifikat booked, or will book
+     * when the credit books it first (creditPreviewIssueOre): the full credit
+     * mirrors exactly that. 0 or absent: the exact amounts.
      */
-    mirrorsIssueOre?: boolean
+    issueOre?: number
   },
 ): FormLine[] {
   const reference = creditNoteOriginalReference(original)
@@ -241,7 +241,7 @@ export function proposeCreditNoteSendLines(
         ore_rounding: fields.ore_rounding,
       },
       entityType: options.entityType,
-      ...(options.mirrorsIssueOre ? { oreRounding: { mirror: true } as const } : {}),
+      ...(options.issueOre ? { oreRounding: { mirror: options.issueOre } } : {}),
     })
   } catch {
     // A missing FX rate on a foreign original: the confirm says how it books instead.

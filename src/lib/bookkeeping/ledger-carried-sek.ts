@@ -24,7 +24,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CompanySettings } from '@/types'
 import { isKronorCurrency, sekOfForeign } from '@/lib/bookkeeping/currency-utils'
-import { invoiceCustomerShare } from '@/lib/bookkeeping/customer-share'
 import { bookedOreRounding } from '@/lib/bookkeeping/ore-rounding'
 import { hasOreToRound } from '@/lib/bookkeeping/invoice-rounding'
 import { issueOreRoundingDelta } from '@/lib/bookkeeping/invoice-lines'
@@ -181,7 +180,7 @@ export function statedSettlement(opts: { cleared: number; sekAtRate: number; dif
   return { bankSek, gainSek: roundOre(bankSek - cleared) }
 }
 
-/** How many invoice ids one invoice_issue_receivable_sek call carries. */
+/** How many invoice ids one invoice_issue_receivable_sek call carries; the batches are read one after another. */
 const ISSUE_RECEIVABLE_BATCH = 200
 
 /** One row of invoice_issue_receivable_sek: what the issue put on 151x and the invoice facts it is compared with. */
@@ -191,98 +190,131 @@ interface IssueReceivableRow {
   currency: string | null
   total: number | string | null
   deduction_total: number | string | null
+  payments?: Array<{ id: string; journal_entry_id: string | null; amount: number | string | null }> | null
 }
 
 /**
  * The öresavrundning a SEK document's own issue verifikat booked: what that
- * verifikat put on 151x (1513 aside) beyond the customer's share at issue
- * (the total less a ROT/RUT deduction; a later reclaim is a verifikat of its
- * own), when the gap is inside the öre band (bookedOreRounding).
+ * verifikat put on 151x (1513 aside) beyond its total, when the gap is inside
+ * the öre band (bookedOreRounding).
  *
- *   > 0  1510 carries more than the share: rounded up (999,75 issued as 1 000)
+ *   > 0  1510 carries more than the total: rounded up (999,75 issued as 1 000)
  *   < 0  1510 carries less: rounded down (1 000,40 as 1 000), or a
  *        kreditfaktura that mirrored a rounding up (-999,75 as -1 000)
  *   0    the exact total (every document issued before the issue verifikat
- *        booked the öre), a foreign document, no issue verifikat, or a gap of
- *        a krona or more, which is never rounding
+ *        booked the öre), a foreign document, no issue verifikat, a gap of a
+ *        krona or more, which is never rounding, or a ROT/RUT document
+ *
+ * A ROT/RUT document reads 0 whatever its verifikat booked: its issue keeps
+ * the exact total (issueOreRoundingDelta), and a refused deduction moves part
+ * of 1513 onto 1510 in a verifikat of its own, which neither the settlement
+ * doors' read of what 1510 carries nor the reskontra's open share follows. So
+ * such a document reads as it did before the issue booked the öre.
  */
 export function issueBookedOre(
   document: { currency?: string | null; total: number | string | null; deduction_total?: number | string | null },
   issueReceivableSek: number | null | undefined,
 ): number {
   if (!isKronorCurrency(document.currency) || issueReceivableSek == null) return 0
-  const share = invoiceCustomerShare({
-    total: Number(document.total) || 0,
-    deduction_total: Number(document.deduction_total) || 0,
-  })
-  const booked = bookedOreRounding(share, issueReceivableSek)
+  if (Math.abs(Number(document.deduction_total) || 0) > 0) return 0
+  const booked = bookedOreRounding(Number(document.total) || 0, issueReceivableSek)
   return booked === 0 ? 0 : -booked
 }
 
+/** What a document's issue verifikat booked of the öre, with the facts a credit link is read against. */
+export interface IssueBookedFacts {
+  /** issueBookedOre: never 0 in a fetchIssueBookedFacts answer. */
+  ore: number
+  /** The document's total: the customer's share, as a ROT/RUT document never books öre. */
+  total: number
+  /** Its payment rows, oldest first: the verifikat each names and the amount it paid. */
+  payments: Array<{ id: string; journal_entry_id: string | null; amount: number }>
+}
+
 /**
- * The öre each document's own issue verifikat booked (issueBookedOre), keyed
- * by invoice id, read through public.invoice_issue_receivable_sek: the issue
- * verifikat followed through a storno to its correction, 151x without 1513,
- * and the document's own facts in the same row. Documents whose issue booked
+ * The öre each document's own issue verifikat booked (issueBookedOre), with
+ * its total and its payment rows, keyed by invoice id, read through
+ * public.invoice_issue_receivable_sek: the issue verifikat followed through a
+ * storno to its correction, 151x without 1513. Documents whose issue booked
  * no öre, or that have no live issue verifikat, are absent. Works with the
  * browser client (RLS) and the server's. Throws on a read error.
  */
+export async function fetchIssueBookedFacts(
+  supabase: Pick<SupabaseClient, 'rpc'>,
+  companyId: string,
+  invoiceIds: readonly string[],
+): Promise<Map<string, IssueBookedFacts>> {
+  const out = new Map<string, IssueBookedFacts>()
+  for (const batch of chunk([...new Set(invoiceIds)], ISSUE_RECEIVABLE_BATCH)) {
+    const { data, error } = await supabase.rpc('invoice_issue_receivable_sek', {
+      p_company_id: companyId,
+      p_invoice_ids: batch,
+    })
+    if (error) throw dbError(error, 'issue receivable')
+    for (const row of (Array.isArray(data) ? data : []) as IssueReceivableRow[]) {
+      const ore = issueBookedOre(row, roundOre(Number(row.sek)))
+      if (ore === 0) continue
+      out.set(row.invoice_id, {
+        ore,
+        total: roundOre(Number(row.total) || 0),
+        payments: (row.payments ?? []).map((payment) => ({
+          id: payment.id,
+          journal_entry_id: payment.journal_entry_id,
+          amount: roundOre(Number(payment.amount) || 0),
+        })),
+      })
+    }
+  }
+  return out
+}
+
+/** fetchIssueBookedFacts, the öre alone. */
 export async function fetchIssueBookedOre(
   supabase: Pick<SupabaseClient, 'rpc'>,
   companyId: string,
   invoiceIds: readonly string[],
 ): Promise<Map<string, number>> {
-  const ids = [...new Set(invoiceIds)]
-  const out = new Map<string, number>()
-  if (ids.length === 0) return out
-  const batches = await Promise.all(
-    chunk(ids, ISSUE_RECEIVABLE_BATCH).map(async (batch) => {
-      const { data, error } = await supabase.rpc('invoice_issue_receivable_sek', {
-        p_company_id: companyId,
-        p_invoice_ids: batch,
-      })
-      if (error) throw dbError(error, 'issue receivable')
-      return (Array.isArray(data) ? data : []) as IssueReceivableRow[]
-    }),
-  )
-  for (const row of batches.flat()) {
-    const ore = issueBookedOre(row, roundOre(Number(row.sek)))
-    if (ore !== 0) out.set(row.invoice_id, ore)
-  }
-  return out
+  const facts = await fetchIssueBookedFacts(supabase, companyId, invoiceIds)
+  return new Map([...facts].map(([id, fact]) => [id, fact.ore]))
 }
 
 /**
- * Whether a kreditfaktura mirrors its original's öresavrundning
- * (buildCreditNoteLines' { mirror: true }): when the original's own issue
- * verifikat booked its öre, the credit books it back so the pair nets to zero
- * on 1510 and 3740. An original booked at the exact total (issued before the
- * issue verifikat booked the öre, or imported that way) is credited at the
- * exact total, as before. Read from the ledger, never from a flag or the
- * company setting of today. A credit without öre in its total has nothing to
- * mirror and costs no read. The credit door and every preview ask here.
- * Throws on a read error.
+ * The öresavrundning a kreditfaktura mirrors (buildCreditNoteLines'
+ * { mirror }): exactly what its original's own issue verifikat booked on
+ * 1510 (issueBookedOre: 0,25 for 999,75 booked at 1 000, -0,50 for 1 000,50
+ * booked at 1 000), so the pair nets to zero on 1510 and 3740. Only for a
+ * full credit, whose total is the original's negated: a credit of part of
+ * the original cannot say which part of the öre is its own, so it reverses
+ * its exact amounts and the öre stays with the original until its settlement
+ * clears what 1510 carries. 0 for an original booked at the exact total
+ * (issued before the issue verifikat booked the öre, or imported that way):
+ * the credit reverses the exact total, as before. Read from the ledger, never
+ * from a flag or the company setting of today. A credit without öre in its
+ * total costs no read. Throws on a read error.
  */
-export async function creditMirrorsIssueOre(
+export async function creditNoteIssueOre(
   supabase: Pick<SupabaseClient, 'rpc'>,
   companyId: string,
   credit: { credited_invoice_id?: string | null; currency?: string | null; total?: number | string | null },
-): Promise<boolean> {
+): Promise<number> {
   const originalId = credit.credited_invoice_id
-  if (!originalId || !hasOreToRound(credit)) return false
-  return (await fetchIssueBookedOre(supabase, companyId, [originalId])).has(originalId)
+  if (!originalId || !hasOreToRound(credit)) return 0
+  const original = (await fetchIssueBookedFacts(supabase, companyId, [originalId])).get(originalId)
+  if (!original || !equalOre(-(Number(credit.total) || 0), original.total)) return 0
+  return original.ore
 }
 
 /**
- * creditMirrorsIssueOre for a preview of the credit of `original`. When the
- * credit books the original first (a deferred original never booked,
- * creditBooksOriginalFirst), the original's verifikat does not exist yet: it
- * will round as its own issue does (issueOreRoundingDelta with the invoice's
- * choice, else the company setting), and the credit mirrors that. Otherwise
- * the ledger answers. A failed read previews no rounding row; the credit
- * decides again when it books.
+ * creditNoteIssueOre for a preview of a credit of `original` whose total is
+ * `creditTotal` (negative). When the credit books the original first (a
+ * deferred original never booked, creditBooksOriginalFirst), the original's
+ * verifikat does not exist yet: it will round as its own issue does
+ * (issueOreRoundingDelta with the invoice's choice, else the company
+ * setting), and a full credit mirrors that. Otherwise the ledger answers. A
+ * failed read previews no rounding row; the credit decides again when it
+ * books.
  */
-export async function creditPreviewMirrorsIssueOre(
+export async function creditPreviewIssueOre(
   supabase: Pick<SupabaseClient, 'rpc'>,
   companyId: string,
   original: {
@@ -293,22 +325,24 @@ export async function creditPreviewMirrorsIssueOre(
     ore_rounding?: boolean | null
     is_self_billed?: boolean | null
   },
+  creditTotal: number,
   booksOriginalFirst: boolean,
   company: Pick<CompanySettings, 'ore_rounding'> | null,
-): Promise<boolean> {
+): Promise<number> {
   if (booksOriginalFirst) {
+    if (!equalOre(-creditTotal, original.total)) return 0
     const exact = roundOre(original.total - Math.max(0, Number(original.deduction_total) || 0))
-    return issueOreRoundingDelta(original, exact, { company }) !== 0
+    return issueOreRoundingDelta(original, exact, { company })
   }
   try {
-    return await creditMirrorsIssueOre(supabase, companyId, {
+    return await creditNoteIssueOre(supabase, companyId, {
       credited_invoice_id: original.id,
       currency: original.currency,
-      total: original.total,
+      total: creditTotal,
     })
   } catch {
     // A preview only: the credit door reads the ledger again when it books,
     // and refuses on a failed read there.
-    return false
+    return 0
   }
 }

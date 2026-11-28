@@ -13,19 +13,19 @@
  * settlement of the rest clears what 151x carries, öre and all
  * (bookedOreRounding in every payment door), after which nothing is added.
  *
- * Invoices issued before, and imported ones booked at the exact total, have
- * no öre on their issue verifikat and read as they always did. Which ones
- * booked it is a fact of their own verifikat (fetchIssueBookedOre); only a SEK
- * document with öre in its total can have one, so only those are read, and
- * the invoices a credit note's verifikat paid (creditNoteCreditUsed reads
- * theirs).
+ * Invoices issued before, imported ones booked at the exact total, and every
+ * ROT/RUT invoice (issueBookedOre) have no öre counted here and read as they
+ * always did. Which ones booked it is a fact of their own verifikat
+ * (fetchIssueBookedFacts); only a SEK document with öre in its total can have
+ * one, so only those are read, and the invoices a credit note's verifikat paid
+ * (creditNoteCreditUsed reads theirs).
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
 import { isKronorCurrency } from '@/lib/bookkeeping/currency-utils'
 import { invoiceCustomerOutstanding, invoiceCustomerShare } from '@/lib/bookkeeping/customer-share'
 import { hasOreToRound } from '@/lib/bookkeeping/invoice-rounding'
-import { fetchIssueBookedOre } from '@/lib/bookkeeping/ledger-carried-sek'
+import { fetchIssueBookedFacts, type IssueBookedFacts } from '@/lib/bookkeeping/ledger-carried-sek'
 import { roundOre } from '@/lib/money'
 import type { CreditNoteLink } from './credit-note-settlement'
 
@@ -41,15 +41,16 @@ export interface IssueOreRow {
 }
 
 /**
- * The öre each row's issue verifikat booked (issueBookedOre), keyed by
- * invoice id, beside that of every SEK invoice a credit note's verifikat paid.
- * Rows that booked none are absent. Throws on a read error.
+ * The öre each row's issue verifikat booked (issueBookedOre, with the facts
+ * of fetchIssueBookedFacts), keyed by invoice id, beside that of every SEK
+ * invoice a credit note's verifikat paid. Rows that booked none are absent.
+ * Throws on a read error.
  */
 export async function fetchReskontraIssueOre(
   supabase: Pick<SupabaseClient, 'rpc'>,
   companyId: string,
   rows: readonly IssueOreRow[],
-): Promise<Map<string, number>> {
+): Promise<Map<string, IssueBookedFacts>> {
   const ids = rows.filter((row) => row.journal_entry_id && hasOreToRound(row)).map((row) => row.id)
   for (const row of rows) {
     if (!isCreditNoteDocument(row) || !isKronorCurrency(row.currency)) continue
@@ -57,7 +58,7 @@ export async function fetchReskontraIssueOre(
       if (isKronorCurrency(link.currency)) ids.push(link.invoice_id)
     }
   }
-  return ids.length === 0 ? new Map() : fetchIssueBookedOre(supabase, companyId, ids)
+  return ids.length === 0 ? new Map() : fetchIssueBookedFacts(supabase, companyId, ids)
 }
 
 /**

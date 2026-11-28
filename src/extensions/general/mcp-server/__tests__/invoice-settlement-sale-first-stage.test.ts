@@ -229,14 +229,29 @@ describe('gnubok_link_invoice_to_voucher staging: sale first', () => {
     expect(findCall('pending_operations', 'insert')).toBeUndefined()
   })
 
-  it('a link the validation refuses never plans the sale', async () => {
-    const { supabase } = setup()
+  it('judges the link against what the sale will put on 1510, as approval does', async () => {
+    // 999,75 asking 1 000: the sale books 1510 at 1 000, so a voucher crediting
+    // 1510 1 000 settles it. Without the plan's figure the validation reads a
+    // remainder of 999,75 and refuses what approval accepts.
+    const { supabase } = setup(unbookedInvoice({ total: 999.75, remaining_amount: 999.75 }))
+    mockPlan.mockResolvedValue({ ok: true, required: true, invoiceId: INVOICE_ID, entry: SALE_ENTRY, receivableSek: 1000 })
+
+    await linkVoucher.execute({ invoice_id: INVOICE_ID, journal_entry_id: JE_ID }, 'company-1', 'user-1', supabase as never, ACTOR)
+
+    expect(mockValidateLink).toHaveBeenCalledWith(
+      expect.anything(), 'company-1', expect.objectContaining({ id: INVOICE_ID }), JE_ID, undefined,
+      { saleReceivableSek: 1000 },
+    )
+  })
+
+  it('a link the validation refuses stages nothing', async () => {
+    const { supabase, findCall } = setup()
     mockValidateLink.mockResolvedValue({ ok: false, code: 'LINK_VOUCHER_NO_AR_CREDIT' })
 
     await expect(
       linkVoucher.execute({ invoice_id: INVOICE_ID, journal_entry_id: JE_ID }, 'company-1', 'user-1', supabase as never, ACTOR),
     ).rejects.toMatchObject({ code: 'LINK_VOUCHER_NO_AR_CREDIT' })
-    expect(mockPlan).not.toHaveBeenCalled()
+    expect(findCall('pending_operations', 'insert')).toBeUndefined()
   })
 
   it('an invoice that needs nothing first stages as before', async () => {
@@ -249,5 +264,7 @@ describe('gnubok_link_invoice_to_voucher staging: sale first', () => {
 
     expect(result.preview).not.toHaveProperty('books_sale_first')
     expect(result.next?.description).toMatch(/No new verifikat is created/)
+    // Its verifikat carries the sale: the validation reads the ledger.
+    expect(mockValidateLink.mock.calls[0]![5]).toEqual({})
   })
 })

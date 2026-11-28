@@ -173,7 +173,7 @@ describe('kundreskontra and 1510 with the öresavrundning booked at issue', () =
     const books = emptyBooks()
     issue(books, source('F-1', 799.8, 199.95), true, { status: 'credited' })
     const credit = source('KF-1', -799.8, -199.95)
-    post(books, 'je-KF-1', buildCreditNoteLines(credit, 'aktiebolag', 'A-1', { oreRounding: { mirror: true } }), '2026-03-05')
+    post(books, 'je-KF-1', buildCreditNoteLines(credit, 'aktiebolag', 'A-1', { oreRounding: { mirror: 0.25 } }), '2026-03-05')
     books.invoices.push({
       id: 'KF-1', invoice_number: 'KF-1', customer_id: 'cust-1', invoice_date: '2026-03-05', due_date: '2026-03-05',
       status: 'sent', total: -999.75, paid_amount: 0, currency: 'SEK', deduction_total: 0,
@@ -205,7 +205,7 @@ describe('kundreskontra and 1510 with the öresavrundning booked at issue', () =
     expect(receivableBalance(books)).toBe(0)
   })
 
-  it('ROT/RUT: the reskontra counts Att betala and Skatteverket\'s share, as 1510 and 1513 carry', async () => {
+  it('ROT/RUT keeps the exact total at issue, and the reskontra reads it as before', async () => {
     const books = emptyBooks()
     const rut = source('F-rut', 670, 167.5, {
       deduction_total: 418,
@@ -214,10 +214,46 @@ describe('kundreskontra and 1510 with the öresavrundning booked at issue', () =
     issue(books, rut, true)
 
     const result = await reconcile(books)
-    // 420 on 1510 (838 rounded, less 418) and 418 on 1513
-    expect(result.account_1510_balance).toBe(838)
-    expect(result.ar_ledger_total).toBe(838)
+    // 419,50 on 1510 (837,50 less 418) and 418 on 1513
+    expect(result.account_1510_balance).toBe(837.5)
+    expect(result.ar_ledger_total).toBe(837.5)
     expect(result.is_reconciled).toBe(true)
+  })
+
+  it('ROT/RUT with öre booked at issue by hand, paid, then the deduction refused: the reskontra reads as before', async () => {
+    // An imported issue: 1510 1 401, 1513 600, Cr 3740 0,50 (rounded 2 000,50
+    // up). The customer pays 1 401; Skatteverket refuses, 600 moves onto 1510.
+    const books = emptyBooks()
+    const rot = source('F-rot', 1600.4, 400.1, {
+      deduction_total: 600,
+      items: [item(1600.4, 400.1, { deduction_type: 'rot', deduction_amount: 600 })],
+    })
+    post(books, 'je-F-rot', [
+      { account_number: '1510', debit_amount: 1401, credit_amount: 0 },
+      { account_number: '1513', debit_amount: 600, credit_amount: 0 },
+      { account_number: '3001', debit_amount: 0, credit_amount: 1600.4 },
+      { account_number: '2611', debit_amount: 0, credit_amount: 400.1 },
+      { account_number: '3740', debit_amount: 0, credit_amount: 0.5 },
+    ] as CreateJournalEntryLineInput[])
+    books.invoices.push({
+      id: 'F-rot', invoice_number: 'F-rot', customer_id: 'cust-1', invoice_date: '2026-03-01', due_date: '2026-03-31',
+      status: 'partially_paid', total: 2000.5, paid_amount: 1400.5, currency: 'SEK', deduction_total: 600,
+      deduction_reclaimed_total: 600, journal_entry_id: 'je-F-rot',
+    })
+    // The doors cleared 1 401 (what 1510 carried); the refusal moved 1513 onto 1510.
+    post(books, 'je-pay-rot', [
+      { account_number: '1930', debit_amount: 1401, credit_amount: 0 },
+      { account_number: '1510', debit_amount: 0, credit_amount: 1401 },
+    ] as CreateJournalEntryLineInput[])
+    post(books, 'je-reclaim', [
+      { account_number: '1510', debit_amount: 600, credit_amount: 0 },
+      { account_number: '1513', debit_amount: 0, credit_amount: 600 },
+    ] as CreateJournalEntryLineInput[])
+
+    const result = await reconcile(books)
+    expect(result.account_1510_balance).toBe(600)
+    // Not 600,50: no issue öre is counted on a ROT/RUT invoice.
+    expect(result.ar_ledger_total).toBe(600)
   })
 })
 
@@ -227,7 +263,7 @@ describe('a mirrored kreditfaktura used against another invoice (link_invoice_to
     issue(books, source('F-A', 799.8, 199.95), true, { status: 'credited', paid_amount: 999.75 })
     pay(books, 'je-pay-A', 1000, 1000)
     books.invoice_payments.push({ id: 'p-0', invoice_id: 'F-A', amount: 999.75, payment_date: '2026-03-20', journal_entry_id: 'je-pay-A', currency: 'SEK' })
-    post(books, 'je-KF-A', buildCreditNoteLines(source('KF-A', -799.8, -199.95), 'aktiebolag', 'A-1', { oreRounding: { mirror: true } }), '2026-03-25')
+    post(books, 'je-KF-A', buildCreditNoteLines(source('KF-A', -799.8, -199.95), 'aktiebolag', 'A-1', { oreRounding: { mirror: 0.25 } }), '2026-03-25')
     books.invoices.push({
       id: 'KF-A', invoice_number: 'KF-A', customer_id: 'cust-1', invoice_date: '2026-03-25', due_date: '2026-03-25',
       status: 'sent', total: -999.75, paid_amount: 0, currency: 'SEK', deduction_total: 0,
@@ -275,6 +311,19 @@ describe('a mirrored kreditfaktura used against another invoice (link_invoice_to
 
     const result = await reconcile(books)
     // 1 249,75 issued as 1 250, less the credit of 1 000.
+    expect(result.account_1510_balance).toBe(250)
+    expect(result.ar_ledger_total).toBe(250)
+  })
+
+  it('a share of 999,75 against a larger rounded invoice uses 999,75 of the credit: 0,25 is left, as 1510 says', async () => {
+    const books = emptyBooks()
+    creditOfPaid(books)
+    // 1 249,75 issued as 1 250. The link states a share of 999,75: a part
+    // payment, so the row is 999,75 and the verifikat keeps 0,25 for later.
+    issue(books, source('F-D', 999.8, 249.95), true, { status: 'partially_paid', paid_amount: 999.75 })
+    books.invoice_payments.push({ id: 'p-1', invoice_id: 'F-D', amount: 999.75, payment_date: '2026-03-25', journal_entry_id: 'je-KF-A', currency: 'SEK' })
+
+    const result = await reconcile(books)
     expect(result.account_1510_balance).toBe(250)
     expect(result.ar_ledger_total).toBe(250)
   })

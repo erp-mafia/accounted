@@ -29,7 +29,7 @@ import { ToastAction } from '@/components/ui/toast'
 import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
 import { KonteringLinesEditor } from '@/components/bookkeeping/KonteringLinesEditor'
 import { proposeSendLines } from '@/lib/bookkeeping/propose-send-lines'
-import { creditPreviewMirrorsIssueOre } from '@/lib/bookkeeping/ledger-carried-sek'
+import { creditPreviewIssueOre } from '@/lib/bookkeeping/ledger-carried-sek'
 import { getAmountToPay } from '@/lib/bookkeeping/invoice-rounding'
 import { voucherLineViews } from '@/lib/bookkeeping/voucher-line-view'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
@@ -176,9 +176,9 @@ export default function SendInvoiceDialog({
   // A kontantmetod ROT/RUT original whose Skatteverket share is not booked
   // yet: its credit reverses the customer's share alone.
   const [deductionBookedSek, setDeductionBookedSek] = useState<number | null>(null)
-  // A kreditfaktura mirrors the öresavrundning its original's issue booked
-  // (creditMirrorsIssueOre), as createCreditNoteJournalEntry books it.
-  const [creditMirrorsOre, setCreditMirrorsOre] = useState(false)
+  // A full kreditfaktura mirrors the öresavrundning its original's issue
+  // booked (creditNoteIssueOre), as createCreditNoteJournalEntry books it.
+  const [creditIssueOre, setCreditIssueOre] = useState(0)
   const [catalog, setCatalog] = useState<CatalogAccount[]>([])
   const [editLines, setEditLines] = useState<FormLine[]>([])
   const [hasEdited, setHasEdited] = useState(false)
@@ -301,19 +301,20 @@ export default function SendInvoiceDialog({
         }
         // Preview only, as the share above: the credit decides again when it
         // books. Never on the two steps (no issue rounding to mirror).
-        const mirrorsOre =
+        const issueOre =
           bookOnIssue && originalResult.data && bookedShare === null
-            ? await creditPreviewMirrorsIssueOre(
+            ? await creditPreviewIssueOre(
                 supabase,
                 company.id,
                 originalResult.data,
+                invoice.total,
                 creditBooksOriginalFirst(companySettings, originalResult.data),
                 companySettings ?? null,
               )
-            : false
+            : 0
         if (cancelled) return
         setDeductionBookedSek(bookedShare)
-        setCreditMirrorsOre(mirrorsOre)
+        setCreditIssueOre(issueOre)
 
         // Line editing needs the BAS catalogue; only the accrual
         // book-at-issue path renders the editor, so skip the load elsewhere.
@@ -353,10 +354,10 @@ export default function SendInvoiceDialog({
     // else the company setting; a kreditfaktura only when its original's
     // issue booked it.
     const oreRounding = isCreditNote
-      ? creditMirrorsOre ? ({ mirror: true } as const) : undefined
+      ? creditIssueOre !== 0 ? { mirror: creditIssueOre } : undefined
       : { company: companySettings ?? null }
     return proposeSendLines({ invoice, entityType, deductionBookedSek, oreRounding })
-  }, [isInitialized, shouldBookOnIssue, entityType, invoice, deductionBookedSek, isCreditNote, creditMirrorsOre, companySettings])
+  }, [isInitialized, shouldBookOnIssue, entityType, invoice, deductionBookedSek, isCreditNote, creditIssueOre, companySettings])
 
   const additionalCc = useMemo(
     () => parseInvoiceRecipientText(additionalCcText),
@@ -390,20 +391,20 @@ export default function SendInvoiceDialog({
       ? t('recipient_too_many', { count: MAX_INVOICE_EMAIL_RECIPIENTS })
       : null
 
-  // Seed the editable grid from the proposal once per open; edits must not be
-  // clobbered by re-renders, so proposedLines is deliberately not a dependency.
+  // Seed the editable grid from the proposal, and follow the proposal while
+  // the user has not edited it (a refreshed company setting can change the
+  // öresavrundning rows): with no edits the send books the proposal, so the
+  // grid must show it. Edits are never clobbered.
   useEffect(() => {
     if (!open) {
       setEditLines([])
       setHasEdited(false)
       return
     }
-    if (isInitialized && editable) {
+    if (isInitialized && editable && !hasEdited) {
       setEditLines(proposedLines.map((line) => ({ ...line })))
-      setHasEdited(false)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, isInitialized, editable])
+  }, [open, isInitialized, editable, hasEdited, proposedLines])
 
   const activeLines = editable ? editLines : proposedLines
 
