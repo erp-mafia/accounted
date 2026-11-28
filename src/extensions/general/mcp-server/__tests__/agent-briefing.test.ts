@@ -488,6 +488,9 @@ describe('gnubok_get_agent_briefing tool', () => {
       "A note about one purchase or verifikat (who took part, what a receipt was for) goes on that verifikat with gnubok_set_voucher_note or in the booking's description, not here."
     expect(result.where_to_find[0]).toMatch(/^memory: /)
     expect(result.where_to_find[0]).toContain(purchaseNotePlace)
+    // Where a person sees these facts in the app, and that arkiv.facts is another list.
+    expect(result.where_to_find[0]).toContain('/wiki?view=memory')
+    expect(result.where_to_find[0]).toContain('arkiv.facts')
     expect(tools.find((t) => t.name === 'gnubok_remember_fact')!.description).toContain(purchaseNotePlace)
     expect(result.memory_truncated).toBeUndefined()
   })
