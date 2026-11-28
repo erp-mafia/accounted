@@ -38,8 +38,11 @@ export function fullRawTransaction(overrides: Partial<RawTransaction> = {}): Req
     provider_transaction_id: 'ENTRY-FULL-1',
     raw_document_id: '00000000-0000-4000-8000-000000000001',
     counterparty_org_number: '5560160680',
-    billing_country: 'SE',
-    card_country: 'DE',
+    // A buyer's countries: the Stripe feed's, which writes through the plain
+    // insert (its own test in ingest.test.ts). No bank states them, so
+    // insert_bank_transaction leaves them out, and a bank row has none.
+    billing_country: null,
+    card_country: null,
     instructed_amount: -2.22,
     instructed_currency: 'EUR',
     exchange_rate: 11.26,
