@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import {
   baseUrlToService,
+  ConnectorAuthorizationRefusedError,
   parseConnectorCode,
   startConnectorAuthorization,
   exchangeConnectorCode,
@@ -136,6 +137,18 @@ describe('startConnectorAuthorization', () => {
         codeChallenge: 'challenge-1234567890',
       }),
     ).rejects.toThrow(/403[\s\S]*CONNECTOR_QUOTA_EXCEEDED/)
+  })
+
+  it("names the broker's connector code on the refusal, so the caller can tell the company limit apart", async () => {
+    mockFetchJson(403, { error: 'This connector key covers 21 companies', code: 'CONNECTOR_COMPANY_LIMIT', limit: 21 })
+    const refusal = await startConnectorAuthorization(CONNECTOR, {
+      companyRef: 'c',
+      returnUrl: 'https://i.example/cb',
+      state: 's',
+      codeChallenge: 'challenge-1234567890',
+    }).catch((err: unknown) => err)
+    expect(refusal).toBeInstanceOf(ConnectorAuthorizationRefusedError)
+    expect(refusal).toMatchObject({ status: 403, code: 'CONNECTOR_COMPANY_LIMIT' })
   })
 
   it('throws on a malformed broker response', async () => {

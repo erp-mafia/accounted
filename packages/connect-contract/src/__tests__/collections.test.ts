@@ -99,6 +99,7 @@ describe('contract constants for the provider capabilities', () => {
     }
     expect(CONNECTOR_ERROR_CODES[0]).toBe('BAD_REQUEST')
     expect(CONNECTOR_ERROR_CODES).toContain('PEPPOL_DUPLICATE_INVOICE_NUMBER')
+    expect(CONNECTOR_ERROR_CODES).toContain('CONNECTOR_COMPANY_LIMIT')
     expect(new Set(CONNECTOR_ERROR_CODES).size).toBe(CONNECTOR_ERROR_CODES.length)
   })
 })

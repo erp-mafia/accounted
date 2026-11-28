@@ -254,6 +254,7 @@ describe('registerCompanyForPeppolReceiving', () => {
     'CONNECTOR_PEPPOL_PARTICIPANT_TAKEN',
     'CONNECTOR_PEPPOL_PARTICIPANT_PUBLISHED_ELSEWHERE',
     'CONNECTOR_QUOTA_EXCEEDED',
+    'CONNECTOR_COMPANY_LIMIT',
   ])('maps the permanent hosted code %s to REJECTED even when the envelope says retryable', async (code) => {
     const transport = makeTransport({
       registerRecipient: vi.fn().mockRejectedValue(transportFailure(code, true)),

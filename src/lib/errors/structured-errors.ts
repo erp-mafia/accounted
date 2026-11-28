@@ -53,6 +53,14 @@ const GENERIC: Record<string, StructuredErrorEntry> = {
     message_sv: 'Något gick fel. Försök igen.',
     message_en: 'An unexpected error occurred.',
   },
+  // Accounted Connect refused a company new to this installation's connector
+  // key: the key covers the companies listed for it, all taken. Raised when a
+  // bank, Skatteverket or Peppol connection starts; Accounted adds the company.
+  CONNECTOR_COMPANY_LIMIT: {
+    httpStatus: 403,
+    message_sv: 'Connector-nyckeln räcker inte till fler bolag. Hör av er till support@accounted.se så lägger vi till bolaget.',
+    message_en: 'The connector key covers no more companies. Contact support@accounted.se and we will add the company.',
+  },
   // An opt-in extension this request needs is not enabled on the deployment
   // (extensions.config.json, or its env flag). Raised for several features
   // (bank sync, the Inkorg, Skatteverket), so the copy names none: details
