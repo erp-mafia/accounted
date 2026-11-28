@@ -7,8 +7,8 @@ import type { ProviderName } from './types'
  * as SIE over the API, so the wizard imports bookkeeping automatically: no
  * manual SIE upload needed.
  *
- * WINT's "token" is the user's WINT login exchanged once for a JWT pair (WINT
- * has no API keys or OAuth). It is env-gated server-side
+ * WINT's "token" is the API key of an app the customer creates inside WINT,
+ * beside that app's username (WINT has no OAuth). It is env-gated server-side
  * (WINT_MIGRATION_ENABLED): the extension's GET /status names the providers
  * this deployment can connect.
  */
@@ -29,11 +29,11 @@ export interface MigrationProviderInfo {
  * never issues, and kept Anslut disabled until it was filled.
  *
  * `secret`: what the customer pastes for us to exchange: Bokio's integration
- * token, Briox's application token, the WINT password. Björn Lundén has
+ * token, Briox's application token, a WINT app's API key. Björn Lundén has
  * none: Accounted holds the client credentials and the customer only names
  * the company.
  * `companyId`: the provider-side company (BL User-Key, Bokio company id,
- * Briox account id) or, for WINT, the login e-mail.
+ * Briox account id) or, for WINT, the app's username.
  */
 export interface TokenCredentials {
   secret: boolean

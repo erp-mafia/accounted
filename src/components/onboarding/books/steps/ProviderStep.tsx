@@ -537,12 +537,13 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
       {phase === 'token' ? (
         <div className="tokfields">
           {credentials.companyId ? (
-            <input type="text" value={tokenB} onChange={(e) => setTokenB(e.target.value)} placeholder={providerId === 'bjornlunden' ? t('tok_bl_key') : t('tok_company', { provider: provName })} />
+            <input type="text" value={tokenB} onChange={(e) => setTokenB(e.target.value)} placeholder={providerId === 'bjornlunden' ? t('tok_bl_key') : providerId === 'wint' ? tx('ext_arcim_wint_username_placeholder') : t('tok_company', { provider: provName })} />
           ) : null}
           {credentials.secret ? (
             <input type="password" value={tokenA} onChange={(e) => setTokenA(e.target.value)} placeholder={t('tok_token', { provider: provName })} autoComplete="off" />
           ) : null}
           {providerId === 'bjornlunden' ? <p className="brandhint">{tx('ext_arcim_bl_token_help')}</p> : null}
+          {providerId === 'wint' ? <p className="brandhint">{tx('ext_arcim_wint_token_help')}</p> : null}
           <div className="jny-qactions" style={{ marginTop: 12 }}>
             <Button variant="ghost" className="text-muted-foreground" onClick={() => setPhase('connect')}>‹ {t('back')}</Button>
             <Button size="lg" disabled={missingTokenCredential(providerId ?? '', { apiToken: tokenA, companyId: tokenB }) !== null} onClick={() => void submitToken()}>{t('tok_connect')}</Button>

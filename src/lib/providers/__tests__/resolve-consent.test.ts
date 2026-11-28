@@ -21,6 +21,7 @@ import { createServiceClient } from '@/lib/supabase/server';
 import { refreshBrioxToken } from '@/lib/providers/briox/oauth';
 import { refreshFortnoxToken } from '@/lib/providers/fortnox/oauth';
 import { refreshWintToken } from '@/lib/providers/wint/oauth';
+import { wintAppCredential } from '@/lib/providers/wint/client';
 import { resolveConsent } from '../resolve-consent';
 import { FortnoxOAuthError } from '../fortnox/oauth-error';
 import { ProviderCallError } from '../with-provider-call';
@@ -360,6 +361,27 @@ describe('resolveConsent: Briox token refresh concurrency', () => {
       access_token: 'wint-new-access',
       refresh_token: 'wint-new-refresh',
     });
+  });
+
+  it('serves a WINT app credential as it is stored: it has no expiry and nothing to refresh', async () => {
+    const wintConsent = { id: 'c3', company_id: 'co1', provider: 'wint', status: 0 };
+    const credential = wintAppCredential('app-user', '0b7f5c1e-2a44-4d0c-9f5e-6d1f0a2b3c4d');
+    mock.enqueue({ data: [wintConsent] }); // consent lookup
+    mock.enqueue({
+      data: [{
+        credential_revision: 'r1',
+        access_token: sealConsentToken(credential),
+        refresh_token: null,
+        token_expires_at: null,
+        provider_company_id: '4711',
+      }],
+    });
+
+    const result = await resolveConsent('co1', 'c3');
+
+    expect(result.accessToken).toBe(credential);
+    expect(result.providerCompanyId).toBe('4711');
+    expect(refreshWintToken).not.toHaveBeenCalled();
   });
 
   it('maps a failed WINT refresh to PROVIDER_AUTH_EXPIRED so callers prompt reconnect', async () => {
