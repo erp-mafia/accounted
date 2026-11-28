@@ -22,6 +22,7 @@ import {
 import {
   isNotVatRegistered,
   isRateBearing,
+  readVatRegistration,
   vatTreatmentForRegistration,
   type VatRegistration,
 } from './vat-registration'
@@ -1730,11 +1731,14 @@ export async function insertOrUpdateTemplate(
           source: newSource,
           counterparty_aliases: mergedAliases,
           category: params.category || existing.category,
-          // The moms fields travel with the pattern they describe: a new
+          ...(params.linePattern !== undefined ? { line_pattern: params.linePattern } : {}),
+          // The moms fields travel with a pattern they describe: a new
           // pattern beside the old field showed one moms on the Regler page
-          // and booked another.
-          ...(params.linePattern !== undefined
-            ? { line_pattern: params.linePattern, vat_treatment: params.vatTreatment, vat_account: params.vatAccount }
+          // and booked another. A pair replays its field, so a re-approval
+          // never writes it (a booking without moms re-approves a rated pair
+          // for a company not known to be registered, and keeps its rate).
+          ...(params.linePattern && params.linePattern.length > 0
+            ? { vat_treatment: params.vatTreatment, vat_account: params.vatAccount }
             : {}),
           ...(params.defaultDimensions && Object.keys(params.defaultDimensions).length > 0
             ? { default_dimensions: params.defaultDimensions }
@@ -2748,6 +2752,9 @@ export async function populateTemplatesFromSieVouchers(
 
   // Step 4: Batch write
   const existingTemplates = await fetchActiveTemplates(supabase, companyId)
+  // History without moms against a rated template is a correction only for a
+  // company known to book moms (contradictsLearnedMoms), as on every door.
+  const vatRegistered = await readVatRegistration(supabase, companyId)
 
   // Keyed by counterparty_name, then by alias: a renamed template keeps its
   // old bank-derived key as an alias (see findTemplateByKey), and a SIE
@@ -2775,6 +2782,7 @@ export async function populateTemplatesFromSieVouchers(
       confidence: item.confidence,
       lastSeenDate: toDateString(item.pattern.latestDate),
       source: 'sie_import',
+      vatRegistered,
     }, existing)
 
     if (written) count += 1

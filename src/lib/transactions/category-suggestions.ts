@@ -474,7 +474,7 @@ export function buildCounterpartySuggestion(
   } = {},
 ): SuggestedTemplate {
   if (opts.amount !== undefined && reviewsUnknownVat(template, opts.vatRegistered)) {
-    return unknownVatProposal(template, confidence, opts.amount, opts.entityType)
+    return unknownVatProposal(template, confidence, opts.amount, opts.entityType, opts.directionMismatch)
   }
   const proposal = counterpartyProposal(template, confidence, opts.vatRegistered)
   if (!opts.directionMismatch) return proposal
@@ -482,7 +482,7 @@ export function buildCounterpartySuggestion(
     ...proposal,
     debit_account: proposal.credit_account,
     credit_account: proposal.debit_account,
-    description_sv: `${template.occurrence_count} tidigare bokföringar åt andra hållet: trolig återbetalning`,
+    description_sv: refundDescription(template),
     requires_review: true,
     direction_mismatch: true,
   }
@@ -501,6 +501,7 @@ function unknownVatProposal(
   confidence: number,
   amount: number,
   entityType?: EntityType,
+  directionMismatch?: boolean,
 ): SuggestedTemplate {
   const learned = counterpartyProposal(template, confidence)
   const account = slateAccount(learned)
@@ -523,7 +524,19 @@ function unknownVatProposal(
     group: 'counterparty',
     risk_level: learned.risk_level,
     default_dimensions: learned.default_dimensions,
+    // The account books in the row's direction already; the refund is said.
+    ...(directionMismatch
+      ? {
+          description_sv: refundDescription(template),
+          direction_mismatch: true,
+        }
+      : {}),
   })
+}
+
+/** What a learned counterpart says of a row that moves against its direction. */
+function refundDescription(template: Pick<CategorizationTemplate, 'occurrence_count'>): string {
+  return `${template.occurrence_count} tidigare bokföringar åt andra hållet: trolig återbetalning`
 }
 
 function counterpartyProposal(

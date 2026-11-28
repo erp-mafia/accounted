@@ -85,6 +85,16 @@ describe('buildCounterpartySuggestion', () => {
     expect(categorizeBodyFor(s, { vatAmount: 125 })).toMatchObject({ vat_amount: 125 })
   })
 
+  it('an unknown-moms counterpart on a refund keeps saying it is a refund', () => {
+    const s = buildCounterpartySuggestion(
+      makeTemplate({ debit_account: '5010', vat_treatment: 'unknown', vat_account: '2641', occurrence_count: 3 }),
+      0.9,
+      { amount: 725, vatRegistered: true, directionMismatch: true },
+    )
+    expect(s).toMatchObject({ direction_mismatch: true, vat_unknown: true, credit_account: '5010' })
+    expect(s.description_sv).toContain('trolig återbetalning')
+  })
+
   it('a company known not to be VAT-registered books no moms: its unknown-moms template stays the template, unflagged', () => {
     const s = buildCounterpartySuggestion(
       makeTemplate({ debit_account: '5010', vat_treatment: 'unknown', vat_account: '2641' }),

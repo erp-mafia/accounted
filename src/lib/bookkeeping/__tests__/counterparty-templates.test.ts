@@ -3076,6 +3076,7 @@ describe('learning-loop repair (issue #865)', () => {
       )
 
       enqueue({ data: [] }) // pre-fetch existing templates
+      enqueue({ data: { vat_registered: true } }) // company_settings
       enqueue({ error: { message: 'null value in column "user_id"' } }) // insert fails
 
       const count = await populateTemplatesFromSieVouchers(supabase as never, 'company-1', vouchers)

@@ -9,7 +9,7 @@ import { isSandboxCompany } from '@/lib/sandbox/guard'
 import { hasCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import type { EntityType, Transaction } from '@/types'
-import { readIsFresh, firstSentence, type AssistantRead } from './read-shape'
+import { readIsFresh, firstSentence, readLeavesMomsUnknown, type AssistantRead } from './read-shape'
 import { underlagKeyFor } from '@/lib/transactions/underlag-key'
 import { createLogger } from '@/lib/logger'
 
@@ -157,10 +157,9 @@ export function assistantSuggestionFromRead(
   const candidate = read.candidates.find((c) => c.account === account)
   const label = candidate?.label ?? getAccountName(account)
   const category = categoryForAccount(account, entityType, read.category)
-  // A pick of a candidate whose moms is unknown, with nothing read in its
-  // place (no reverse charge, no purchase abroad): the review states the
+  // A pick of a candidate whose moms is unknown: the review states the
   // underlag's moms. Passed on as null it was read as 'exempt' below.
-  const vatUnknown = read.from_candidate && candidate?.vatUnknown === true && read.vat_treatment == null
+  const vatUnknown = readLeavesMomsUnknown(read)
   const proposal = accountProposal({
     id: `assistant:${tx.id}`,
     source: 'assistant',

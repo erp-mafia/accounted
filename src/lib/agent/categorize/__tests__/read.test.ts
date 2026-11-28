@@ -8,6 +8,7 @@ import {
   storeRead,
   type AssistantRead,
 } from '../read'
+import { readLeavesMomsUnknown } from '../read-shape'
 import type { SuggestedTemplate } from '@/lib/transactions/category-suggestions'
 import { categorizeBodyFor } from '@/lib/bookkeeping/proposal'
 import { buildMappingResultFromCategory } from '@/lib/bookkeeping/category-mapping'
@@ -92,6 +93,14 @@ describe('assistantSuggestionFromRead', () => {
     )
     expect(s).toMatchObject({ vat_unknown: true, requires_review: true, booking: { kind: 'account', account: '5010', vat_treatment: 'standard_25' } })
     expect(s?.booking).not.toMatchObject({ vat_treatment: 'exempt' })
+  })
+
+  it('readLeavesMomsUnknown: only a candidate pick of unknown moms with nothing read in its place', () => {
+    const unknownCandidate = [{ account: '5010', label: 'Lokalhyra', vatTreatment: null, vatUnknown: true, source: 'counterparty_template' as const, confidence: 0.9 }]
+    expect(readLeavesMomsUnknown({ account: '5010', from_candidate: true, vat_treatment: null, candidates: unknownCandidate })).toBe(true)
+    expect(readLeavesMomsUnknown({ account: '5010', from_candidate: true, vat_treatment: 'reverse_charge', candidates: unknownCandidate })).toBe(false)
+    expect(readLeavesMomsUnknown({ account: '5010', from_candidate: false, vat_treatment: null, candidates: unknownCandidate })).toBe(false)
+    expect(readLeavesMomsUnknown({ account: '6570', from_candidate: true, vat_treatment: null, candidates: unknownCandidate })).toBe(false)
   })
 
   it('puts an income account on the credit side', () => {

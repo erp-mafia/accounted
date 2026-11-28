@@ -170,6 +170,24 @@ describe('insertOrUpdateTemplate: the moms of a booking on the template\'s own p
     expect(payload).toMatchObject({ occurrence_count: 6, corrections: 1, vat_treatment: 'reduced_6' })
   })
 
+  it('SIE history without moms re-approves a 25 % pair for a company not known to be registered, and keeps its rate', async () => {
+    const payload = await learn(
+      makeCategorizationTemplate({ ...SAAS_PAIR, vat_treatment: 'standard_25', vat_account: '2641', occurrence_count: 2, corrections: 0, source: 'user_approved' }),
+      { vatTreatment: null, vatAccount: null, linePattern: null, source: 'sie_import', occurrenceCount: 3 },
+    )
+    expect(payload).toMatchObject({ occurrence_count: 5 })
+    expect(payload).not.toHaveProperty('vat_treatment')
+    expect(payload).not.toHaveProperty('vat_account')
+  })
+
+  it('SIE history without moms corrects a 25 % pair for a VAT-registered company', async () => {
+    const payload = await learn(
+      makeCategorizationTemplate({ ...SAAS_PAIR, vat_treatment: 'standard_25', vat_account: '2641', occurrence_count: 2, corrections: 0 }),
+      { vatTreatment: null, vatAccount: null, linePattern: null, source: 'sie_import', occurrenceCount: 3, vatRegistered: true },
+    )
+    expect(payload).toMatchObject({ occurrence_count: 3, corrections: 1, vat_treatment: null })
+  })
+
   it('a re-approval that writes a pattern writes its moms fields beside it', async () => {
     const pattern = [
       { account: '5420', side: 'debit', type: 'business', ratio: 1 },
