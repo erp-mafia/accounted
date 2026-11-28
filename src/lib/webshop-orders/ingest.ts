@@ -58,6 +58,7 @@ type ExistingRow = Pick<
   WebshopOrder,
   | 'id'
   | 'external_id'
+  | 'parent_order_id'
   | 'journal_entry_id'
   | 'invoice_id'
   | 'manually_booked_at'
@@ -283,7 +284,7 @@ export async function upsertWebshopOrders(
     const { data: existingData, error: existingError } = await supabase
       .from('webshop_orders')
       .select(
-        'id, external_id, journal_entry_id, invoice_id, manually_booked_at, legacy_transaction_id, remote_changed_after_freeze, total, total_tax, total_sek, exchange_rate, currency, order_date, paid_date, is_paid, payment_method, payment_method_title, gateway_reference, order_number, status, refunded_total, store_label, connection_id, customer_name, customer_company, customer_email, customer_orgnr, customer_country, customer_address_line1, customer_address_line2, customer_postal_code, customer_city, ships_nothing, vat_breakdown, line_items',
+        'id, external_id, parent_order_id, journal_entry_id, invoice_id, manually_booked_at, legacy_transaction_id, remote_changed_after_freeze, total, total_tax, total_sek, exchange_rate, currency, order_date, paid_date, is_paid, payment_method, payment_method_title, gateway_reference, order_number, status, refunded_total, store_label, connection_id, customer_name, customer_company, customer_email, customer_orgnr, customer_country, customer_address_line1, customer_address_line2, customer_postal_code, customer_city, ships_nothing, vat_breakdown, line_items',
       )
       .eq('company_id', companyId)
       .in('external_id', lookupIds)
@@ -445,6 +446,10 @@ export async function upsertWebshopOrders(
       // Never null-out an already-resolved parent link (the parent may just
       // be absent from this batch's lookup).
       if (parentOrderId !== null) update.parent_order_id = parentOrderId
+      // A refund stored before its order was is linked once the order is
+      // found, even when nothing else changed: the refund's guards read the
+      // order through this link.
+      const newParentLink = parentOrderId !== null && existing.parent_order_id !== parentOrderId
       const newLegacyLink =
         existing.legacy_transaction_id === null && legacyTransactionId !== null
       if (newLegacyLink) {
@@ -459,6 +464,7 @@ export async function upsertWebshopOrders(
         !moneyMoved &&
         !needsFx &&
         !newLegacyLink &&
+        !newParentLink &&
         existing.status === incoming.status &&
         existing.refunded_total === incoming.refunded_total &&
         existing.store_label === incoming.store_label &&
