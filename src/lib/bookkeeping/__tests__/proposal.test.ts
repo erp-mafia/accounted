@@ -412,4 +412,13 @@ describe('a webshop payout clearing proposal', () => {
     expect(text).toMatch(/12,5/)
     expect(text).toMatch(/3,13/)
   })
+
+  it('names no fee VAT for a fee without any', () => {
+    const noVat = { ...payout, clearing: { ...payout.clearing!, provider: 'Shopify Payments', fee_vat: 0 } } as typeof payout
+    expect(whyKeyFor(noVat)).toEqual({
+      key: 'rec_why_clearing_payout_no_vat',
+      values: { provider: 'Shopify Payments', date: '2026-11-19', fees: expect.stringMatching(/12,5/), account: '1686' },
+    })
+    expect(whyTextSv(noVat)).not.toContain('moms')
+  })
 })
