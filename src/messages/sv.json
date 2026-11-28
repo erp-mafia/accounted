@@ -8912,6 +8912,7 @@
     "bank_entered_hint": "Bocka i om du lägger in betalningen själv i internetbanken i stället för via betalfil.",
     "credit_note_button": "Kreditfaktura",
     "uncredit_button": "Ångra kreditering",
+    "register_again_button": "Registrera igen",
     "load_failed_title": "Kunde inte ladda leverantörsfaktura",
     "approve_failed_title": "Attesteringen misslyckades",
     "approved_title": "Attesterad",

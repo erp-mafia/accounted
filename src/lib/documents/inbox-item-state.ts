@@ -131,8 +131,9 @@ export interface DocumentHoldRow {
  * The row as the readings above take it: document_journal_entry_id names the
  * verifikat that holds the item's document and still books it. A link is
  * permanent, so a document on a reversed verifikat stays there, but nothing
- * books the purchase any more and the item is open again. Whether such a
- * document can go on another verifikat is a different question, and no.
+ * books the purchase any more and the item is open again. The document itself
+ * never goes on another verifikat: a registration made again from it gets a
+ * byte-identical copy (lib/supplier-invoices/released-underlag.ts).
  */
 export function withDocumentHold<Row extends DocumentHoldRow>(row: Row): Omit<Row, 'document_hold'> & { document_journal_entry_id: string | null } {
   const { document_hold, ...rest } = row
@@ -140,4 +141,10 @@ export function withDocumentHold<Row extends DocumentHoldRow>(row: Row): Omit<Ro
   const status = oneOf(hold?.entry)?.status
   const held = !!hold?.journal_entry_id && !(status && SPENT_ENTRY_STATUSES.has(status))
   return { ...rest, document_journal_entry_id: held ? (hold?.journal_entry_id ?? null) : null }
+}
+
+/** The verifikat the item's document is linked to, as stored (spent or not), and that verifikat's status. */
+export function documentHoldOf(row: DocumentHoldRow): { journal_entry_id: string | null; status: string | null } {
+  const hold = oneOf(row.document_hold)
+  return { journal_entry_id: hold?.journal_entry_id ?? null, status: oneOf(hold?.entry)?.status ?? null }
 }
