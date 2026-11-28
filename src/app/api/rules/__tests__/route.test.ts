@@ -95,6 +95,44 @@ describe('GET /api/rules/[id]', () => {
     // so a comma or a parenthesis in a name cannot reshape the filter.
     expect(findCalls('transactions', 'or')[0]).toEqual(['description.ilike."%google cloud emea%"'])
   })
+
+  it('returns the rule’s track record from the decision receipts', async () => {
+    enqueue({ data: rule })
+    enqueue({ data: [] })
+    enqueue({ data: { direct_booking_enabled: true } })
+    enqueue({ data: { version: 2 } })
+    enqueue({
+      data: [
+        { top: { source_id: `counterparty:${RULE_ID}`, matches_final: true, evidence: { template_version: 2 } } },
+        { top: { source_id: `counterparty:${RULE_ID}`, matches_final: false, evidence: { template_version: 1 } } },
+      ],
+    })
+    const { status, body } = await parseJsonResponse<{ data: { track_record: unknown } }>(
+      await getRule(createMockRequest(`/api/rules/${RULE_ID}`), { params: Promise.resolve({ id: RULE_ID }) }),
+    )
+    expect(status).toBe(200)
+    expect(body.data.track_record).toEqual({
+      decided: 2,
+      as_proposed: 1,
+      version: 2,
+      current: { decided: 1, as_proposed: 1 },
+      capped: false,
+    })
+  })
+
+  it('still returns the rule when its track record cannot be read', async () => {
+    enqueue({ data: rule })
+    enqueue({ data: [] })
+    enqueue({ data: { direct_booking_enabled: true } })
+    enqueue({ data: { version: 1 } })
+    enqueue({ error: { code: '57014', message: 'canceling statement due to statement timeout' } })
+    const { status, body } = await parseJsonResponse<{ data: { rule: { id: string }; track_record: unknown } }>(
+      await getRule(createMockRequest(`/api/rules/${RULE_ID}`), { params: Promise.resolve({ id: RULE_ID }) }),
+    )
+    expect(status).toBe(200)
+    expect(body.data.rule.id).toBe(RULE_ID)
+    expect(body.data.track_record).toBeNull()
+  })
 })
 
 describe('PATCH /api/rules/[id]', () => {

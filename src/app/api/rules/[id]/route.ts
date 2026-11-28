@@ -6,6 +6,7 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
 import { UUID_RE } from '@/lib/invariants/uuid'
 import { getRule, listRuleMatches, updateRule } from '@/lib/rules/service'
 import { USER_SETTABLE_MODES } from '@/lib/rules/model'
+import { readRuleTrackRecord, type RuleTrackRecord } from '@/lib/rules/track-record'
 import { readDirectBookingSettings } from '@/lib/transactions/direct-booking-settings'
 
 type Params = { params: Promise<{ id: string }> }
@@ -13,19 +14,25 @@ type Params = { params: Promise<{ id: string }> }
 /**
  * GET /api/rules/[id]
  * One rule with this year's matches (booked transactions whose bank text
- * matches the counterparty or an alias), and the company's one-click switch.
+ * matches the counterparty or an alias), the company's one-click switch, and
+ * the rule's track record from the decision receipts (null when it could not
+ * be read: the page shows the rule without it).
  */
-export const GET = withRouteContext<Params>('rule.get', async (_request, { supabase, companyId }, { params }) => {
+export const GET = withRouteContext<Params>('rule.get', async (_request, { supabase, companyId, log }, { params }) => {
   const { id } = await params
   if (!UUID_RE.test(id)) return NextResponse.json({ error: 'Ogiltigt id' }, { status: 400 })
   try {
     const rule = await getRule(supabase, companyId, id)
     if (!rule) return NextResponse.json({ error: 'Regeln finns inte' }, { status: 404 })
-    const [matches, direct_booking] = await Promise.all([
+    const [matches, direct_booking, track_record] = await Promise.all([
       listRuleMatches(supabase, companyId, rule),
       readDirectBookingSettings(supabase, companyId),
+      readRuleTrackRecord(supabase, companyId, id).catch((error: unknown): RuleTrackRecord | null => {
+        log.warn('rule track record read failed', { error: error instanceof Error ? error.message : String(error) })
+        return null
+      }),
     ])
-    return NextResponse.json({ data: { rule, matches, direct_booking } })
+    return NextResponse.json({ data: { rule, matches, direct_booking, track_record } })
   } catch (error) {
     return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
   }

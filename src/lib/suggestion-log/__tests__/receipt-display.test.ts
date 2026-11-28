@@ -574,3 +574,40 @@ describe('bookingWhyUserIds', () => {
     expect(bookingWhyUserIds(entry({ committed_actor_type: 'system' }), compactDecisions([]))).toEqual([])
   })
 })
+
+describe('bookingWhy: the rule and the request', () => {
+  it('names the counterpart rule that proposed it right after the proposal, linked to its page', () => {
+    const r = buildDecisionReceipt(bankRow({ suggestions: [counterpart, assistant] }), ctx())
+    const view = bookingWhy(data({ receipts: [r], rule: { id: 'rule-1', name: 'Telia' } }), opts())
+    expect(view.rows.find((x) => x.id === 'rule')).toEqual({ id: 'rule', label: 'Regel', value: 'Telia', href: '/rules/rule-1' })
+    const ids = view.rows.map((x) => x.id)
+    expect(ids.indexOf('rule')).toBe(ids.indexOf('proposal') + 1)
+    expect(bookingWhy(data({ receipts: [r], rule: { id: 'rule-1', name: 'Telia' } }), opts('en')).rows.find((x) => x.id === 'rule')?.label).toBe('Rule')
+  })
+
+  it('names no rule when the decision came from none', () => {
+    const r = buildDecisionReceipt(bankRow(), ctx())
+    expect(rowMap(bookingWhy(data({ receipts: [r] }), opts())).rule).toBeUndefined()
+    expect(rowMap(bookingWhy(data({ receipts: [r], rule: null }), opts())).rule).toBeUndefined()
+  })
+
+  it('lists what else the request committed, naming ten and counting the rest', () => {
+    const r = buildDecisionReceipt(bankRow(), ctx())
+    const vouchers = Array.from({ length: 10 }, (_, i) => `A${i + 13}`)
+    const view = bookingWhy(data({ receipts: [r], same_request: { vouchers, total: 12 } }), opts())
+    expect(view.rows.at(-1)?.id).toBe('same_request')
+    expect(rowMap(view).same_request).toBe('Bokade också 12 andra verifikat')
+    expect(rowItems(view, 'same_request')).toEqual([...vouchers, 'och 2 till'])
+    const one = bookingWhy(data({ receipts: [r], same_request: { vouchers: ['A13'], total: 1 } }), opts('en'))
+    expect(rowMap(one).same_request).toBe('Also posted 1 other voucher')
+    expect(rowItems(one, 'same_request')).toEqual(['A13'])
+  })
+
+  it('shows the request on a verifikat without a receipt, and nothing when it committed nothing else', () => {
+    expect(rowMap(bookingWhy(data({ same_request: { vouchers: ['A13', 'A14'], total: 2 } }), opts())).same_request).toBe(
+      'Bokade också 2 andra verifikat',
+    )
+    expect(rowMap(bookingWhy(data({ same_request: { vouchers: [], total: 0 } }), opts())).same_request).toBeUndefined()
+    expect(rowMap(bookingWhy(data({ same_request: null }), opts())).same_request).toBeUndefined()
+  })
+})
