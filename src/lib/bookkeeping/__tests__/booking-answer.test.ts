@@ -41,6 +41,18 @@ describe('bookedEntryOf', () => {
     expect(bookedEntryOf({ data: { id: 'je-7' } })).not.toHaveProperty('underlag_archived')
   })
 
+  it('carries the manual door\'s no_document_required answer when the door gives it', () => {
+    expect(
+      bookedEntryOf({ data: { id: 'je-8', voucher_series: 'A', voucher_number: 4 }, no_document_required: false }),
+    ).toEqual({ id: 'je-8', voucher_series: 'A', voucher_number: 4, no_document_required: false })
+    expect(bookedEntryOf({ data: { id: 'je-9' }, no_document_required: true })).toEqual({
+      id: 'je-9',
+      no_document_required: true,
+    })
+    // Not asked, not answered: the flag stays out.
+    expect(bookedEntryOf({ data: { id: 'je-10' } })).not.toHaveProperty('no_document_required')
+  })
+
   it('falls back to a top-level journal_entry_id', () => {
     expect(bookedEntryOf({ journal_entry_id: 'je-4' })).toEqual({ id: 'je-4' })
   })

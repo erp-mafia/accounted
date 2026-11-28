@@ -22,7 +22,7 @@ describe('invoice list query shape', () => {
   // in production (2026-11-12).
   it('selects the columns the list reads, never the whole invoice', () => {
     expect(source).toContain(
-      "'id, customer_id, invoice_number, external_invoice_number, is_self_billed, document_type, status, quote_status, invoice_date, due_date, valid_until, subtotal, total, total_sek, currency, ore_rounding, credited_invoice_id, remaining_amount, paid_at, deduction_total, journal_entry_id, customer:customers(name)'",
+      "'id, customer_id, invoice_number, external_invoice_number, is_self_billed, document_type, status, quote_status, invoice_date, due_date, valid_until, subtotal, total, total_sek, currency, ore_rounding, credited_invoice_id, credit_undone_at, remaining_amount, paid_at, deduction_total, journal_entry_id, customer:customers(name)'",
     )
     expect(source).not.toMatch(/\.from\('invoices'\)\s*\.select\(\s*'\*/)
   })

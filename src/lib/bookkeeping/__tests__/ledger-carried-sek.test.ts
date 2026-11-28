@@ -145,5 +145,24 @@ describe('carriedSekOf', () => {
       const supabase = client({ data: { ok: true, sek: 12176 }, error: null })
       expect(await carriedSekOf(supabase, 'c-1', 'customer', { ...invoice, remaining_amount: '12176.25' as never, paid_amount: 5000 })).toBe(12176)
     })
+
+    it('reads a whole-krona remainder left by a part payment: the total has the öre, and 1510 still carries them', async () => {
+      // 17 176,25 issued at 17 176, a part payment of 5 000,25: 12 176 open while 1510 carries 12 175,75.
+      const supabase = client({ data: { ok: true, sek: 12175.75 }, error: null })
+      expect(await carriedSekOf(supabase, 'c-1', 'customer', { ...invoice, remaining_amount: 12176, paid_amount: 5000.25 })).toBe(12175.75)
+      expect(supabase.rpc).toHaveBeenCalledTimes(1)
+    })
+
+    it('still reads a remainder with öre when the total is whole kronor', async () => {
+      // 1 000 with a payment typed as Cr 1510 333 / Cr 3740 0,33 of 333,33: 666,67 open, 1510 carries 667.
+      const supabase = client({ data: { ok: true, sek: 667 }, error: null })
+      expect(await carriedSekOf(supabase, 'c-1', 'customer', { ...invoice, total: 1000, remaining_amount: 666.67, paid_amount: 333.33 })).toBe(667)
+    })
+
+    it('without the total on the row, gates on the remainder as before', async () => {
+      const supabase = client({ data: { ok: true, sek: 1 }, error: null })
+      expect(await carriedSekOf(supabase, 'c-1', 'customer', { id: 'inv-1', currency: 'SEK', remaining_amount: 12176, journal_entry_id: 'je-1' })).toBeNull()
+      expect(supabase.rpc).not.toHaveBeenCalled()
+    })
   })
 })

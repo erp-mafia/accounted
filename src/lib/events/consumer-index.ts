@@ -57,6 +57,7 @@ const INDEX: Partial<Record<CoreEventType, readonly string[]>> = {
   'invoice.match_confirmed': ['event-log'],
   'invoice.paid': ['event-log', 'webhooks', 'ext:stripe'],
   'invoice.sent': ['event-log', 'webhooks'],
+  'invoice.uncredited': ['event-log'],
   'journal_entry.committed': ['event-log', 'webhooks'],
   'journal_entry.corrected': ['unlearn-on-reversal', 'tax-account-row-follows-correction', 'event-log', 'webhooks'],
   'journal_entry.reversed': ['unlearn-on-reversal', 'accrual-origin-reversal', 'event-log', 'webhooks'],

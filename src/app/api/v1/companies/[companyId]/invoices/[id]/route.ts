@@ -33,6 +33,7 @@ import { readV1JsonBody } from '@/lib/api/v1/body'
 import { INVOICE_FULL_COLUMNS, INVOICE_ITEM_FULL_COLUMNS } from '@/lib/api/v1/invoice-columns'
 import { DimensionsBagSchema } from '@/lib/bookkeeping/dimension-resolver'
 import { CreateInvoiceItemSchema, InvoiceQrModeSchema, InvoiceVatOverrideShape } from '@/lib/api/schemas'
+import type { InvoiceVatTreatmentOverride } from '@/lib/invoices/invoice-vat-override'
 import { InvoiceDeliveryAddressSchema } from '@/lib/invoices/delivery-address'
 import { buildInvoiceWriteData, type InvoiceWriteItemInput } from '@/lib/invoices/build-invoice-write'
 import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
@@ -476,7 +477,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
         ore_rounding: boolean | null
         deduction_personnummer_encrypted: string | null
         deduction_personnummer_last4: string | null
-        vat_treatment_override: 'standard' | 'export' | 'reverse_charge' | null
+        vat_treatment_override: InvoiceVatTreatmentOverride | null
         delivery_country: string | null
       }
 

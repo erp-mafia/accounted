@@ -16,9 +16,20 @@ import {
   CAPABILITY_REASONS,
   CAPABILITY_STATUSES,
   loadCompanyCapabilities,
+  PART_REASONS,
   publishedCapabilities,
+  ROLLOUT_PARTS,
 } from '@/lib/modules/capabilities'
 import { PROFILE_IDS } from '@/lib/modules/profiles'
+
+const ModulePart = z.object({
+  id: z.enum(ROLLOUT_PARTS.map((p) => p.id) as [string, ...string[]]),
+  name: z.string(),
+  name_sv: z.string(),
+  status: z.enum(['active', 'off']).describe('active: on for this company. off: not switched on for it; its endpoints answer 404.'),
+  reasons: z.array(z.enum(PART_REASONS)).describe('switched_on_per_company when off; empty when active.'),
+  resolution: z.string().nullable().describe('One sentence a client can show; null when active.'),
+})
 
 const ModuleCapability = z.object({
   id: z.string().describe('Module id: the OpenAPI tag and x-module of the endpoints it owns.'),
@@ -32,6 +43,11 @@ const ModuleCapability = z.object({
     .array(z.enum(CAPABILITY_REASONS))
     .describe('Every reason that applies, the deciding one first; empty when active.'),
   resolution: z.string().nullable().describe('One sentence a client can show; null when active.'),
+  parts: z
+    .array(ModulePart)
+    .describe(
+      'Parts of the module switched on company by company, not by plan or setting: the module is active while a part that is off answers 404. Empty for most modules.',
+    ),
 })
 
 const Profile = z
@@ -66,6 +82,7 @@ registerEndpoint({
     'off (turned off for this company); unsupported (not offered for this company: its country, or its legal form, such as payroll for an enskild firma that has not said it pays salaries). ' +
     'Reasons, the deciding one first: unsupported_country, unsupported_legal_form, needs_plan, disabled_by_company, dependency_unavailable (a module it needs is unsupported or off; it then takes that status). ' +
     'Kernels (platform, ledger) are always active. ' +
+    'parts lists a part of a module that is switched on company by company (Avtal och åtaganden in year-end: agreements, securities and group links): active for a company the rollout names; for any other its status is off, with the reason switched_on_per_company and a resolution, while the module itself stays active. ' +
     'profile names the company profile (sole-trader, limited-company-no-employees, limited-company-with-employees, retail, association, or standard, every package on): the starting point for which packages the app menu and the MCP tool list show. ' +
     'A module in a package the profile leaves off is hidden there but keeps its status and still answers when called. A company without a stored profile has standard (source implicit). This is a read-only report: nothing here changes a profile or a module.',
   useWhen:
@@ -100,6 +117,29 @@ registerEndpoint({
             status: 'active',
             reasons: [],
             resolution: null,
+            parts: [],
+          },
+          {
+            id: 'year-end',
+            kind: 'block',
+            name: 'Year-end and annual report',
+            name_sv: 'Bokslut och årsredovisning',
+            summary: 'The bokslut workspace (accruals, reserves, tax provision, readiness) and the årsredovisning, ...',
+            depends_on: ['assets'],
+            status: 'active',
+            reasons: [],
+            resolution: null,
+            parts: [
+              {
+                id: 'commitments',
+                name: 'Agreements and commitments',
+                name_sv: 'Avtal och åtaganden',
+                status: 'off',
+                reasons: ['switched_on_per_company'],
+                resolution:
+                  'Agreements and commitments is switched on company by company and is not on for this company: write to support@accounted.se to have it switched on.',
+              },
+            ],
           },
           {
             id: 'bank-feed',
@@ -111,6 +151,7 @@ registerEndpoint({
             status: 'needs_plan',
             reasons: ['needs_plan'],
             resolution: 'Upgrade the plan to use Bank feed.',
+            parts: [],
           },
           {
             id: 'payroll',
@@ -123,6 +164,7 @@ registerEndpoint({
             reasons: ['unsupported_legal_form'],
             resolution:
               'Payroll is on for every legal person; an enskild firma turns it on by setting pays_salaries in the company tax profile.',
+            parts: [],
           },
         ],
       },

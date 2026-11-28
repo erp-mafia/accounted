@@ -5,7 +5,10 @@ import type { PayslipData } from '@/lib/salary/pdf/payslip-template'
 const providers = vi.hoisted(() => ({ getDigitalMailboxProviders: vi.fn() }))
 vi.mock('@/lib/digital-mailboxes/providers', () => providers)
 const connections = vi.hoisted(() => ({ getConnection: vi.fn() }))
-vi.mock('@/lib/digital-mailboxes/connections', () => connections)
+vi.mock('@/lib/digital-mailboxes/connections', async (orig) => ({
+  ...(await orig<typeof import('@/lib/digital-mailboxes/connections')>()),
+  ...connections,
+}))
 
 import { payslipMailboxBlock, payslipStatement } from '../send-digital-mailbox'
 
@@ -49,10 +52,12 @@ describe('payslipMailboxBlock', () => {
 
   it('refuses Kivra up front while the employer contact is incomplete', async () => {
     senderFor('kivra', true)
-    await expect(payslipMailboxBlock(settingsDb({ ...CONTACT, phone: null }).db, 'company-1', 'kivra')).resolves.toBe(
-      'DIGITAL_MAILBOX_EMPLOYER_CONTACT_MISSING',
-    )
-    await expect(payslipMailboxBlock(settingsDb(null).db, 'company-1', 'kivra')).resolves.toBe('DIGITAL_MAILBOX_EMPLOYER_CONTACT_MISSING')
+    await expect(payslipMailboxBlock(settingsDb({ ...CONTACT, phone: null }).db, 'company-1', 'kivra')).resolves.toEqual({
+      code: 'DIGITAL_MAILBOX_EMPLOYER_CONTACT_MISSING',
+    })
+    await expect(payslipMailboxBlock(settingsDb(null).db, 'company-1', 'kivra')).resolves.toEqual({
+      code: 'DIGITAL_MAILBOX_EMPLOYER_CONTACT_MISSING',
+    })
   })
 
   it('never reads the contact for Billo, which shows the PDF only', async () => {
@@ -64,13 +69,34 @@ describe('payslipMailboxBlock', () => {
 
   it('answers not configured and not active before looking at the contact', async () => {
     providers.getDigitalMailboxProviders.mockReturnValue({})
-    await expect(payslipMailboxBlock(settingsDb(CONTACT).db, 'company-1', 'kivra')).resolves.toBe('DIGITAL_MAILBOX_NOT_CONFIGURED')
+    await expect(payslipMailboxBlock(settingsDb(CONTACT).db, 'company-1', 'kivra')).resolves.toEqual({
+      code: 'DIGITAL_MAILBOX_NOT_CONFIGURED',
+    })
 
     senderFor('kivra', true)
-    connections.getConnection.mockResolvedValue({ send_state: 'pending', tenant_ref: null })
+    connections.getConnection.mockResolvedValue({ send_state: 'off', tenant_ref: null, provider_meta: {} })
     const { db } = settingsDb(null)
-    await expect(payslipMailboxBlock(db, 'company-1', 'kivra')).resolves.toBe('DIGITAL_MAILBOX_SENDING_NOT_ACTIVE')
+    await expect(payslipMailboxBlock(db, 'company-1', 'kivra')).resolves.toMatchObject({
+      code: 'DIGITAL_MAILBOX_SENDING_NOT_ACTIVE',
+      details: { state: 'off' },
+    })
     expect(db.from).not.toHaveBeenCalled()
+  })
+
+  it('says where sending stands while it waits for Kivra\'s approval or was declined', async () => {
+    senderFor('kivra', true)
+    for (const status of ['pending', 'rejected'] as const) {
+      connections.getConnection.mockResolvedValue({
+        send_state: 'off',
+        tenant_ref: null,
+        provider_meta: { sender_request: { ref: 'req-1', status, requested_at: '2026-11-20T10:00:00Z', requested_by: 'user-1' } },
+      })
+      await expect(payslipMailboxBlock(settingsDb(CONTACT).db, 'company-1', 'kivra')).resolves.toMatchObject({
+        code: 'DIGITAL_MAILBOX_SENDING_NOT_ACTIVE',
+        details: { state: status },
+        messageSv: expect.stringContaining('Kivra'),
+      })
+    }
   })
 })
 

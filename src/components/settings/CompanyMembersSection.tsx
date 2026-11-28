@@ -13,13 +13,16 @@ import { HelpPopover } from '@/components/ui/help-popover'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { SettingsGroup, SettingsRowNote, SettingsSelect } from '@/components/settings/SettingsRows'
+import { ROLE_TRIGGER_CLASS } from '@/components/settings/TeamPanel'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { SettingsTopBarPortal, useSettingsTopBarSlots } from '@/components/settings/SettingsTopBar'
 import { parseCompanyMembersPayload, type MembersProfileChoice } from '@/components/settings/members-payload'
 import { PACKAGES } from '@/lib/modules/packages'
 import { PROFILES, isProfileId, latestProfile, packagesOffIn, type ProfileId } from '@/lib/modules/profiles'
 import { isInviteExpired } from '@/components/settings/invite-expiry'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
-import { formatDateLong } from '@/lib/utils'
+import { GRANTABLE_COMPANY_ROLES } from '@/lib/company/member-roles'
+import { cn, formatDateLong } from '@/lib/utils'
 import { ArrowPathIcon, EnvelopeIcon, PlusIcon, TrashIcon } from '@/components/icons'
 
 interface CompanyMemberItem {
@@ -104,6 +107,10 @@ export function CompanyMembersSection() {
   const [removingId, setRemovingId] = useState<string | null>(null)
   const [revokingId, setRevokingId] = useState<string | null>(null)
   const [resendingId, setResendingId] = useState<string | null>(null)
+  // The member or invitation whose role change is on its way.
+  // Every row whose role change is in flight: one shared id would re-enable a
+  // row's picker when another row's request ends first.
+  const [changingRoleIds, setChangingRoleIds] = useState<ReadonlySet<string>>(() => new Set())
   const [canInvite, setCanInvite] = useState(false)
   // Multi-user seat gate: true when inviting requires the paid plan
   // (multi_user frozen). The form is swapped for the upsell line; the POST's
@@ -332,6 +339,77 @@ export function CompanyMembersSection() {
     }
   }
 
+  // A role change applies at once, like the team panel's: the row's select
+  // shows the server's answer again after the refetch, also when refused.
+  const handleRoleChange = async (target: { id: string; isInvite: boolean }, role: string) => {
+    setChangingRoleIds((ids) => new Set(ids).add(target.id))
+    try {
+      const path = target.isInvite ? `/api/company/members/invite/${target.id}` : `/api/company/members/${target.id}`
+      const res = await fetch(path, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role }),
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok) {
+        toast({
+          title: t('members_role_change_failed'),
+          description: getErrorMessage(data, {
+            statusCode: res.status,
+            locale: errorLocale,
+            fallback: t('members_role_change_failed'),
+          }),
+          variant: 'destructive',
+        })
+        return
+      }
+      toast({ title: t('members_role_changed') })
+    } catch {
+      toast({ title: t('members_role_change_failed'), variant: 'destructive' })
+    } finally {
+      setChangingRoleIds((ids) => {
+        const next = new Set(ids)
+        next.delete(target.id)
+        return next
+      })
+      void fetchMembers()
+    }
+  }
+
+  // The role as text, or, for those who manage members, a picker of the
+  // roles an invitation can grant (never owner).
+  const roleCell = (
+    target: { id: string; isInvite: boolean },
+    role: string,
+    email: string,
+    editable: boolean,
+    suffix?: React.ReactNode,
+  ) =>
+    editable ? (
+      <Select
+        value={role}
+        onValueChange={(value) => void handleRoleChange(target, value)}
+        disabled={changingRoleIds.has(target.id) || [removingId, revokingId, resendingId].includes(target.id)}
+      >
+        <SelectTrigger
+          className={cn(ROLE_TRIGGER_CLASS, 'text-xs text-muted-foreground hover:text-foreground')}
+          aria-label={t('members_role_change_aria', { email })}
+        >
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent align="end">
+          {GRANTABLE_COMPANY_ROLES.map((r) => (
+            <SelectItem key={r} value={r}>{roleLabels[r]}</SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    ) : (
+      <span className="shrink-0 text-xs text-muted-foreground">
+        {roleLabels[role] || role}
+        {suffix}
+      </span>
+    )
+
   if (members === null || invitations === null) {
     return (
       <div>
@@ -365,6 +443,14 @@ export function CompanyMembersSection() {
 
   const ownerEmail = members.find((m) => m.role === 'owner' && !m.is_current_user)?.email ?? null
 
+  // The rows remove and the role picker apply to: never one's own, the
+  // owner's, or a team-sourced one (its role follows the team role).
+  const manageable = (member: CompanyMemberItem) =>
+    canInvite && !member.is_current_user && member.role !== 'owner' && member.source !== 'team'
+  // A member's role is changed by the owner only (an admin removes and
+  // invites); a pending invitation's role by anyone who may invite.
+  const callerIsOwner = members.some((m) => m.is_current_user && m.role === 'owner')
+
   const inviteButton = (
     <Button size={topBar ? 'toolbar' : 'default'} onClick={() => setInviteOpen(true)}>
       <PlusIcon className="h-4 w-4" aria-hidden />
@@ -392,11 +478,14 @@ export function CompanyMembersSection() {
               <span className="ml-1 text-muted-foreground">{t('members_you')}</span>
             )}
           </p>
-          <span className="shrink-0 text-xs text-muted-foreground">
-            {roleLabels[member.role] || member.role}
-            {member.source === 'team' && <> · {t('members_team_badge')}</>}
-          </span>
-          {canInvite && !member.is_current_user && member.role !== 'owner' && member.source !== 'team' && (
+          {roleCell(
+            { id: member.id, isInvite: false },
+            member.role,
+            member.email,
+            callerIsOwner && manageable(member),
+            member.source === 'team' && <> · {t('members_team_badge')}</>,
+          )}
+          {manageable(member) && (
             <Button
               variant="ghost"
               size="icon"
@@ -432,9 +521,7 @@ export function CompanyMembersSection() {
                 : t('invitations_expires', { date: formatDateLong(inv.expires_at) })}
             </span>
           </p>
-          <span className="shrink-0 text-xs text-muted-foreground">
-            {roleLabels[inv.role] || inv.role}
-          </span>
+          {roleCell({ id: inv.id, isInvite: true }, inv.role, inv.email, canInvite)}
           {/* Re-send is inviting again, so it follows the invite form's
               seat gate: hidden while the paid-plan upsell replaces the form. */}
           {canInvite && !inviteRequiresUpgrade && (
@@ -558,10 +645,9 @@ export function CompanyMembersSection() {
                   value={inviteRole}
                   onChange={(e) => setInviteRole(e.target.value)}
                 >
-                  <option value="viewer">{t('members_role_viewer')}</option>
-                  <option value="invoicer">{t('members_role_invoicer')}</option>
-                  <option value="member">{t('members_role_member')}</option>
-                  <option value="admin">{t('members_role_admin')}</option>
+                  {GRANTABLE_COMPANY_ROLES.map((r) => (
+                    <option key={r} value={r}>{roleLabels[r]}</option>
+                  ))}
                 </SettingsSelect>
                 {inviteRole === 'invoicer' && <SettingsRowNote>{t('members_role_invoicer_note')}</SettingsRowNote>}
               </div>

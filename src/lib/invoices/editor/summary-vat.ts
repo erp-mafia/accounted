@@ -14,7 +14,7 @@ import type { VatTreatment } from '@/types'
  */
 
 /** Why a 0 % rate charges no VAT. */
-export type ZeroVatReason = 'reverse_charge' | 'reverse_charge_domestic' | 'export' | 'exempt'
+export type ZeroVatReason = 'reverse_charge' | 'reverse_charge_domestic' | 'export' | 'exempt' | 'outside_scope'
 
 /** The priced lines at one rate (text rows excluded). */
 export interface SummaryVatGroup {
@@ -34,13 +34,15 @@ export type SummaryVatLine =
 
 /**
  * The reason a 0 % rate is 0, from the invoice's VAT treatment as the write
- * path derives it (deriveInvoiceVatHeader): reverse charge (EU or domestic)
- * and export say so, anything else at 0 % is a momsfri supply.
+ * path derives it (deriveInvoiceVatHeader): reverse charge (EU or domestic),
+ * export and outside the scope of Swedish VAT say so, anything else at 0 % is
+ * a momsfri supply.
  */
 export function zeroVatReason(treatment: VatTreatment): ZeroVatReason {
   if (treatment === 'reverse_charge') return 'reverse_charge'
   if (treatment === 'reverse_charge_domestic') return 'reverse_charge_domestic'
   if (treatment === 'export') return 'export'
+  if (treatment === 'outside_scope') return 'outside_scope'
   return 'exempt'
 }
 
@@ -60,7 +62,10 @@ export function buildSummaryVatLines(input: {
   for (const group of groups) {
     if (groups.length > 1) lines.push({ kind: 'net', rate: group.rate, amount: group.base })
     if (group.rate === 0) {
-      lines.push({ kind: 'vat', rate: 0, amount: 0, reason: zeroVatReason(input.treatment) })
+      // Outside the scope of Swedish VAT there is no rate, not even 0 %: the
+      // line says why without one, as the PDF prints no VAT row for it.
+      const reason = zeroVatReason(input.treatment)
+      lines.push({ kind: 'vat', rate: reason === 'outside_scope' ? null : 0, amount: 0, reason })
     } else if (group.vat !== 0) {
       lines.push({ kind: 'vat', rate: group.rate, amount: group.vat, reason: null })
     }

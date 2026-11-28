@@ -60,13 +60,19 @@ export interface InvoiceCopyInitial {
   items: InvoiceCopyItem[]
 }
 
+/**
+ * A räntefaktura is never copied: its lines charge interest that was charged
+ * once already, and a copy would lose the treatment that keeps them out of
+ * the sales accounts.
+ */
 export function canCopyInvoice(
-  invoice: Pick<Invoice, 'status' | 'document_type' | 'credited_invoice_id' | 'is_self_billed' | 'total'>,
+  invoice: Pick<Invoice, 'status' | 'document_type' | 'credited_invoice_id' | 'is_self_billed' | 'total' | 'is_late_interest_invoice'>,
 ): boolean {
   return (
     invoice.document_type === 'invoice' &&
     !isCreditNoteDocument(invoice) &&
     !invoice.is_self_billed &&
+    invoice.is_late_interest_invoice !== true &&
     COPYABLE_STATUSES.has(invoice.status)
   )
 }

@@ -34,6 +34,7 @@ import { invoiceDisplayNumber, isTextLikeLine } from '@/lib/invoices/display'
 import { getDisplayTotal, getAmountToPay } from '@/lib/bookkeeping/invoice-rounding'
 import { workTypeLabel } from '@/lib/bookkeeping/rot-rut-rules'
 import { buildDetailVatRows } from '@/lib/invoices/detail-vat-rows'
+import { emailDeliveryAttention } from '@/lib/invoices/email-delivery-attention'
 import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
 import { countTextRowsLeftOutOfPeppol } from '@/lib/invoices/peppol-lines'
 import { peppolDeliveryAttention } from '@/lib/invoices/peppol-attention'
@@ -76,6 +77,7 @@ import { failureDescription } from '@/lib/browser/action-failure'
 import {
   ArrowDownTrayIcon,
   ArrowTopRightOnSquareIcon,
+  ArrowUturnLeftIcon,
   BanknotesIcon,
   BellAlertIcon,
   CalendarDaysIcon,
@@ -109,6 +111,7 @@ import { InvoiceAttachmentsSection } from '@/components/invoices/InvoiceAttachme
 import { InvoiceUnderlagSection } from '@/components/invoices/InvoiceUnderlagSection'
 import { offersInvoiceAttachments } from '@/lib/invoices/invoice-attachment-limits'
 import QuotePartDialog from '@/components/invoices/QuotePartDialog'
+import UncreditInvoiceDialog from '@/components/invoices/UncreditInvoiceDialog'
 import { quoteInvoicingProgress } from '@/lib/invoices/quote-partial-invoice'
 import { VatTreatmentNotice } from '@/components/invoices/VatTreatmentNotice'
 import {
@@ -177,6 +180,8 @@ interface PeppolDeliveryView {
   status_at: string
   status_detail: string | null
   provider_submission_id: string | null
+  /** When the access point was handed the document; null while only staged. */
+  submitted_at: string | null
 }
 const PEPPOL_STATUS_KEYS = new Set([
   'staged', 'recipient_verified', 'submitting', 'retryable_failure', 'submission_accepted',
@@ -358,6 +363,10 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     documents: Array<{ id: string; file_name: string }> | null
   } | null>(null)
   const [creditNote, setCreditNote] = useState<Invoice | null>(null)
+  // The credit note whose credit was undone (Ångra kreditering): kept with
+  // its number, so the invoice links it and is not credited again here.
+  const [undoneCreditNote, setUndoneCreditNote] = useState<Invoice | null>(null)
+  const [showUncreditDialog, setShowUncreditDialog] = useState(false)
   const [originalInvoice, setOriginalInvoice] = useState<Invoice | null>(null)
   const [convertedFromInvoice, setConvertedFromInvoice] = useState<Invoice | null>(null)
   // Offert: the invoice created from this quote (converted_from_id points
@@ -459,6 +468,9 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     remaining_sends: number | null
   } | null>(null)
   const [peppolDeliveries, setPeppolDeliveries] = useState<PeppolDeliveryView[]>([])
+  // The invoice the Peppol rows were read for: after a switch to another
+  // invoice whose read fails, the rows still belong to the previous one.
+  const [peppolDeliveriesFor, setPeppolDeliveriesFor] = useState<string | null>(null)
   // When the deliveries were read: the clock the "not confirmed yet" line
   // measures against, set with the rows so rendering stays pure.
   const [peppolReadAt, setPeppolReadAt] = useState<number | null>(null)
@@ -809,13 +821,13 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           ? loadDeductionPersonnummerMasked()
           : Promise.resolve(null),
         !data.credited_invoice_id &&
-        ['sent', 'paid', 'overdue', 'credited'].includes(data.status)
+        // partially_paid: what an undone credit can restore (the undone credit note is linked).
+        ['sent', 'paid', 'partially_paid', 'overdue', 'credited'].includes(data.status)
           ? supabase
               .from('invoices')
-              .select('id, invoice_number, status')
+              .select('id, invoice_number, status, credit_undone_at')
               .eq('credited_invoice_id', id)
-              .neq('status', 'cancelled')
-              .maybeSingle()
+              .or('status.neq.cancelled,credit_undone_at.not.is.null')
           : Promise.resolve(null),
         data.credited_invoice_id
           ? supabase
@@ -857,7 +869,9 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         // to the one the pager has since navigated to.
         if (seq !== fetchSeqRef.current) return
         setDeductionPersonnummerMasked(personnummerMasked)
-        setCreditNote(creditNoteRes?.data ? (creditNoteRes.data as Invoice) : null)
+        const creditNotes = (creditNoteRes?.data ?? []) as Invoice[]
+        setCreditNote(creditNotes.find((c) => c.status !== 'cancelled') ?? null)
+        setUndoneCreditNote(creditNotes.find((c) => !!c.credit_undone_at) ?? null)
         if (originalRes?.data) {
           setOriginalInvoice(originalRes.data as Invoice)
         }
@@ -1454,8 +1468,9 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   }
 
   async function loadPeppolDeliveries() {
+    const forId = id
     try {
-      const response = await fetch(`/api/invoices/${encodeURIComponent(id)}/peppol/deliveries`)
+      const response = await fetch(`/api/invoices/${encodeURIComponent(forId)}/peppol/deliveries`)
       if (!response.ok) return
       const payload = (await response.json()) as {
         data?: PeppolDeliveryView[]
@@ -1465,6 +1480,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       const rows = Array.isArray(payload.data) ? [...payload.data] : []
       rows.sort((a, b) => (a.status_at < b.status_at ? 1 : a.status_at > b.status_at ? -1 : 0))
       setPeppolDeliveries(rows)
+      setPeppolDeliveriesFor(forId)
       setPeppolReadAt(Date.now())
       setPeppolTransportAvailable(payload.transport?.available === true)
       setPeppolAccess(payload.access ?? null)
@@ -2118,7 +2134,12 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     // A credit note, linked or imported without its original, is never
     // credited (the doors refuse it by the same rule).
     !isCreditNoteDocument(invoice) &&
-    !creditNote
+    !creditNote &&
+    !undoneCreditNote
+  // Ångra kreditering: the original of a credit note this app issued, or of
+  // one already kept as undone by a run that stopped before the original was
+  // restored. The server decides (lib/invoices/uncredit-invoice.ts).
+  const canUncredit = invoice.status === 'credited' && !!(creditNote ?? undoneCreditNote) && canWrite
   // Download/prepare need the F-number (the XML carries it); sending a draft
   // assigns the number server-side, so the menu shows once a provider is on.
   const showPeppolActions = !isSelfBilled && isRealInvoice && !isCreditNote
@@ -2156,6 +2177,19 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const peppolOtherWay = invoice.status === 'draft'
     ? (canWrite ? { label: t('peppol_failed_email_action'), onClick: () => openSendDialog('email') } : null)
     : { label: t('download_pdf'), onClick: () => void downloadPDF() }
+  // The email counterpart (lib/invoices/email-delivery-attention.ts), for a
+  // faktura or kreditfaktura: the newest handover was an email the provider
+  // reported as not arrived. A Peppol submission or a digital-mailbox send
+  // made after it clears it; a Peppol sentence, when there is one, keeps the
+  // page's one line.
+  const emailAttention = !isRealInvoice || peppolAttention || deliveriesUnreadable
+    ? null
+    : emailDeliveryAttention(invoice.status, deliveries, [
+        ...(peppolDeliveriesFor === id ? peppolDeliveries : []).map((delivery) => delivery.submitted_at),
+        ...mailboxView.dispatches
+          .filter((dispatch) => dispatch.status === 'sent')
+          .map((dispatch) => dispatch.created_at),
+      ])
   const showDestructive =
     invoice.status !== 'cancelled' &&
     invoice.status !== 'credited' &&
@@ -2211,6 +2245,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     showManualSendAlternative ||
     canResend ||
     (canCreateCreditNote && canWrite) ||
+    canUncredit ||
     (canBookAfterwards && canWrite) ||
     showPeppolActions ||
     mailboxActions.length > 0 ||
@@ -2583,6 +2618,17 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                         </Link>
                       </DropdownMenuItem>
                     )}
+                    {canUncredit && (
+                      <DropdownMenuItem onSelect={() => setShowUncreditDialog(true)} className="items-start">
+                        <ArrowUturnLeftIcon className="mt-0.5 h-4 w-4" />
+                        <span className="min-w-0">
+                          <span className="block">{t('uncredit_menu_item')}</span>
+                          <span className="block text-xs leading-snug text-muted-foreground">
+                            {t('uncredit_menu_hint')}
+                          </span>
+                        </span>
+                      </DropdownMenuItem>
+                    )}
                     {correction && (
                       <DropdownMenuItem onSelect={correction.open} disabled={correction.isLoading}>
                         <PencilIcon className="h-4 w-4" />
@@ -2848,6 +2894,35 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       )}
       {!loadFailed && peppolAttention === 'unconfirmed' && <AttnLine>{t('peppol_unconfirmed_attn')}</AttnLine>}
       {!loadFailed && peppolAttention === 'unreported' && <AttnLine>{t('peppol_unreported_attn')}</AttnLine>}
+
+      {/* The latest email, when the provider reported it did not arrive: the
+          address it went to (masked to the domain, as the delivery history
+          shows it to every member) and the ways on. Skicka igen sends to the
+          customer's address as it is now. */}
+      {!loadFailed && emailAttention && (
+        <AttnLine
+          action={canResend && canWrite && customerHasEmail && canEmail
+            ? { label: t('resend_action'), onClick: () => setShowResendDialog(true) }
+            : undefined}
+          trailing={customer && (
+            <>
+              {' '}
+              <Link
+                href={`/customers/${customer.id}`}
+                className="text-muted-foreground underline underline-offset-2 hover:text-foreground print:hidden"
+              >
+                {t('email_failed_customer_action')}
+              </Link>
+            </>
+          )}
+        >
+          {t.rich(`email_${emailAttention.status}_attn`, {
+            addresses: emailAttention.addresses.join(', '),
+            // data-ph-mask: the domain the invoice went to
+            mask: (chunks) => <span data-ph-mask="">{chunks}</span>,
+          })}
+        </AttnLine>
+      )}
 
       {/* Record head (V7 Försäljning): who the document is for and what it
           comes to; the number and the status are the top bar's. */}
@@ -3270,6 +3345,14 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                   {creditNote.status === 'draft' && creditNote.invoice_number && (
                     <span className="text-muted-foreground">{' · '}{statusLabel('draft')}</span>
                   )}
+                </DefRow>
+              )}
+              {!creditNote && undoneCreditNote && (
+                <DefRow label={t('def_credit_note')}>
+                  <Link href={`/invoices/${undoneCreditNote.id}`} className="hover:underline">
+                    {undoneCreditNote.invoice_number ?? ''}
+                  </Link>
+                  <span className="text-muted-foreground">{' · '}{tInvoices('status_credit_undone')}</span>
                 </DefRow>
               )}
               {invoice.credited_invoice_id && originalInvoice && (
@@ -4100,6 +4183,16 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           })}
           confirmLabel={t('resend_confirm_action')}
           onConfirm={resendInvoice}
+        />
+      )}
+
+      {canUncredit && (
+        <UncreditInvoiceDialog
+          invoice={{ id: invoice.id, invoice_number: invoice.invoice_number ?? null }}
+          copyHref={newEditorHref({ copyFromId: invoice.id })}
+          open={showUncreditDialog}
+          onOpenChange={setShowUncreditDialog}
+          onUncredited={fetchInvoice}
         />
       )}
 

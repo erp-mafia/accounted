@@ -5,6 +5,8 @@ import {
   contradictsLearnedDirection,
   findCounterpartyTemplatesBatch,
   findSwitchedOffCounterpartyRules,
+  readSwitchedOffRulesByName,
+  type SwitchedOffCounterpartyRule,
   type CounterpartyTemplateMatch,
 } from '@/lib/bookkeeping/counterparty-templates'
 import { loadCounterLegTopology, type CounterLegTopology } from '@/lib/cash-accounts/service'
@@ -22,7 +24,7 @@ import { readDirectBookingSettings } from './direct-booking-settings'
 import { proposeClearings } from './clearing-proposals'
 import { loadActiveBookingReviewRules } from '@/lib/booking-review/rules'
 import { markBlockedProposals } from '@/lib/booking-review/proposals'
-import { isAutoLearnedMappingRule, mappingRulesRead } from '@/lib/bookkeeping/mapping-engine'
+import { isAutoLearnedMappingRule, mappingRulesBesideSwitchedOff, mappingRulesRead, readsAutoLearnedMappingRules } from '@/lib/bookkeeping/mapping-engine'
 import { isBookingPrecedentEnabled } from '@/lib/env/booking-precedent-switch'
 import { loadBookingPrecedents, precedentProposal, type PrecedentBooking } from './booking-precedent'
 import { markUnconfirmedReverseChargeBoxes } from './reverse-charge-box-evidence'
@@ -59,6 +61,10 @@ import type { Transaction, EntityType, CategorizationTemplate, MappingRule } fro
  * rule the company switched off silences it, as it silences the rule; a
  * payment to Skatteverket never gets one; a clearing proposal still leads
  * above it. Every other company's list is what it was.
+ *
+ * An auto-learned mapping row of a counterparty rule the company switched
+ * off proposes nothing (mappingRulesBesideSwitchedOff): the pause in Regler
+ * silences the learned row the same booking wrote.
  *
  * For a company whose auto-learned mapping rows are not read
  * (lib/bookkeeping/mapping-engine.ts readsAutoLearnedMappingRules), such a
@@ -120,7 +126,7 @@ export async function proposeForTransactions(
   // in one round; the proposals are then put together in the same order as
   // before. The suggestions in Transaktioner wait on this.
   const precedentOn = isBookingPrecedentEnabled(companyId)
-  const [companyRules, globalRules, direct_booking, settingsRead, counterpartyMatches, storedReads, clearings, blockRules, switchedOffRules] = await Promise.all([
+  const [companyRules, globalRules, direct_booking, settingsRead, counterpartyMatches, storedReads, clearings, blockRules, switchedOffRules, switchedOffByName] = await Promise.all([
     supabase
       .from('mapping_rules')
       .select('*')
@@ -163,6 +169,18 @@ export async function proposeForTransactions(
           return null
         })
       : Promise.resolve(null),
+    // The switched-off counterparty rules by name, read where the company's
+    // auto-learned rows are read (mappingRulesBesideSwitchedOff). Best
+    // effort: a failed read leaves the learned rows as stored.
+    readsAutoLearnedMappingRules(companyId)
+      ? readSwitchedOffRulesByName(supabase, companyId).catch((err: unknown) => {
+          log.warn('switched-off counterparty rules read failed; learned rows are read as stored', {
+            companyId,
+            error: err instanceof Error ? err.message : String(err),
+          })
+          return new Map<string, SwitchedOffCounterpartyRule[]>()
+        })
+      : Promise.resolve(new Map<string, SwitchedOffCounterpartyRule[]>()),
   ])
   const storedRules = [
     ...((companyRules.data ?? []) as MappingRule[]),
@@ -170,8 +188,10 @@ export async function proposeForTransactions(
   ]
   // Without the company's auto-learned rows where they are not read
   // (lib/bookkeeping/mapping-engine.ts readsAutoLearnedMappingRules).
-  const mappingRules = mappingRulesRead(companyId, storedRules)
-  const unreadRules = mappingRules.length === storedRules.length ? [] : storedRules.filter(isAutoLearnedMappingRule)
+  const readRules = mappingRulesRead(companyId, storedRules)
+  const unreadRules = readRules.length === storedRules.length ? [] : storedRules.filter(isAutoLearnedMappingRule)
+  // Beside the switched-off counterparty rules: a learned row whose rule was paused matches nothing.
+  const mappingRules = mappingRulesBesideSwitchedOff(readRules, switchedOffByName)
 
   const entityType = (settingsRead.data?.entity_type as EntityType) || undefined
 

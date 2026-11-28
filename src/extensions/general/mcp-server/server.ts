@@ -192,7 +192,7 @@ import { invoicePayableRefusal } from '@/lib/invoices/invoice-payable'
 import { resolveInvoicePaymentAccount, resolveInvoiceSettlementAccount } from '@/lib/invoices/invoice-payee'
 import { isPaidAtIssueAccount } from '@/lib/invoices/paid-at-issue'
 import { supplierInvoiceReference } from '@/lib/bookkeeping/supplier-invoice-description'
-import { contradictsLearnedDirection, findCounterpartyTemplatesBatch, formatCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
+import { contradictsLearnedDirection, findCounterpartyTemplatesBatch, formatCounterpartyName, readSwitchedOffRulesByName, type SwitchedOffCounterpartyRule } from '@/lib/bookkeeping/counterparty-templates'
 import { counterpartyTemplateKey } from '@/lib/rules/service'
 import { escapeLikePattern } from '@/lib/supabase/like-pattern'
 import { bankRowRefusalCode, decideBankRowRebooking } from '@/lib/transactions/is-booked'
@@ -570,6 +570,7 @@ import {
 import { assertNoOpeningBalance } from '@/lib/import/opening-balance/existing'
 import { assertStornoTarget, movedCorrectionDescription } from '@/lib/core/bookkeeping/storno-target'
 import { correctionLanding } from '@/lib/vat/moved-correction-vat'
+import { rcBasisTwiceVoucherWarning } from '@/lib/vat/voucher-rc-basis-twice-warning'
 import { assertCorrectedImportVatBase } from '@/lib/bookkeeping/import-vat-base'
 import {
   checkVoucherGapExplanation,
@@ -709,7 +710,7 @@ import { voucherOwnerOrNull } from '@/lib/core/bookkeeping/voucher-owner'
 import { negatesOriginal } from '@/lib/core/bookkeeping/correction-shape'
 import { getSuggestedCategories, buildMerchantHistory, merchantHistoryFor } from '@/lib/transactions/category-suggestions'
 import { proposeForTransactions } from '@/lib/transactions/propose'
-import { mappingRulesRead } from '@/lib/bookkeeping/mapping-engine'
+import { isAutoLearnedMappingRule, mappingRulesBesideSwitchedOff, mappingRulesRead } from '@/lib/bookkeeping/mapping-engine'
 import {
   findSalaryRunPayouts,
   salaryPayoutLinkProposal,
@@ -885,6 +886,7 @@ import { creditNoteRefusal } from '@/lib/invoices/credit-invoice'
 import { noteCompletionLog } from '@/lib/extensions/completion-log'
 import { loadInvoiceTerms } from '@/lib/invoices/due-date'
 import { lineQuantityIssue, LINE_QUANTITY_MESSAGES } from '@/lib/invoices/line-quantity'
+import { SEND_ORDER_WAYS } from '@/lib/invoices/send-order'
 import { bookDirectDocumentCurrency, bookDirectFxRefusal } from '@/lib/bookkeeping/book-direct-prefill'
 
 // ── Actor context ────────────────────────────────────────────
@@ -4974,6 +4976,7 @@ async function stageInvoiceMailboxSend(request: {
     throw new OperationError(check.code, {
       ...(check.details ? { details: check.details } : {}),
       ...(check.messageSv ? { messageSv: check.messageSv } : {}),
+      ...(check.remediation ? { remediation: check.remediation } : {}),
     })
   }
 
@@ -10420,6 +10423,7 @@ export const tools: McpTool[] = [
         language: { type: 'string', enum: ['sv', 'en'] },
         invoice_reference: { type: 'string' },
         invoice_marking: { type: 'string' },
+        invoice_send_way: { type: 'string', enum: [...SEND_ORDER_WAYS], description: "Sent first; omitted: company's order." },
         notes: { type: 'string' },
         dry_run: STAGING_ARGS_PROPERTIES.dry_run,
         idempotency_key: STAGING_ARGS_PROPERTIES.idempotency_key,
@@ -10519,6 +10523,7 @@ export const tools: McpTool[] = [
         default_payment_terms: { type: 'integer', minimum: 0, maximum: 365 },
         invoice_reference: { type: 'string' },
         invoice_marking: { type: 'string' },
+        invoice_send_way: { type: ['string', 'null'], enum: [...SEND_ORDER_WAYS, null], description: "Null: company's order." },
         notes: { type: 'string' },
         dry_run: STAGING_ARGS_PROPERTIES.dry_run,
         idempotency_key: STAGING_ARGS_PROPERTIES.idempotency_key,
@@ -14140,8 +14145,21 @@ export const tools: McpTool[] = [
         .eq('is_active', true)
         .order('priority', { ascending: false })
 
-      // Without the company's auto-learned rows where they are not read.
-      const readMappingRules = mappingRulesRead(companyId, (mappingRules ?? []) as MappingRule[])
+      // Without the company's auto-learned rows where they are not read, and
+      // beside its switched-off counterparty rules, read when a learned row is
+      // left: a learned row whose rule was paused is no hint. A failed read
+      // leaves the learned rows as stored.
+      const keptMappingRules = mappingRulesRead(companyId, (mappingRules ?? []) as MappingRule[])
+      const switchedOffByName = keptMappingRules.some(isAutoLearnedMappingRule)
+        ? await readSwitchedOffRulesByName(supabase, companyId).catch((err: unknown) => {
+            log.warn('switched-off counterparty rules read failed; learned rows are hints as stored', {
+              companyId,
+              error: err instanceof Error ? err.message : String(err),
+            })
+            return new Map<string, SwitchedOffCounterpartyRule[]>()
+          })
+        : new Map<string, SwitchedOffCounterpartyRule[]>()
+      const readMappingRules = mappingRulesBesideSwitchedOff(keptMappingRules, switchedOffByName)
 
       // Build category history from past categorizations
       // Counterparty-keyed history: the engine only surfaces history tied to
@@ -17767,7 +17785,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_reconcile_signoff',
     keywords: ['avstämning', 'avstämt', 'signera avstämning'],
     title: 'Reconcile: Sign off',
-    description: 'Mark one account (skattekonto, bank:<id> or manual:<BAS>) as reconciled through a date ("avstämt t.o.m."). Refused unless unexplained_difference is 0, or force + note. Manual accounts without a specification take external_balance (underlag, ledger sign). Stages; dry_run previews.',
+    description: 'Mark one account (skattekonto, bank:<id> or manual:<BAS>) as reconciled through a date ("avstämt t.o.m."). Refused unless unexplained_difference is 0, or force + note. Manual (no specification) and unconnected bank accounts take external_balance. Stages; dry_run previews.',
     catalogVisibility: 'search',
     inputSchema: {
       type: 'object',
@@ -17777,7 +17795,7 @@ export const tools: McpTool[] = [
         through_date: { type: 'string', description: 'Inclusive YYYY-MM-DD the account is reconciled through (not in the future; not past the skattekonto snapshot).' },
         note: { type: 'string', description: 'Free text. Required with force.' },
         force: { type: 'boolean', description: 'Sign despite an unexplained difference or an unknown outside balance. Needs note.' },
-        external_balance: { type: 'number', description: 'Manual accounts without a system specification only: balance per underlag, ledger sign (liabilities negative).' },
+        external_balance: { type: 'number', description: 'Balance per underlag at the end of through_date, ledger sign (liabilities negative), judged against the booked balance. Manual accounts without a system specification, and bank accounts without a bank connection (the statement balance).' },
         ...STAGING_ARGS_PROPERTIES,
       },
       required: ['account_key', 'through_date'],
@@ -28324,6 +28342,30 @@ export const tools: McpTool[] = [
         throw new MeaninglessCorrectionError('negates_original')
       }
 
+      // A basis pair beside an account that reports ruta 20-24 itself counts
+      // the purchase twice in the momsdeklaration: the booking-time warning
+      // every typed door asks (lib/vat/voucher-rc-basis-twice-warning.ts),
+      // advice for the agent and the approver, never a refusal. A failed
+      // read never stops the staging.
+      const basisTwice = await rcBasisTwiceVoucherWarning(supabase, companyId, {
+        lines,
+        replaces: {
+          entry_date: original.entry_date,
+          lines: originalLines.map((l) => ({
+            account_number: l.account_number,
+            debit_amount: Number(l.debit_amount) || 0,
+            credit_amount: Number(l.credit_amount) || 0,
+          })),
+        },
+        ...(original.source_type === 'opening_balance' ? { opening_balance: true } : {}),
+      }).catch((err: unknown) => {
+        log.warn('correct_entry: reverse-charge basis check failed (continuing)', err as Error)
+        return null
+      })
+      const warnings = [ownedBy?.hint_sv, vatWarning?.message_sv, basisTwice?.message_sv].filter(
+        (w): w is string => !!w,
+      )
+
       return stage({
         supabase,
         companyId,
@@ -28384,9 +28426,7 @@ export const tools: McpTool[] = [
           },
           ...(dimensionResolutions.length > 0 ? { dimension_resolutions: dimensionResolutions } : {}),
           ...(ownedBy ? { owned_by: ownedBy } : {}),
-          ...(ownedBy || vatWarning
-            ? { warnings: [ownedBy?.hint_sv, vatWarning?.message_sv].filter((w): w is string => !!w) }
-            : {}),
+          ...(warnings.length > 0 ? { warnings } : {}),
           will: stornoTarget.moved
             ? `post a storno that mirrors the original and a new corrected entry, both dated ${stornoTarget.date} in the first open period and naming the original; the original stays as booked in its locked period (BFL 5 kap 5§)`
             : 'post a storno that mirrors the original, then post a new corrected entry, then mark the original as reversed (BFL 5 kap 5§)',
@@ -28399,6 +28439,9 @@ export const tools: McpTool[] = [
           tool: 'gnubok_query_journal',
         },
         dateForPeriodCheck: stornoTarget.date,
+        // The approval card in Att göra shows compliance_warning: the
+        // approver reads the double count there too.
+        ...(basisTwice ? { complianceNote: basisTwice.message_sv } : {}),
       })
     },
   },

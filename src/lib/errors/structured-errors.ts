@@ -504,12 +504,12 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
   DRAFT_HAS_DOCUMENTS: {
     httpStatus: 409,
     message_sv:
-      'Utkastet har bilagor som inte kan flyttas när utkastet har makulerats. Bokför utkastet, eller kontakta supporten.',
+      'Utkastet har bilagor som inte kan flyttas om utkastet makuleras. Radera utkastet i Accounted i stället (Bokföring › verifikationen › Fler alternativ › Radera utkast): bilagorna finns kvar och kan kopplas till en annan verifikation. Eller bokför utkastet.',
     message_en:
-      'The draft holds documents that can never be moved to another verifikat once the draft is cancelled. Book the draft, or contact support.',
+      'The draft holds documents that could never be moved to another verifikat once the draft is cancelled. Delete the draft in Accounted instead (Bokföring › the verifikat › Fler alternativ › Radera utkast): the documents stay and can be linked to another verifikat. Or book the draft.',
     remediation: {
       description:
-        'Do not cancel this draft. details.documents lists its underlag. Ask the user to book the draft (commit it), or to contact support to move the documents first.',
+        'Do not cancel this draft, and do not retry: no tool deletes a draft. details.documents lists its underlag. Ask the user (a company owner or admin) to delete the draft in Accounted: Bokföring, open the verifikat, Fler alternativ › Radera utkast. Deleting a draft releases its documents: they stay and can then be linked to another verifikat (gnubok_link_document_to_voucher). Or ask the user to book the draft (commit it).',
     },
   },
   JOURNAL_ENTRY_ALREADY_CANCELLED: {
@@ -1948,7 +1948,7 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
       'The delivery country does not match the VAT treatment. Export requires the goods to leave the EU; an intra-EU supply requires transport to another EU member state.',
     remediation: {
       description:
-        'Check delivery_country. Goods to another EU member state: vat_treatment reverse_charge (needs the buyer VAT number). Goods leaving the EU: export. Goods staying in Sweden: standard. reverse_charge_domestic (construction services) takes no delivery_country. details.required names what the treatment needs.',
+        'Check delivery_country. Goods to another EU member state: vat_treatment reverse_charge (needs the buyer VAT number). Goods leaving the EU: export. Goods staying in Sweden: standard. reverse_charge_domestic (construction services) and outside_scope (late payment interest) take no delivery_country. details.required names what the treatment needs.',
     },
   },
   INVOICE_VAT_TREATMENT_BUYER_VAT_NUMBER_REQUIRED: {
@@ -1961,6 +1961,17 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
       description:
         'Add the buyer EU VAT number to the customer (it is validated against VIES when saved), or send vat_treatment standard for Swedish VAT (for example a consumer under the distance-sales threshold). details.reason: private_person, missing, not_another_member_state or not_validated.',
       tool: 'gnubok_update_customer',
+    },
+  },
+  INVOICE_VAT_TREATMENT_OUTSIDE_SCOPE_LINE: {
+    httpStatus: 400,
+    message_sv:
+      'Utanför svensk moms gäller bara belopp som inte är försäljning, i dag dröjsmålsränta: varje rad med belopp ska bokföras på ett konto för ränteintäkter, till exempel 8313.',
+    message_en:
+      'Outside the scope of Swedish VAT applies only to amounts that are not a sale, today late payment interest: every priced line must book an interest-income account, for example 8313.',
+    remediation: {
+      description:
+        'Set revenue_account to an interest-income account (825x, 826x, 831x or 836x, e.g. 8313) on the rows in details.rows, or omit vat_treatment for an ordinary sale.',
     },
   },
   INVOICE_VAT_TREATMENT_DOMESTIC_BUYER_REQUIRED: {
@@ -2663,6 +2674,34 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     httpStatus: 409,
     message_sv: 'Kreditfakturan har redan utfärdats.',
     message_en: 'The credit note has already been issued.',
+  },
+  // The undone credit note keeps its number KR-<the original's> (ML 17 kap
+  // 24 § p. 2), and a new credit note of the same invoice would take it.
+  INVOICE_CREDIT_UNDONE_BEFORE: {
+    httpStatus: 409,
+    message_sv: 'Fakturans kreditering har ångrats, och kreditfakturans nummer är redan använt. Fakturan kan inte krediteras igen här.',
+    message_en: 'This invoice\'s credit was undone, and the undone credit note keeps its number, so the invoice cannot be credited again here.',
+  },
+  // "Ångra kreditering" (lib/invoices/uncredit-invoice.ts).
+  INVOICE_UNCREDIT_DELIVERED: {
+    httpStatus: 409,
+    message_sv: 'Kreditfakturan har skickats till kunden och kan inte ångras. Skapa en ny faktura som kopia av originalet i stället.',
+    message_en: 'The credit note reached the customer, so the credit cannot be undone. Create a new invoice as a copy of the original instead.',
+  },
+  INVOICE_UNCREDIT_ATTESTATION_REQUIRED: {
+    httpStatus: 400,
+    message_sv: 'Kreditfakturan är markerad som skickad. Intyga att den inte har lämnats till kunden.',
+    message_en: 'The credit note is marked as sent: confirm that it never reached the customer (attest_not_delivered).',
+  },
+  INVOICE_UNCREDIT_REFUNDED: {
+    httpStatus: 409,
+    message_sv: 'Kreditfakturan har en registrerad återbetalning. Makulera återbetalningens verifikation först.',
+    message_en: 'The credit note has a refund recorded. Reverse the refund\'s verifikat first.',
+  },
+  INVOICE_UNCREDIT_NOT_REVERSIBLE: {
+    httpStatus: 409,
+    message_sv: 'Krediteringen kan inte ångras här. Skapa en ny faktura som kopia av originalet i stället.',
+    message_en: 'The credit cannot be undone here; details.reason says why (accrual_schedules, customer_loss or credit_note_state). Create a new invoice as a copy of the original instead.',
   },
   INVOICE_MARK_SENT_INVALID_STATUS: {
     httpStatus: 400,
@@ -3618,6 +3657,26 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Underlaget har redan en kundorder.',
     message_en: 'The source document already has a sales order.',
   },
+  // POST /api/invoices/late-payment-interest/invoices (Skapa räntefaktura).
+  LATE_INTEREST_NOT_CHARGEABLE: {
+    httpStatus: 409,
+    message_sv:
+      'Räntan på en eller flera av fakturorna kan inte faktureras: de har redan en räntefaktura eller är inte slutbetalda. Ladda om sidan Dröjsmålsränta och försök igen.',
+    message_en:
+      'The interest on one or more of the invoices cannot be charged: they already have an interest invoice or are not paid in full. Reload the Late payment interest page and try again.',
+    remediation: {
+      description:
+        'Read the report again (gnubok_get_late_payment_interest): only paid_late rows with fully_paid true, interest_invoice null and interest above 0 can be charged. details.invoice_ids names the refused ones.',
+      tool: 'gnubok_get_late_payment_interest',
+    },
+  },
+  LATE_INTEREST_FX_RATE_UNAVAILABLE: {
+    httpStatus: 502,
+    message_sv:
+      'Kunde inte hämta växelkursen från Riksbanken för fakturadatumet. Räntefakturan har inte skapats: en gissad kurs får inte bokföras. Försök igen om en stund.',
+    message_en:
+      'Could not fetch the Riksbanken exchange rate for the invoice date. No interest invoice was created: a guessed rate must not be booked. Try again shortly.',
+  },
   SALES_ORDER_INVOICE_FX_RATE_UNAVAILABLE: {
     httpStatus: 502,
     message_sv:
@@ -3746,14 +3805,17 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Inkorgen är inte aktiverad i den här miljön, så brevlådan kan inte läsas in.',
     message_en: 'The inbox is not enabled in this environment, so the mailbox cannot be read.',
   },
+  // The send composes the sentence and next step for where sending stands
+  // (details.state: off, pending, rejected; lib/digital-mailboxes/sending-not-active.ts).
   DIGITAL_MAILBOX_SENDING_NOT_ACTIVE: {
     httpStatus: 409,
-    message_sv: 'Aktivera utskick via den digitala brevlådan först.',
-    message_en: 'Activate sending through this digital mailbox first.',
+    message_sv: 'Utskick via den digitala brevlådan är inte aktivt för företaget.',
+    message_en: 'Sending through this digital mailbox is not active for the company.',
     remediation: {
       description:
-        'Sending through this mailbox is off for the company. A person connects Kivra or Billo and switches on "Utskick av fakturor och lönebesked" under Settings, Connections (/settings/connections); an agent or API key cannot. Until then send by email: channel email, the default.',
+        'Sending through this mailbox is not active for the company; details.state says where it stands. off: a company admin switches on "Utskick av fakturor och lönebesked" under Settings, Connections (/settings/connections). pending: the provider has not yet approved Accounted\'s access request; wait, sending starts by itself once it does. rejected: the provider declined; an admin switches sending on again to ask once more, or contacts Accounted. An agent or API key cannot change it. Until then send by email: channel email, the default.',
     },
+    thrown_message_sv: true,
   },
   DIGITAL_MAILBOX_INVOICE_NOT_SENDABLE: {
     httpStatus: 409,
@@ -11791,6 +11853,13 @@ const POS_SALES: Record<string, StructuredErrorEntry> = {
     message_sv: 'Kassan är redan kopplad till företaget.',
     message_en: 'This point-of-sale venue is already connected to the company.',
   },
+  // The exchange-rate read (lib/operations/exchange-rates.ts): Riksbanken
+  // limits requests per IP, so a sandbox company never asks it.
+  EXCHANGE_RATE_SANDBOX: {
+    httpStatus: 403,
+    message_sv: 'Valutakursen kan inte hämtas från sandlådan. Skapa ett konto för att använda externa tjänster.',
+    message_en: 'The exchange rate cannot be read from the sandbox. Create an account to use external services.',
+  },
   POS_SANDBOX_BLOCKED: {
     httpStatus: 403,
     message_sv: 'Kassasystem kan inte kopplas i sandlådan.',
@@ -13835,8 +13904,8 @@ const BOLAGET: Record<string, StructuredErrorEntry> = {
 const COMMITMENTS: Record<string, StructuredErrorEntry> = {
   COMMITMENTS_UNAVAILABLE: {
     httpStatus: 404,
-    message_sv: 'Avtal och åtaganden finns inte här ännu.',
-    message_en: 'Agreements and commitments are not available here yet.',
+    message_sv: 'Avtal och åtaganden slås på bolag för bolag och är inte påslaget för det här bolaget: skriv till support@accounted.se för att få det påslaget.',
+    message_en: 'Agreements and commitments are switched on company by company and are not on for this company: write to support@accounted.se to have them switched on.',
   },
   COMMITMENTS_REFERENCE_NOT_FOUND: {
     httpStatus: 404,

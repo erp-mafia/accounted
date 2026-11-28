@@ -170,10 +170,7 @@ export default function SkattekontoBookDialog({
   // Unknown until the settings load: the picker shows a placeholder, never a guess.
   const defaultSeries = companySettings ? resolveDefaultSeriesForSource(companySettings, 'tax_account') : null
   const shownSeries = chosenSeries ?? defaultSeries
-  const seriesOptions = buildVoucherSeriesOptions(companySettings?.voucher_series_labels, [
-    ...Object.values(companySettings?.default_voucher_series_per_source_type ?? {}),
-    shownSeries,
-  ])
+  const seriesOptions = buildVoucherSeriesOptions(companySettings?.voucher_series_labels)
 
   // Which action "Bokför ändå" repeats for a twin found on open: the one the
   // dialog's primary button would have taken.

@@ -7,6 +7,9 @@
  *   - the invoicing entry is owned by the module of its leaf
  *     (lib/invoices/__tests__/voucher-open-invoice-warning.test.ts pins what
  *     it answers);
+ *   - the VAT block's reverse-charge basis entry is owned by the module of
+ *     its leaf (lib/vat/__tests__/voucher-rc-basis-twice-warning.test.ts
+ *     pins what it answers);
  *   - cycle guard: neither the seam nor its leaf reaches back into the guard,
  *     engine.ts or lib/init.
  * What the guard does with a warning is pinned by
@@ -27,6 +30,7 @@ import { scanLibImports } from '@/lib/modules/__tests__/import-scan'
 const LIB_ROOT = join(__dirname, '..', '..')
 const LEAF = 'vat/voucher-filed-period-warning'
 const INVOICING_LEAF = 'invoices/voucher-open-invoice-warning'
+const RC_BASIS_LEAF = 'vat/voucher-rc-basis-twice-warning'
 
 describe('VOUCHER_BLOCK_WARNINGS', () => {
   beforeEach(() => {
@@ -34,7 +38,11 @@ describe('VOUCHER_BLOCK_WARNINGS', () => {
   })
 
   it('holds the VAT block\'s filed-period warning, owned by the module of its leaf, and is frozen', () => {
-    expect(VOUCHER_BLOCK_WARNINGS.map((w) => w.id)).toEqual(['vat-period-already-filed', 'open-invoice-covers-posting'])
+    expect(VOUCHER_BLOCK_WARNINGS.map((w) => w.id)).toEqual([
+      'vat-period-already-filed',
+      'open-invoice-covers-posting',
+      'reverse-charge-basis-twice',
+    ])
     const [vat] = VOUCHER_BLOCK_WARNINGS
     expect(vat.module).toBe('vat')
     expect(MODULE_IDS).toContain(vat.module)
@@ -49,6 +57,13 @@ describe('VOUCHER_BLOCK_WARNINGS', () => {
     expect(MODULE_IDS).toContain(invoicing.module)
     expect(moduleForLibPath(INVOICING_LEAF)).toBe(invoicing.module)
     expect(Object.isFrozen(invoicing)).toBe(true)
+  })
+
+  it('holds the VAT block\'s reverse-charge basis warning, owned by the module of its leaf', () => {
+    const rcBasis = VOUCHER_BLOCK_WARNINGS[2]
+    expect(rcBasis.module).toBe('vat')
+    expect(moduleForLibPath(RC_BASIS_LEAF)).toBe(rcBasis.module)
+    expect(Object.isFrozen(rcBasis)).toBe(true)
   })
 
   it('calls filedPeriodVoucherWarning once with the same arguments and returns its answer as it is', async () => {
@@ -105,7 +120,7 @@ describe('voucher block warnings: cycle guard', () => {
     expect(reaches('bookkeeping/voucher-warnings-guard', (node) => node === 'composition/voucher-block-warnings')).not.toBeNull()
   })
 
-  it.each([LEAF, INVOICING_LEAF, 'composition/voucher-block-warnings'])('%s never reaches the guard, engine.ts or lib/init', (start) => {
+  it.each([LEAF, INVOICING_LEAF, RC_BASIS_LEAF, 'composition/voucher-block-warnings'])('%s never reaches the guard, engine.ts or lib/init', (start) => {
     expect(reaches(start, (node) => node === 'bookkeeping/voucher-warnings-guard'), 'path to the guard').toBeNull()
     expect(reaches(start, (node) => node === 'bookkeeping/engine'), 'path to engine.ts').toBeNull()
     expect(reaches(start, (node) => node === 'init' || node === 'init/index'), 'path to lib/init').toBeNull()

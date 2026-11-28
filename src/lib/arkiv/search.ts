@@ -1,6 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { dbError } from '@/lib/errors/db-error'
 import { PREDICATES, predicateDef, type FactSubjectKind } from '@/lib/arkiv/facts/predicates'
+import { isArkivBrainEnabled } from '@/lib/arkiv/flag'
+import { originalsOf } from '@/lib/arkiv/list-records'
 import { searchDocumentPages } from '@/lib/documents/read/search'
 import { NOT_STRUCTURED_MIME_FILTER } from '@/lib/documents/read/types'
 
@@ -12,7 +14,8 @@ import { NOT_STRUCTURED_MIME_FILTER } from '@/lib/documents/read/types'
  * by the Swedish name of the predicate. Every hit carries a record_ref and,
  * where it was read from a page, the page: the person opens it, the agent
  * passes it to gnubok_get_record. Retrieval only; how a hit is titled for a
- * person is the route's job.
+ * person is the route's job. searchArchive below is the answer an agent or an
+ * integration gets (gnubok_search_records, GET /documents/search).
  */
 export const SEARCH_KINDS = ['document', 'agreement', 'fact'] as const
 export type SearchKind = (typeof SEARCH_KINDS)[number]
@@ -128,4 +131,61 @@ export async function searchRecords(
   }
 
   return items
+}
+
+export interface ArchiveSearchItem extends SearchItem {
+  /**
+   * On a later copy of a document (the same file or the same text archived
+   * again), the earliest one's record_ref (originalsOf): a sum counts each
+   * document once.
+   */
+  duplicate_of: string | null
+}
+
+export interface ArchiveSearch {
+  items: ArchiveSearchItem[]
+  /** Documents not read yet: their page text is not searched, only their file names. */
+  unread: number
+}
+
+/** Documents not read yet, among the ones search reaches. */
+export async function countUnreadDocuments(supabase: SupabaseClient, companyId: string): Promise<number> {
+  const { count, error } = await supabase
+    .from('document_attachments')
+    .select('id', { count: 'exact', head: true })
+    .eq('company_id', companyId)
+    .in('admission_state', ['admitted', 'held'])
+    .is('pages_read_at', null)
+    .or(NOT_STRUCTURED_MIME_FILTER)
+  if (error) throw dbError(error)
+  return count ?? 0
+}
+
+/**
+ * The archive searched for an agent or an integration, one answer for both
+ * doors (gnubok_search_records, GET /documents/search; each door words its own
+ * hint): searchRecords' hits, a later copy of a document marked with the
+ * original it copies, and how many documents are not read yet, so an empty
+ * answer from an archive nobody has read yet is not taken for "no such
+ * document". Agreements and facts are the brain's interpretations: outside
+ * it the documents are the archive, whatever kinds were asked for.
+ */
+export async function searchArchive(
+  supabase: SupabaseClient,
+  companyId: string,
+  query: string,
+  opts: { kinds?: readonly SearchKind[]; limit?: number } = {},
+): Promise<ArchiveSearch> {
+  const kinds = isArkivBrainEnabled(companyId) ? (opts.kinds ?? []) : (['document'] as const)
+  const items = await searchRecords(supabase, companyId, query, { kinds, limit: opts.limit })
+  // Each hit counted once (seen 2026-09-25: one invoice archived twice summed twice).
+  const hitIds = [...new Set(items.map((i) => i.document_id).filter((id): id is string => !!id))]
+  let originals = new Map<string, string>()
+  if (hitIds.length) {
+    const { data: hitDocs, error: hitError } = await supabase.from('document_attachments').select('id, created_at, sha256_hash').eq('company_id', companyId).in('id', hitIds)
+    if (hitError) throw dbError(hitError)
+    originals = await originalsOf(supabase, companyId, (hitDocs ?? []) as Array<{ id: string; created_at: string; sha256_hash: string | null }>)
+  }
+  const marked = items.map((i) => ({ ...i, duplicate_of: i.document_id && originals.has(i.document_id) ? `document:${originals.get(i.document_id)}` : null }))
+  return { items: marked, unread: await countUnreadDocuments(supabase, companyId) }
 }

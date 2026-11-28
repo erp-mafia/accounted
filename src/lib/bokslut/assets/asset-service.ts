@@ -1995,6 +1995,7 @@ function outputVatAccountFor(treatment: VatTreatment): string | null {
     case 'reverse_charge_domestic':
     case 'export':
     case 'exempt':
+    case 'outside_scope':
       return null
   }
 }

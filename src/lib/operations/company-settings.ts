@@ -158,6 +158,7 @@ export const TAX_PROFILE_FIELDS = [
   'fyllnadsinbetalning_enabled',
   'fiscal_year_start_month',
   'preliminary_tax_monthly',
+  'preliminary_tax_first_due_date',
   'pays_salaries',
   'employer_registered',
   'employer_seasonal',
@@ -245,7 +246,7 @@ const SettingsResource = z.object({
       'self_billing_prefix', 'self_billing_acceptance_text',
       'salary_vacation_year_basis', 'vat_number', 'moms_period', 'vat_filing_method',
       'periodisk_sammanstallning_period', 'periodisk_sammanstallning_filing_method', 'accounting_method',
-      'bookkeeping_locked_through',
+      'bookkeeping_locked_through', 'preliminary_tax_first_due_date',
     ].map((key) => [key, nullableString]),
   ),
   ...Object.fromEntries(
@@ -495,6 +496,9 @@ export const settingsUpdate = defineOperation({
 const TaxProfileInput = z
   .object({
     ...pickShape(S, TAX_PROFILE_FIELDS),
+    preliminary_tax_first_due_date: S.preliminary_tax_first_due_date.describe(
+      "The first förfallodag in Skatteverket's decision on debiterad preliminärskatt, YYYY-MM-DD: no F-skatt payment deadline is created for a month before it. Null clears it.",
+    ),
     accounting_method_correction_reason: S.accounting_method_correction_reason.describe(
       'Needed to change accounting_method in a fiscal year with posted verifikat: why the setting was wrong (a correction, recorded in the behandlingshistorik).',
     ),
@@ -522,6 +526,7 @@ export const settingsUpdateTaxProfile = defineOperation({
     pitfalls: [
       'Only an owner or admin of the company may change settings: other members get 403 FORBIDDEN.',
       'Saving regenerates the system tax deadlines for this year and next; completed deadlines keep their status.',
+      'preliminary_tax_first_due_date removes the open F-skatt deadlines due from today until its month; one already past due stays: remove it under Deadlines in the app or with gnubok_delete_deadline.',
       'vat_registered=true needs vat_number (SE + 12 digits) and moms_period, stored or sent.',
       'vat_registered=false also turns off vat_taxable_base_over_40m, vat_has_eu_trade and periodisk_sammanstallning_enabled.',
       'vat_taxable_base_over_40m requires moms_period=monthly; periodisk sammanställning requires VAT registration and EU trade.',

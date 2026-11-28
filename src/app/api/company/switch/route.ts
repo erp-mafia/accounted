@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { validateBody } from '@/lib/api/validate'
 import { CompanyContextError, setActiveCompany } from '@/lib/company/context'
+import { resolveStartPath } from '@/lib/company/start-page-server'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { createLogger } from '@/lib/logger'
 
@@ -16,7 +17,9 @@ const SwitchCompanyBodySchema = z.object({
  * POST /api/company/switch: make `company_id` the signed-in user's active
  * company (user_preferences, which RLS reads, and the company cookies), for
  * every company switch in the browser (lib/company/switch-client.ts).
- * Answers `{ data: { company_id } }`; a refusal is COMPANY_SWITCH_NOT_MEMBER
+ * Answers `{ data: { company_id, start_path } }`, start_path being the
+ * person's start page in that company (lib/company/start-page.ts), '/' when
+ * they chose none or it could not be read; a refusal is COMPANY_SWITCH_NOT_MEMBER
  * or COMPANY_SWITCH_LOCKED (403), a failed or unverified write
  * COMPANY_SWITCH_PERSIST_FAILED (500, retryable), and 401 when signed out.
  *
@@ -59,5 +62,6 @@ export async function POST(request: Request) {
     return errorResponseFromCode('COMPANY_SWITCH_PERSIST_FAILED', log, { requestId })
   }
 
-  return NextResponse.json({ data: { company_id: companyId } })
+  const startPath = await resolveStartPath(supabase, user.id, companyId)
+  return NextResponse.json({ data: { company_id: companyId, start_path: startPath } })
 }

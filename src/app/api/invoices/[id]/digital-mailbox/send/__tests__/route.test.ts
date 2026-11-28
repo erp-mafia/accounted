@@ -15,6 +15,7 @@ vi.mock('@/lib/invoices/digital-mailbox-send', () => ({ sendInvoiceToDigitalMail
 
 import { POST } from '../route'
 import { requireAuth } from '@/lib/auth/require-auth'
+import { sendingNotActiveRefusal } from '@/lib/digital-mailboxes/sending-not-active'
 
 const URL = '/api/invoices/inv-1/digital-mailbox/send'
 
@@ -61,6 +62,26 @@ describe('POST /api/invoices/[id]/digital-mailbox/send', () => {
     )
     expect(status).toBe(422)
     expect(body.error.code).toBe('DIGITAL_MAILBOX_RECIPIENT_NOT_REACHABLE')
+  })
+
+  it('answers sending that waits for Kivra\'s approval with that state\'s sentence in both languages and its next step', async () => {
+    authed()
+    sendMock.mockResolvedValue({
+      ok: false,
+      ...sendingNotActiveRefusal('kivra', {
+        send_state: 'off',
+        provider_meta: { sender_request: { ref: 'req-1', status: 'pending', requested_at: '2026-11-20T10:00:00Z', requested_by: 'user-1' } },
+      }),
+    })
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; message: string; message_en: string; remediation?: { description: string }; details: Record<string, unknown> }
+    }>(await POST(createMockRequest(URL, { method: 'POST', body: { provider: 'kivra' } }), createMockRouteParams({ id: 'inv-1' })))
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('DIGITAL_MAILBOX_SENDING_NOT_ACTIVE')
+    expect(body.error.details).toEqual({ state: 'pending' })
+    expect(body.error.message).toMatch(/^Utskick via Kivra är påslaget men väntar på att Kivra godkänner det/)
+    expect(body.error.message_en).toMatch(/^Sending through Kivra is switched on and waits for Kivra to approve it/)
+    expect(body.error.remediation?.description).toMatch(/Nothing to do but wait/)
   })
 
   it('sends and answers the dispatch', async () => {

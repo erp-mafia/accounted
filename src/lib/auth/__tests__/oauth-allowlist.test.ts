@@ -37,6 +37,11 @@ describe('isBuiltInRedirectUri', () => {
     ['https://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-1-x?next=x', false],
     ['https://oauth-redirect.googleusercontent.com/user_bound_custom-mcp-1-x', false],
     ['https://oauth-redirect-sandbox.googleusercontent.com/r/user_bound_custom-mcp-1-x', false],
+    // Google's newer opaque id is admitted; the twins Gemini registers beside
+    // it (/a/, the -test host) never are, so /authorize refuses them.
+    ['https://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-4815162342c0ffee15deadbe', true],
+    ['https://oauth-redirect.googleusercontent.com/a/user_bound_custom-mcp-4815162342c0ffee15deadbe', false],
+    ['https://oauth-redirect-test.googleusercontent.com/r/user_bound_custom-mcp-4815162342c0ffee15deadbe', false],
     ['https://oauth-redirect.googleusercontent.com.evil.com/r/user_bound_custom-mcp-1-x', false],
     ['https://evil.googleusercontent.com/r/user_bound_custom-mcp-1-x', false],
     ['http://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-1-x', false],

@@ -8,7 +8,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { createLogger } from '@/lib/logger'
-import { deadlinesComplete, deadlinesList } from '../deadlines'
+import { deadlinesComplete, deadlinesDelete, deadlinesList } from '../deadlines'
 import type { OperationContext } from '../types'
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
@@ -190,5 +190,93 @@ describe('deadlines.list', () => {
     if (!outcome.ok || outcome.dryRun) return
     expect(outcome.data).toMatchObject({ has_more: false, deadlines: [{ deadline_id: DEADLINE_ID, overdue: true }] })
     expect(deadlinesList.output.safeParse(outcome.data).success).toBe(true)
+  })
+})
+
+describe('deadlines.delete: contract', () => {
+  it('is a low-risk bookkeeping:write, the scope of the tick, that stages over MCP as delete_deadline, behind search', () => {
+    expect(deadlinesDelete.kind).toBe('write')
+    expect(deadlinesDelete.scope).toBe(deadlinesComplete.scope)
+    expect(deadlinesDelete.risk).toBe('low')
+    expect(deadlinesDelete.reversible).toBe(false)
+    expect(deadlinesDelete.http).toBeUndefined()
+    expect(deadlinesDelete.mcp?.name).toBe('gnubok_delete_deadline')
+    expect(deadlinesDelete.mcp?.visibility ?? 'search').toBe('search')
+    expect(deadlinesDelete.mcp?.stage?.pendingType).toBe('delete_deadline')
+    expect(deadlinesDelete.errorCodes).toEqual(['DEADLINE_NOT_FOUND'])
+  })
+
+  it('titles the approval by the deadline the preview names', () => {
+    const title = deadlinesDelete.mcp!.stage!.title
+    expect(title({ deadline_id: DEADLINE_ID }, { title: 'Betala preliminärskatt december 2026' })).toBe(
+      'Ta bort deadline: Betala preliminärskatt december 2026',
+    )
+    expect(title({ deadline_id: DEADLINE_ID })).toBe('Ta bort deadline')
+  })
+
+  it('needs a uuid and no other field (validation, 400)', () => {
+    const parse = (value: unknown) => deadlinesDelete.input.safeParse(value).success
+    expect(parse({ deadline_id: DEADLINE_ID })).toBe(true)
+    expect(parse({})).toBe(false)
+    expect(parse({ deadline_id: 'deadline-1' })).toBe(false)
+    expect(parse({ deadline_id: DEADLINE_ID, hard: true })).toBe(false)
+  })
+})
+
+describe('deadlines.delete: run', () => {
+  const GENERATED = {
+    ...OPEN_ROW,
+    title: 'Betala preliminärskatt december 2026',
+    due_date: '2026-12-14',
+    source: 'system',
+    tax_deadline_type: 'f_skatt',
+    tax_period: '2026-12',
+  }
+
+  it('dry run says a generated deadline is dismissed, and writes nothing', async () => {
+    const { ctx, enqueue, findCall } = setup()
+    enqueue({ data: GENERATED })
+
+    const outcome = await deadlinesDelete.run(ctx, { deadline_id: DEADLINE_ID }, { dryRun: true })
+
+    expect(outcome).toMatchObject({
+      ok: true,
+      dryRun: true,
+      preview: { deadline_id: DEADLINE_ID, title: GENERATED.title, source: 'system', effect: 'dismissed' },
+    })
+    expect(findCall('deadlines', 'update')).toBeUndefined()
+  })
+
+  it('dismisses a generated deadline and answers in the output shape', async () => {
+    const { ctx, enqueueMany, findCall } = setup()
+    enqueueMany([{ data: GENERATED }, { data: [{ id: DEADLINE_ID }] }])
+
+    const outcome = await deadlinesDelete.run(ctx, { deadline_id: DEADLINE_ID }, { dryRun: false })
+
+    expect(findCall('deadlines', 'update')).toEqual([{ dismissed_at: '2026-11-13T10:00:00.000Z' }])
+    expect(outcome.ok && !outcome.dryRun).toBe(true)
+    if (!outcome.ok || outcome.dryRun) return
+    expect(outcome.data).toEqual({ deadline_id: DEADLINE_ID, title: GENERATED.title, source: 'system', effect: 'dismissed' })
+    expect(deadlinesDelete.output.safeParse(outcome.data).success).toBe(true)
+  })
+
+  it('deletes a deadline added by hand', async () => {
+    const { ctx, enqueueMany, findCall } = setup()
+    enqueueMany([{ data: OPEN_ROW }, { count: 1 }])
+
+    const outcome = await deadlinesDelete.run(ctx, { deadline_id: DEADLINE_ID }, { dryRun: false })
+
+    expect(outcome).toMatchObject({ ok: true, data: { effect: 'deleted', source: 'user' } })
+    expect(findCall('deadlines', 'delete')).toEqual([{ count: 'exact' }])
+  })
+
+  it("answers DEADLINE_NOT_FOUND for another company's, an unknown or an already removed deadline", async () => {
+    const { ctx, enqueue, findCalls } = setup()
+    enqueue({ data: null })
+
+    const outcome = await deadlinesDelete.run(ctx, { deadline_id: DEADLINE_ID }, { dryRun: false })
+
+    expect(outcome).toMatchObject({ ok: false, code: 'DEADLINE_NOT_FOUND', details: { deadline_id: DEADLINE_ID } })
+    expect(findCalls('deadlines', 'eq')).toContainEqual(['company_id', COMPANY_ID])
   })
 })
