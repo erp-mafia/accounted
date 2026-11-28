@@ -41,6 +41,7 @@ import {
 import {
   WEBSHOP_PREFILL_ACCOUNTS,
   buildOrderBooking,
+  defaultEntryDate,
   orderBookingDescription,
   resolveBookingWarnings,
   resolvePaymentAccount,
@@ -229,10 +230,6 @@ function suggestedBooking(order: WebshopOrder, settings: WebshopStoreSettings | 
     // Only a non-SEK order without an exchange rate throws: no prefill yet.
     return null
   }
-}
-
-function defaultEntryDate(order: Pick<WebshopOrder, 'paid_date' | 'order_date'>): string {
-  return (order.paid_date ?? order.order_date).slice(0, 10)
 }
 
 export async function getWebshopOrder(

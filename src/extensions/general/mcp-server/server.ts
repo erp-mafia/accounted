@@ -190,7 +190,8 @@ import {
 } from '@/lib/invoices/refund-credit-note'
 import { invoicePayableRefusal } from '@/lib/invoices/invoice-payable'
 import { resolveInvoicePaymentAccount, resolveInvoiceSettlementAccount } from '@/lib/invoices/invoice-payee'
-import { isPaidAtIssueAccount } from '@/lib/invoices/paid-at-issue'
+import { isCashLedger } from '@/lib/bookkeeping/bank-leg'
+import { paidAtIssueAccountRefusal } from '@/lib/invoices/paid-at-issue-accounts'
 import { supplierInvoiceReference } from '@/lib/bookkeeping/supplier-invoice-description'
 import { contradictsLearnedDirection, findCounterpartyTemplatesBatch, formatCounterpartyName, readSwitchedOffRulesByName, type SwitchedOffCounterpartyRule } from '@/lib/bookkeeping/counterparty-templates'
 import { counterpartyTemplateKey } from '@/lib/rules/service'
@@ -12598,7 +12599,7 @@ export const tools: McpTool[] = [
       // dashboard and v1 mark-paid field, under the same rule.
       let namedAccount: string | undefined
       if (args.payment_account !== undefined && args.payment_account !== null) {
-        if (typeof args.payment_account !== 'string' || !isPaidAtIssueAccount(args.payment_account)) {
+        if (typeof args.payment_account !== 'string' || !isCashLedger(args.payment_account)) {
           throw badArgument(
             'payment_account',
             'payment_account must be a 19xx account (kassa, bank or Swish), such as 1930.',
@@ -13188,7 +13189,7 @@ export const tools: McpTool[] = [
         invoice_id: { type: 'string' },
         paid_at_issue_account: {
           type: 'string',
-          description: 'Kontantfaktura: 19xx account paid at issue, no 1510.',
+          description: 'Kontantfaktura: account paid at issue, no 1510. 19xx, 1686 (card/Klarna until payout) or a webshop payment-method account.',
         },
       },
       required: ['invoice_id'],
@@ -13200,7 +13201,8 @@ export const tools: McpTool[] = [
       if (!invoiceId) throw badArgument('invoice_id', 'invoice_id is required')
 
       // The kontantfaktura (crm#1281): the dashboard and v1 mark-sent body,
-      // validated by the same schema (a 19xx account).
+      // validated by the same schema, and its account by the rule the
+      // approval applies (issueAndBookInvoice, crm#2324).
       let paidAtIssue: { account_number: string } | null = null
       if (args.paid_at_issue_account !== undefined && args.paid_at_issue_account !== null) {
         const parsed = MarkInvoiceSentPaidAtIssueSchema.safeParse({
@@ -13209,8 +13211,20 @@ export const tools: McpTool[] = [
         if (!parsed.success || !parsed.data.paid_at_issue) {
           throw badArgument(
             'paid_at_issue_account',
-            'paid_at_issue_account must be a 19xx account (kassa, bank or Swish), such as 1930.',
-            'Betalkontot måste vara ett 19xx-konto (kassa, bank eller Swish).',
+            'paid_at_issue_account must be a four-digit account number, such as 1930.',
+            'Betalkontot måste vara ett kontonummer med fyra siffror, till exempel 1930.',
+          )
+        }
+        const accountRefusal = await paidAtIssueAccountRefusal(supabase, companyId, parsed.data.paid_at_issue.account_number)
+        if (accountRefusal) {
+          throw codedRefusal(
+            'INVOICE_PAID_AT_ISSUE_ACCOUNT_NOT_ALLOWED',
+            `A kontantfaktura cannot be paid to ${accountRefusal.account_number}: only to a 19xx account, 1686, or an account a webshop store books a payment method to${accountRefusal.provider_accounts.length > 0 ? ` (${accountRefusal.provider_accounts.join(', ')})` : ''}.`,
+            {
+              description: 'Name a 19xx account (such as 1930), 1686, or one of the store payment-method accounts.',
+              tool: 'gnubok_mark_invoice_as_sent',
+              args: { invoice_id: invoiceId },
+            },
           )
         }
         paidAtIssue = parsed.data.paid_at_issue

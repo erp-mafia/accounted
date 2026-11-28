@@ -11,6 +11,7 @@ import { emitInvoiceSent } from '@/lib/invoices/invoice-sent-event'
 import { ensureInvoiceNumber, invoiceNumberingFailure } from '@/lib/invoices/ensure-invoice-number'
 import type { CustomIssuanceLine } from '@/lib/invoices/issuance-custom-lines'
 import { paidAtIssueBlockReason } from '@/lib/invoices/paid-at-issue'
+import { paidAtIssueAccountRefusal } from '@/lib/invoices/paid-at-issue-accounts'
 import { settleInvoicePayment } from '@/lib/invoices/settle-invoice-payment'
 import { recordManualInvoiceDelivery } from '@/lib/invoices/invoice-deliveries'
 import { renderInvoicePdfBuffer } from '@/lib/invoices/render-invoice-pdf'
@@ -160,13 +161,15 @@ export interface IssueAndBookOptions {
   customLines?: CustomIssuanceLine[] | null
   /**
    * The kontantfaktura (crm#1281, lib/invoices/paid-at-issue.ts): the invoice
-   * is paid when it is issued, to this 19xx account on the fakturadatum.
+   * is paid when it is issued, to this account on the fakturadatum.
    * The issue books no registration verifikat; the payment books the one
    * cash verifikat, in either accounting method. issueAndBookInvoice refuses
-   * it (INVOICE_PAID_AT_ISSUE_NOT_ALLOWED, paidAtIssueBlockReason) before
-   * anything changes; the account is a 19xx one (MarkInvoiceSentPaidAtIssueSchema,
-   * checked where the request is parsed). The dashboard and v1 mark-sent and
-   * the MCP mark_invoice_sent approval all pass it here.
+   * it before anything changes: a document that cannot be issued paid
+   * (INVOICE_PAID_AT_ISSUE_NOT_ALLOWED, paidAtIssueBlockReason) and an
+   * account outside 19xx, 1686 and the company's store payment-method
+   * accounts (INVOICE_PAID_AT_ISSUE_ACCOUNT_NOT_ALLOWED,
+   * paidAtIssueAccountRefusal). The dashboard and v1 mark-sent and the MCP
+   * mark_invoice_sent approval all pass it here.
    */
   paidAtIssue?: { settlementAccountNumber: string } | null
 }
@@ -617,6 +620,12 @@ export async function issueAndBookInvoice(
     const reason = paidAtIssueBlockReason(invoice, { customLines: opts.customLines })
     if (reason) {
       return { ok: false, errorCode: 'INVOICE_PAID_AT_ISSUE_NOT_ALLOWED', details: { reason } }
+    }
+    // The account it is paid to (crm#2324): 19xx, 1686 or a store's
+    // payment-method account, never anything else.
+    const accountRefusal = await paidAtIssueAccountRefusal(supabase, companyId, opts.paidAtIssue.settlementAccountNumber)
+    if (accountRefusal) {
+      return { ok: false, errorCode: 'INVOICE_PAID_AT_ISSUE_ACCOUNT_NOT_ALLOWED', details: accountRefusal }
     }
   }
 

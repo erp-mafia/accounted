@@ -24,11 +24,13 @@ import type {
  * Under kontantmetoden (cash): no journal entry; booking happens at payment.
  *
  * Body `paid_at_issue: { account_number }` (crm#1281, the kontantfaktura):
- * the invoice is issued already paid, on its fakturadatum, to that 19xx
- * account. In either method it books one verifikat, Debit 19xx, Credit
+ * the invoice is issued already paid, on its fakturadatum, to that account
+ * (19xx, 1686 or a webshop store's payment-method account, crm#2324). In
+ * either method it books one verifikat, Debit that account, Credit
  * 30xx/26xx, with no 1510 leg, and the invoice ends paid. Refused for
- * anything but a plain faktura (paidAtIssueBlockReason) and together with
- * custom issuance lines, by issueAndBookInvoice: v1 mark-sent and the MCP
+ * anything but a plain faktura (paidAtIssueBlockReason), for any other
+ * account (paidAtIssueAccountRefusal) and together with custom issuance
+ * lines, by issueAndBookInvoice: v1 mark-sent and the MCP
  * mark_invoice_sent approval issue it through that same function.
  *
  * The non-credit-note core lives in lib/invoices/issue-and-book-invoice.ts,

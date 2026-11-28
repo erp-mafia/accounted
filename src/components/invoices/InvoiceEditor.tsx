@@ -3,7 +3,7 @@
 import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import { Fragment, useState, useEffect, useRef, useMemo, useId } from 'react'
 import Link from 'next/link'
-import { usePathname, useRouter } from 'next/navigation'
+import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
 import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
 import { createClient } from '@/lib/supabase/client'
@@ -824,7 +824,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const [savingArticleIndex, setSavingArticleIndex] = useState<number | null>(null)
   // Active balance-sheet, revenue and interest-income accounts (PH 246) for
   // the optional per-line posting override, plus which rows show that picker.
-  const { accounts: activeAccounts } = useAccounts()
+  const { accounts: activeAccounts, isLoading: accountsLoading } = useAccounts()
   const paymentLedger = usePaymentBankLedger()
   const postingAccounts = useMemo(
     () => activeAccounts.filter((account) => isInvoiceLinePostingAccount(account.account_number)),
@@ -1097,6 +1097,32 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       cancelled = true
     }
   }, [isInvoicer])
+  // Kontantfaktura (crm#2323, crm#2324): the store payment-method accounts it
+  // may also be paid to, and the account the webshop order this draft was
+  // made from books its payment method to (the confirm's default). Read
+  // once; a failed read offers 19xx and 1686 only, the rule without them.
+  const paidAtIssueInvoiceId = isEditMode ? initial?.id ?? null : null
+  const [paidAtIssueAccounts, setPaidAtIssueAccounts] = useState<{
+    provider_accounts: string[]
+    order_account: string | null
+  } | null>(null)
+  useEffect(() => {
+    if (isInvoicer) return
+    let cancelled = false
+    const query = paidAtIssueInvoiceId ? `?invoice_id=${encodeURIComponent(paidAtIssueInvoiceId)}` : ''
+    fetch(`/api/invoices/paid-at-issue-accounts${query}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json) => {
+        if (cancelled) return
+        setPaidAtIssueAccounts(json?.data ?? { provider_accounts: [], order_account: null })
+      })
+      .catch(() => {
+        if (!cancelled) setPaidAtIssueAccounts({ provider_accounts: [], order_account: null })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [isInvoicer, paidAtIssueInvoiceId])
   // The digital mailboxes this company sends through (Kivra, Billo), read
   // once: the caret menu offers one only where its send can go. A failed
   // read offers none; email stays the channel.
@@ -2519,9 +2545,19 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   async function prepareConfirm(data: FormData, intent: ConfirmIntent) {
     // A send books on the invoice date: one in a locked or closed period is
     // refused by the database, so the date is the thing to fix first (the
-    // status line says why). A kontantfaktura books its payment on that date.
+    // status line says why). A kontantfaktura books its payment on that date
+    // in either method, so it meets the lock even where a send does not; the
+    // status line does not name that lock, so the toast does.
     const issues = intent.kind === 'send' || intent.kind === 'issue_paid'
-    if (issues && dateLock && data.document_type === 'invoice') {
+    const lock = intent.kind === 'issue_paid' ? paidDateLock : dateLock
+    if (issues && lock && data.document_type === 'invoice') {
+      if (!dateLock) {
+        toast({
+          title: tShell('issue_paid_blocked_title'),
+          description: tForm(`date_lock_${lock}`),
+          variant: 'destructive',
+        })
+      }
       focusSettingsField('invoice_date')
       return
     }
@@ -3286,14 +3322,18 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const documentLanguage: DocumentLanguage = documentLanguageOf(selectedCustomer)
   // The invoice date against the lock date and the fiscal periods, only where
   // sending books on it (a faktura under faktureringsmetoden).
-  const dateLock =
-    !isSelfBilled && booksOnIssue
-      ? invoiceDateLock({
-          date: watchInvoiceDate,
-          lockedThrough: companySettings?.bookkeeping_locked_through,
-          periods: fiscalPeriods,
-        })
-      : null
+  // A kontantfaktura books its cash verifikat on the invoice date in either
+  // accounting method (lib/invoices/paid-at-issue.ts), so its date meets the
+  // locks even where a sent invoice books nothing at issue (kontantmetoden,
+  // deferred booking): paidDateLock. dateLock is the lock a send meets.
+  const paidDateLock = !isSelfBilled
+    ? invoiceDateLock({
+        date: watchInvoiceDate,
+        lockedThrough: companySettings?.bookkeeping_locked_through,
+        periods: fiscalPeriods,
+      })
+    : null
+  const dateLock = booksOnIssue ? paidDateLock : null
   // The same date against the filed momsdeklarationer: an open date in a
   // filed period books, and the declaration then needs correcting. Said
   // beside the date, where it can still be changed.
@@ -3648,19 +3688,42 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [])
 
+  // ?intent=issue_paid: Skapa kontantfaktura on Ordrar (crm#2322) lands on
+  // the draft with the kontantfaktura confirm open, once what the confirm
+  // reads has loaded (the company, the customer, the accounts). The flag
+  // leaves the URL first, so a reload does not open it again. Opening it is
+  // the whole step: nothing is issued until the user confirms.
+  const searchParams = useSearchParams()
+  const arrivesToIssuePaid = isEditMode && searchParams.get('intent') === 'issue_paid'
+  const arrivalIntentDone = useRef(false)
+  const readyToIssuePaid =
+    companySettings !== null && selectedCustomer !== null && !accountsLoading && paidAtIssueAccounts !== null
+  useEffect(() => {
+    if (!arrivesToIssuePaid || arrivalIntentDone.current || !readyToIssuePaid) return
+    arrivalIntentDone.current = true
+    router.replace(pathname, { scroll: false })
+    requestIntentRef.current({ kind: 'issue_paid' })
+  }, [arrivesToIssuePaid, readyToIssuePaid, router, pathname])
+
   // ===== Confirm dialog ====================================================
   const confirmData = pendingData
   const confirmDocType = confirmData?.document_type ?? watchDocumentType
-  // Kontantfaktura (crm#1281): issued paid at once to a 19xx account active
-  // in the chart (kassa, bank, Swish). The default is the account the invoice
-  // asks to be paid to, else the primary bank account. The receipt is mailed when email can go.
+  // Kontantfaktura (crm#1281): issued paid at once to an account active in
+  // the chart that the rule allows (19xx, 1686 or a store payment-method
+  // account, crm#2324). The default is the account the webshop order this
+  // draft came from books its payment method to (crm#2323), else the
+  // account the invoice asks to be paid to, else the primary bank account.
+  // The receipt is mailed when email can go.
   const isPaidConfirm = confirmIntent?.kind === 'issue_paid'
-  const paidAccountOptions = activeAccounts.filter((account) => isPaidAtIssueAccount(account.account_number))
+  const paidProviderAccounts = paidAtIssueAccounts?.provider_accounts ?? []
+  const paidAccountOptions = activeAccounts.filter((account) =>
+    isPaidAtIssueAccount(account.account_number, paidProviderAccounts),
+  )
   const payeeLedgerAccount = (
     watchPayeeAccount ? payeeState?.accounts.find((account) => account.id === watchPayeeAccount) : defaultPayee
   )?.ledger_account
   const defaultPaidAccount =
-    [payeeLedgerAccount, paymentLedger].find(
+    [paidAtIssueAccounts?.order_account, payeeLedgerAccount, paymentLedger].find(
       (candidate) => candidate && paidAccountOptions.some((option) => option.account_number === candidate),
     ) ??
     paidAccountOptions[0]?.account_number ??
@@ -3859,7 +3922,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     (partiesUnknown || partiesVerdict === 'seller_missing' || partiesVerdict === 'buyer_missing')
   const confirmDisabled =
     !canWrite ||
-    (isPaidConfirm && !isPaidAtIssueAccount(paidAccount)) ||
+    (isPaidConfirm && !isPaidAtIssueAccount(paidAccount, paidProviderAccounts)) ||
     (needsSwedishVatAcknowledgement && !swedishVatAcknowledged) ||
     partiesRefuseConfirm ||
     (confirmChannel === 'email' && isCompanyAdmin && extraCcError !== null)

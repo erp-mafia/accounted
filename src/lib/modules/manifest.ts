@@ -317,7 +317,11 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
       'Customer invoices from draft to paid or credited, quotes and sales orders, the customer and article registers, and Peppol e-invoicing.',
     dependsOn: [],
     layer: 'process',
-    uses: ['payments', 'transactions', 'vat'],
+    // webshop: a kontantfaktura may be paid to an account a webshop store
+    // books a payment method to, and one made from an order defaults to it
+    // (lib/invoices/paid-at-issue.ts, paid-at-issue-accounts.ts). Code only:
+    // a company without webshop stores pays it to 19xx or 1686.
+    uses: ['payments', 'transactions', 'vat', 'webshop'],
     libFolders: ['invoices', 'customers', 'articles', 'sales-orders', 'customer-loss'],
     operationPrefixes: ['invoices', 'peppol', 'customers'],
     v1Segments: ['invoices', 'customers', 'articles', 'peppol', 'setoffs'],

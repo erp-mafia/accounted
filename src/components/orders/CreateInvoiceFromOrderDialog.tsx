@@ -20,7 +20,8 @@ import { useToast } from '@/components/ui/use-toast'
 import { VTD_CLASS, VTH_CLASS } from '@/components/ui/dry-table'
 import CustomerCombobox from '@/components/customers/CustomerCombobox'
 import { useCustomers } from '@/lib/reference-data/hooks'
-import { cn, formatCurrency, formatRowAmount } from '@/lib/utils'
+import { cn, formatCurrency, formatDate, formatRowAmount } from '@/lib/utils'
+import { defaultEntryDate } from '@/lib/webshop-orders/booking-lines'
 import type { WebshopOrder } from '@/types'
 
 interface CreateInvoiceFromOrderDialogProps {
@@ -28,6 +29,12 @@ interface CreateInvoiceFromOrderDialogProps {
   onOpenChange: (open: boolean) => void
   order: WebshopOrder
   onCreated: () => void
+  /**
+   * Skapa kontantfaktura (crm#2322): the draft is dated the day the order was
+   * paid and opens with the kontantfaktura confirm, where the account the
+   * store books the payment method to is chosen (crm#2323).
+   */
+  paidAtIssue?: boolean
 }
 
 /** The new customer as typed or prefilled in the dialog. */
@@ -87,6 +94,7 @@ export default function CreateInvoiceFromOrderDialog({
   onOpenChange,
   order,
   onCreated,
+  paidAtIssue = false,
 }: CreateInvoiceFromOrderDialogProps) {
   const t = useTranslations('webshop_orders')
   const locale = useLocale() as ErrorLocale
@@ -146,9 +154,11 @@ export default function CreateInvoiceFromOrderDialog({
   const blocked = (newCustomer && lookup === 'loading') || draftMissingName || draftEmailInvalid
 
   function requestBody(): Record<string, unknown> {
-    if (!confirmCustomer) return {}
-    if (customerId) return { customer_id: customerId }
+    const kind = paidAtIssue ? { paid_at_issue: true } : {}
+    if (!confirmCustomer) return kind
+    if (customerId) return { ...kind, customer_id: customerId }
     return {
+      ...kind,
       customer: {
         name: draft.name.trim() || null,
         company: draft.company.trim() || null,
@@ -156,6 +166,8 @@ export default function CreateInvoiceFromOrderDialog({
       },
     }
   }
+  // The kontantfaktura's date, the day Bokför books the same order.
+  const paidDay = formatDate(defaultEntryDate(order))
 
   async function handleCreate() {
     setSubmitting(true)
@@ -174,8 +186,14 @@ export default function CreateInvoiceFromOrderDialog({
         })
         return
       }
-      toast({ title: t('invoice_created') })
       onCreated()
+      if (paidAtIssue) {
+        // The draft with the kontantfaktura confirm open: nothing is issued
+        // or booked until the user confirms there.
+        router.push(`/invoices/${json.invoice_id}/edit?intent=issue_paid`)
+        return
+      }
+      toast({ title: t('invoice_created') })
       router.push(`/invoices/${json.invoice_id}`)
     } catch {
       toast({ title: t('invoice_create_failed'), variant: 'destructive' })
@@ -189,11 +207,17 @@ export default function CreateInvoiceFromOrderDialog({
       <DialogContent size="form">
         <DialogHeader>
           {/* data-ph-mask: order number and customer name are user data */}
-          <DialogTitle data-ph-mask="">{t('invoice_title', { number: order.order_number })}</DialogTitle>
+          <DialogTitle data-ph-mask="">
+            {t(paidAtIssue ? 'cash_invoice_title' : 'invoice_title', { number: order.order_number })}
+          </DialogTitle>
           <DialogDescription data-ph-mask="">
-            {confirmCustomer
-              ? t('invoice_description_confirm')
-              : t('invoice_description', { customer: customerLabel })}
+            {paidAtIssue
+              ? confirmCustomer
+                ? t('cash_invoice_description_confirm', { date: paidDay })
+                : t('cash_invoice_description', { customer: customerLabel, date: paidDay })
+              : confirmCustomer
+                ? t('invoice_description_confirm')
+                : t('invoice_description', { customer: customerLabel })}
           </DialogDescription>
         </DialogHeader>
 
@@ -257,7 +281,7 @@ export default function CreateInvoiceFromOrderDialog({
             {t('cancel')}
           </Button>
           <Button onClick={handleCreate} disabled={submitting || blocked}>
-            {submitting ? t('invoice_creating') : t('invoice_confirm')}
+            {submitting ? t('invoice_creating') : t(paidAtIssue ? 'cash_invoice_confirm' : 'invoice_confirm')}
           </Button>
         </DialogFooter>
       </DialogContent>

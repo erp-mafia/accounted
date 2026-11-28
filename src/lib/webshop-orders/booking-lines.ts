@@ -113,6 +113,16 @@ export const WEBSHOP_PREFILL_ACCOUNTS: readonly string[] = [
 ]
 
 /**
+ * The day an order's sale is booked on: the day it was paid, else the day it
+ * was placed. Bokför's default verifikat date, and the date of a
+ * kontantfaktura made from the order (crm#2322), so both book the sale on the
+ * same day.
+ */
+export function defaultEntryDate(order: Pick<WebshopOrder, 'paid_date' | 'order_date'>): string {
+  return (order.paid_date ?? order.order_date).slice(0, 10)
+}
+
+/**
  * Resolve the prefilled payment counter-account for an order from the
  * per-store mapping. Returns the account plus whether the store marked this
  * payment method as invoice-flow (the dialog then nudges toward Skapa
@@ -120,7 +130,7 @@ export const WEBSHOP_PREFILL_ACCOUNTS: readonly string[] = [
  */
 export function resolvePaymentAccount(
   order: Pick<WebshopOrder, 'payment_method'>,
-  settings: WebshopStoreSettings | null | undefined,
+  settings: Pick<WebshopStoreSettings, 'payment_method_account_map'> | null | undefined,
 ): { account: string; invoiceMode: boolean; mapped: boolean } {
   const method = order.payment_method
   const policy = method ? settings?.payment_method_account_map?.[method] : undefined

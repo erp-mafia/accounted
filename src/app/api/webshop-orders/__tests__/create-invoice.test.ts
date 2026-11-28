@@ -785,3 +785,76 @@ describe('POST /api/webshop-orders/[id]/create-invoice: the billing address', ()
     )
   })
 })
+
+/**
+ * Skapa kontantfaktura (crm#2322): the draft for a cash invoice is dated the
+ * day the order was paid, the day Bokför books the same order, so the sale
+ * and its VAT land on the day the customer paid (founder decision
+ * 2026-11-27). Only a paid order gets one.
+ */
+describe('POST /api/webshop-orders/[id]/create-invoice: a kontantfaktura', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1', email: 'test@test.se' }, supabase: mockSupabase })
+    requireWriteMock.mockResolvedValue({ ok: true })
+    mockBuildInvoiceWriteData.mockResolvedValue(okBuild)
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-11-27T10:00:00Z'))
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  const paidOrder = () =>
+    makeOrderRow({ is_paid: true, order_date: '2026-11-19', paid_date: '2026-11-20', payment_method: 'klarna' })
+
+  it('dates the draft the day the order was paid, not today', async () => {
+    enqueue({ data: paidOrder() }) // order fetch
+    enqueue({ data: { id: 'cust-1', name: 'Testbolaget AB', email: 'kund@example.se', customer_type: 'swedish_business', default_payment_terms: 30 } }) // email match
+    enqueue({ data: { id: 'inv-1', status: 'draft', invoice_number: null } }) // invoices insert
+    enqueue({ data: null }) // invoice_items insert
+    enqueue({ data: [{ id: 'order-1' }] }) // order link-back matched
+
+    const { status, body } = await parseJsonResponse<{ invoice_id: string }>(await postCreate({ paid_at_issue: true }))
+
+    expect(status).toBe(200)
+    expect(body.invoice_id).toBe('inv-1')
+    expect(mockBuildInvoiceWriteData).toHaveBeenCalledWith(
+      expect.objectContaining({ input: expect.objectContaining({ invoice_date: '2026-11-20' }) }),
+    )
+  })
+
+  it('keeps today for a plain Skapa faktura on the same order', async () => {
+    enqueue({ data: paidOrder() }) // order fetch
+    enqueue({ data: { id: 'cust-1', name: 'Testbolaget AB', email: 'kund@example.se', customer_type: 'swedish_business', default_payment_terms: 30 } }) // email match
+    enqueue({ data: { id: 'inv-1', status: 'draft', invoice_number: null } }) // invoices insert
+    enqueue({ data: null }) // invoice_items insert
+    enqueue({ data: [{ id: 'order-1' }] }) // order link-back matched
+
+    const { status } = await parseJsonResponse(await postCreate())
+
+    expect(status).toBe(200)
+    expect(mockBuildInvoiceWriteData).toHaveBeenCalledWith(
+      expect.objectContaining({ input: expect.objectContaining({ invoice_date: '2026-11-27' }) }),
+    )
+  })
+
+  it('refuses an unpaid order with 409 WEBSHOP_ORDER_NOT_PAID before any customer or invoice is written', async () => {
+    enqueue({ data: makeOrderRow({ is_paid: false }) }) // order fetch
+
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(await postCreate({ paid_at_issue: true }))
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('WEBSHOP_ORDER_NOT_PAID')
+    expect(findCall('invoices', 'insert')).toBeUndefined()
+    expect(findCall('customers', 'insert')).toBeUndefined()
+  })
+
+  it('returns 400 for a paid_at_issue that is not a boolean', async () => {
+    const { status } = await parseJsonResponse(await postCreate({ paid_at_issue: 'yes' }))
+
+    expect(status).toBe(400)
+    expect(findCall('webshop_orders', 'select')).toBeUndefined()
+  })
+})
