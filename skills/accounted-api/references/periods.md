@@ -1694,7 +1694,7 @@ Example response `200`:
 Sets one deadline completed (is_completed true) or open again (false), as the checkbox under Deadlines in the app does. Only the tick changes: no verifikat, period or filing is touched and nothing is sent to Skatteverket. Asking for the state the deadline already has changes nothing (changed false). Dry-runnable.
 
 **Use when:** The work a deadline stands for is done (or was ticked off by mistake) and it should leave (or return to) the open list.
-**Do not use for:** A moms or AGI filing made outside Accounted: record the filing instead (moms: POST /reports/vat-declaration/filings or accounted_mark_vat_period_filed; AGI: accounted_mark_agi_period_filed), which completes the deadline with the filing date.
+**Do not use for:** A moms or AGI filing made outside Accounted: record the filing instead (moms: POST /reports/vat-declaration/filings or accounted_mark_vat_period_filed; AGI: accounted_mark_agi_period_filed), which completes the deadline with the filing date. A deadline for an obligation the company does not have: remove it (accounted_delete_deadline).
 
 **Pitfalls:**
 - DEADLINE_NOT_FOUND for an id that is not one of the company's listed deadlines (GET /deadlines, accounted_list_deadlines), including one the company removed.

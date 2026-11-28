@@ -455,6 +455,20 @@ export function TaxSettingsForm({
             className="max-w-32 flex-none tabular-nums"
           />
         </SettingsRow>
+        <SettingsRow
+          label={t('preliminary_tax_first_due_date_label')}
+          htmlFor="preliminary_tax_first_due_date"
+          help={t('preliminary_tax_first_due_date_help')}
+          align="baseline"
+        >
+          <SettingsInput
+            id="preliminary_tax_first_due_date"
+            name="preliminary_tax_first_due_date"
+            type="date"
+            defaultValue={settings.preliminary_tax_first_due_date || ''}
+            className="max-w-44 flex-none tabular-nums"
+          />
+        </SettingsRow>
       </SettingsGroup>
 
       {/* Long-tail deadlines: explicit opt-in only */}

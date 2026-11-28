@@ -226,7 +226,7 @@ import {
 import { vatCheckReviewsMark } from './vat-check-reviews'
 import { vatMomsredovisningMarksMark, vatMomsredovisningMarksWithdraw } from './vat-momsredovisning-marks'
 import { agiFilingsMark } from './agi-filings'
-import { deadlinesComplete, deadlinesList } from './deadlines'
+import { deadlinesComplete, deadlinesDelete, deadlinesList } from './deadlines'
 import { counterpartyTemplatesRename, counterpartyTemplatesUpdate } from './counterparty-templates'
 import {
   arsredovisningAddSignatory,
@@ -519,6 +519,8 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   // deadlines (v1 and MCP: the dashboard ticks a deadline through the same service)
   deadlinesList,
   deadlinesComplete,
+  // MCP only: the dashboard removes a deadline through the same service.
+  deadlinesDelete,
   // counterparty-templates (MCP only: Bokföringsregler and the settings panel
   // change a rule through the same service)
   counterpartyTemplatesRename,

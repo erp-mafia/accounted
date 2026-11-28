@@ -102,6 +102,7 @@
     "gnubok_delete_account": ["actor","message","preview","risk_level","staged"],
     "gnubok_delete_asset": ["actor","message","preview","risk_level","staged"],
     "gnubok_delete_budget": ["actor","message","preview","risk_level","staged"],
+    "gnubok_delete_deadline": ["actor","message","preview","risk_level","staged"],
     "gnubok_delete_dimension": ["actor","message","preview","risk_level","staged"],
     "gnubok_delete_dimension_rule": ["actor","message","preview","risk_level","staged"],
     "gnubok_delete_document": ["actor","message","preview","risk_level","staged"],

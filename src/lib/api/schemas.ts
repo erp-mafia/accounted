@@ -4107,6 +4107,9 @@ export const UpdateSettingsSchema = z.object({
   tax_contact_email: z.string().email().nullable().optional().or(z.literal('')),
   fiscal_year_start_month: z.number().int().min(1).max(12).optional(),
   preliminary_tax_monthly: z.number().nullable().optional(),
+  // The first förfallodag in Skatteverket's decision on debiterad
+  // preliminärskatt: no F-skatt payment deadline for a month before it.
+  preliminary_tax_first_due_date: saneIsoDate.nullable().optional(),
   // Share capital per Bolagsverket (annual report aktiekapital note).
   aktiekapital: z.number().int('Aktiekapital anges i hela kronor').positive('Aktiekapital måste vara större än 0').nullable().optional(),
   antal_aktier: z.number().int('Antal aktier måste vara ett heltal').positive('Antal aktier måste vara större än 0').nullable().optional(),

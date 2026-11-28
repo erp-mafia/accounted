@@ -787,7 +787,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/skatteverket/tax-payments/:period/mark-paid': gap('P3', 'mark AGI period tax paid'),
   'POST /api/deadlines': gap('P3', 'custom deadline'),
   'PUT /api/deadlines/:id': gap('P3'),
-  'DELETE /api/deadlines/:id': gap('P3'),
+  'DELETE /api/deadlines/:id': covered(['gnubok_delete_deadline'], 'one added by hand is deleted, a generated one dismissed, through the same service (lib/deadlines/removal.ts); no v1 route yet'),
   'POST /api/deadlines/:id/complete': covered([`POST ${V}/deadlines/:id/complete`, `POST ${V}/reports/vat-declaration/filings`, 'gnubok_complete_deadline', 'gnubok_mark_vat_period_filed', 'gnubok_mark_agi_period_filed'], 'any deadline by its id, either way (crm#1848); the moms and AGI deadlines also by period, with the filing date'),
   'POST /api/rot-rut/payout-file': covered(['gnubok_generate_rot_rut_file']),
   'POST /api/rot-rut/beslut/import': covered(['gnubok_import_rot_rut_beslut']),
@@ -1196,5 +1196,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * (POST /api/invoices/late-payment-interest/invoices), dashboard first; its
  * pull request raised 160 -> 161 beside the one above, and the two merged as
  * one raise.
+ * 162 -> 161 (2026-11-28): removing a deadline (DELETE /api/deadlines/:id),
+ * through the staged gnubok_delete_deadline.
  */
-export const GAP_CEILING = 162
+export const GAP_CEILING = 161
