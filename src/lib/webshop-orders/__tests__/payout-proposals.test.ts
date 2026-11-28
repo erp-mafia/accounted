@@ -72,6 +72,12 @@ describe('pairRowsWithPayouts', () => {
     const pairs = pairRowsWithPayouts([r('a', '2026-11-20'), r('b', '2026-11-23')], [p('p1', '2026-11-19')])
     expect([...pairs.keys()]).toEqual(['a'])
   })
+
+  it('never gives a payout to a farther row while a nearer one fits it, whichever payout that one leans to', () => {
+    // a fits p1 and p2 equally (no pick); b leans to p2, but a is nearer p2.
+    const pairs = pairRowsWithPayouts([r('a', '2026-11-20'), r('b', '2026-11-23')], [p('p1', '2026-11-19'), p('p2', '2026-11-21')])
+    expect(pairs.get('b')).toBeUndefined()
+  })
 })
 
 describe('webshopPayoutProposer.propose', () => {
@@ -130,6 +136,28 @@ describe('webshopPayoutProposer.propose', () => {
     expect((await webshopPayoutProposer.propose(cash.client as never, COMPANY, [bankRow()], noBank)).size).toBe(0)
   })
 
+  it('proposes nothing for a store whose payment method is invoiced: the orders are receivables, not on a clearing account', async () => {
+    const db = createFakeDb({
+      webshop_payouts: [payout()],
+      webshop_store_settings: [{ company_id: COMPANY, platform: 'kustom', store_scope: 'M100', payment_method_account_map: { kustom: { mode: 'invoice' } } }],
+      company_settings: [],
+    })
+    expect((await webshopPayoutProposer.propose(db.client as never, COMPANY, [bankRow()], noBank)).size).toBe(0)
+  })
+
+  it('keeps a claimed payout to its row and pairs the next row with another payout that fits', async () => {
+    const db = createFakeDb({
+      webshop_payouts: [
+        payout({ transaction_id: 'tx-other' }),
+        payout({ id: 'payout-2', external_id: 'kustom_M100_PAY124', reference: 'PAY124', payout_date: '2026-11-17' }),
+      ],
+      webshop_store_settings: [],
+      company_settings: [],
+    })
+    const out = await webshopPayoutProposer.propose(db.client as never, COMPANY, [bankRow()], noBank)
+    expect(out.get('tx-1')?.template_id).toBe('clearing:webshop-payout:payout-2')
+  })
+
   it('proposes a payout again once its verifikat is reversed', async () => {
     const db = createFakeDb({
       webshop_payouts: [payout({ transaction_id: 'tx-old', journal_entry_id: 'je-1' })],
@@ -167,7 +195,8 @@ describe('webshopPayoutProposer.booking', () => {
       ok: true,
       description: 'Utbetalning Kustom PAY123 2026-11-19',
       lines: [
-        { account_number: '6570', debit_amount: 12.5, credit_amount: 0, description: 'Avgifter Kustom' },
+        // The fee line is the cost line: it takes the booking's dimensions.
+        { account_number: '6570', debit_amount: 12.5, credit_amount: 0, description: 'Avgifter Kustom', business_line: true },
         { account_number: '2641', debit_amount: 3.13, credit_amount: 0, description: 'Moms på avgifter Kustom' },
         { account_number: '1686', debit_amount: 0, credit_amount: 950, description: 'Utbetalning Kustom PAY123 2026-11-19' },
       ],
@@ -262,6 +291,16 @@ describe('webshopPayoutProposer.booking', () => {
       service.current = supabase
       enqueue({ data: [] })
       await expect(booking.settle({} as never, COMPANY, 'user-1', PAYOUT_ID, 'tx-1', 'je-1')).resolves.toBeNull()
+    })
+
+    it('files no specification when the verifikat\'s lines cannot be read', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      service.current = supabase
+      enqueue({ data: [payout({ transaction_id: 'tx-1', journal_entry_id: 'je-1' })] })
+      const user = createQueuedMockSupabase()
+      user.enqueue({ data: { company_name: 'Testbolaget AB', org_number: '556677-8899' } })
+      user.enqueue({ data: null, error: { message: 'timeout' } })
+      await expect(booking.settle(user.supabase as never, COMPANY, 'user-1', PAYOUT_ID, 'tx-1', 'je-1')).resolves.toBeNull()
     })
   })
 })

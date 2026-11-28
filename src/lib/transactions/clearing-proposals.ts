@@ -105,6 +105,8 @@ export interface ClearingBookingLine {
   debit_amount: number
   credit_amount: number
   description: string
+  /** A cost or revenue line: it takes the booking's dimensions (VAT and clearing lines do not). */
+  business_line?: boolean
 }
 
 export type ClearingLinesOutcome =

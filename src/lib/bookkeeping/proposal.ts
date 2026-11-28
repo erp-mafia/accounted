@@ -618,7 +618,7 @@ export function categorizeBodyFor(
     case 'account':
       // A clearing record books its own lines: no override, no VAT treatment.
       if (p.booking.clearing_ref) {
-        return { is_business: true, category: p.booking.category, clearing_ref: p.booking.clearing_ref, ...inbox, ...from }
+        return { is_business: true, category: p.booking.category, clearing_ref: p.booking.clearing_ref, ...dims, ...inbox, ...from }
       }
       return {
         is_business: true,

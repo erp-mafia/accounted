@@ -103,6 +103,8 @@ export interface PayoutVoucherLine {
   debit_amount: number
   credit_amount: number
   description: string
+  /** The fee line: the payout's one cost line, which takes the booking's dimensions. */
+  business_line?: true
 }
 
 export interface PayoutVoucherPlan {
@@ -164,7 +166,7 @@ export function planPayoutVoucher(
   const voucher: PayoutVoucherLine[] = []
   if (input.vatRegistered) {
     if (fees > 0) {
-      voucher.push({ account_number: PAYOUT_FEE_ACCOUNT, debit_amount: fees, credit_amount: 0, description: `Avgifter ${provider}` })
+      voucher.push({ account_number: PAYOUT_FEE_ACCOUNT, debit_amount: fees, credit_amount: 0, description: `Avgifter ${provider}`, business_line: true })
     }
     if (feeVat > 0) {
       voucher.push({ account_number: PAYOUT_FEE_VAT_ACCOUNT, debit_amount: feeVat, credit_amount: 0, description: `Moms på avgifter ${provider}` })
@@ -172,7 +174,7 @@ export function planPayoutVoucher(
   } else {
     const cost = sumOre([fees, feeVat])
     if (cost > 0) {
-      voucher.push({ account_number: PAYOUT_FEE_ACCOUNT, debit_amount: cost, credit_amount: 0, description: `Avgifter ${provider} inklusive moms` })
+      voucher.push({ account_number: PAYOUT_FEE_ACCOUNT, debit_amount: cost, credit_amount: 0, description: `Avgifter ${provider} inklusive moms`, business_line: true })
     }
   }
   voucher.push({

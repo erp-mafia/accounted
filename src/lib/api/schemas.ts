@@ -2879,8 +2879,8 @@ export const CategorizeTransactionSchema = z
     message: "reverse_charge_kind is only valid with vat_treatment 'reverse_charge'",
     path: ['reverse_charge_kind'],
   })
-  .refine((v) => !v.clearing_ref || (!v.template_id && !v.counterparty_template_id && !v.account_override && v.vat_amount === undefined), {
-    message: 'clearing_ref books its own lines: send it without template_id, counterparty_template_id, account_override or vat_amount',
+  .refine((v) => !v.clearing_ref || (!v.template_id && !v.counterparty_template_id && !v.account_override && v.vat_amount === undefined && v.vat_treatment === undefined), {
+    message: 'clearing_ref books its own lines: send it without template_id, counterparty_template_id, account_override, vat_treatment or vat_amount',
     path: ['clearing_ref'],
   })
 
