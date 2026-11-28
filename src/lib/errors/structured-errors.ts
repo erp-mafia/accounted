@@ -543,7 +543,7 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
       'The entry cannot be reversed: its source type needs a reversal hook to keep its sub-ledger in step, and none is registered in this installation. Nothing was written. Contact support.',
     retryable: false,
   },
-  // The refusals of three reversal hooks (lib/composition/reversal-hooks.ts),
+  // The refusals of the reversal hooks (lib/composition/reversal-hooks.ts),
   // raised before anything is written.
   SI_REGISTRATION_STORNO_HAS_PAYMENTS: {
     httpStatus: 409,
@@ -578,6 +578,53 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
       description:
         'details.salaryRunId is the booked run. Correct it (gnubok_correct_salary_run, POST /api/v1/companies/{companyId}/salary-runs/{id}/correct): every voucher of the run is reversed together and a correction run for the period is created as a draft. Nothing was written.',
       tool: 'gnubok_correct_salary_run',
+    },
+  },
+  INVOICE_STORNO_WITHDRAWN: {
+    httpStatus: 409,
+    message_sv:
+      'Fakturan som verifikationen bokför är redan krediterad eller avskriven som kundförlust, så verifikationen återförs inte igen. En kreditering ångras med Ångra kreditering på fakturan, en kundförlust genom att kundförlustens verifikation återförs.',
+    message_en:
+      'The invoice this voucher books is already credited or written off as a customer loss, so the voucher is not reversed again. A credit is undone with Undo credit (Ångra kreditering) on the invoice, a customer loss by reversing its customer loss voucher.',
+    remediation: {
+      description:
+        'details.invoiceStatus is credited or written_off. A credit is undone by the person on the invoice page (Ångra kreditering); a customer loss by reversing its customer_loss voucher (gnubok_reverse_journal_entry). Nothing was written.',
+    },
+  },
+  SI_REGISTRATION_STORNO_CREDITED: {
+    httpStatus: 409,
+    message_sv:
+      'Leverantörsfakturan som verifikationen bokför är krediterad. Ångra krediteringen på fakturan först (Ångra kreditering), återför sedan verifikationen.',
+    message_en:
+      'The supplier invoice this voucher books is credited. Undo the credit on the invoice first (Ångra kreditering), then reverse the voucher.',
+    remediation: {
+      description:
+        'details.supplierInvoiceId is the credited invoice. Undo its credit (gnubok_uncredit_supplier_invoice), then reverse the registration voucher again. Nothing was written.',
+      tool: 'gnubok_uncredit_supplier_invoice',
+    },
+  },
+  EXPENSE_CLAIM_STORNO_REGISTERED: {
+    httpStatus: 409,
+    message_sv:
+      'Verifikationen bokför ett utlägg och återförs inte för sig. Ta bort utlägget i stället, så återförs verifikationen och utlägget tas bort tillsammans.',
+    message_en:
+      'The voucher books an expense claim and is not reversed on its own. Delete the claim instead (Ta bort), which reverses the voucher and removes the claim together.',
+    remediation: {
+      description:
+        'details.expenseClaimId is the claim. Delete it (gnubok_delete_expense_claim, DELETE /api/v1/companies/{companyId}/expense-claims/{id}): its voucher is reversed with it. Nothing was written.',
+      tool: 'gnubok_delete_expense_claim',
+    },
+  },
+  EXPENSE_CLAIM_STORNO_PAID: {
+    httpStatus: 409,
+    message_sv:
+      'Verifikationen bokför ett utlägg som är utbetalt eller betalas med lön, och återförs inte för sig. Är konteringen fel, rätta verifikationen (Rätta) i stället, så står utlägget kvar.',
+    message_en:
+      'The voucher books an expense claim that is paid out or repaid with salary, and is not reversed on its own. If the booking is wrong, correct the voucher (Rätta) instead; the claim stays.',
+    remediation: {
+      description:
+        'details.expenseClaimId is the claim, which can no longer be deleted. Correct its voucher instead (gnubok_correct_entry): the claim follows the corrected voucher. Nothing was written.',
+      tool: 'gnubok_correct_entry',
     },
   },
   CURRENCY_REVALUATION_ALREADY_EXISTS: {

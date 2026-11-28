@@ -751,7 +751,8 @@ describe('DELETE /api/v1/companies/:companyId/expense-claims/:id', () => {
     const res = await del()
     expect(res.status).toBe(200)
     expect((await res.json()).data).toEqual({ deleted: true, expense_claim_id: CLAIM_ID, reversal_entry_id: 'storno-1' })
-    expect(reverseEntryMock).toHaveBeenCalledWith(expect.anything(), COMPANY_ID, 'user-1', JE_ID)
+    // Ta bort's own storno carries the option that lets it past the expense claim's reversal hook.
+    expect(reverseEntryMock).toHaveBeenCalledWith(expect.anything(), COMPANY_ID, 'user-1', JE_ID, undefined, { expenseClaimRemoval: true })
     expect(client.calls.some((c) => c.table === 'expense_claims' && c.method === 'delete')).toBe(true)
     expect(client.calls.some((c) => c.table === 'journal_entries' && WRITES.has(c.method))).toBe(false)
   })

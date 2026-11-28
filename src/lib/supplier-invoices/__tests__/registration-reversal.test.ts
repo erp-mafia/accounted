@@ -1,7 +1,7 @@
 /**
  * The supplier invoice side of a storno of its registration verifikat:
- * refused before the storno while the invoice the verifikat registers has
- * payments; afterwards the pointer to the reversed verifikat is cleared, so
+ * refused before the storno while the invoice the verifikat registers is
+ * credited (Ångra kreditering first) or has payments; afterwards the pointer to the reversed verifikat is cleared, so
  * the invoice reads not booked and Bokför books it again. A registration no
  * invoice points at (the create flow undoing a failed registration) passes
  * and changes no invoice.
@@ -12,7 +12,10 @@ const logError = vi.hoisted(() => vi.fn())
 vi.mock('@/lib/logger', () => ({ createLogger: () => ({ error: logError, warn: vi.fn(), info: vi.fn(), debug: vi.fn() }) }))
 
 import { createRowsMockSupabase, createTableMockSupabase } from '@/tests/helpers'
-import { SupplierInvoiceRegistrationHasPaymentsError } from '@/lib/bookkeeping/errors'
+import {
+  SupplierInvoiceRegistrationCreditedError,
+  SupplierInvoiceRegistrationHasPaymentsError,
+} from '@/lib/bookkeeping/errors'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import {
   assertSupplierInvoiceRegistrationReversible,
@@ -37,6 +40,29 @@ beforeEach(() => vi.clearAllMocks())
 describe('assertSupplierInvoiceRegistrationReversible', () => {
   it('lets the registration of an unpaid invoice through', async () => {
     const { supabase } = createRowsMockSupabase({ supplier_invoices: [invoice()], supplier_invoice_payments: [] })
+    await expect(assertSupplierInvoiceRegistrationReversible(supabase as never, COMPANY, 'je-reg')).resolves.toBeUndefined()
+  })
+
+  it('refuses while the invoice is credited, before any payment is read', async () => {
+    const { supabase, tables } = createRowsMockSupabase({
+      supplier_invoices: [invoice({ status: 'credited', is_credit_note: false })],
+      supplier_invoice_payments: [{ id: 'pay-1', company_id: COMPANY, supplier_invoice_id: 'si-1', amount: 100 }],
+    })
+    const refusal = assertSupplierInvoiceRegistrationReversible(supabase as never, COMPANY, 'je-reg')
+    await expect(refusal).rejects.toBeInstanceOf(SupplierInvoiceRegistrationCreditedError)
+    await expect(refusal).rejects.toMatchObject({ code: 'SI_REGISTRATION_STORNO_CREDITED', supplierInvoiceId: 'si-1' })
+    // Undoing the credit comes first: the payments are not asked about.
+    expect(tables()).toEqual(['supplier_invoices'])
+  })
+
+  it('does not take a credit note row resting at credited for a credited invoice', async () => {
+    // A credit note rests at 'credited' like its original and names its own
+    // verifikat; should that verifikat carry this source type, the credit
+    // note is not the credited invoice the refusal is about.
+    const { supabase } = createRowsMockSupabase({
+      supplier_invoices: [invoice({ id: 'si-credit-1', status: 'credited', is_credit_note: true })],
+      supplier_invoice_payments: [],
+    })
     await expect(assertSupplierInvoiceRegistrationReversible(supabase as never, COMPANY, 'je-reg')).resolves.toBeUndefined()
   })
 
@@ -102,6 +128,12 @@ describe('assertSupplierInvoiceRegistrationReversible', () => {
     const refusal = new SupplierInvoiceRegistrationHasPaymentsError('si-1')
     expect(getErrorMessage(refusal)).toMatch(/Ångra betalningarna först/)
     expect(getErrorMessage(refusal, { locale: 'en' })).toMatch(/Undo the payments first/)
+  })
+
+  it('names undoing the credit first, in Swedish and in English', () => {
+    const refusal = new SupplierInvoiceRegistrationCreditedError('si-1')
+    expect(getErrorMessage(refusal)).toMatch(/Ångra krediteringen på fakturan först \(Ångra kreditering\)/)
+    expect(getErrorMessage(refusal, { locale: 'en' })).toMatch(/Undo the credit on the invoice first/)
   })
 })
 

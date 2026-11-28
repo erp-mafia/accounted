@@ -9,9 +9,15 @@
  * create flow undoing a failed registration, Bokför losing its link race)
  * registers no invoice and reverses freely.
  *
- * Before the storno: refused while the invoice has payments (a payment row,
- * or a paid amount). They clear 2440 against the registration, so they are
- * undone first.
+ * Before the storno: refused while the invoice is credited. Its credit note's
+ * verifikat took the purchase out of the ledger already, so a storno of the
+ * registration would take it out a second time. The credit is undone first
+ * with Ångra kreditering (uncreditSupplierInvoice, manage.ts), which reverses
+ * the credit note's own verifikat (supplier_credit_note), never this one. A
+ * credit note row rests at 'credited' too and can name a verifikat of its
+ * own; it is not the invoice this check is about. Then refused while the
+ * invoice has payments (a payment row, or a paid amount). They clear 2440
+ * against the registration, so they are undone first.
  *
  * After the storno: the pointer is cleared. That is the state of an invoice
  * registered without its verifikat (defer_invoice_booking, #967), and the
@@ -24,12 +30,19 @@
  * composition seam without a cycle.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { SupplierInvoiceRegistrationHasPaymentsError } from '@/lib/bookkeeping/errors'
+import {
+  SupplierInvoiceRegistrationCreditedError,
+  SupplierInvoiceRegistrationHasPaymentsError,
+} from '@/lib/bookkeeping/errors'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('supplier-invoices/registration-reversal')
 
-/** Throws SupplierInvoiceRegistrationHasPaymentsError when the invoice the verifikat registers has payments. */
+/**
+ * Throws SupplierInvoiceRegistrationCreditedError when the invoice the
+ * verifikat registers is credited, and SupplierInvoiceRegistrationHasPaymentsError
+ * when it has payments.
+ */
 export async function assertSupplierInvoiceRegistrationReversible(
   supabase: SupabaseClient,
   companyId: string,
@@ -37,12 +50,20 @@ export async function assertSupplierInvoiceRegistrationReversible(
 ): Promise<void> {
   const { data, error } = await supabase
     .from('supplier_invoices')
-    .select('id, paid_amount')
+    .select('id, paid_amount, status, is_credit_note')
     .eq('company_id', companyId)
     .eq('registration_journal_entry_id', journalEntryId)
   if (error) throw new Error(`supplier invoice registration: lookup by voucher failed: ${error.message}`)
-  const invoices = (data ?? []) as Array<{ id: string; paid_amount: number | string | null }>
+  const invoices = (data ?? []) as Array<{
+    id: string
+    paid_amount: number | string | null
+    status: string
+    is_credit_note: boolean | null
+  }>
   if (invoices.length === 0) return
+
+  const credited = invoices.find((invoice) => invoice.status === 'credited' && invoice.is_credit_note !== true)
+  if (credited) throw new SupplierInvoiceRegistrationCreditedError(credited.id)
 
   const paid = invoices.find((invoice) => Number(invoice.paid_amount ?? 0) > 0)
   if (paid) throw new SupplierInvoiceRegistrationHasPaymentsError(paid.id)
