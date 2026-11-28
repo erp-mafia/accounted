@@ -2750,6 +2750,19 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_en:
       'This invoice cannot be issued as already paid (cash invoice). Only a plain invoice without periodised lines, dated today at the latest, can. Send it as usual and register the payment afterwards.',
   },
+  // crm#2324: the account a kontantfaktura is paid to (isPaidAtIssueAccount
+  // in lib/invoices/paid-at-issue.ts). details.provider_accounts lists the
+  // company's store payment-method accounts.
+  INVOICE_PAID_AT_ISSUE_ACCOUNT_NOT_ALLOWED: {
+    httpStatus: 400,
+    message_sv:
+      'En kontantfaktura kan bara betalas till ett kassa- eller bankkonto (19xx), till 1686 Fordringar för kontokort och kuponger eller till ett konto som en webbutiks betalsätt bokförs på.',
+    message_en:
+      'A cash invoice can only be paid to a cash or bank account (19xx), to 1686 (claims on card acquirers and payment providers), or to an account a webshop payment method books to.',
+    remediation: {
+      description: 'Name a 19xx account, 1686, or one of details.provider_accounts (the accounts the company\'s webshop stores book a payment method to).',
+    },
+  },
   INVOICE_MARK_SENT_REPAIR_REQUIRED: {
     httpStatus: 500,
     message_sv: 'Verifikatet skapades, men kopplingen till fakturan måste återställas. Kontakta support.',
