@@ -2,9 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { isCashLedger } from '@/lib/bookkeeping/bank-leg'
 import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
 import { accountProposal, clearingReasonSv, type BookingProposal, type WebshopPayoutEvidence } from '@/lib/bookkeeping/proposal'
-import { uploadDocument } from '@/lib/core/documents/document-service'
 import { addDaysIso, daysBetweenIso, todayIsoStockholm } from '@/lib/dates/iso'
-import { linkBasisColumns } from '@/lib/links/stamp'
 import { createLogger } from '@/lib/logger'
 import { equalOre } from '@/lib/money'
 import { createServiceClient } from '@/lib/supabase/server'
@@ -14,6 +12,7 @@ import type {
   ClearingBookingRow,
   ClearingLinesOutcome,
   ClearingProposer,
+  ClearingUnderlag,
 } from '@/lib/transactions/clearing-proposals'
 import type { WebshopPayout, WebshopStoreSettings } from '@/types'
 import { resolvePaymentAccount } from './booking-lines'
@@ -357,7 +356,7 @@ async function settle(
   ref: string,
   transactionId: string,
   journalEntryId: string,
-): Promise<void> {
+): Promise<ClearingUnderlag | null> {
   try {
     // The claim may have been let go meanwhile by a second booking of the same
     // row that lost: the winner settles all the same, as long as no other
@@ -372,7 +371,7 @@ async function settle(
       .select(PAYOUT_COLUMNS)
     if (error || !data || data.length === 0) {
       log.error('failed to settle the payout on its verifikat', error ?? new Error('no claimed payout matched'), { payoutId: ref, journalEntryId })
-      return
+      return null
     }
     const payout = normalize(data[0] as PayoutRow)
     const { buildPayoutUnderlagModel, renderWebshopPayoutUnderlagPdf } = await import('./payout-underlag')
@@ -387,24 +386,12 @@ async function settle(
       company: (company ?? {}) as { company_name?: string | null; org_number?: string | null },
       generatedAt: todayIsoStockholm(),
     })
-    await uploadDocument(
-      supabase,
-      userId,
-      companyId,
-      { name: filename, buffer: bytes.buffer, type: 'application/pdf' },
-      // The payout's own specification on the payout's own verifikat; the
-      // key keeps a retry from filing it twice.
-      {
-        upload_source: 'system',
-        journal_entry_id: journalEntryId,
-        linkBasis: linkBasisColumns('system_derived'),
-        idempotency_key: `webshop-payout:${payout.id}`,
-        extractionOwner: 'none',
-      },
-    )
+    // The payout's own specification, for the payout's own verifikat.
+    return { name: filename, bytes, type: 'application/pdf', idempotencyKey: `webshop-payout:${payout.id}` }
   } catch (err) {
     // The verifikat stands; a missing specification shows as missing underlag.
-    log.error('failed to file the payout specification', err as Error, { payoutId: ref, journalEntryId })
+    log.error('failed to build the payout specification', err as Error, { payoutId: ref, journalEntryId })
+    return null
   }
 }
 
