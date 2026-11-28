@@ -7,6 +7,7 @@ import type { SkattekontoLedgerAccount } from '@/lib/skatteverket/skattekonto-ac
 import { accountHue, templateGroupHue, type TemplateHue } from './template-group-colors'
 import { getDefaultAccountForCategory, getDefaultVatTreatmentForCategory } from './category-mapping'
 import { groupForAccount } from './template-groups'
+import { formatCurrency } from '@/lib/utils'
 import {
   DEFAULT_REVERSE_CHARGE_KIND,
   REVERSE_CHARGE_TREATMENT_KINDS,
@@ -49,10 +50,39 @@ export type ProposalSource = 'rule' | 'recent' | 'catalog' | 'counterparty' | 'a
  * What a clearing proposal (source 'clearing') rests on: another block's own
  * record that this money was already booked onto a clearing account, so the
  * bank row clears that account instead of being booked as revenue again
- * (lib/transactions/clearing-proposals.ts). Today the till: card and Swish
- * on the day voucher (lib/pos-sales/payout-match.ts).
+ * (lib/transactions/clearing-proposals.ts). The till: card and Swish on the
+ * day voucher (lib/pos-sales/payout-match.ts); a webshop's payment provider:
+ * one payout of the orders it collected (WebshopPayoutEvidence).
  */
-export interface ClearingEvidence {
+export type ClearingEvidence = PosClearingEvidence | WebshopPayoutEvidence
+
+/**
+ * A payment provider's payout (Kustom, Shopify Payments): the orders booked
+ * the sales on the clearing account, and the payout settles them net of the
+ * provider's fees (lib/webshop-orders/payout-proposals.ts).
+ */
+export interface WebshopPayoutEvidence {
+  channel: 'webshop'
+  kind: 'payout'
+  fit: 'payout'
+  /** The provider as people know it: Kustom, Shopify Payments. */
+  provider: string
+  /** The payout reference the provider prints, when it gives one. */
+  reference: string | null
+  /** The clearing account the verifikat credits. */
+  account: string
+  /** The payout day. */
+  business_dates: string[]
+  /** The net payout: the bank row's amount. */
+  expected_amount: number
+  /** The provider's fees and the VAT on them, as the verifikat books them. */
+  fees: number
+  fee_vat: number
+  /** The clearing account's credit: net + fees + fee VAT. */
+  clearing_amount: number
+}
+
+export interface PosClearingEvidence {
   /** The block whose record it is. */
   channel: 'pos'
   /** How the money was paid. */
@@ -88,6 +118,12 @@ export type ProposalBooking =
       vat_treatment: VatTreatment
       category: TransactionCategory
       reverse_charge_kind?: ReverseChargeKind
+      /**
+       * A clearing proposal whose record states the whole verifikat (a
+       * payout: the bank net, the provider's fees, `account` gross): the
+       * booking sends it back and the proposer books those lines.
+       */
+      clearing_ref?: { proposer: string; ref: string }
     }
 
 export interface BookingProposal {
@@ -566,6 +602,7 @@ export function categorizeBodyFor(
   dimensions?: Record<string, string>
   inbox_item_id?: string
   proposal_id?: string
+  clearing_ref?: { proposer: string; ref: string }
 } {
   const dims = extras.dimensions && Object.keys(extras.dimensions).length > 0 ? { dimensions: extras.dimensions } : {}
   const vatAmount = extras.vatAmount != null ? { vat_amount: extras.vatAmount } : {}
@@ -579,6 +616,10 @@ export function categorizeBodyFor(
     case 'counterparty':
       return { is_business: true, counterparty_template_id: p.booking.counterparty_template_id, ...dims, ...inbox, ...from }
     case 'account':
+      // A clearing record books its own lines: no override, no VAT treatment.
+      if (p.booking.clearing_ref) {
+        return { is_business: true, category: p.booking.category, clearing_ref: p.booking.clearing_ref, ...dims, ...inbox, ...from }
+      }
       return {
         is_business: true,
         category: p.booking.category,
@@ -663,6 +704,8 @@ export function agentBookingFor(
 ): { category: TransactionCategory; account_override: string; vat_treatment: VatTreatment } | null {
   if (p.vat_unknown) return null
   if (p.booking.kind === 'account') {
+    // A payout's verifikat is more than one account: booked from the app.
+    if (p.booking.clearing_ref) return null
     return { category: p.booking.category, account_override: p.booking.account, vat_treatment: p.booking.vat_treatment }
   }
   if (p.booking.kind === 'template') {
@@ -714,6 +757,12 @@ export function categorizeArgsFor(
 function clearingWhyKey(p: BookingProposal): { key: string; values?: Record<string, string | number> } {
   const e = p.clearing
   if (!e) return { key: 'rec_why_manual' }
+  if (e.channel === 'webshop') {
+    return {
+      key: 'rec_why_clearing_payout',
+      values: { provider: e.provider, date: e.business_dates[0] ?? '', fees: formatCurrency(e.fees), vat: formatCurrency(e.fee_vat), account: e.account },
+    }
+  }
   const dates = e.business_dates
   const last = dates[dates.length - 1] ?? ''
   if (e.fit === 'receipt') {
@@ -731,6 +780,15 @@ function clearingWhyKey(p: BookingProposal): { key: string; values?: Record<stri
  * MCP tool's why and the assistant's candidate reason.
  */
 export function clearingReasonSv(e: ClearingEvidence): string {
+  if (e.channel === 'webshop') {
+    const reference = e.reference ? ` ${e.reference}` : ''
+    const vat = e.fee_vat > 0 ? ` och ${formatCurrency(e.fee_vat)} moms på avgifterna, som dras av mot ${e.provider}s faktura för dem` : ''
+    return (
+      `Utbetalning från ${e.provider}${reference} ${e.business_dates[0] ?? ''}, som stämmer på öret. ` +
+      `Försäljningen bokförs från ordrarna mot ${e.account}, så utbetalningen bokförs mot ${e.account} med ${formatCurrency(e.clearing_amount)}: ` +
+      `bankens ${formatCurrency(e.expected_amount)} plus ${formatCurrency(e.fees)} i avgifter${vat}.`
+    )
+  }
   const dates = e.business_dates
   const first = dates[0] ?? ''
   const last = dates[dates.length - 1] ?? ''

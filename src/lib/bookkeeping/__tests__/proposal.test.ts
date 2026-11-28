@@ -366,3 +366,66 @@ describe('slateAccount', () => {
     ).toBe('6211')
   })
 })
+
+describe('a webshop payout clearing proposal', () => {
+  const evidence = {
+    channel: 'webshop' as const,
+    kind: 'payout' as const,
+    fit: 'payout' as const,
+    provider: 'Kustom',
+    reference: 'PAY123',
+    account: '1686',
+    business_dates: ['2026-11-19'],
+    expected_amount: 934.37,
+    fees: 12.5,
+    fee_vat: 3.13,
+    clearing_amount: 950,
+  }
+  const base = accountProposal({
+    id: 'clearing:webshop-payout:p1',
+    source: 'clearing',
+    account: '1686',
+    label: 'Utbetalning Kustom',
+    category: 'income_other',
+    vat_treatment: 'exempt',
+    amount: 934.37,
+  })
+  const payout: BookingProposal = {
+    ...base,
+    booking: { ...(base.booking as Extract<BookingProposal['booking'], { kind: 'account' }>), clearing_ref: { proposer: 'webshop-payouts', ref: 'p1' } },
+    requires_review: true,
+    clearing: evidence,
+  }
+
+  it('sends the record back instead of an account override', () => {
+    expect(categorizeBodyFor(payout)).toEqual({
+      is_business: true,
+      category: 'income_other',
+      clearing_ref: { proposer: 'webshop-payouts', ref: 'p1' },
+      proposal_id: 'clearing:webshop-payout:p1',
+    })
+    // Dimensions picked in the review travel with the record.
+    expect(categorizeBodyFor(payout, { dimensions: { '1': 'K10' } })).toMatchObject({ dimensions: { '1': 'K10' } })
+  })
+
+  it('gives an agent no one-account booking: the payout books more than one account', () => {
+    expect(categorizeArgsFor(payout)).toBeNull()
+  })
+
+  it('drops the record when the person picks another account', () => {
+    const picked = withAccount(payout, '1930', 'exempt', 934.37)
+    expect(picked.booking).not.toHaveProperty('clearing_ref')
+  })
+
+  it('says what the payout clears and what the fees are, in both languages\' keys and in Swedish', () => {
+    expect(whyKeyFor(payout)).toEqual({
+      key: 'rec_why_clearing_payout',
+      values: { provider: 'Kustom', date: '2026-11-19', fees: expect.stringMatching(/12,5/), vat: expect.stringMatching(/3,13/), account: '1686' },
+    })
+    const text = whyTextSv(payout)
+    expect(text).toContain('Utbetalning från Kustom PAY123 2026-11-19')
+    expect(text).toMatch(/950\skr/)
+    expect(text).toMatch(/12,5/)
+    expect(text).toMatch(/3,13/)
+  })
+})

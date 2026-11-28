@@ -74,6 +74,87 @@ export interface ClearingProposer {
     asked: readonly ClearingBankRow[],
     bank: ClearingBankRows,
   ): Promise<Map<string, BookingProposal>>
+  /**
+   * For a proposer whose verifikat is more than the row against one
+   * account: what the bank row's booking asks it (ClearingBooking).
+   */
+  readonly booking?: ClearingBooking
+}
+
+/**
+ * A clearing proposal's record, named on the proposal (the account booking's
+ * clearing_ref) and sent back by the bank row's booking: which proposer, and
+ * the id of its record (a payout).
+ */
+export interface ClearingRef {
+  proposer: string
+  ref: string
+}
+
+/** The row a clearing booking is asked about. */
+export interface ClearingBookingRow {
+  id: string
+  date: string
+  amount: number
+  currency: string | null
+}
+
+/** One line of a clearing booking beside the bank leg, in SEK. */
+export interface ClearingBookingLine {
+  account_number: string
+  debit_amount: number
+  credit_amount: number
+  description: string
+  /** A cost or revenue line: it takes the booking's dimensions (VAT and clearing lines do not). */
+  business_line?: boolean
+}
+
+export type ClearingLinesOutcome =
+  | { ok: true; lines: ClearingBookingLine[]; description: string }
+  /** A structured-error code, refused before anything is written. */
+  | { ok: false; code: string; details?: Record<string, unknown> }
+
+/**
+ * A clearing proposal that books more than the row against one account: a
+ * payment provider's payout books the bank net, the provider's fees and the
+ * clearing account gross (lib/webshop-orders/payout-proposals.ts). The bank
+ * row's booking (lib/transactions/categorize-core.ts) asks the proposer for
+ * every line beside the bank leg, claims the record for the row before the
+ * verifikat is written, lets go of the claim when the booking fails, and
+ * settles the record once the verifikat stands. The proposer owns its record;
+ * the bank side owns the row and the verifikat, and files the underlag the
+ * settle hands back (so a proposer stays a hook leaf: no documents, no bus).
+ */
+export interface ClearingUnderlag {
+  name: string
+  bytes: Uint8Array<ArrayBuffer>
+  type: string
+  /** Keeps a retried booking from filing the same underlag twice. */
+  idempotencyKey: string
+}
+
+export interface ClearingBooking {
+  /** The lines beside the bank leg, for this row and record, or a refusal. */
+  lines(
+    supabase: SupabaseClient,
+    companyId: string,
+    row: ClearingBookingRow,
+    ref: string,
+    context: { vatRegistered: boolean },
+  ): Promise<ClearingLinesOutcome>
+  /** Claims the record for the row; false when another booking holds or booked it. */
+  claim(supabase: SupabaseClient, companyId: string, ref: string, transactionId: string): Promise<boolean>
+  /** Lets go of a claim whose booking wrote no verifikat. */
+  release(supabase: SupabaseClient, companyId: string, ref: string, transactionId: string): Promise<void>
+  /** Ties the claimed record to the posted verifikat; returns its underlag to file, if any. Never throws. */
+  settle(
+    supabase: SupabaseClient,
+    companyId: string,
+    userId: string,
+    ref: string,
+    transactionId: string,
+    journalEntryId: string,
+  ): Promise<ClearingUnderlag | null>
 }
 
 

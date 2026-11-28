@@ -5,9 +5,12 @@ import {
   kustomCaptureExternalId,
   kustomImport,
   kustomOrderNumbers,
+  kustomPayoutRecord,
   kustomRefundExternalId,
   parseKustomSettlementReport,
 } from '../kustom-settlement'
+import { planPayoutVoucher } from '../payouts'
+import { sumOre } from '@/lib/money'
 
 const SUMMARY_HEADER =
   'total_sale_amount;total_fee_amount;total_return_amount;total_reversal_amount;total_commission_amount;total_holdback_amount;total_repay_amount;total_release_amount;total_fee_correction_amount;total_settlement_amount;total_tax_amount;payment_reference;settlement_currency;payout_date;merchant_id;merchant_settlement_type'
@@ -437,5 +440,73 @@ describe('parseKustomSettlementReport', () => {
     const { rows } = imported(content)
     expect(rows[2]).toMatchObject({ total: -300, total_tax: -60 })
     expect(rows[2].vat_breakdown).toEqual([{ rate: 25, net: 240, tax: 60 }])
+  })
+})
+
+describe('kustomPayoutRecord', () => {
+  it('stores the payout with its parts signed toward it, adding up to what Kustom paid out', () => {
+    const record = kustomPayoutRecord(read(report()).payout)
+    expect(record).toEqual({
+      platform: 'kustom',
+      store_scope: 'M100',
+      external_id: 'kustom_M100_payout_PAY123',
+      reference: 'PAY123',
+      payout_date: '2026-11-19',
+      currency: 'SEK',
+      amount: 1539.37,
+      lines: [
+        { kind: 'sale', amount: 1862 },
+        { kind: 'return', amount: -300 },
+        { kind: 'fee', amount: -18.1 },
+        { kind: 'fee_vat', amount: -4.53 },
+      ],
+    })
+    expect(sumOre(record!.lines.map((l) => l.amount))).toBe(record!.amount)
+  })
+
+  it('keeps reversals, holdbacks, releases and the rest as their own parts; a part it cannot name is booked by a person', () => {
+    const record = kustomPayoutRecord(
+      read(
+        report({
+          summary: '1862.00;18.10;300.00;50.00;0.00;100.00;0.00;40.00;0.00;1420.00;4.53;PAY123;SEK;2026-11-19T00:00:00.000Z;M100;NET',
+        }),
+      ).payout,
+    )!
+    expect(record.lines).toEqual([
+      { kind: 'sale', amount: 1862 },
+      { kind: 'return', amount: -300 },
+      { kind: 'reversal', amount: -50 },
+      { kind: 'fee', amount: -18.1 },
+      { kind: 'fee_vat', amount: -4.53 },
+      { kind: 'holdback', amount: -100 },
+      { kind: 'release', amount: 40 },
+      { kind: 'adjustment', amount: -9.37 },
+    ])
+    expect(planPayoutVoucher({ payout: record, clearingAccount: '1686', vatRegistered: true })).toEqual({ ok: false, reason: 'adjustment' })
+
+    // Without the unnamed part the payout is proposed: bank 1429.37 + fees
+    // 18.10 + VAT 4.53 is the clearing credit, the holdback stays on 1686.
+    const named = kustomPayoutRecord(
+      read(
+        report({
+          summary: '1862.00;18.10;300.00;50.00;0.00;100.00;0.00;40.00;0.00;1429.37;4.53;PAY123;SEK;2026-11-19T00:00:00.000Z;M100;NET',
+        }),
+      ).payout,
+    )!
+    const planned = planPayoutVoucher({ payout: named, clearingAccount: '1686', vatRegistered: true })
+    if (!planned.ok) throw new Error(planned.reason)
+    expect(planned.plan.clearing).toBe(1452)
+  })
+
+  it('stores nothing for a payout that paid nothing or has no payout day', () => {
+    const payout = read(report()).payout
+    expect(kustomPayoutRecord({ ...payout, settlement: 0 })).toBeNull()
+    expect(kustomPayoutRecord({ ...payout, settlement: -12 })).toBeNull()
+    expect(kustomPayoutRecord({ ...payout, payoutDate: null })).toBeNull()
+  })
+
+  it('keys a payout without a reference by its day and amount', () => {
+    const payout = read(report()).payout
+    expect(kustomPayoutRecord({ ...payout, reference: null })?.external_id).toBe('kustom_M100_payout_2026-11-19_1539.37')
   })
 })

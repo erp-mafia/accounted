@@ -5052,6 +5052,48 @@ export interface WebshopOrder {
   updated_at: string
 }
 
+/**
+ * One part of a payment provider's payout, signed toward the payout: a sale
+ * or a release adds to it; a return, reversal, fee, fee VAT or holdback takes
+ * from it; an adjustment goes either way (lib/webshop-orders/payouts.ts).
+ */
+export type WebshopPayoutLineKind =
+  | 'sale'
+  | 'return'
+  | 'reversal'
+  | 'fee'
+  | 'fee_vat'
+  | 'holdback'
+  | 'release'
+  | 'adjustment'
+
+export interface WebshopPayoutLine {
+  kind: WebshopPayoutLineKind
+  amount: number
+}
+
+/** Row shape of public.webshop_payouts. */
+export interface WebshopPayout {
+  id: string
+  company_id: string
+  user_id: string | null
+  platform: Extract<WebshopPlatform, 'kustom' | 'shopify'>
+  store_scope: string
+  external_id: string
+  reference: string | null
+  payout_date: string
+  currency: string
+  /** What reached the bank: the sum of `lines`. */
+  amount: number
+  lines: WebshopPayoutLine[]
+  /** The bank row whose booking claimed the payout. */
+  transaction_id: string | null
+  /** The verifikat that booked it. */
+  journal_entry_id: string | null
+  created_at: string
+  updated_at: string
+}
+
 /** Per-payment-method booking policy in webshop_store_settings. */
 export type WebshopPaymentMethodPolicy =
   | { mode: 'book'; account: string }

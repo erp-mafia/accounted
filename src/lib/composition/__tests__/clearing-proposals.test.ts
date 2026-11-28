@@ -8,8 +8,15 @@ import { MODULE_IDS } from '@/lib/modules/manifest'
 import { CLEARING_PROPOSERS } from '../clearing-proposals'
 
 describe('CLEARING_PROPOSERS', () => {
-  it('asks the till, owned by its block', () => {
-    expect(CLEARING_PROPOSERS.map((p) => ({ id: p.id, module: p.module }))).toEqual([{ id: 'pos-payouts', module: 'pos' }])
+  it('asks the till, then the webshop payouts, each owned by its block', () => {
+    expect(CLEARING_PROPOSERS.map((p) => ({ id: p.id, module: p.module }))).toEqual([
+      { id: 'pos-payouts', module: 'pos' },
+      { id: 'webshop-payouts', module: 'webshop' },
+    ])
+  })
+
+  it('books a payout through the webshop proposer only', () => {
+    expect(CLEARING_PROPOSERS.filter((p) => p.booking).map((p) => p.id)).toEqual(['webshop-payouts'])
   })
 
   it('is frozen, with unique ids and known modules', () => {

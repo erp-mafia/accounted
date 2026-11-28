@@ -1276,6 +1276,9 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   // A point-of-sale day is the basis of its daily takings voucher: the day
   // model and the provider's answer verbatim (BFL 7 kap) belong in the archive.
   { name: 'pos_sales_days', file: 'pos_sales_days.json', orderBy: 'business_date' },
+  // A provider's payout and its parts (sales, returns, fees, fee VAT) are the
+  // basis of the payout's verifikat: they travel with the bank rows they book.
+  { name: 'webshop_payouts', file: 'webshop_payouts.json', orderBy: 'payout_date' },
   // Kundorder: non-ledger sales documents. Not räkenskapsinformation on
   // their own, but the provenance of invoices created from them
   // (invoices.sales_order_id / invoice_items.sales_order_item_id) points

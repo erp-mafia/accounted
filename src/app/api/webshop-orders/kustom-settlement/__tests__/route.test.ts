@@ -4,7 +4,38 @@ import { createQueuedMockSupabase } from '@/tests/helpers'
 import type { WebshopOrderUpsert } from '@/lib/webshop-orders/types'
 
 const { supabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
-const serviceClient = { marker: 'service' }
+const payoutUpsert = vi.fn()
+const payoutRefresh = vi.fn()
+const payoutDelete = vi.fn()
+const refreshFilters: unknown[][] = []
+const deleteFilters: unknown[][] = []
+const serviceClient = {
+  marker: 'service',
+  from: (table: string) => {
+    if (table !== 'webshop_payouts') throw new Error(`unexpected service table ${table}`)
+    return {
+      upsert: (...args: unknown[]) => payoutUpsert(...args),
+      delete: () => {
+        payoutDelete()
+        const chain = {
+          eq: (...args: unknown[]) => (deleteFilters.push(['eq', ...args]), chain),
+          is: (...args: unknown[]) => (deleteFilters.push(['is', ...args]), chain),
+          then: (resolve: (v: unknown) => unknown) => resolve({ error: null }),
+        }
+        return chain
+      },
+      update: (patch: unknown) => {
+        payoutRefresh(patch)
+        const chain = {
+          eq: (...args: unknown[]) => (refreshFilters.push(['eq', ...args]), chain),
+          is: (...args: unknown[]) => (refreshFilters.push(['is', ...args]), chain),
+          then: (resolve: (v: unknown) => unknown) => resolve({ error: null }),
+        }
+        return chain
+      },
+    }
+  },
+}
 
 const requireAuthMock = vi.fn()
 vi.mock('@/lib/auth/require-auth', () => ({
@@ -65,6 +96,7 @@ describe('POST /api/webshop-orders/kustom-settlement', () => {
     requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase })
     requireWriteMock.mockResolvedValue({ ok: true })
     upsertMock.mockResolvedValue({ inserted: 2, updated: 0, unchanged: 0, frozenFlagged: 0, crossMarked: 0, errors: 0 })
+    payoutUpsert.mockResolvedValue({ error: null })
   })
 
   it('returns 401 when unauthenticated', async () => {
@@ -157,7 +189,66 @@ describe('POST /api/webshop-orders/kustom-settlement', () => {
       sales_held: 0,
       returns_held: 0,
       returns_left_out: { count: 0, total: 0 },
+      payout_recorded: true,
     })
+
+    // The payout is stored once, its parts signed toward it and adding up to
+    // what Kustom paid out, so its bank row can be proposed.
+    expect(payoutUpsert).toHaveBeenCalledTimes(1)
+    const [record, options] = payoutUpsert.mock.calls[0] as [Record<string, unknown>, Record<string, unknown>]
+    expect(record).toEqual({
+      platform: 'kustom',
+      store_scope: 'M100',
+      external_id: 'kustom_M100_payout_PAY123',
+      reference: 'PAY123',
+      payout_date: '2026-11-19',
+      currency: 'SEK',
+      amount: 934.37,
+      lines: [
+        { kind: 'sale', amount: 1250 },
+        { kind: 'return', amount: -300 },
+        { kind: 'fee', amount: -12.5 },
+        { kind: 'fee_vat', amount: -3.13 },
+      ],
+      company_id: 'company-1',
+      user_id: 'user-1',
+    })
+    expect(options).toEqual({ onConflict: 'company_id,external_id', ignoreDuplicates: true })
+    // A payout no bank row has claimed takes the report's figures again.
+    expect(payoutRefresh).toHaveBeenCalledWith(expect.objectContaining({ amount: 934.37 }))
+    expect(refreshFilters).toEqual(
+      expect.arrayContaining([
+        ['eq', 'external_id', 'kustom_M100_payout_PAY123'],
+        ['is', 'transaction_id', null],
+        ['is', 'journal_entry_id', null],
+      ]),
+    )
+  })
+
+  it('withdraws the unclaimed payout a corrected report says never reached the bank', async () => {
+    enqueue({ data: [] })
+    deleteFilters.length = 0
+    const corrected = REPORT.replace(';PAY123;SEK;2026-11-19T00:00:00.000Z;M100', ';PAY123;SEK;;M100')
+    const { status, body } = await jsonOf(await POST(makeFileRequest(corrected), emptyParams))
+    expect(status).toBe(200)
+    expect(body.data.payout_recorded).toBe(false)
+    expect(payoutUpsert).not.toHaveBeenCalled()
+    expect(payoutDelete).toHaveBeenCalledTimes(1)
+    expect(deleteFilters).toEqual(
+      expect.arrayContaining([
+        ['eq', 'external_id', 'kustom_M100_payout_PAY123'],
+        ['is', 'transaction_id', null],
+        ['is', 'journal_entry_id', null],
+      ]),
+    )
+  })
+
+  it('returns 500 when the payout could not be stored, so the user reads the file again', async () => {
+    enqueue({ data: [] })
+    payoutUpsert.mockResolvedValue({ error: { message: 'boom' } })
+    const { status, body } = await jsonOf(await POST(makeFileRequest(REPORT), emptyParams))
+    expect(status).toBe(500)
+    expect(body.error.code).toBe('KUSTOM_SETTLEMENT_IMPORT_FAILED')
   })
 
   it('holds a sale the shop feed already has, and leaves its return out, so nothing is booked twice', async () => {

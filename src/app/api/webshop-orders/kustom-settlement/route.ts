@@ -7,6 +7,8 @@ import { upsertWebshopOrders } from '@/lib/webshop-orders/ingest'
 import {
   kustomImport,
   kustomOrderNumbers,
+  kustomPayoutExternalId,
+  kustomPayoutRecord,
   parseKustomSettlementReport,
 } from '@/lib/webshop-orders/kustom-settlement'
 
@@ -25,8 +27,10 @@ const LOOKUP_CHUNK = 100
  * its sales as orders and its returns as refunds, through the same
  * upsertWebshopOrders write the Zettle, Shopify and WooCommerce feeds use.
  * Books nothing. The same file read twice changes nothing (rows are keyed by
- * Kustom's capture and refund ids). Answers with the payout as the report
- * states it, so the user can book the payout's bank row against 1686.
+ * Kustom's capture and refund ids, the payout by its reference). The payout
+ * is stored (webshop_payouts), so its bank row is proposed as one verifikat:
+ * the bank net, Kustom's fees and the clearing account gross. Answers with
+ * the payout as the report states it.
  *
  * A sale the shop's own feed (WooCommerce, Shopify) already has, by order
  * number, is held rather than imported bookable: booking both would double
@@ -71,10 +75,49 @@ export const POST = withRouteContext(
     }
 
     const { payout, rows, salesHeld, returnsHeld, returnsLeftOut } = kustomImport(outcome.file, knownElsewhere)
-    const result = await upsertWebshopOrders(createServiceClient(), companyId, user.id, rows)
+    const service = createServiceClient()
+    const result = await upsertWebshopOrders(service, companyId, user.id, rows)
     if (result.errors > 0) {
       opLog.error('kustom settlement rows not saved', { errors: result.errors, firstError: result.firstError })
       return errorResponseFromCode('KUSTOM_SETTLEMENT_IMPORT_FAILED', opLog, { requestId })
+    }
+
+    // The payout, once: a second upload of the report finds it by its key.
+    // A payout no bank row has claimed takes the report's figures again (a
+    // corrected report); a claimed or booked one keeps what it was booked by.
+    const record = kustomPayoutRecord(payout)
+    if (record) {
+      const { error: payoutError } = await service
+        .from('webshop_payouts')
+        .upsert({ ...record, company_id: companyId, user_id: user.id }, { onConflict: 'company_id,external_id', ignoreDuplicates: true })
+      const { error: refreshError } = payoutError
+        ? { error: null }
+        : await service
+            .from('webshop_payouts')
+            .update({ reference: record.reference, payout_date: record.payout_date, currency: record.currency, amount: record.amount, lines: record.lines })
+            .eq('company_id', companyId)
+            .eq('external_id', record.external_id)
+            .is('transaction_id', null)
+            .is('journal_entry_id', null)
+      if (payoutError || refreshError) {
+        opLog.error('kustom payout not saved', { error: (payoutError ?? refreshError)?.message })
+        return errorResponseFromCode('KUSTOM_SETTLEMENT_IMPORT_FAILED', opLog, { requestId })
+      }
+    } else if (payout.reference) {
+      // A corrected report whose payout reached no bank: the payout an earlier
+      // upload stored under the same reference is not proposed any more,
+      // unless a bank row already claimed or booked it.
+      const { error: withdrawError } = await service
+        .from('webshop_payouts')
+        .delete()
+        .eq('company_id', companyId)
+        .eq('external_id', kustomPayoutExternalId(payout))
+        .is('transaction_id', null)
+        .is('journal_entry_id', null)
+      if (withdrawError) {
+        opLog.error('kustom payout not withdrawn', { error: withdrawError.message })
+        return errorResponseFromCode('KUSTOM_SETTLEMENT_IMPORT_FAILED', opLog, { requestId })
+      }
     }
 
     return NextResponse.json({
@@ -89,6 +132,7 @@ export const POST = withRouteContext(
         sales_held: salesHeld,
         returns_held: returnsHeld,
         returns_left_out: returnsLeftOut,
+        payout_recorded: record !== null,
       },
     })
   },
