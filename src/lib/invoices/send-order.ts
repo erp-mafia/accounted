@@ -65,53 +65,6 @@ export function defaultChannelByOrder(
   return fallback
 }
 
-/** What reaches a customer: the answers of the three recipient checks. */
-export interface CustomerReach {
-  /** peppolRecipientIdentifiable */
-  peppol: boolean
-  /** mailboxRecipientIdentifiable: serves Kivra and Billo alike */
-  mailbox: boolean
-  /** A usable email address */
-  email: boolean
-}
-
-export interface CustomerReachCount {
-  reach: CustomerReach
-  count: number
-}
-
-function wayReaches(way: SendOrderWay, reach: CustomerReach): boolean {
-  if (way === 'peppol') return reach.peppol
-  if (way === 'email') return reach.email
-  return reach.mailbox
-}
-
-export interface OrderSplit {
-  /** Customers each way reaches first, in the given order. */
-  perWay: Record<SendOrderWay, number>
-  /** Customers no way in the order reaches. */
-  none: number
-  total: number
-}
-
-/**
- * How the customers split over the ways of an order: each customer counts
- * for the first way in the order that reaches it, or for none. The order
- * holds only the ways switched on.
- */
-export function splitCustomers(counts: readonly CustomerReachCount[], order: readonly SendOrderWay[]): OrderSplit {
-  const perWay: Record<SendOrderWay, number> = { peppol: 0, kivra: 0, billo: 0, email: 0 }
-  let none = 0
-  let total = 0
-  for (const { reach, count } of counts) {
-    total += count
-    const way = order.find((candidate) => wayReaches(candidate, reach))
-    if (way) perWay[way] += count
-    else none += count
-  }
-  return { perWay, none, total }
-}
-
 /**
  * The ways this company can use: e-faktura when it can send e-fakturor (the
  * answer the editor lists Peppol by), each mailbox when it sends through that
@@ -137,34 +90,48 @@ export interface SendOrderRow {
 }
 
 /**
+ * E-post is in every order and cannot be switched off: every customer with an
+ * address can take it, and without it the editor would fall back to email
+ * anyway. It can still be moved.
+ */
+export function isAlwaysOnWay(way: SendOrderWay): boolean {
+  return way === 'email'
+}
+
+/**
  * The rows to start from: with a saved order its ways first, in its order and
  * on, then the other available ways, off; without one every available way in
  * the recommended order, on. A saved way the company cannot use any more is
- * left out.
+ * left out, and e-post is on even where a saved order left it out.
  */
 export function initialSendOrderRows(available: readonly SendOrderWay[], saved: readonly SendOrderWay[] | null): SendOrderRow[] {
   if (!saved) return available.map((way) => ({ way, on: true }))
   const kept = saved.filter((way) => available.includes(way))
+  const alwaysOn = available.filter((way) => isAlwaysOnWay(way) && !kept.includes(way))
+  const on = [...kept, ...alwaysOn]
   return [
-    ...kept.map((way) => ({ way, on: true })),
-    ...available.filter((way) => !kept.includes(way)).map((way) => ({ way, on: false })),
+    ...on.map((way) => ({ way, on: true })),
+    ...available.filter((way) => !on.includes(way)).map((way) => ({ way, on: false })),
   ]
 }
 
-/** The row one place up; the first row stays. */
-export function moveSendOrderRowUp(rows: readonly SendOrderRow[], way: SendOrderWay): SendOrderRow[] {
+/** The row one place up (-1) or down (1); a row at the end it moves toward stays. */
+export function moveSendOrderRow(rows: readonly SendOrderRow[], way: SendOrderWay, step: -1 | 1): SendOrderRow[] {
   const index = rows.findIndex((row) => row.way === way)
-  if (index <= 0) return [...rows]
+  const target = index + step
+  if (index < 0 || target < 0 || target >= rows.length) return [...rows]
   const next = [...rows]
-  ;[next[index - 1], next[index]] = [next[index], next[index - 1]]
+  ;[next[index], next[target]] = [next[target], next[index]]
   return next
 }
 
+/** A way switched on or off; e-post stays on. */
 export function toggleSendOrderRow(rows: readonly SendOrderRow[], way: SendOrderWay): SendOrderRow[] {
+  if (isAlwaysOnWay(way)) return [...rows]
   return rows.map((row) => (row.way === way ? { ...row, on: !row.on } : row))
 }
 
-/** The order the rows stand for: the ways switched on, top to bottom. Empty when every way is off. */
+/** The order the rows stand for: the ways switched on, top to bottom. */
 export function orderOfRows(rows: readonly SendOrderRow[]): SendOrderWay[] {
   return rows.filter((row) => row.on).map((row) => row.way)
 }

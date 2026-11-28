@@ -695,7 +695,7 @@ export default async function DashboardLayout({
       isSupportAssistantEnabled(companyId) && getAiStatus().configured && !isInvoicer && !isSandbox,
     // Manual booking on the booking screen (/bokfor) instead of the dialogs.
     bookingScreen: isBookingScreenEnabled(companyId),
-    // The send-order setup block on the invoices page, for the listed users.
+    // The send order on Utskick, for the listed users (a saved order shows it to everyone).
     sendOrderSetup: isSendOrderSetupEnabled(user.id),
   }
 

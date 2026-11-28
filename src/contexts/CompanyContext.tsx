@@ -116,7 +116,7 @@ interface CompanyContextValue {
    */
   bookingScreen?: boolean
   /**
-   * Whether this user sees the send-order setup block on the invoices page,
+   * Whether this user sees the send order on Utskick without a saved order,
    * as the layout read INVOICE_SEND_ORDER_USER_IDS
    * (lib/invoices/send-order-rollout.ts). Absent reads as no.
    */
@@ -133,7 +133,7 @@ export function useBookingScreenEnabled(): boolean {
   return useContext(CompanyContext)?.bookingScreen === true
 }
 
-/** Whether the send-order setup block is switched on for this user. Off outside a CompanyProvider. */
+/** Whether the send order on Utskick is switched on for this user. Off outside a CompanyProvider. */
 export function useSendOrderSetupEnabled(): boolean {
   return useContext(CompanyContext)?.sendOrderSetup === true
 }

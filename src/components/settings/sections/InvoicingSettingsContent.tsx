@@ -8,7 +8,6 @@ import { InvoiceSettingsForm } from '@/components/settings/InvoiceSettingsForm'
 import { InvoiceTypesSettings } from '@/components/settings/InvoiceTypesSettings'
 import { InvoicePaymentLinkSettings } from '@/components/settings/InvoicePaymentLinkSettings'
 import { InvoicePaymentAccountsSettings } from '@/components/settings/InvoicePaymentAccountsSettings'
-import { SendOrderSettingsRow } from '@/components/invoices/send-order/SendOrderSettingsRow'
 import { InvoicePreviewCard } from '@/components/settings/InvoicePreviewCard'
 import { NavGateToggle } from '@/components/settings/NavGateToggle'
 import { PdfPrintSettings } from '@/components/settings/PdfPrintSettings'
@@ -93,9 +92,6 @@ export function InvoicingSettingsContent() {
       <SettingsViewerScope>
         <InvoicePaymentLinkSettings settings={settings} onUpdate={updateSettings} />
       </SettingsViewerScope>
-
-      {/* The order invoices go out in: saves itself, owner/admin only. */}
-      <SendOrderSettingsRow settings={settings} />
 
       {/* PDF settings: saves individually via toggle switches */}
       <SettingsViewerScope>

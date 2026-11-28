@@ -22529,28 +22529,17 @@
     "empty_all_closed": "Accruals are made once the fiscal year has ended. Every fiscal year already has its closing or is closed."
   },
   "invoice_send_order": {
-    "heading": "How should invoices go out?",
-    "intro": "We try them from the top down for each customer.",
-    "customers_here": "{count, plural, one {# customer is here.} other {# customers are here.}}",
-    "customers_none": "No customers here yet. This applies from your first invoice.",
+    "ways_label": "Ways",
+    "ways_help": "When you create an invoice, the first way in this order that the customer has details for is chosen: e-invoice for a company or association with an organisation number, Kivra or Billo for a customer with a personal or organisation number, otherwise email. A customer with its own way (Sent as) gets that one first. On the invoice you can always pick another way.",
     "way_peppol": "E-invoice",
     "way_email": "Email",
     "line_peppol": "Straight into the customer's system",
     "line_mailbox": "To the customer's digital mailbox",
     "line_email": "As a PDF in an email",
-    "reach_count": "{count, plural, one {# customer} other {# customers}}",
-    "move_up": "Move {way} up",
     "use_way": "Use {way}",
-    "split_label": "How the customers split over the ways in this order",
-    "without_way": "{count} without a way",
-    "apply": "Use this order",
-    "turn_one_on": "Turn on at least one way.",
-    "cancel": "Cancel",
-    "saved": "Saved. Every invoice goes out the best way the customer has.",
     "save_failed": "Could not save the order",
-    "row_label": "Sending order",
-    "row_help": "Each invoice goes out the first way in the order that the customer has. If the customer has none, the invoice goes out as usual.",
-    "recommended_order": "Recommended order",
-    "change": "Change"
+    "always": "Always",
+    "move": "Move {way}",
+    "saved_toast": "Order saved"
   }
 }

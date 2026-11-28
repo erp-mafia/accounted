@@ -28,8 +28,8 @@ export function useSendOrderWays(enabled = true): SendOrderWay[] | null {
   return ways
 }
 
-/** Saves the order through the settings write; true once it is stored. */
-export function useSaveSendOrder(): (order: SendOrderWay[]) => Promise<boolean> {
+/** Saves the order through the settings write (null clears it); true once it is stored. */
+export function useSaveSendOrder(): (order: SendOrderWay[] | null) => Promise<boolean> {
   const t = useTranslations('invoice_send_order')
   const saveSettings = useSaveSettings()
   const { updateSettings } = useCompanySettings()

@@ -7,6 +7,7 @@ import { InvoiceReminderSettingsForm } from '@/components/settings/InvoiceSettin
 import { InvoiceEmailTextsSettings } from '@/components/settings/InvoiceEmailTextsSettings'
 import { InvoiceEmailRecipientsSettings } from '@/components/settings/InvoiceEmailRecipientsSettings'
 import { InvoiceSenderDomainSettings } from '@/components/settings/InvoiceSenderDomainSettings'
+import { SendOrderSection } from '@/components/invoices/send-order/SendOrderSection'
 import { SettingsFormWrapper } from '@/components/settings/SettingsFormWrapper'
 import { SettingsLoadError } from '@/components/settings/SettingsLoadError'
 import { SettingsLoadingSkeleton } from '@/components/settings/SettingsLoadingSkeleton'
@@ -17,7 +18,7 @@ import type { ReminderOverview } from '@/lib/reminders/overview'
 import type { CompanySettings } from '@/types'
 
 /**
- * Försäljning → Utskick: who invoice mail comes from, where replies and copies
+ * Försäljning → Utskick: the ways invoices go out and their order, who invoice mail comes from, where replies and copies
  * go, what the invoice mails say, and (while reminder sending exists) when
  * reminders go out. Split out of Fakturering on 2026-09-24, which had grown to
  * ten blocks.
@@ -66,6 +67,9 @@ export function SendingSettingsContent() {
   return (
     <div>
       <SettingsSectionHeader title={tNav('sending')} intro={tIntro('sending')} />
+
+      {/* The ways and their order: saves on drop, with Ångra on the toast */}
+      <SendOrderSection settings={settings} />
 
       <InvoiceSenderDomainSettings companyName={settings.company_name ?? null} />
 
