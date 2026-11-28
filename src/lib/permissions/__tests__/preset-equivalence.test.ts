@@ -53,10 +53,13 @@ const HAND_ROLLED_GATES: Readonly<Record<string, Gate>> = {
   'POST /api/billing/payment-packs': 'owner',
   // requireWrite at the route; reset_company_for_migration refuses everyone but the owner.
   'POST /api/company/:id/migration-reset': 'owner',
-  // requireWrite at the route; the handler (or loadInviteForManagement) asks for owner or admin.
+  // requireWrite at the route; loadMemberForManagement asks for the owner, as enforce_company_member_role_transitions does.
+  'PATCH /api/company/members/:id': 'owner',
+  // requireWrite at the route; the handler (or loadMemberForManagement, loadInviteForManagement) asks for owner or admin.
   'DELETE /api/company/members/:id': 'admin',
   'POST /api/company/members/invite': 'admin',
   'POST /api/company/members/invite/:id': 'admin',
+  'PATCH /api/company/members/invite/:id': 'admin',
   'DELETE /api/company/members/invite/:id': 'admin',
   // requireWrite at the route; minting a key asks for owner or admin in the handler.
   'POST /api/settings/api-keys': 'admin',

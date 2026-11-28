@@ -6,6 +6,8 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 import { getMultiUserState } from '@/lib/entitlements/multi-user'
 import { sendCompanyInviteMail } from '@/lib/email/send-company-invite'
 import { resolveRequestAppOrigin } from '@/lib/domains/trusted-app-origin'
+import { validateBody } from '@/lib/api/validate'
+import { CompanyRoleChangeSchema } from '@/lib/company/member-roles'
 
 interface CompanyInviteRow {
   id: string
@@ -16,8 +18,8 @@ interface CompanyInviteRow {
 }
 
 /**
- * Shared gate chain for acting on an existing company invitation (revoke and
- * re-send): the caller must be owner/admin of the active company, and the
+ * Shared gate chain for acting on an existing company invitation (revoke,
+ * re-send and role change): the caller must be owner/admin of the active company, and the
  * invitation must belong to that company. Returns the invitation row or the
  * error response to bubble. The role gate runs first, so a caller without
  * the right cannot probe which invitation ids exist.
@@ -149,6 +151,63 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     })
   },
   { requireWrite: true },
+)
+
+/**
+ * PATCH /api/company/members/invite/[id]
+ * Change the role a pending invitation grants, to one of the roles the
+ * invite form offers (lib/company/member-roles.ts; never owner, which the
+ * invitation trigger enforce_company_invitation_role refuses too). Same gates
+ * as POST and DELETE. The link stays as it is: the role is read when the
+ * invitation is accepted, so nothing is mailed again and no seat is added.
+ *
+ * The write is conditional on the invitation still being pending: one
+ * accepted or revoked in the meantime answers 409, like the re-send.
+ */
+export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
+  'company_members.update_invite_role',
+  async (request, ctx, { params }) => {
+    const { companyId, user, log } = ctx
+    const { id: inviteId } = await params
+    const validation = await validateBody(request, CompanyRoleChangeSchema, {
+      log,
+      operation: 'company_members.update_invite_role',
+    })
+    if (!validation.success) return validation.response
+    const { role: newRole } = validation.data
+
+    const serviceClient = createServiceClient()
+    const loaded = await loadInviteForManagement(serviceClient, companyId, user.id, inviteId)
+    if ('response' in loaded) return loaded.response
+    const { invitation } = loaded
+
+    const inactive = () => NextResponse.json({ error: 'Inbjudan är inte längre aktiv.' }, { status: 409 })
+    if (invitation.status !== 'pending') return inactive()
+
+    const result = { data: { id: invitation.id, email: invitation.email, role: newRole, status: 'pending' } }
+    if (invitation.role === newRole) return NextResponse.json(result)
+
+    const { data: updated, error } = await serviceClient
+      .from('company_invitations')
+      .update({ role: newRole })
+      .eq('id', invitation.id)
+      .eq('company_id', companyId)
+      .eq('status', 'pending')
+      .select('id')
+
+    if (error) {
+      return NextResponse.json({ error: 'Kunde inte ändra rollen.' }, { status: 500 })
+    }
+    if (!updated || updated.length === 0) return inactive()
+
+    log.info('company invitation role changed', {
+      invitationId: invitation.id,
+      fromRole: invitation.role,
+      toRole: newRole,
+    })
+    return NextResponse.json(result)
+  },
+  { requireWrite: true, uuidParams: { id: 'NOT_FOUND' } },
 )
 
 /**

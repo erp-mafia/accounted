@@ -97,6 +97,7 @@ export const OWNER_ONLY: readonly string[] = [
   'POST /api/billing/payment-packs',
   'POST /api/company/:id/delete',
   'POST /api/company/:id/migration-reset',
+  'PATCH /api/company/members/:id',
 ]
 
 /**

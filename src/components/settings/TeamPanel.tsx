@@ -31,8 +31,9 @@ import { cn, formatDateLong } from '@/lib/utils'
 // Role dropdowns use the Radix Select for its styled popup (the native
 // <select> list cannot be styled and clashes with the panel), but the
 // TRIGGER keeps the flat quiet SettingsSelect look: borderless, dashed
-// underline on hover, no box. Shared by the member rows and the invite form.
-const ROLE_TRIGGER_CLASS =
+// underline on hover, no box. Shared by the member rows and the invite form,
+// and by the company member list (CompanyMembersSection).
+export const ROLE_TRIGGER_CLASS =
   'h-auto w-auto shrink-0 gap-1.5 rounded-none border-0 border-b border-dashed border-transparent bg-transparent px-0 py-1 text-sm ' +
   'hover:border-border focus:border-solid focus:border-foreground/50 focus:ring-0'
 
