@@ -41,7 +41,7 @@ type Rows = Record<string, Row[]>
  */
 function withEmbeds(tables: Rows): Rows {
   const entries = tables.journal_entries ?? []
-  const documents = (tables.document_attachments ?? []).map((d) => ({
+  const documents: Row[] = (tables.document_attachments ?? []).map((d) => ({
     ...d,
     entry: entries.find((e) => e.id === d.journal_entry_id) ?? null,
   }))
