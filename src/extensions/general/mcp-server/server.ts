@@ -4974,6 +4974,7 @@ async function stageInvoiceMailboxSend(request: {
     throw new OperationError(check.code, {
       ...(check.details ? { details: check.details } : {}),
       ...(check.messageSv ? { messageSv: check.messageSv } : {}),
+      ...(check.remediation ? { remediation: check.remediation } : {}),
     })
   }
 

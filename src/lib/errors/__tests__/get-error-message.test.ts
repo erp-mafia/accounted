@@ -333,6 +333,22 @@ describe('getErrorMessage: the paying account of a payment file (crm#1483)', () 
   })
 })
 
+describe('getErrorMessage: a mailbox send refused while sending is not active', () => {
+  const body = {
+    error: {
+      code: 'DIGITAL_MAILBOX_SENDING_NOT_ACTIVE',
+      message: 'Kivra nekade att Accounted skickar för företaget, eftersom företaget redan skickar via Kivra genom en annan tjänst.',
+      message_en: 'Kivra declined to let Accounted send for the company, since the company already sends through Kivra via another service.',
+      details: { state: 'rejected' },
+    },
+  }
+
+  it('shows the sentence for where sending stands, in either language', () => {
+    expect(getErrorMessage(body, { locale: 'sv', statusCode: 409 })).toBe(body.error.message)
+    expect(getErrorMessage(body, { locale: 'en', statusCode: 409 })).toBe(body.error.message_en)
+  })
+})
+
 describe('getErrorMessage: existing patterns still work', () => {
   it('regex match for "Entry date ... outside fiscal period" on plain string', () => {
     const msg = getErrorMessage('Entry date 2024-06-15 is outside fiscal period "FY 2025"')

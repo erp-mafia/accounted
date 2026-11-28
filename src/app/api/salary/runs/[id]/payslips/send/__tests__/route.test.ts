@@ -1,3 +1,4 @@
+import { sendingNotActiveRefusal } from '@/lib/digital-mailboxes/sending-not-active'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import {
@@ -515,17 +516,19 @@ describe('POST /api/salary/runs/[id]/payslips/send', () => {
       expect(response.status).toBe(400)
     })
 
-    it('refuses a mailbox channel whose sending is not active', async () => {
+    it('refuses a mailbox channel whose sending is not active, saying it waits for the provider\'s approval', async () => {
       const { supabase, enqueueMany } = createQueuedMockSupabase()
       authed(supabase)
       mockEmail({ success: true })
-      mailboxMock.payslipMailboxBlock.mockResolvedValue('DIGITAL_MAILBOX_SENDING_NOT_ACTIVE')
+      mailboxMock.payslipMailboxBlock.mockResolvedValue(sendingNotActiveRefusal('billo', { send_state: 'off', provider_meta: { sender_request: { ref: 'req-1', status: 'pending', requested_at: '2026-11-20T10:00:00Z', requested_by: 'user-1' } } }))
       enqueueMany([{ data: RUN }])
       const request = createMockRequest('/api/salary/runs/run-1/payslips/send', { method: 'POST', body: { channel: 'billo' } })
       const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
-      const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+      const { status, body } = await parseJsonResponse<{ error: { code: string; message: string; details: Record<string, unknown> } }>(response)
       expect(status).toBe(409)
       expect(body.error.code).toBe('DIGITAL_MAILBOX_SENDING_NOT_ACTIVE')
+      expect(body.error.details).toMatchObject({ channel: 'billo', state: 'pending' })
+      expect(body.error.message).toMatch(/^Utskick via Billo är påslaget men väntar på att Billo godkänner det/)
       expect(mailboxMock.deliverPayslipsToMailbox).not.toHaveBeenCalled()
     })
 
