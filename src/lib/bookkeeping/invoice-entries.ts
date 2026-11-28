@@ -2,12 +2,12 @@ import { bankBookingContext } from '@/lib/bookkeeping/bank-booking-context'
 import { isKronorCurrency } from '@/lib/bookkeeping/currency-utils'
 import { findFiscalPeriod } from './engine'
 import { coerceDimensionsBag } from './dimension-resolver'
-import { clearedSek, creditNoteIssueOre, statedSettlement } from './ledger-carried-sek'
+import { clearedSek, creditNoteIssueOre, fetchOreRoundingAccountOff, statedSettlement } from './ledger-carried-sek'
 import { fxDifferenceLine, oreRoundingLine, oreSettlementResidual } from './ore-rounding'
 import { getDisplayTotal, hasOreToRound } from './invoice-rounding'
 import { dbError } from '@/lib/errors/db-error'
 import { createLogger } from '@/lib/logger'
-import { ORE_ROUNDING_ACCOUNT, ORE_TOLERANCE, equalOre, roundOre, sumOre } from '@/lib/money'
+import { ORE_TOLERANCE, equalOre, roundOre, sumOre } from '@/lib/money'
 import { postingPort } from '@/lib/posting/port'
 import { assertAccruedIncomeLinesBookable } from './accruals/accrued-cost-guard'
 import {
@@ -216,14 +216,7 @@ async function issueOreRoundingOf(
     company = (data as Pick<CompanySettings, 'ore_rounding'> | null) ?? null
   }
   if (!getDisplayTotal(invoice, company).applies) return undefined
-  const { data: account, error: accountError } = await supabase
-    .from('chart_of_accounts')
-    .select('is_active')
-    .eq('company_id', companyId)
-    .eq('account_number', ORE_ROUNDING_ACCOUNT)
-    .maybeSingle()
-  if (accountError) throw dbError(accountError, 'öresavrundning account')
-  if (account && (account as { is_active?: boolean | null }).is_active === false) return undefined
+  if (await fetchOreRoundingAccountOff(supabase, companyId)) return undefined
   return { company }
 }
 

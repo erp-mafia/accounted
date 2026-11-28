@@ -29,8 +29,8 @@ import { ToastAction } from '@/components/ui/toast'
 import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
 import { KonteringLinesEditor } from '@/components/bookkeeping/KonteringLinesEditor'
 import { proposeSendLines } from '@/lib/bookkeeping/propose-send-lines'
-import { creditPreviewIssueOre } from '@/lib/bookkeeping/ledger-carried-sek'
-import { getAmountToPay } from '@/lib/bookkeeping/invoice-rounding'
+import { creditPreviewIssueOre, fetchOreRoundingAccountOff } from '@/lib/bookkeeping/ledger-carried-sek'
+import { getAmountToPay, hasOreToRound } from '@/lib/bookkeeping/invoice-rounding'
 import { voucherLineViews } from '@/lib/bookkeeping/voucher-line-view'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { lineBalance, storedLineAmount } from '@/lib/bookkeeping/line-balance'
@@ -179,6 +179,9 @@ export default function SendInvoiceDialog({
   // A full kreditfaktura mirrors the öresavrundning its original's issue
   // booked (creditNoteIssueOre), as createCreditNoteJournalEntry books it.
   const [creditIssueOre, setCreditIssueOre] = useState(0)
+  // 3740 switched off in the kontoplan: the issue books the exact total
+  // (oreRoundingAccountOff), so the preview shows no rounding row.
+  const [oreAccountOff, setOreAccountOff] = useState(false)
   const [catalog, setCatalog] = useState<CatalogAccount[]>([])
   const [editLines, setEditLines] = useState<FormLine[]>([])
   const [hasEdited, setHasEdited] = useState(false)
@@ -312,9 +315,15 @@ export default function SendInvoiceDialog({
                 companySettings ?? null,
               )
             : 0
+        // 3740 switched off: the issue books the exact total.
+        const accountOff =
+          !invoice.credited_invoice_id && bookOnIssue && hasOreToRound(invoice)
+            ? await fetchOreRoundingAccountOff(supabase, company.id).catch(() => false) // Preview only: the issue reads it again when it books and refuses on a failed read.
+            : false
         if (cancelled) return
         setDeductionBookedSek(bookedShare)
         setCreditIssueOre(issueOre)
+        setOreAccountOff(accountOff)
 
         // Line editing needs the BAS catalogue; only the accrual
         // book-at-issue path renders the editor, so skip the load elsewhere.
@@ -351,13 +360,13 @@ export default function SendInvoiceDialog({
     // The whole row: the server books from all of it (item accounts and
     // dimensions, delivery_country), so the preview must read the same. The
     // öresavrundning as the issue books it: an invoice by its own choice,
-    // else the company setting; a kreditfaktura only when its original's
-    // issue booked it.
+    // else the company setting, and none when 3740 is switched off; a
+    // kreditfaktura only when its original's issue booked it.
     const oreRounding = isCreditNote
       ? creditIssueOre !== 0 ? { mirror: creditIssueOre } : undefined
-      : { company: companySettings ?? null }
+      : oreAccountOff ? undefined : { company: companySettings ?? null }
     return proposeSendLines({ invoice, entityType, deductionBookedSek, oreRounding })
-  }, [isInitialized, shouldBookOnIssue, entityType, invoice, deductionBookedSek, isCreditNote, creditIssueOre, companySettings])
+  }, [isInitialized, shouldBookOnIssue, entityType, invoice, deductionBookedSek, isCreditNote, creditIssueOre, oreAccountOff, companySettings])
 
   const additionalCc = useMemo(
     () => parseInvoiceRecipientText(additionalCcText),

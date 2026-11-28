@@ -266,9 +266,11 @@ describe('invoice_issue_receivable_sek', () => {
     })
     // The storno marks the original reversed; its rättelse names it.
     await reverse(original)
+    // The live correction carries 1513 too: the answer stays 1 000.
     await correctionOf(c, original, 0, '1510', [
       { accountNumber: '1510', debitAmount: 1000, creditAmount: 0 },
-      { accountNumber: '3001', debitAmount: 0, creditAmount: 799.8 },
+      { accountNumber: '1513', debitAmount: 50, creditAmount: 0 },
+      { accountNumber: '3001', debitAmount: 0, creditAmount: 849.8 },
       { accountNumber: '2611', debitAmount: 0, creditAmount: 199.95 },
       { accountNumber: '3740', debitAmount: 0, creditAmount: 0.25 },
     ])

@@ -28,7 +28,7 @@ import { bookedOreRounding } from '@/lib/bookkeeping/ore-rounding'
 import { hasOreToRound } from '@/lib/bookkeeping/invoice-rounding'
 import { issueOreRoundingDelta } from '@/lib/bookkeeping/invoice-lines'
 import { dbError } from '@/lib/errors/db-error'
-import { ORE_TOLERANCE, equalOre, roundOre } from '@/lib/money'
+import { ORE_ROUNDING_ACCOUNT, ORE_TOLERANCE, equalOre, roundOre } from '@/lib/money'
 import { chunk } from '@/lib/utils'
 
 /** Which ledger carries the document: 1510 or 244x. */
@@ -314,17 +314,43 @@ export async function creditNoteIssueOre(
 }
 
 /**
+ * The company has switched 3740 off in its kontoplan: an issue then books the
+ * exact total (the engine refuses an inactive account, and the invoice must
+ * still issue). A 3740 not yet in the kontoplan is not off: the engine seeds
+ * it (standard BAS). The one rule the issue door and the previews read, from
+ * the account row (`is_active`).
+ */
+export function oreRoundingAccountOff(account: { is_active?: boolean | null } | null | undefined): boolean {
+  return account?.is_active === false
+}
+
+/** oreRoundingAccountOff, read from the company's kontoplan. Throws on a read error. */
+export async function fetchOreRoundingAccountOff(
+  supabase: Pick<SupabaseClient, 'from'>,
+  companyId: string,
+): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('chart_of_accounts')
+    .select('is_active')
+    .eq('company_id', companyId)
+    .eq('account_number', ORE_ROUNDING_ACCOUNT)
+    .maybeSingle()
+  if (error) throw dbError(error, 'öresavrundning account')
+  return oreRoundingAccountOff(data as { is_active?: boolean | null } | null)
+}
+
+/**
  * creditNoteIssueOre for a preview of a credit of `original` whose total is
  * `creditTotal` (negative). When the credit books the original first (a
  * deferred original never booked, creditBooksOriginalFirst), the original's
  * verifikat does not exist yet: it will round as its own issue does
  * (issueOreRoundingDelta with the invoice's choice, else the company
- * setting), and a full credit mirrors that. Otherwise the ledger answers. A
- * failed read previews no rounding row; the credit decides again when it
- * books.
+ * setting, and none when 3740 is switched off: oreRoundingAccountOff), and a
+ * full credit mirrors that. Otherwise the ledger answers. A failed read
+ * previews no rounding row; the credit decides again when it books.
  */
 export async function creditPreviewIssueOre(
-  supabase: Pick<SupabaseClient, 'rpc'>,
+  supabase: Pick<SupabaseClient, 'rpc' | 'from'>,
   companyId: string,
   original: {
     id: string
@@ -341,7 +367,15 @@ export async function creditPreviewIssueOre(
   if (booksOriginalFirst) {
     if (!equalOre(-creditTotal, original.total)) return 0
     const exact = roundOre(original.total - Math.max(0, Number(original.deduction_total) || 0))
-    return issueOreRoundingDelta(original, exact, { company })
+    const ore = issueOreRoundingDelta(original, exact, { company })
+    if (ore === 0) return 0
+    try {
+      return (await fetchOreRoundingAccountOff(supabase, companyId)) ? 0 : ore
+    } catch {
+      // A preview only: the original's issue reads the account again when it
+      // books, and refuses on a failed read there.
+      return 0
+    }
   }
   try {
     return await creditNoteIssueOre(supabase, companyId, {

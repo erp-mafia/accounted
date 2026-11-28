@@ -22,6 +22,7 @@ vi.mock('../engine', () => ({
 const { createJournalEntry } = await import('../engine')
 const mockedCreateEntry = vi.mocked(createJournalEntry)
 const { createInvoiceJournalEntry, createCreditNoteJournalEntry } = await import('../invoice-entries')
+const { creditPreviewIssueOre, oreRoundingAccountOff } = await import('../ledger-carried-sek')
 
 function item(overrides: Partial<InvoiceItem> = {}): InvoiceItem {
   return {
@@ -319,5 +320,43 @@ describe('createCreditNoteJournalEntry: the credit mirrors what its original\'s 
       'aktiebolag',
     )
     expect(reads).toEqual([])
+  })
+})
+
+describe('creditPreviewIssueOre: a credit that books its deferred original first previews what that issue books', () => {
+  const original = { id: 'inv-1', currency: 'SEK', total: 999.75, ore_rounding: true }
+  const preview = (opts: Parameters<typeof client>[0], doc = original) => {
+    const { supabase, reads } = client(opts)
+    return { ore: creditPreviewIssueOre(supabase, 'company-1', doc, -999.75, true, null), reads }
+  }
+
+  it('3740 active or not yet in the kontoplan: the full credit mirrors 0,25', async () => {
+    expect(await preview({ account3740Active: true }).ore).toBe(0.25)
+    expect(await preview({}).ore).toBe(0.25)
+  })
+
+  it('3740 switched off: the original issues at the exact total, so the credit previews no rounding row', async () => {
+    const { ore, reads } = preview({ account3740Active: false })
+    expect(await ore).toBe(0)
+    expect(reads).toEqual(['chart_of_accounts'])
+  })
+
+  it('a failed account read previews no rounding row', async () => {
+    expect(await preview({ settingsError: true }).ore).toBe(0)
+  })
+
+  it('no rounding to preview costs no account read', async () => {
+    const { ore, reads } = preview({ account3740Active: false }, { ...original, ore_rounding: false })
+    expect(await ore).toBe(0)
+    expect(reads).toEqual([])
+  })
+})
+
+describe('oreRoundingAccountOff', () => {
+  it('only an inactive 3740 row is off: a missing one is seeded by the engine', () => {
+    expect(oreRoundingAccountOff({ is_active: false })).toBe(true)
+    expect(oreRoundingAccountOff({ is_active: true })).toBe(false)
+    expect(oreRoundingAccountOff(null)).toBe(false)
+    expect(oreRoundingAccountOff(undefined)).toBe(false)
   })
 })
