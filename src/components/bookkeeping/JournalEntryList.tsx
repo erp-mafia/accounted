@@ -2,6 +2,7 @@
 
 import { Fragment, useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
+import dynamic from 'next/dynamic'
 import { useTranslations } from 'next-intl'
 import {
   DataList,
@@ -103,6 +104,10 @@ import { NEEDS_DOC_SOURCE_TYPES } from '@/lib/worklist/types'
 import { collectPages } from '@/lib/lists/collect-pages'
 import type { JournalEntry, JournalEntryLine, UserUiState } from '@/types'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+
+// The underlag picker: mounted when "Koppla underlag" is first used, so its
+// code loads then and not with the list.
+const InboxDocumentPicker = dynamic(() => import('@/components/bookkeeping/InboxDocumentPicker'))
 
 // Shared source of truth (lib/worklist/types.ts) so the per-row chip and
 // waiver UI can never drift from the worklist count and the SQL predicate
@@ -291,6 +296,13 @@ export default function JournalEntryList({
   const shiftHeld = useRef(false)
   const [batchReason, setBatchReason] = useState('')
   const [batchSubmitting, setBatchSubmitting] = useState(false)
+  // "Koppla underlag" in the bulk bar: one underlag onto every selected
+  // verifikat (a monthly invoice behind several fees), fixed at the moment
+  // the picker opened so a refetch cannot change what is linked.
+  const [sweepIds, setSweepIds] = useState<string[]>([])
+  const [sweepOpen, setSweepOpen] = useState(false)
+  // Bumped after a sweep: an expanded row's underlag list reads itself again.
+  const [sweepRound, setSweepRound] = useState(0)
   const [bulkOpen, setBulkOpen] = useState(false)
   const [bulkCount, setBulkCount] = useState<number | null>(null)
   const [bulkReason, setBulkReason] = useState('')
@@ -938,6 +950,23 @@ export default function JournalEntryList({
     } finally {
       setBatchSubmitting(false)
     }
+  }
+
+  // The verifikat that got the swept underlag now hold one: they leave the
+  // missing set (and the selection, which only keeps eligible rows), and with
+  // the saknade-underlag filter on they leave the list too.
+  const handleSweepLinked = (linkedIds: string[]) => {
+    // At once on screen: each of them had no underlag and now holds one. The
+    // refetch below then reads the counts from the server, and its generation
+    // guard drops any count read that started before the sweep.
+    setAttachmentCounts((prev) => {
+      const next = { ...prev }
+      for (const id of linkedIds) next[id] = Math.max(next[id] ?? 0, 1)
+      return next
+    })
+    selection.deselect(linkedIds)
+    setSweepRound((round) => round + 1)
+    void fetchEntries({ preserveSelection: true })
   }
 
   // Filter-scoped bulk mark: mark EVERY missing-doc verifikat matching the active
@@ -1592,6 +1621,19 @@ export default function JournalEntryList({
           clearLabel={t('batch_clear_selection')}
           busy={batchSubmitting}
         >
+          {/* One underlag for every selected verifikat (a monthly invoice or a
+              bank statement behind several fees), in list order: the first
+              takes the document, the rest a byte-identical copy each. */}
+          <Button
+            variant="outline"
+            onClick={() => {
+              setSweepIds(filteredEntries.filter((e) => selectedIds.has(e.id)).map((e) => e.id))
+              setSweepOpen(true)
+            }}
+            disabled={batchSubmitting}
+          >
+            {t('batch_link_document')}
+          </Button>
           <Input
             value={batchReason}
             onChange={(e) => setBatchReason(e.target.value)}
@@ -1954,6 +1996,7 @@ export default function JournalEntryList({
                               <JournalEntryTransactionLinks journalEntryId={entry.id} />
 
                               <JournalEntryAttachments
+                                key={`${entry.id}:${sweepRound}`}
                                 journalEntryId={entry.id}
                                 onCountChange={(c) => handleAttachmentCountChange(entry.id, c)}
                               />
@@ -2061,6 +2104,15 @@ export default function JournalEntryList({
           </table>
         </div>
       </div>
+      )}
+
+      {sweepIds.length > 0 && (
+        <InboxDocumentPicker
+          open={sweepOpen}
+          onClose={() => setSweepOpen(false)}
+          journalEntryIds={sweepIds}
+          onLinked={handleSweepLinked}
+        />
       )}
 
       {/* Filter-scoped bulk "Inget underlag krävs" confirmation */}

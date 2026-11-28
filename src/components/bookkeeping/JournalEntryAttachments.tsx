@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
+import dynamic from 'next/dynamic'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton, LateReveal } from '@/components/ui/skeleton'
@@ -37,10 +38,13 @@ import {
 } from '@/components/icons'
 import DocumentUploadZone from '@/components/bookkeeping/DocumentUploadZone'
 import type { UploadedFile } from '@/components/bookkeeping/DocumentUploadZone'
-import InboxDocumentPicker from '@/components/bookkeeping/InboxDocumentPicker'
 import { useViewerLock } from '@/components/ui/viewer-lock'
 import { useBranding } from '@/lib/branding/brand-context'
 import { DOCUMENT_UPLOAD_ACCEPT } from '@/lib/documents/upload-types'
+
+// "Välj från inkorgen": mounted when it is first used, so the picker's code
+// loads then and not with every page that lists verifikat.
+const InboxDocumentPicker = dynamic(() => import('@/components/bookkeeping/InboxDocumentPicker'))
 
 interface DocumentRecord {
   id: string
@@ -92,6 +96,7 @@ export default function JournalEntryAttachments({
   const [expandedDoc, setExpandedDoc] = useState<string | null>(null)
   const [showUpload, setShowUpload] = useState(false)
   const [showInboxPicker, setShowInboxPicker] = useState(false)
+  const [inboxPickerUsed, setInboxPickerUsed] = useState(false)
   const [uploadFiles, setUploadFiles] = useState<UploadedFile[]>([])
 
   // Docs listed here are filtered by journal_entry_id, so every row is bound
@@ -110,6 +115,15 @@ export default function JournalEntryAttachments({
 
   const onCountChangeRef = useRef(onCountChange)
   onCountChangeRef.current = onCountChange
+  // An instance the parent replaced (a list row remounted after a sweep) may
+  // still finish a read: its count is stale and must not reach the parent.
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
 
   const fetchDocuments = useCallback(async () => {
     try {
@@ -154,6 +168,7 @@ export default function JournalEntryAttachments({
       }
 
       const allDocuments = [...direct, ...referenced]
+      if (!mountedRef.current) return
       setDocuments(allDocuments)
       onCountChangeRef.current?.(allDocuments.length)
       setLoadFailed(false)
@@ -317,7 +332,10 @@ export default function JournalEntryAttachments({
         <div className="flex items-center gap-2">
           <Button
             variant="outline"
-            onClick={() => setShowInboxPicker(true)}
+            onClick={() => {
+              setInboxPickerUsed(true)
+              setShowInboxPicker(true)
+            }}
             disabled={!canWrite}
             title={lockedTitle}
           >
@@ -538,12 +556,14 @@ export default function JournalEntryAttachments({
         </DialogContent>
       </Dialog>
 
-      <InboxDocumentPicker
-        open={showInboxPicker}
-        onClose={() => setShowInboxPicker(false)}
-        journalEntryId={journalEntryId}
-        onLinked={fetchDocuments}
-      />
+      {inboxPickerUsed && (
+        <InboxDocumentPicker
+          open={showInboxPicker}
+          onClose={() => setShowInboxPicker(false)}
+          journalEntryId={journalEntryId}
+          onLinked={fetchDocuments}
+        />
+      )}
     </div>
   )
 }
