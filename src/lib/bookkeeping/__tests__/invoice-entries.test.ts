@@ -63,6 +63,9 @@ function makeInvoice(overrides: Partial<Invoice> & { items?: InvoiceItem[] }): I
     document_type: 'invoice',
     created_at: '2024-06-15T00:00:00Z',
     updated_at: '2024-06-15T00:00:00Z',
+    // These cases pin the exact-total registration; the öresavrundning an
+    // issue books is issue-ore-rounding-door.test.ts's.
+    ore_rounding: false,
     items: [],
     ...overrides,
   } as Invoice

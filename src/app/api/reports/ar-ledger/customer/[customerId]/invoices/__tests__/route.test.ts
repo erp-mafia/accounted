@@ -377,3 +377,47 @@ describe('GET /api/reports/ar-ledger/customer/[customerId]/invoices: a credited 
     expect(await linesFor([original(1000), note(-400)])).toEqual([['orig', 600]])
   })
 })
+
+describe('GET /api/reports/ar-ledger/customer/[customerId]/invoices: the öresavrundning the issue verifikat booked', () => {
+  const row = { currency: 'SEK', exchange_rate: null, notes: null, deduction_total: 0 }
+  // 999,75 issued as 1 000 (Dr 1510 1 000, Cr 3740 0,25), and an old one at the exact total.
+  const issued = (id: string, receivable: number) => [
+    { id: `je-${id}-1510`, journal_entry_id: `je-${id}`, account_number: '1510', debit_amount: receivable, credit_amount: 0 },
+  ]
+  const books = (paid: number): ReskontraTables => ({
+    invoices: [
+      { ...row, id: 'new', invoice_number: 'F-1', invoice_date: '2026-11-01', due_date: '2026-12-01', total: 999.75, paid_amount: paid, status: paid ? 'partially_paid' : 'sent', journal_entry_id: 'je-new' },
+      { ...row, id: 'old', invoice_number: 'F-2', invoice_date: '2026-11-02', due_date: '2026-12-02', total: 999.75, paid_amount: 0, journal_entry_id: 'je-old' },
+    ],
+    journal_entries: [
+      { id: 'je-new', status: 'posted' },
+      { id: 'je-old', status: 'posted' },
+    ],
+    journal_entry_lines: [...issued('new', 1000), ...issued('old', 999.75)],
+  })
+
+  async function linesFor(tables: ReskontraTables) {
+    authWith(buildSupabase({ id: 'cust-1', name: 'Kunden AB' }, tables))
+    const res = await GET(createMockRequest('/api/reports/ar-ledger/customer/cust-1/invoices'), createMockRouteParams({ customerId: 'cust-1' }))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { data: { lines: Array<{ invoice_id: string; outstanding: number; paid_amount: number }> } }
+    return Object.fromEntries(body.data.lines.map((line) => [line.invoice_id, line]))
+  }
+
+  it('an open rounded invoice owes what 1510 carries, an old one its exact total, like the aggregate', async () => {
+    const lines = await linesFor(books(0))
+    expect(lines.new).toMatchObject({ outstanding: 1000, paid_amount: 0 })
+    expect(lines.old).toMatchObject({ outstanding: 999.75, paid_amount: 0 })
+  })
+
+  it('after a part payment of 500 the rest is what 1510 carries, and paid reads what was paid', async () => {
+    const lines = await linesFor(books(500))
+    expect(lines.new).toMatchObject({ outstanding: 500, paid_amount: 500 })
+  })
+
+  it('answers with an error when the öre cannot be read', async () => {
+    authWith(buildSupabase({ id: 'cust-1', name: 'Kunden AB' }, books(0), { invoice_issue_receivable_sek: { message: 'timeout' } }))
+    const res = await GET(createMockRequest('/api/reports/ar-ledger/customer/cust-1/invoices'), createMockRouteParams({ customerId: 'cust-1' }))
+    expect(res.status).toBe(500)
+  })
+})

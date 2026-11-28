@@ -291,4 +291,53 @@ describe('proposeCreditNoteSendLines', () => {
     const unnumbered = { ...original(), invoice_number: null, external_invoice_number: null }
     expect(proposeCreditNoteSendLines(unnumbered, { entityType: 'aktiebolag', today: '2026-10-05' })).toEqual([])
   })
+
+  // 999,75 issued as 1 000: the credit mirrors the öresavrundning its original's issue booked.
+  const rounded = () => {
+    const o = original()
+    return {
+      ...o,
+      subtotal: 799.8,
+      vat_amount: 199.95,
+      total: 999.75,
+      ore_rounding: true,
+      items: [{ ...o.items[0], unit_price: 799.8, line_total: 799.8, vat_amount: 199.95 }],
+    }
+  }
+
+  it('shows the 3740 row when the original booked its öresavrundning: Cr 1510 1 000, Dr 3740 0,25', () => {
+    const lines = proposeCreditNoteSendLines(rounded(), { entityType: 'aktiebolag', today: '2026-10-05', issueOre: 0.25 })
+    const byAccount = Object.fromEntries(lines.map((l) => [l.account_number, l]))
+    expect(byAccount['1510'].credit_amount).toBe('1000')
+    expect(byAccount['3740'].debit_amount).toBe('0.25')
+    expect(byAccount['2611'].debit_amount).toBe('199.95')
+  })
+
+  it('an original booked at the exact total: no 3740 row', () => {
+    const lines = proposeCreditNoteSendLines(rounded(), { entityType: 'aktiebolag', today: '2026-10-05' })
+    expect(lines.find((l) => l.account_number === '1510')?.credit_amount).toBe('999.75')
+    expect(lines.some((l) => l.account_number === '3740')).toBe(false)
+  })
+})
+
+describe('proposeDraftSendLines: the öresavrundning the send books', () => {
+  const ore = (overrides: Partial<DraftVoucherInput> = {}) =>
+    input({ items: [{ line_type: 'product', quantity: 1, unit_price: 799.8, vat_rate: 25 }], ...overrides })
+
+  it('the form\'s rounding on: Dr 1510 1 000, Cr 3740 0,25', () => {
+    expect(amounts(proposeDraftSendLines(ore({ oreRounding: true })))).toEqual([
+      ['1510', '1000', ''],
+      ['3001', '', '799.8'],
+      ['2611', '', '199.95'],
+      ['3740', '', '0.25'],
+    ])
+  })
+
+  it('the form\'s rounding off: the exact total', () => {
+    expect(amounts(proposeDraftSendLines(ore({ oreRounding: false })))).toEqual([
+      ['1510', '999.75', ''],
+      ['3001', '', '799.8'],
+      ['2611', '', '199.95'],
+    ])
+  })
 })

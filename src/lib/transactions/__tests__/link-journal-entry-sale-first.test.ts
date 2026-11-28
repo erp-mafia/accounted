@@ -289,6 +289,44 @@ describe('linkTransactionToJournalEntry: sale first (defer_invoice_booking)', ()
     expect(findCalls('journal_entry_lines', 'select')).toHaveLength(1)
   })
 
+  // 999,75 with öresavrundning: the sale books 1 000 on 1510 and 0,25 on
+  // 3740, so a bank row of 1 000 linked to a verifikat clearing 1 000 pays the
+  // whole invoice. Planned before the sale exists, the row is judged against
+  // what the sale will put on 1510 (receivableSek).
+  const ROUNDED = { ...INVOICE, total: 999.75, remaining_amount: 999.75, journal_entry_id: null }
+  const ROUNDED_PLAN = { ...REQUIRED_PLAN, receivableSek: 1000 }
+
+  it('a sale that books the öre first: the 1 000 row settles the 999,75 invoice in full', async () => {
+    const { supabase, enqueue } = setup(CLEARING_LINES, ROUNDED)
+    enqueue({ data: [], error: null }) // payment rows on the verifikat (capacity)
+    mockPlanById.mockResolvedValue(ROUNDED_PLAN)
+
+    const outcome = await linkTransactionToJournalEntry(
+      supabase as never,
+      'user-1',
+      'company-1',
+      { transactionId: TX_ID, journalEntryId: JE_ID, invoiceId: INV_ID },
+      { dryRun: true },
+    )
+
+    expect(outcome).toMatchObject({ ok: true, result: { invoiceStatus: 'paid', paidAmount: 999.75, remainingAmount: 0 } })
+  })
+
+  it('a sale that books the exact total first: the 1 000 row is more than the invoice owes', async () => {
+    const { supabase } = setup(CLEARING_LINES, ROUNDED)
+    mockPlanById.mockResolvedValue({ ...ROUNDED_PLAN, receivableSek: 999.75 })
+
+    const outcome = await linkTransactionToJournalEntry(supabase as never, 'user-1', 'company-1', {
+      transactionId: TX_ID,
+      journalEntryId: JE_ID,
+      invoiceId: INV_ID,
+    })
+
+    expect(outcome).toMatchObject({ ok: false, code: 'MATCH_AMOUNT_EXCEEDS_REMAINING' })
+    expect(mockBookSale).not.toHaveBeenCalled()
+    expect(mockWrite).not.toHaveBeenCalled()
+  })
+
   it('a link without invoice_id plans nothing', async () => {
     const mock = createQueuedMockSupabase()
 

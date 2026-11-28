@@ -1273,7 +1273,12 @@ function scaleCarryLines(
  * deferAccruals off (no accrual schedule exists under kontantmetoden, so a
  * 29xx / 17xx balance would never dissolve). For ROT/RUT that includes the
  * 1513 leg: the full revenue and moms belong to the closed year, the
- * customer's share sits on 1510 and Skatteverket's on 1513.
+ * customer's share sits on 1510 and Skatteverket's on 1513. An invoice with
+ * öresavrundning is carried at its exact total, with no 3740 line (no
+ * oreRounding option): the year-2 doors clear what the carry put on 1510 and
+ * book the öre at the payment, and the paid-after rättelse
+ * (buildPaidBeforePostingCorrectionLines) clears exactly the carried figure
+ * and keeps the payment's 3740 row.
  *
  * When part of it was settled on period end (a legacy partial payment, or an
  * undated settlement the reskontra assumes), the same lines are scaled to the

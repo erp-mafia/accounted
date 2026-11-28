@@ -16,6 +16,8 @@ import {
 } from '@/lib/bookkeeping/skatteverket-share'
 import { creditNoteCreditUsed, outstandingWithCreditUsed } from './credit-note-settlement'
 import { fetchArLedgerInvoices, type ArLedgerInvoice } from './ar-ledger-invoices'
+import { fetchReskontraIssueOre, reskontraShownTotal, withIssueOre } from './reskontra-issue-ore'
+import type { IssueBookedFacts } from '@/lib/bookkeeping/ledger-carried-sek'
 import { fetchCreditedInvoiceIds, netCreditedPairs } from './credited-pairs'
 import { daysPastDue, todayIsoStockholm } from '@/lib/dates/iso'
 
@@ -146,9 +148,19 @@ export async function generateARLedger(
   }
 
   const payments = isHistorical ? paymentsAsOfFromFacts(invoices) : null
+  // The öresavrundning each invoice's issue verifikat put on 151x
+  // (reskontra-issue-ore.ts). A failed read leaves the figures as the
+  // invoices state them, off from 1510 by those öre only; `strict` throws.
+  let issueOre: Map<string, IssueBookedFacts>
+  try {
+    issueOre = await fetchReskontraIssueOre(supabase, companyId, invoices)
+  } catch (err) {
+    if (options?.strict) throw err
+    issueOre = new Map()
+  }
   // A credit note whose verifikat paid another invoice has used that much
   // of its credit (credit-note-settlement.ts).
-  const creditUsed = creditNoteCreditUsed(invoices, isHistorical ? asOfDate : undefined)
+  const creditUsed = creditNoteCreditUsed(invoices, isHistorical ? asOfDate : undefined, issueOre)
   // What Skatteverket has paid out of each ROT/RUT deduction, which no
   // longer sits on 1513 (skatteverket-share.ts).
   const settled = skatteverketSettledByInvoice(invoices, isHistorical ? asOfDate : undefined)
@@ -161,10 +173,12 @@ export async function generateARLedger(
   for (const inv of invoices) {
     const total = Number(inv.total) || 0
     const liveOutstanding = roundOre(total - (Number(inv.paid_amount) || 0))
+    const outstanding = payments ? outstandingAsOf(inv, total, liveOutstanding, payments, asOfDate!) : liveOutstanding
+    const receivable = payments
+      ? outstandingLessPayouts(outstanding, settled.get(inv.id))
+      : liveReceivableOutstanding(inv, liveOutstanding, settled.get(inv.id))
     ownOutstanding.set(inv.id, outstandingWithCreditUsed(
-      payments
-        ? outstandingLessPayouts(outstandingAsOf(inv, total, liveOutstanding, payments, asOfDate!), settled.get(inv.id))
-        : liveReceivableOutstanding(inv, liveOutstanding, settled.get(inv.id)),
+      withIssueOre(receivable, outstanding, inv, issueOre.get(inv.id)?.ore),
       creditUsed.get(inv.id)
     ))
   }
@@ -202,7 +216,8 @@ export async function generateARLedger(
 
     const entry = byCustomer.get(customerId)!
     const daysOverdue = daysPastDue(inv.due_date, asOf)
-    const total = Number(inv.total) || 0
+    // What the issue verifikat booked, so Betalt stays what was paid.
+    const total = reskontraShownTotal(inv, issueOre.get(inv.id)?.ore)
     const outstanding = paired.outstanding.get(inv.id) ?? 0
     const paidAmount = roundOre(total - outstanding)
 

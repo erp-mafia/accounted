@@ -136,6 +136,14 @@ export async function buildSimCompany(plan: SimPlan, key: AnswerKey, options: Bu
   setSimDay(SIM_COMPANY.firstDay)
   await ensurePayrollYears(supabase)
   const companyId = await createCompany(supabase, userId)
+  // The simulated customers pay the exact total (sale_payment below, the
+  // answer key's gross), so the company invoices without öresavrundning: the
+  // invoices ask for that total and 1510 carries it from issue to payment.
+  const { error: roundingError } = await supabase
+    .from('company_settings')
+    .update({ ore_rounding: false })
+    .eq('company_id', companyId)
+  if (roundingError) throw new Error(`could not turn öresavrundning off: ${roundingError.message}`)
   const doors = new SimDoors(supabase, companyId, userId)
   const log = createLogger('sim')
 
@@ -203,12 +211,23 @@ export async function buildSimCompany(plan: SimPlan, key: AnswerKey, options: Bu
     const committed = await doors.approve('gnubok_create_transactions', stagedRows.operations[0].operation_id)
     return committed.transaction_id
   }
-  const voucher = (date: string, description: string, lines: Array<Record<string, unknown>>) =>
-    doors.write('gnubok_create_voucher', { entry_date: date, description, lines })
+  const voucher = (date: string, description: string, lines: Array<Record<string, unknown>>, acknowledged?: string[]) =>
+    doors.write('gnubok_create_voucher', {
+      entry_date: date,
+      description,
+      lines,
+      ...(acknowledged ? { acknowledged_warnings: acknowledged } : {}),
+    })
   /** Every krona on 1930 has its bank row, so the bank and the ledger can be compared to the öre. */
-  const bankVoucher = async (date: string, description: string, amount: number, otherLines: Array<Record<string, unknown>>) => {
+  const bankVoucher = async (
+    date: string,
+    description: string,
+    amount: number,
+    otherLines: Array<Record<string, unknown>>,
+    acknowledged?: string[],
+  ) => {
     const bankLine = amount > 0 ? { debit_amount: amount } : { credit_amount: -amount }
-    const posted = await voucher(date, description, [...otherLines, { account_number: '1930', ...bankLine }])
+    const posted = await voucher(date, description, [...otherLines, { account_number: '1930', ...bankLine }], acknowledged)
     await linkBankRow(date, amount, description, posted.journal_entry_id)
     return posted
   }
@@ -307,9 +326,16 @@ export async function buildSimCompany(plan: SimPlan, key: AnswerKey, options: Bu
       }
       case 'purchase_payment': {
         const invoice = supplierInvoices.get(event.purchaseId)!
-        const posted = await bankVoucher(event.date, `Betalning leverantörsfaktura ${event.purchaseId}`, -invoice.gross, [
-          { account_number: '2440', debit_amount: invoice.gross },
-        ])
+        // The voucher settles the open supplier invoice by hand and is linked
+        // to it right after: the person confirms the warning a typed
+        // verifikat that settles an open invoice asks about (#4064).
+        const posted = await bankVoucher(
+          event.date,
+          `Betalning leverantörsfaktura ${event.purchaseId}`,
+          -invoice.gross,
+          [{ account_number: '2440', debit_amount: invoice.gross }],
+          ['OPEN_INVOICE_COVERS_POSTING'],
+        )
         await doors.write('gnubok_link_supplier_invoice_to_voucher', {
           supplier_invoice_id: invoice.id,
           journal_entry_id: posted.journal_entry_id,

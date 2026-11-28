@@ -36,6 +36,7 @@ import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { emitInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
 import { equalOre, roundOre, sumOre } from '@/lib/money'
 import { carriedSekOf } from '@/lib/bookkeeping/ledger-carried-sek'
+import { bookedOreRounding } from '@/lib/bookkeeping/ore-rounding'
 import { isKronorCurrency } from '@/lib/bookkeeping/currency-utils'
 import { storedRemaining, voucherCapacity } from '@/lib/invoices/voucher-matching-shared'
 import { recordInvoicePaymentRow } from '@/lib/invoices/invoice-payment-row'
@@ -268,6 +269,8 @@ export async function linkTransactionToJournalEntry(
     | 'journal_entry_id'
   > & { customer?: { name?: string } | null }
   let invoice: FetchedInvoice | null = null
+  const saleCtx = { supabase, companyId, userId, log }
+  let salePlan: SaleFirstPlan = SALE_FIRST_NOT_REQUIRED
   let newPaidAmount = 0
   let newRemaining = 0
   let isFullyPaid = false
@@ -363,28 +366,11 @@ export async function linkTransactionToJournalEntry(
       }
     }
 
-    // A SEK invoice whose own verifikat booked the öresavrundning (1510 at the
-    // rounded "Att betala", the öre on 3740) is settled in full when the row
-    // and the verifikat both clear exactly what 151x carries for it: the rule
-    // of the voucher link (validateVoucherForInvoiceLink) and the other
-    // settlement doors (bookedOreRounding over carriedSekOf). Otherwise the
-    // one payment plan, strict: no öre absorption, and a bank row larger than
-    // the invoice's remainder is refused before anything is written.
-    const settlesCarried =
-      side.side === 'ar_credit' &&
-      (await clearsBookedOre(supabase, companyId, invoice, journalEntryId, transaction.amount, sideLines))
-    const payment = planInvoicePayment(invoice, settlesCarried ? storedRemaining(invoice) : transaction.amount)
-    if (!payment.ok) return { ok: false, code: payment.code, details: payment.details }
-    ;({ newPaidAmount, newRemaining, isFullyPaid, newStatus } = payment.plan)
-  }
-
-  // Faktureringsmetoden with defer_invoice_booking: an invoice sent without
-  // its verifikat gets its sale booked first, by the Bokför step on its
-  // invoice date, when the verifikat clears the receivable. Planned here, so
-  // a refusal comes before anything is written.
-  const saleCtx = { supabase, companyId, userId, log }
-  let salePlan: SaleFirstPlan = SALE_FIRST_NOT_REQUIRED
-  if (invoice && invoiceId) {
+    // Faktureringsmetoden with defer_invoice_booking: an invoice sent without
+    // its verifikat gets its sale booked first, by the Bokför step on its
+    // invoice date, when the verifikat clears the receivable. Planned here,
+    // before the payment, so a refusal comes before anything is written and
+    // the payment is judged against what the sale will put on 1510.
     const plan = await planSaleBeforeSettlementById(saleCtx, invoiceId)
     if (!plan.ok) return { ok: false, code: saleFirstRefusalCode(plan), details: plan.details }
     if (plan.required) {
@@ -392,6 +378,29 @@ export async function linkTransactionToJournalEntry(
       if (clears === null) return { ok: false, code: 'LINK_TX_DB_ERROR', details: { reason: 'journal entry lines unreadable' } }
       if (clears) salePlan = plan
     }
+
+    // A SEK invoice whose own verifikat booked the öresavrundning (1510 at the
+    // rounded "Att betala", the öre on 3740) is settled in full when the row
+    // and the verifikat both clear exactly what 151x carries for it: the rule
+    // of the voucher link (validateVoucherForInvoiceLink) and the other
+    // settlement doors (bookedOreRounding over carriedSekOf). A sale booked
+    // first carries what its plan puts on 1510 (receivableSek). Otherwise the
+    // one payment plan, strict: no öre absorption, and a bank row larger than
+    // the invoice's remainder is refused before anything is written.
+    const settlesCarried =
+      side.side === 'ar_credit' &&
+      (await clearsBookedOre(
+        supabase,
+        companyId,
+        invoice,
+        journalEntryId,
+        transaction.amount,
+        sideLines,
+        salePlan.required ? salePlan.receivableSek : undefined,
+      ))
+    const payment = planInvoicePayment(invoice, settlesCarried ? storedRemaining(invoice) : transaction.amount)
+    if (!payment.ok) return { ok: false, code: payment.code, details: payment.details }
+    ;({ newPaidAmount, newRemaining, isFullyPaid, newStatus } = payment.plan)
   }
 
   // Dry run (the v1 ?dry_run=true door): every check above ran on the same
@@ -720,6 +729,11 @@ async function verifikatClearsReceivable(supabase: SupabaseClient, journalEntryI
  * 151x credit has left after the rows of other invoices it settles
  * (voucherCapacity) must be exactly that. A failed read answers false: the row is then planned against
  * the remainder, as before.
+ *
+ * `saleReceivableSek`: the invoice's sale is booked first (sale-first.ts), so
+ * no verifikat carries it yet; what the sale will put on 1510 (the plan's
+ * receivableSek) is what the link clears, when it differs from the
+ * remainder by öresavrundning.
  */
 async function clearsBookedOre(
   supabase: SupabaseClient,
@@ -728,18 +742,23 @@ async function clearsBookedOre(
   journalEntryId: string,
   rowAmount: number,
   sideLines: ReadonlyArray<{ account_number: string | null; credit_amount: number | string | null }>,
+  saleReceivableSek?: number,
 ): Promise<boolean> {
   if (!isKronorCurrency(invoice.currency)) return false
   let carried: number | null
-  try {
-    carried = await carriedSekOf(supabase, companyId, 'customer', invoice)
-  } catch (error) {
-    log.warn('carried SEK read failed; the row is planned against the remainder', {
-      companyId,
-      invoiceId: invoice.id,
-      message: error instanceof Error ? error.message : String(error),
-    })
-    return false
+  if (saleReceivableSek !== undefined) {
+    carried = bookedOreRounding(storedRemaining(invoice), saleReceivableSek) !== 0 ? saleReceivableSek : null
+  } else {
+    try {
+      carried = await carriedSekOf(supabase, companyId, 'customer', invoice)
+    } catch (error) {
+      log.warn('carried SEK read failed; the row is planned against the remainder', {
+        companyId,
+        invoiceId: invoice.id,
+        message: error instanceof Error ? error.message : String(error),
+      })
+      return false
+    }
   }
   if (carried === null || !equalOre(rowAmount, carried)) return false
 

@@ -39,6 +39,7 @@ import { resolveSendLabel } from '@/lib/invoices/editor/primary-action'
 import { DIGITAL_MAILBOX_PROVIDER_NAMES } from '@/lib/digital-mailboxes/sending-status'
 import { resolveEditorStatusLine } from '@/lib/invoices/editor/status-line'
 import { proposeCreditNoteSendLines } from '@/lib/invoices/editor/voucher-preview'
+import { creditPreviewIssueOre } from '@/lib/bookkeeping/ledger-carried-sek'
 import { persistAndSend } from '@/lib/invoices/editor/send-sequence'
 import { creditedAmount, creditNoteNumber, creditNoteOriginalReference } from '@/lib/invoices/build-credit-note'
 import { buildCreditNoteItem } from '@/lib/invoices/build-credit-note-item'
@@ -165,6 +166,31 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
   // accounted#45: a deferred original that was never booked is booked first,
   // on its own date, then credited.
   const booksOriginalFirst = invoice ? creditBooksOriginalFirst(companySettings, invoice) : false
+  // The full credit mirrors the öresavrundning the original's issue booked,
+  // or will book when the credit books it first (creditPreviewIssueOre).
+  // Preview only: the credit decides again when it books. null while the
+  // ledger is read, so the confirm never shows the exact-total reversal as
+  // the one that books before the answer is in.
+  const [issueOre, setIssueOre] = useState<{ invoiceId: string; ore: number } | null>(null)
+  useEffect(() => {
+    if (!invoice || !company?.id || !books) return
+    let cancelled = false
+    const invoiceId = invoice.id
+    void creditPreviewIssueOre(
+      supabase,
+      company.id,
+      invoice,
+      -invoice.total,
+      booksOriginalFirst,
+      companySettings ?? null,
+    ).then((ore) => {
+      if (!cancelled) setIssueOre({ invoiceId, ore })
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [supabase, invoice, company?.id, books, booksOriginalFirst, companySettings])
+  const resolvedIssueOre = invoice && issueOre?.invoiceId === invoice.id ? issueOre.ore : null
   const channelContext: ChannelContext = {
     documentType: 'invoice',
     canEmail,
@@ -451,17 +477,22 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
       // No legal form, no proposal: the accounts depend on it, and a guess
       // would show a reversal that is not the one booked.
       const entityType = companySettings?.entity_type ?? company?.entity_type
-      const lines = isEntityType(entityType)
-        ? proposeCreditNoteSendLines({ ...invoice, customer: invoice.customer ?? undefined }, { entityType, today })
+      const lines = isEntityType(entityType) && resolvedIssueOre !== null
+        ? proposeCreditNoteSendLines(
+            { ...invoice, customer: invoice.customer ?? undefined },
+            { entityType, today, issueOre: resolvedIssueOre },
+          )
         : []
       confirmVoucher =
-        lines.length > 0
-          ? {
-              kind: 'lines',
-              date: today,
-              lines: voucherLineViews(lines),
-            }
-          : { kind: 'note', text: tShell('confirm_voucher_foreign') }
+        isEntityType(entityType) && resolvedIssueOre === null
+          ? { kind: 'note', text: tShell('preview_loading') }
+          : lines.length > 0
+            ? {
+                kind: 'lines',
+                date: today,
+                lines: voucherLineViews(lines),
+              }
+            : { kind: 'note', text: tShell('confirm_voucher_foreign') }
     }
   }
   const confirmLabel =

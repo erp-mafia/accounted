@@ -119,7 +119,8 @@ import {
   type PriorYearDeductions,
 } from '@/lib/bookkeeping/rot-rut-rules'
 import { UNDECRYPTABLE_PERSONAL_NUMBER_MASK } from '@/lib/customers/mask-personal-number'
-import { roundOre } from '@/lib/money'
+import { ORE_ROUNDING_ACCOUNT, roundOre } from '@/lib/money'
+import { oreRoundingAccountOff } from '@/lib/bookkeeping/ledger-carried-sek'
 import { selfBilledSaleAmounts } from '@/lib/invoices/self-billed-amounts'
 import { isFiscalYear, normalizeOrgNumber } from '@/lib/invariants'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
@@ -798,7 +799,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const [paymentPanelOpen, setPaymentPanelOpen] = useState(false)
   const [paymentPanelScope, setPaymentPanelScope] = useState<PaymentPanelScope>('all')
   const [accountingMethod, setAccountingMethod] = useState<'accrual' | 'cash'>('accrual')
-  // Öresavrundning is display-only. In edit mode the draft's stored flag wins;
+  // Öresavrundning: Att betala and the issue verifikat. In edit mode the draft's stored flag wins;
   // otherwise it defaults to the company-wide setting (loaded below).
   const [oreRounding, setOreRounding] = useState<boolean>(
     typeof initialOreRounding === 'boolean' ? initialOreRounding : true,
@@ -825,6 +826,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // Active balance-sheet, revenue and interest-income accounts (PH 246) for
   // the optional per-line posting override, plus which rows show that picker.
   const { accounts: activeAccounts, isLoading: accountsLoading } = useAccounts()
+  // The same cache entry with the inactive rows: 3740 switched off means the
+  // issue books the exact total (oreRoundingAccountOff), as the confirm shows.
+  const { accounts: allAccounts } = useAccounts(false)
   const paymentLedger = usePaymentBankLedger()
   const postingAccounts = useMemo(
     () => activeAccounts.filter((account) => isInvoiceLinePostingAccount(account.account_number)),
@@ -3838,6 +3842,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         items: confirmData.items,
         defaultDimensions: defaultDims,
         entityType,
+        oreRounding,
       }
     : null
   let confirmVoucher: ConfirmVoucher | null = null
@@ -3875,7 +3880,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     } else if (confirmInForeignCurrency) {
       confirmVoucher = { kind: 'note', text: tShell('confirm_voucher_foreign') }
     } else {
-      const lines = proposeDraftSendLines(confirmDraft)
+      const oreAccountOff = oreRoundingAccountOff(
+        allAccounts.find((account) => account.account_number === ORE_ROUNDING_ACCOUNT),
+      )
+      const lines = proposeDraftSendLines(oreAccountOff ? { ...confirmDraft, oreRounding: undefined } : confirmDraft)
       if (lines.length > 0) {
         // The periodisering entries the send books besides this verifikat.
         const accrualDates = draftAccrualEntryDates(confirmDraft)

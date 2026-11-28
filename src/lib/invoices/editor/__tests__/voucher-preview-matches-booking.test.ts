@@ -61,7 +61,18 @@ function formRow(overrides: Partial<DraftVoucherItem> & { description?: string }
 type Row = [account: string, debit: number, credit: number, dimensions: Record<string, string> | undefined]
 
 /** The verifikat the send books for these form rows. */
-async function bookedRows(items: ReturnType<typeof formRow>[], defaultDims: Record<string, string>): Promise<Row[]> {
+/**
+ * The one read the booking makes here: whether 3740 is switched off in the
+ * kontoplan (it is not: no row, the engine seeds it).
+ */
+const KONTOPLAN_WITHOUT_ROWS = {
+  from: () => {
+    const chain = { select: () => chain, eq: () => chain, maybeSingle: async () => ({ data: null, error: null }) }
+    return chain
+  },
+}
+
+async function bookedRows(items: ReturnType<typeof formRow>[], defaultDims: Record<string, string>, oreRounding = false): Promise<Row[]> {
   const body = buildInvoiceWritePayload(
     {
       customer_id: CUSTOMER_ID,
@@ -71,7 +82,7 @@ async function bookedRows(items: ReturnType<typeof formRow>[], defaultDims: Reco
       document_type: 'invoice',
       items,
     },
-    { oreRounding: false, defaultDims },
+    { oreRounding, defaultDims },
   )
   const input = CreateInvoiceSchema.parse(JSON.parse(JSON.stringify(body)))
   const { supabase } = createTableMockSupabase({
@@ -99,7 +110,7 @@ async function bookedRows(items: ReturnType<typeof formRow>[], defaultDims: Reco
     invoice_number: '1043',
     items: build.items.map((row, i) => ({ ...row, id: `item-${i}`, invoice_id: 'invoice-1' })) as unknown as InvoiceItem[],
   } as unknown as Invoice
-  const entry = await buildInvoiceJournalEntryInput(null as never, COMPANY_ID, invoice, 'aktiebolag')
+  const entry = await buildInvoiceJournalEntryInput(KONTOPLAN_WITHOUT_ROWS as never, COMPANY_ID, invoice, 'aktiebolag')
   if (!entry) throw new Error('no entry')
   return entry.lines
     .filter((l) => roundOre(l.debit_amount) !== 0 || roundOre(l.credit_amount) !== 0)
@@ -112,7 +123,7 @@ async function bookedRows(items: ReturnType<typeof formRow>[], defaultDims: Reco
 }
 
 /** The verifikat the editor's confirm shows for the same rows. */
-function previewRows(items: ReturnType<typeof formRow>[], defaultDims: Record<string, string>): Row[] {
+function previewRows(items: ReturnType<typeof formRow>[], defaultDims: Record<string, string>, oreRounding?: boolean): Row[] {
   return proposeDraftSendLines({
     invoiceNumber: '1043',
     invoiceDate: INVOICE_DATE,
@@ -123,6 +134,7 @@ function previewRows(items: ReturnType<typeof formRow>[], defaultDims: Record<st
     items,
     defaultDimensions: defaultDims,
     entityType: 'aktiebolag',
+    oreRounding,
   }).map((l) => [l.account_number, Number(l.debit_amount || 0), Number(l.credit_amount || 0), l.dimensions])
 }
 
@@ -160,5 +172,17 @@ describe('the editor confirm previews the verifikat the send books (#114)', () =
     const booked = await bookedRows(items, defaultDims)
     expect(booked.map((row) => row[0])).toEqual(['1510', '2970', '1790', '3041', '3001', '2611', '3002', '2621'])
     expect(previewRows(items, defaultDims)).toEqual(booked)
+  })
+
+  it('öresavrundning on: the confirm shows the 3740 row the send books', async () => {
+    const items = [formRow({ unit_price: 799.8 })]
+    const booked = await bookedRows(items, {}, true)
+    expect(booked).toEqual([
+      ['1510', 1000, 0, undefined],
+      ['3001', 0, 799.8, undefined],
+      ['2611', 0, 199.95, undefined],
+      ['3740', 0, 0.25, undefined],
+    ])
+    expect(previewRows(items, {}, true)).toEqual(booked)
   })
 })

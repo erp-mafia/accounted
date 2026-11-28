@@ -62,6 +62,12 @@ export interface DraftVoucherInput {
   items: DraftVoucherItem[]
   defaultDimensions?: Record<string, string> | null
   entityType: EntityType
+  /**
+   * The form's öresavrundning choice (the editor's toggle, which starts from
+   * the company setting). The send books it on 1510 and 3740, so the preview
+   * shows that row; absent, no rounding is previewed.
+   */
+  oreRounding?: boolean
 }
 
 /**
@@ -72,7 +78,12 @@ export interface DraftVoucherInput {
 export function proposeDraftSendLines(input: DraftVoucherInput): FormLine[] {
   const invoice = draftInvoice(input)
   if (!invoice) return []
-  return proposeSendLines({ invoice, entityType: input.entityType })
+  return proposeSendLines({
+    invoice,
+    entityType: input.entityType,
+    // The form's own choice rides on the row, so no company setting is read.
+    ...(typeof input.oreRounding === 'boolean' ? { oreRounding: { company: null } } : {}),
+  })
 }
 
 /**
@@ -177,6 +188,7 @@ function draftInvoice(input: DraftVoucherInput) {
     vat_treatment: input.vatTreatment,
     items,
     default_dimensions: input.defaultDimensions ?? null,
+    ore_rounding: input.oreRounding ?? null,
   }
 }
 
@@ -191,7 +203,16 @@ function draftInvoice(input: DraftVoucherInput) {
  */
 export function proposeCreditNoteSendLines(
   original: Invoice & { items: InvoiceItem[] },
-  options: { entityType: EntityType; today: string },
+  options: {
+    entityType: EntityType
+    today: string
+    /**
+     * The öresavrundning the original's issue verifikat booked, or will book
+     * when the credit books it first (creditPreviewIssueOre): the full credit
+     * mirrors exactly that. 0 or absent: the exact amounts.
+     */
+    issueOre?: number
+  },
 ): FormLine[] {
   const reference = creditNoteOriginalReference(original)
   if (!reference) return []
@@ -217,8 +238,10 @@ export function proposeCreditNoteSendLines(
         credited_invoice_id: fields.credited_invoice_id,
         items,
         default_dimensions: fields.default_dimensions,
+        ore_rounding: fields.ore_rounding,
       },
       entityType: options.entityType,
+      ...(options.issueOre ? { oreRounding: { mirror: options.issueOre } } : {}),
     })
   } catch {
     // A missing FX rate on a foreign original: the confirm says how it books instead.

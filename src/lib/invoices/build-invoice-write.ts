@@ -160,7 +160,7 @@ export interface InvoiceWriteInput {
   payment_link_url?: string
   /** Per-invoice opt-out for the automatic Stripe payment link. Omitted → true. */
   payment_link_auto?: boolean
-  /** Per-invoice öresavrundning override (display-only). Omitted → null (inherit company setting). */
+  /** Per-invoice öresavrundning override (Att betala and the issue verifikat). Omitted → null (inherit company setting). */
   ore_rounding?: boolean
   /**
    * Per-invoice QR code choice (lib/invoices/payment-qr.ts). Omitted leaves
@@ -912,7 +912,7 @@ export async function buildInvoiceWriteData(params: {
     // Automation opt-out for the Stripe payment link; default on. The form
     // always sends the field, so a draft edit that unticked it persists false.
     payment_link_auto: input.payment_link_auto ?? true,
-    // Display-only öresavrundning override; null inherits company_settings.ore_rounding.
+    // Öresavrundning override (Att betala and the issue verifikat); null inherits company_settings.ore_rounding.
     ore_rounding: input.ore_rounding ?? null,
     // Only when sent: every rebuild path (v1 PATCH, the update_invoice
     // executor) feeds the stored header back field by field, and an absent

@@ -29,7 +29,8 @@ import { ToastAction } from '@/components/ui/toast'
 import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
 import { KonteringLinesEditor } from '@/components/bookkeeping/KonteringLinesEditor'
 import { proposeSendLines } from '@/lib/bookkeeping/propose-send-lines'
-import { getAmountToPay } from '@/lib/bookkeeping/invoice-rounding'
+import { creditPreviewIssueOre, fetchOreRoundingAccountOff } from '@/lib/bookkeeping/ledger-carried-sek'
+import { getAmountToPay, hasOreToRound } from '@/lib/bookkeeping/invoice-rounding'
 import { voucherLineViews } from '@/lib/bookkeeping/voucher-line-view'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { lineBalance, storedLineAmount } from '@/lib/bookkeeping/line-balance'
@@ -38,7 +39,7 @@ import { getResponseErrorMessage } from '@/lib/errors/get-error-message'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
 import { isInvoicerRole } from '@/lib/auth/invoicer-role'
 import { CAPABILITY } from '@/lib/entitlements/keys'
-import { creditNoteNeedsJournalEntry, issueBooksDocument } from '@/lib/bookkeeping/booking-mode'
+import { creditBooksOriginalFirst, creditNoteNeedsJournalEntry, issueBooksDocument } from '@/lib/bookkeeping/booking-mode'
 import { getDeductionShareBookedByPayout } from '@/lib/invoices/rot-rut-payout-recognition'
 import { itemHasAccrual } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { explainVatTreatment, requiresSwedishVatAcknowledgement } from '@/lib/invoices/vat-rules'
@@ -175,6 +176,12 @@ export default function SendInvoiceDialog({
   // A kontantmetod ROT/RUT original whose Skatteverket share is not booked
   // yet: its credit reverses the customer's share alone.
   const [deductionBookedSek, setDeductionBookedSek] = useState<number | null>(null)
+  // A full kreditfaktura mirrors the öresavrundning its original's issue
+  // booked (creditNoteIssueOre), as createCreditNoteJournalEntry books it.
+  const [creditIssueOre, setCreditIssueOre] = useState(0)
+  // 3740 switched off in the kontoplan: the issue books the exact total
+  // (oreRoundingAccountOff), so the preview shows no rounding row.
+  const [oreAccountOff, setOreAccountOff] = useState(false)
   const [catalog, setCatalog] = useState<CatalogAccount[]>([])
   const [editLines, setEditLines] = useState<FormLine[]>([])
   const [hasEdited, setHasEdited] = useState(false)
@@ -266,7 +273,7 @@ export default function SendInvoiceDialog({
         const originalResult = invoice.credited_invoice_id
           ? await supabase
               .from('invoices')
-              .select('id, invoice_number, status, journal_entry_id, paid_at, paid_amount, total')
+              .select('id, invoice_number, status, journal_entry_id, paid_at, paid_amount, total, currency, deduction_total, ore_rounding, is_self_billed')
               .eq('id', invoice.credited_invoice_id)
               .eq('company_id', company.id)
               .maybeSingle()
@@ -295,8 +302,28 @@ export default function SendInvoiceDialog({
           // Preview only: issueCreditNote decides again when it books.
           bookedShare = state.ok ? state.bookedSek : null
         }
+        // Preview only, as the share above: the credit decides again when it
+        // books. Never on the two steps (no issue rounding to mirror).
+        const issueOre =
+          bookOnIssue && originalResult.data && bookedShare === null
+            ? await creditPreviewIssueOre(
+                supabase,
+                company.id,
+                originalResult.data,
+                invoice.total,
+                creditBooksOriginalFirst(companySettings, originalResult.data),
+                companySettings ?? null,
+              )
+            : 0
+        // 3740 switched off: the issue books the exact total.
+        const accountOff =
+          !invoice.credited_invoice_id && bookOnIssue && hasOreToRound(invoice)
+            ? await fetchOreRoundingAccountOff(supabase, company.id).catch(() => false) // Preview only: the issue reads it again when it books and refuses on a failed read.
+            : false
         if (cancelled) return
         setDeductionBookedSek(bookedShare)
+        setCreditIssueOre(issueOre)
+        setOreAccountOff(accountOff)
 
         // Line editing needs the BAS catalogue; only the accrual
         // book-at-issue path renders the editor, so skip the load elsewhere.
@@ -331,9 +358,15 @@ export default function SendInvoiceDialog({
     if (!isInitialized || !shouldBookOnIssue) return []
 
     // The whole row: the server books from all of it (item accounts and
-    // dimensions, delivery_country), so the preview must read the same.
-    return proposeSendLines({ invoice, entityType, deductionBookedSek })
-  }, [isInitialized, shouldBookOnIssue, entityType, invoice, deductionBookedSek])
+    // dimensions, delivery_country), so the preview must read the same. The
+    // öresavrundning as the issue books it: an invoice by its own choice,
+    // else the company setting, and none when 3740 is switched off; a
+    // kreditfaktura only when its original's issue booked it.
+    const oreRounding = isCreditNote
+      ? creditIssueOre !== 0 ? { mirror: creditIssueOre } : undefined
+      : oreAccountOff ? undefined : { company: companySettings ?? null }
+    return proposeSendLines({ invoice, entityType, deductionBookedSek, oreRounding })
+  }, [isInitialized, shouldBookOnIssue, entityType, invoice, deductionBookedSek, isCreditNote, creditIssueOre, oreAccountOff, companySettings])
 
   const additionalCc = useMemo(
     () => parseInvoiceRecipientText(additionalCcText),
@@ -367,20 +400,20 @@ export default function SendInvoiceDialog({
       ? t('recipient_too_many', { count: MAX_INVOICE_EMAIL_RECIPIENTS })
       : null
 
-  // Seed the editable grid from the proposal once per open; edits must not be
-  // clobbered by re-renders, so proposedLines is deliberately not a dependency.
+  // Seed the editable grid from the proposal, and follow the proposal while
+  // the user has not edited it (a refreshed company setting can change the
+  // öresavrundning rows): with no edits the send books the proposal, so the
+  // grid must show it. Edits are never clobbered.
   useEffect(() => {
     if (!open) {
       setEditLines([])
       setHasEdited(false)
       return
     }
-    if (isInitialized && editable) {
+    if (isInitialized && editable && !hasEdited) {
       setEditLines(proposedLines.map((line) => ({ ...line })))
-      setHasEdited(false)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, isInitialized, editable])
+  }, [open, isInitialized, editable, hasEdited, proposedLines])
 
   const activeLines = editable ? editLines : proposedLines
 
