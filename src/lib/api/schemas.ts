@@ -56,7 +56,7 @@ import {
 } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { ORE_ROUNDING_ACCOUNT, roundOre } from '@/lib/money'
 import { VOUCHER_WARNING_CODES } from '@/lib/bookkeeping/voucher-plausibility'
-import { isPaidAtIssueAccount } from '@/lib/invoices/paid-at-issue'
+import { isCashLedger } from '@/lib/bookkeeping/bank-leg'
 import {
   INVOICE_COLOR_PATTERN,
   INVOICE_FOOTER_TEXT_MAX_LENGTH,
@@ -1442,7 +1442,7 @@ export const MarkInvoicePaidSchema = z.object({
   // accounts (resolveInvoicePaymentAccount). Custom lines carry their own
   // accounts, so the two are not sent together.
   payment_account: accountNumber
-    .refine(isPaidAtIssueAccount, { message: 'Betalkontot måste vara ett 19xx-konto (kassa, bank eller Swish)' })
+    .refine(isCashLedger, { message: 'Betalkontot måste vara ett 19xx-konto (kassa, bank eller Swish)' })
     .optional()
     .describe(
       'The 19xx account the payment landed on (on a credit note: the account the refund left). One of the company\'s own enabled cash accounts, else 400 INVOICE_PAID_PAYMENT_ACCOUNT_INVALID with the accounts that can be named. Omitted: the account the invoice asked to be paid to, else the company\'s primary bank account. Not combinable with lines.',
@@ -1478,16 +1478,18 @@ export const MarkInvoiceSentSchema = z.object({
 
 // The kontantfaktura (crm#1281, lib/invoices/paid-at-issue.ts): mark-sent
 // only. The invoice is issued already paid, on its fakturadatum, to this
-// 19xx account (kassa, bank, Swish), as one cash verifikat in either
-// accounting method. Deliberately NOT on MarkInvoiceSentSchema: the send
+// account, as one cash verifikat in either accounting method. Which accounts
+// it may be paid to depends on the company's webshop stores (crm#2324), so
+// issueAndBookInvoice decides it (INVOICE_PAID_AT_ISSUE_ACCOUNT_NOT_ALLOWED),
+// not this schema. Deliberately NOT on MarkInvoiceSentSchema: the send
 // route extends that schema and would silently drop the field, emailing an
 // unpaid invoice while the caller believes it is paid.
 export const MarkInvoiceSentPaidAtIssueSchema = z.object({
   paid_at_issue: z
     .object({
-      account_number: accountNumber.refine(isPaidAtIssueAccount, {
-        message: 'Betalkontot måste vara ett 19xx-konto (kassa, bank eller Swish)',
-      }),
+      account_number: accountNumber.describe(
+        'The account the customer paid to: a 19xx cash or bank account, 1686 (a card acquirer or payment provider owes it until the payout), or an account a webshop store books a payment method to. Any other account returns 400 INVOICE_PAID_AT_ISSUE_ACCOUNT_NOT_ALLOWED.',
+      ),
     })
     .optional(),
 })
@@ -3048,6 +3050,12 @@ export const CreateInvoiceFromWebshopOrderSchema = z.object({
    * is given, and an existing customer with the same email wins over it.
    */
   customer: WebshopOrderNewCustomerSchema.optional(),
+  /**
+   * The draft is for a kontantfaktura (crm#2322): the order must be paid, and
+   * the invoice is dated the day it was paid, the day Bokför books it, so the
+   * sale and its VAT land on the day the customer paid.
+   */
+  paid_at_issue: z.boolean().optional(),
 })
 
 /**

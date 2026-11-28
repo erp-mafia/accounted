@@ -113,6 +113,8 @@ export default function OrdersPage() {
   const [page, setPage] = useState(0)
   const [bookingOrder, setBookingOrder] = useState<WebshopOrder | null>(null)
   const [invoicingOrder, setInvoicingOrder] = useState<WebshopOrder | null>(null)
+  // Skapa kontantfaktura (crm#2322) opens the same dialog for a cash invoice.
+  const [invoicingPaid, setInvoicingPaid] = useState(false)
   const [markingOrder, setMarkingOrder] = useState<WebshopOrder | null>(null)
   // Snapshot of the selection the bulk dialog opened with: the list refresh
   // after a partial failure clears the live selection, but the dialog must
@@ -407,7 +409,14 @@ export default function OrdersPage() {
                   isSelected={selectedIds.has(order.id)}
                   onToggleSelect={toggleSelect}
                   onBook={() => setBookingOrder(order)}
-                  onInvoice={() => setInvoicingOrder(order)}
+                  onInvoice={() => {
+                    setInvoicingPaid(false)
+                    setInvoicingOrder(order)
+                  }}
+                  onCashInvoice={() => {
+                    setInvoicingPaid(true)
+                    setInvoicingOrder(order)
+                  }}
                   onMarkBooked={() => setMarkingOrder(order)}
                   onVoid={() => void voidOrder(order)}
                   onUnmark={() => void unmarkOrder(order)}
@@ -491,6 +500,7 @@ export default function OrdersPage() {
             if (!open) setInvoicingOrder(null)
           }}
           order={invoicingOrder}
+          paidAtIssue={invoicingPaid}
           onCreated={() => {
             setInvoicingOrder(null)
             void load()
@@ -523,6 +533,7 @@ function OrderRow({
   onToggleSelect,
   onBook,
   onInvoice,
+  onCashInvoice,
   onMarkBooked,
   onVoid,
   onUnmark,
@@ -537,6 +548,7 @@ function OrderRow({
   onToggleSelect: (id: string, extend?: boolean) => void
   onBook: () => void
   onInvoice: () => void
+  onCashInvoice: () => void
   onMarkBooked: () => void
   onVoid: () => void
   onUnmark: () => void
@@ -571,6 +583,9 @@ function OrderRow({
   // on a paid order (Bokför holds it), both on a voidable one.
   const bookViaMenu = bookable && primary !== 'book'
   const invoiceViaMenu = invoiceable && primary !== 'invoice'
+  // Skapa kontantfaktura (crm#2322): only for an order the customer has paid
+  // (the route refuses an unpaid one), wherever the button sits.
+  const cashInvoiceable = invoiceable && order.is_paid
 
   return (
     <tr
@@ -695,6 +710,13 @@ function OrderRow({
                 {invoiceViaMenu && (
                   <DropdownMenuItem onSelect={onInvoice}>
                     {t('action_create_invoice')}
+                  </DropdownMenuItem>
+                )}
+                {/* A paid order's receipt as a faktura (crm#2322): issued
+                    paid, dated the day the order was paid. */}
+                {cashInvoiceable && (
+                  <DropdownMenuItem onSelect={onCashInvoice}>
+                    {t('action_create_cash_invoice')}
                   </DropdownMenuItem>
                 )}
                 {markable && (

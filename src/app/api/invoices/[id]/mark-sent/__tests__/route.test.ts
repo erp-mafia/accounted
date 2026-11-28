@@ -831,10 +831,25 @@ describe('POST /api/invoices/[id]/mark-sent: kontantfaktura, paid at issue (crm#
     )
   })
 
-  it('returns 400 for a payment account outside 19xx, before anything changes', async () => {
-    enqueue({ data: draft(), error: null })
+  it('returns 400 for a payment account outside 19xx, 1686 and the store accounts, before anything changes', async () => {
+    enqueue({ data: draft(), error: null }) // fetch invoice
+    enqueue({ data: company, error: null }) // settings
+    enqueue({ data: [{ payment_method_account_map: { klarna: { mode: 'book', account: '1517' } } }], error: null }) // stores
 
     const response = await post({ paid_at_issue: { account_number: '1510' } })
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details: unknown } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('INVOICE_PAID_AT_ISSUE_ACCOUNT_NOT_ALLOWED')
+    expect(body.error.details).toEqual({ account_number: '1510', provider_accounts: ['1517'] })
+    expect(mockSettleInvoicePayment).not.toHaveBeenCalled()
+    expect(mockEnsureInvoiceNumber).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 for an account that is no account number, before anything changes', async () => {
+    enqueue({ data: draft(), error: null }) // fetch invoice
+
+    const response = await post({ paid_at_issue: { account_number: '19' } })
     const { status } = await parseJsonResponse(response)
 
     expect(status).toBe(400)

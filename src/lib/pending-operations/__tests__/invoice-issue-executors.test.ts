@@ -423,17 +423,38 @@ describe('commitPendingOperation: mark_invoice_sent with paid_at_issue (crm#1281
     expect(findCalls('invoices', 'update')).toEqual([])
   })
 
-  it('refuses a staged account outside 19xx without reading the invoice', async () => {
+  it('refuses a staged account that is no account number without reading the invoice', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({ data: null, error: null }) // dispatcher reject
 
-    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', paidOp({ account_number: '1510' }))
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', paidOp({ account_number: '19' }))
 
     expect(result.status).not.toBe('committed')
     expect(result.http_status).toBe(400)
     expect(findCalls('invoices', 'select')).toEqual([])
     expect(mocks.settleInvoicePayment).not.toHaveBeenCalled()
+  })
+
+  // crm#2324: 19xx, 1686 or a store's payment-method account. A staged
+  // account the stores no longer name is refused at approval, before a
+  // number is taken.
+  it('refuses a staged account outside 19xx, 1686 and the store accounts before anything changes', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: paidDraft(), error: null })
+    enqueue({ data: SETTINGS, error: null })
+    enqueue({ data: [{ payment_method_account_map: { klarna: { mode: 'book', account: '1517' } } }], error: null }) // stores
+    enqueue({ data: null, error: null }) // dispatcher reject
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', paidOp({ account_number: '1510' }))
+
+    expect(result.status).not.toBe('committed')
+    expect(result.code).toBe('INVOICE_PAID_AT_ISSUE_ACCOUNT_NOT_ALLOWED')
+    expect(result.http_status).toBe(400)
+    expect(ensureInvoiceNumber).not.toHaveBeenCalled()
+    expect(mocks.settleInvoicePayment).not.toHaveBeenCalled()
+    expect(findCalls('invoices', 'update')).toEqual([])
   })
 })
 

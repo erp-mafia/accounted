@@ -395,7 +395,7 @@ describe('gnubok_mark_invoice_as_sent with paid_at_issue_account (crm#1281)', ()
     expect(result.preview.period_status).toBeDefined()
   })
 
-  it.each(['1510', '3001', '19', 'abcd'])('refuses %s as the payment account before anything is read', async (account) => {
+  it.each(['19', 'abcd'])('refuses %s, no account number, before anything is read', async (account) => {
     const { supabase, findCall } = setup({ accounting_method: 'accrual' }, draft())
 
     await expect(
@@ -406,6 +406,44 @@ describe('gnubok_mark_invoice_as_sent with paid_at_issue_account (crm#1281)', ()
     ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' })
     expect(findCall('invoices', 'select')).toBeUndefined()
     expect(findCall('pending_operations', 'insert')).toBeUndefined()
+  })
+
+  // crm#2324: 19xx, 1686, or an account a webshop store books a payment
+  // method to; refused at staging by the rule the approval applies.
+  it.each(['1510', '3001', '1518'])('refuses %s, outside the rule, before the invoice is read', async (account) => {
+    const { supabase, setTable, findCall } = setup({ accounting_method: 'accrual' }, draft())
+    setTable('webshop_store_settings', { data: [{ payment_method_account_map: { klarna: { mode: 'book', account: '1517' } } }] })
+
+    const error = (await markSent
+      .execute(
+        { invoice_id: INVOICE_ID, paid_at_issue_account: account },
+        'company-1', 'user-1', supabase as never, { type: 'api_key' } as never,
+      )
+      .catch((err: unknown) => err)) as { code?: string; message?: string } | undefined
+
+    expect(error).toMatchObject({ code: 'INVOICE_PAID_AT_ISSUE_ACCOUNT_NOT_ALLOWED' })
+    expect(error?.message).toContain('1517')
+    expect(findCall('invoices', 'select')).toBeUndefined()
+    expect(findCall('pending_operations', 'insert')).toBeUndefined()
+  })
+
+  it('stages it paid to the account a store books Klarna to: that account debited, no 1510', async () => {
+    const { supabase, setTable, findCall } = setup({ accounting_method: 'accrual', defer_invoice_booking: false }, draft())
+    setTable('webshop_store_settings', { data: [{ payment_method_account_map: { klarna: { mode: 'book', account: '1517' } } }] })
+
+    const result = (await markSent.execute(
+      { invoice_id: INVOICE_ID, paid_at_issue_account: '1517' },
+      'company-1', 'user-1', supabase as never, { type: 'api_key' } as never,
+    )) as { staged: boolean; preview: Record<string, unknown> }
+
+    expect(result.staged).toBe(true)
+    const staged = stagedInsert(findCall) as { title: string; params: Record<string, unknown>; preview_data: Record<string, unknown> }
+    expect(staged.params).toEqual({ invoice_id: INVOICE_ID, paid_at_issue: { account_number: '1517' } })
+    const entry = result.preview.journal_entry_preview as { lines: PreviewLine[]; total_debit: number; total_credit: number }
+    const byAccount = Object.fromEntries(entry.lines.map((l) => [l.account_number, l]))
+    expect(byAccount['1517']).toMatchObject({ debit_amount: 12500, credit_amount: 0 })
+    expect(byAccount['1510']).toBeUndefined()
+    expect(entry.total_debit).toBe(entry.total_credit)
   })
 
   it.each([

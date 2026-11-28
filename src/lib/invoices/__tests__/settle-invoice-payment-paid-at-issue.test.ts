@@ -67,7 +67,12 @@ function issuedUnbooked(overrides: Partial<Invoice> = {}) {
   } as Invoice & { customer?: { name?: string | null } | null }
 }
 
-function settle(accountingMethod: 'accrual' | 'cash', invoice = issuedUnbooked(), recognizeSaleAtPayment = true) {
+function settle(
+  accountingMethod: 'accrual' | 'cash',
+  invoice = issuedUnbooked(),
+  recognizeSaleAtPayment = true,
+  settlementAccountNumber = '1940',
+) {
   return settleInvoicePayment(
     createQueuedMockSupabaseWithRows().supabase as unknown as SupabaseClient,
     'company-1',
@@ -78,7 +83,7 @@ function settle(accountingMethod: 'accrual' | 'cash', invoice = issuedUnbooked()
       paymentDate: '2026-10-17',
       accountingMethod,
       entityType: 'enskild_firma',
-      settlementAccountNumber: '1940',
+      settlementAccountNumber,
       paymentSource: 'manual',
       recognizeSaleAtPayment,
     },
@@ -131,6 +136,26 @@ describe('settleInvoicePayment: the kontantfaktura (paid at issue, crm#1281)', (
       ])
     },
   )
+
+  // crm#2324: a card or Klarna sale is a claim on the provider until the
+  // payout. The same one verifikat, with that claim as the debit.
+  it.each([
+    ['accrual', '1686'],
+    ['cash', '1686'],
+    ['accrual', '1517'],
+    ['cash', '1517'],
+  ] as const)('under %s books a card or Klarna sale on the provider claim %s, no 1510', async (method, account) => {
+    const result = await settle(method, issuedUnbooked(), true, account)
+
+    expect(result).toMatchObject({ ok: true, newStatus: 'paid', newRemaining: 0 })
+    const input = postedInput()
+    expect(input.source_type).toBe('invoice_cash_payment')
+    expect(shape(input)).toEqual([
+      { account, debit: 1250, credit: 0 },
+      { account: '2611', debit: 0, credit: 250 },
+      { account: '3001', debit: 0, credit: 1000 },
+    ])
+  })
 
   it('regression: without the flag a faktureringsmetoden payment still clears 1510', async () => {
     const result = await settle('accrual', issuedUnbooked(), false)

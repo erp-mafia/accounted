@@ -16,6 +16,7 @@ import { todayIsoStockholm, invoiceDueDate } from '@/lib/dates/iso'
 import { consumerInvoiceTerms } from '@/lib/invoices/consumer-credit'
 import { loadInvoiceTerms } from '@/lib/invoices/due-date'
 import { resolveDefaultPaymentTerms } from '@/lib/customers/default-payment-terms'
+import { defaultEntryDate } from '@/lib/webshop-orders/booking-lines'
 
 const EU_COUNTRY_CODES = new Set(EU_COUNTRIES.map((c) => c.code))
 
@@ -53,6 +54,9 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     const validation = await validateBody(request, CreateInvoiceFromWebshopOrderSchema)
     if (!validation.success) return validation.response
     const { customer_id } = validation.data
+    // A kontantfaktura (crm#2322): only for a paid order, dated the day it
+    // was paid (below).
+    const forCashInvoice = validation.data.paid_at_issue === true
     // The customer the user confirmed in the dialog (a Shopify order row
     // carries no names, so the dialog fetches them from the store on demand).
     // It replaces the row's billing snapshot, and only when this route
@@ -100,6 +104,9 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     // Refund rows never convert (kreditfaktura is created from the invoice).
     if (order.row_type === 'refund') {
       return errorResponseFromCode('WEBSHOP_ORDER_REFUND_NOT_CONVERTIBLE', log, { requestId })
+    }
+    if (forCashInvoice && !order.is_paid) {
+      return errorResponseFromCode('WEBSHOP_ORDER_NOT_PAID', log, { requestId })
     }
     // Same legacy double-booking lock as the book route: an invoice created
     // for a sale whose feed row is later booked in the transactions inbox
@@ -273,7 +280,11 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     // The due date counts the terms from the invoice date itself: a UTC
     // clock lands one day short between midnight and 01:00/02:00 in Sweden.
-    const invoiceDate = todayIsoStockholm()
+    // A kontantfaktura is dated the day the order was paid, the day Bokför
+    // books the same order: it books the sale and its VAT on its invoice
+    // date, so a receipt made later still lands on the day the customer paid
+    // (founder decision 2026-11-27).
+    const invoiceDate = forCashInvoice ? defaultEntryDate(order) : todayIsoStockholm()
     const dueDate = invoiceDueDate(
       invoiceDate,
       consumerInvoiceTerms(await loadInvoiceTerms(supabase, companyId, customer.default_payment_terms), customer.customer_type, invoiceDate),

@@ -3412,9 +3412,10 @@ async function commitMarkInvoiceSent(
   const invoiceId = params.invoice_id as string
   // The kontantfaktura (crm#1281), staged by gnubok_mark_invoice_as_sent with
   // paid_at_issue_account: the dashboard mark-sent body, the same schema.
+  // Which accounts it may be paid to (crm#2324) issueAndBookInvoice decides.
   const paidAtIssueParse = MarkInvoiceSentPaidAtIssueSchema.safeParse({ paid_at_issue: params.paid_at_issue })
   if (!paidAtIssueParse.success) {
-    return { error: 'Betalkontot måste vara ett 19xx-konto (kassa, bank eller Swish).', status: 400 }
+    return { error: 'Betalkontot måste vara ett kontonummer med fyra siffror, till exempel 1930.', status: 400 }
   }
   const paidAtIssue = paidAtIssueParse.data.paid_at_issue ?? null
 
@@ -3446,8 +3447,9 @@ async function commitMarkInvoiceSent(
   // archived dimension value or a locked period, leaves the invoice in draft),
   // then the PDF archived as underlag, the manual delivery recorded and
   // invoice.sent emitted. A kontantfaktura is refused there for anything but
-  // a plain faktura (INVOICE_PAID_AT_ISSUE_NOT_ALLOWED), and otherwise booked
-  // as one cash verifikat with the invoice ending paid.
+  // a plain faktura (INVOICE_PAID_AT_ISSUE_NOT_ALLOWED) or an account outside
+  // 19xx, 1686 and the store accounts (INVOICE_PAID_AT_ISSUE_ACCOUNT_NOT_ALLOWED),
+  // and otherwise booked as one cash verifikat with the invoice ending paid.
   const issued = await issueAndBookInvoice({
     supabase,
     companyId,

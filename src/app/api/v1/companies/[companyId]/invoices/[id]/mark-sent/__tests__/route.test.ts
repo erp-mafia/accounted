@@ -1012,7 +1012,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent with paid_at_
     expect(mockRecordManualInvoiceDelivery).toHaveBeenCalledTimes(1)
   })
 
-  it('returns 400 VALIDATION_ERROR for a payment account outside 19xx, before the invoice is read', async () => {
+  it('returns 400 VALIDATION_ERROR for an account that is no account number, before the invoice is read', async () => {
     const { supabase, calls } = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       invoices: { data: DRAFT_INVOICE, error: null },
@@ -1020,7 +1020,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent with paid_at_
     mockServiceClient.mockReturnValue(supabase)
 
     const res = await markSent(
-      postWithBody({ paid_at_issue: { account_number: '1510' } }),
+      postWithBody({ paid_at_issue: { account_number: '19' } }),
       detailParams(COMPANY_ID, INVOICE_ID),
     )
 
@@ -1030,6 +1030,94 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent with paid_at_
     expect(body.error.details.issues[0].field).toBe('paid_at_issue.account_number')
     expect(calls.filter((c) => c.table === 'invoices')).toEqual([])
     expect(mockSettleInvoicePayment).not.toHaveBeenCalled()
+  })
+
+  // crm#2324: 19xx, 1686 or an account a webshop store books a payment
+  // method to; anything else is refused before a number is taken.
+  it.each([
+    ['the commit', URL],
+    ['the dry run', `${URL}?dry_run=true`],
+  ])('%s refuses an account outside 19xx, 1686 and the store accounts', async (_door, url) => {
+    const { supabase, calls } = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      invoices: [
+        { data: DRAFT_INVOICE, error: null }, // pre-flight
+        { data: DRAFT_INVOICE, error: null }, // booking row
+      ],
+      company_settings: { data: SETTINGS, error: null },
+      webshop_store_settings: { data: [{ payment_method_account_map: { klarna: { mode: 'book', account: '1517' } } }], error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await markSent(
+      postWithBody({ paid_at_issue: { account_number: '1510' } }, url),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('INVOICE_PAID_AT_ISSUE_ACCOUNT_NOT_ALLOWED')
+    expect(body.error.details).toEqual({ account_number: '1510', provider_accounts: ['1517'] })
+    expect(mockEnsureInvoiceNumber).not.toHaveBeenCalled()
+    expect(mockSettleInvoicePayment).not.toHaveBeenCalled()
+    expect(calls.filter((c) => c.table === 'invoices' && c.method === 'update')).toEqual([])
+  })
+
+  it('commits it paid to the account a store books Klarna to: the settlement debits that account', async () => {
+    const { supabase } = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      invoices: [
+        { data: DRAFT_INVOICE, error: null }, // pre-flight
+        { data: { ...DRAFT_INVOICE }, error: null }, // booking row
+        { data: [{ id: INVOICE_ID }], error: null }, // compare-and-set to sent
+        { data: { ...SENT_INVOICE, status: 'paid', paid_amount: 12500, remaining_amount: 0 }, error: null }, // stored
+      ],
+      company_settings: { data: SETTINGS, error: null },
+      webshop_store_settings: { data: [{ payment_method_account_map: { klarna: { mode: 'book', account: '1517' } } }], error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+    mockSettleInvoicePayment.mockResolvedValue({
+      ok: true,
+      newStatus: 'paid',
+      newPaidAmount: 12500,
+      newRemaining: 0,
+      journalEntryId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+      paidAt: '2026-05-12T12:00:00.000Z',
+    })
+
+    const res = await markSent(
+      postWithBody({ paid_at_issue: { account_number: '1517' } }),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data).toMatchObject({ status: 'paid', remaining_amount: 0 })
+    expect(mockSettleInvoicePayment).toHaveBeenCalledWith(
+      supabase,
+      COMPANY_ID,
+      USER_ID,
+      expect.objectContaining({ settlementAccountNumber: '1517', recognizeSaleAtPayment: true }),
+    )
+  })
+
+  it('dry run: previews it paid to the account a store books Klarna to', async () => {
+    const { supabase } = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      invoices: { data: DRAFT_INVOICE, error: null },
+      company_settings: { data: SETTINGS, error: null },
+      webshop_store_settings: { data: [{ payment_method_account_map: { klarna: { mode: 'book', account: '1517' } } }], error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await markSent(
+      postWithBody({ paid_at_issue: { account_number: '1517' } }, `${URL}?dry_run=true`),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.preview).toMatchObject({ status: 'paid', paid_at_issue: { account_number: '1517' } })
   })
 
   it.each([
