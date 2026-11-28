@@ -291,11 +291,13 @@ export default function RuleDetail({ id }: { id: string }) {
               v={
                 rule.mode === 'paused'
                   ? t('next_paused')
-                  : rule.mode === 'auto'
-                    ? t('next_auto_on')
-                    : remaining > 0
-                      ? t('next_auto', { count: remaining })
-                      : t('next_ready')
+                  : rule.vat_treatment === 'unknown'
+                    ? t('next_vat_unknown')
+                    : rule.mode === 'auto'
+                      ? t('next_auto_on')
+                      : remaining > 0
+                        ? t('next_auto', { count: remaining })
+                        : t('next_ready')
               }
             />
           </Section>

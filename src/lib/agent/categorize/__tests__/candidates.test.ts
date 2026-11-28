@@ -42,6 +42,16 @@ describe('gatherCandidates', () => {
     expect(out[0].matchReason).toContain('4 tidigare')
   })
 
+  it('carries a counterpart\'s unknown moms as no treatment, never as the rate its review opens with', async () => {
+    propose.mockResolvedValue({ proposals: { t1: [proposal({
+      template_id: 'cp:abc', source: 'counterparty',
+      booking: { kind: 'account', account: '5010', vat_treatment: 'standard_25', category: 'expense_other' },
+      name_sv: 'Förrådshyra', debit_account: '5010', vat_treatment: 'standard_25', vat_unknown: true, requires_review: true, confidence: 0.9,
+    })] }, assistant_reads: {} })
+    const out = await gatherCandidates(supabase, 'c1', TX)
+    expect(out[0]).toMatchObject({ account: '5010', source: 'counterparty_template', vatTreatment: null, vatUnknown: true })
+  })
+
   it('maps a matched rule and a catalog match to the slate\'s sources', async () => {
     propose.mockResolvedValue({ proposals: { t1: [
       proposal({ source: 'rule', debit_account: '6570', vat_treatment: 'exempt', confidence: 0.9 }),

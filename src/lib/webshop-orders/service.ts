@@ -23,6 +23,7 @@ import {
 } from '@/lib/bookkeeping/errors'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import type { OperationContext, OperationOutcome, OperationWarning } from '@/lib/operations/types'
+import { BOOKED_EXITS_FILTER } from '@/lib/webshop-orders/booking-status'
 import { checkOrderBankRow, type OrderBankRow } from '@/lib/webshop-orders/order-bank-row'
 import type {
   CreateJournalEntryLineInput,
@@ -165,10 +166,11 @@ export async function listWebshopOrders(
   if (input.from) query = query.gte('order_date', input.from)
   if (input.to) query = query.lte('order_date', input.to)
   if (input.country) query = query.eq('customer_country', input.country.toUpperCase())
-  // Same split as the Orders page: "booked" is every closed exit (booked
-  // here or marked as booked outside), "unbooked" the open set.
+  // Same split as the Orders page: "booked" is every exit that books (booked
+  // here or marked as booked outside, never a voided row), "unbooked" the
+  // open set.
   if (input.booked === 'booked') {
-    query = query.or('journal_entry_id.not.is.null,manually_booked_at.not.is.null')
+    query = query.or(BOOKED_EXITS_FILTER)
   }
   if (input.booked === 'unbooked') {
     query = query.is('journal_entry_id', null).is('manually_booked_at', null)

@@ -52,6 +52,8 @@ const TransactionDetail = z.object({
   counterparty_account: z.string().nullable(),
   counterparty_iban: z.string().nullable().optional().describe('The counterparty\'s IBAN as the bank sent it (the payee of a foreign payment, the payer of an incoming transfer).'),
   counterparty_org_number: z.string().nullable().optional().describe('The counterparty\'s organisationsnummer, digits only, when the bank\'s enrichment names it.'),
+  billing_country: z.string().nullable().optional().describe('A Stripe sale: the country of the buyer\'s billing address (ISO 3166-1 alpha-2), as Stripe states it. Kept apart from card_country: they can differ.'),
+  card_country: z.string().nullable().optional().describe('A Stripe sale: the country of the buyer\'s card (ISO 3166-1 alpha-2), as Stripe states it. Kept apart from billing_country: they can differ.'),
   instructed_amount: z.number().nullable().optional().describe('The amount in the currency the payment was made in, when that differs from the account currency (a card purchase abroad).'),
   instructed_currency: z.string().nullable().optional().describe('The currency of instructed_amount.'),
   balance_after: z.number().nullable().optional().describe('The account balance after this transaction as the bank reports it; null for personal accounts and feeds that send none.'),

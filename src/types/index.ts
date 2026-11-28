@@ -388,6 +388,14 @@ export type VatTreatment =
   | 'exempt'            // VAT exempt
   | 'outside_scope'     // No Swedish VAT: not a supply made in Sweden (dröjsmålsränta on a räntefaktura, no ruta)
 
+/**
+ * The moms a learned counterparty template stores: a treatment, or 'unknown'
+ * for moms its bookings carried that is no one Swedish rate of the net (a
+ * mixed invoice). Such a template books no moms of its own and is never
+ * booked without a review (lib/bookkeeping/counterparty-templates.ts).
+ */
+export type TemplateVatTreatment = VatTreatment | 'unknown'
+
 // Accounting method (bokföringsmetod)
 export type AccountingMethod = 'accrual' | 'cash'
 
@@ -1185,6 +1193,12 @@ export interface Transaction {
   balance_after?: number | null
   is_enriched?: boolean | null
   enriched_at?: string | null
+
+  // The buyer's two countries on a Stripe sale (migration 20261128093000),
+  // ISO 3166-1 alpha-2: the billing address's and the card's, kept apart
+  // because they can differ. Null on every other row.
+  billing_country?: string | null
+  card_country?: string | null
 
   // Notes
   notes: string | null
@@ -2764,7 +2778,7 @@ export interface CategorizationTemplate {
   counterparty_aliases: string[]
   debit_account: string
   credit_account: string
-  vat_treatment: VatTreatment | null
+  vat_treatment: TemplateVatTreatment | null
   vat_account: string | null
   category: TransactionCategory | null
   line_pattern: LinePatternEntry[] | null
@@ -4722,6 +4736,13 @@ export interface RawTransaction {
   raw_document_id?: string | null
   /** The counterparty's organisationsnummer, digits only, when the bank's enrichment names it. */
   counterparty_org_number?: string | null
+  /**
+   * The buyer's countries on a sale, as the source states them (the Stripe
+   * feed's charge): the billing address's and the card's, ISO 3166-1
+   * alpha-2. Kept apart, never one folded into the other: they can differ.
+   */
+  billing_country?: string | null
+  card_country?: string | null
   /** The amount in the currency the payment was made in, when that differs from the account currency. */
   instructed_amount?: number | null
   /** The currency of instructed_amount. */
@@ -4958,7 +4979,11 @@ export interface WebshopOrder {
   external_id: string
   platform_order_id: string
   order_number: string
-  /** Raw platform status (pending/processing/completed/refunded/...). */
+  /**
+   * Raw platform status (pending/processing/completed/refunded/...);
+   * 'cancelled' when the store cancelled the order (WooCommerce's own status,
+   * Shopify's cancelledAt).
+   */
   status: string
   is_paid: boolean
   order_date: string
@@ -5018,6 +5043,11 @@ export interface WebshopOrder {
   manually_booked_by: string | null
   /** Optional informational reference to the existing verifikat. */
   manually_booked_journal_entry_id: string | null
+  /**
+   * The manual mark voids the row (makulerad): the store cancelled the order
+   * and nothing is booked. False when the mark says it was booked outside.
+   */
+  manually_voided: boolean
   created_at: string
   updated_at: string
 }

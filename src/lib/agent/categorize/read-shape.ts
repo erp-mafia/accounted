@@ -44,3 +44,16 @@ export function firstSentence(text: string): string {
   const m = text.trim().match(/^.*?[.!?](?=\s|$)/)
   return m ? m[0] : text.trim()
 }
+
+/**
+ * Whether the read picked a candidate whose moms is unknown (vatUnknown) and
+ * read nothing in its place (no reverse charge, no purchase abroad): its null
+ * treatment is no reading of none. Such a pick books through a review with
+ * the underlag's moms (withUnknownVat), never as exempt.
+ */
+export function readLeavesMomsUnknown(
+  read: Pick<AssistantRead, 'account' | 'from_candidate' | 'vat_treatment' | 'candidates'>,
+): boolean {
+  if (!read.account || !read.from_candidate || read.vat_treatment != null) return false
+  return read.candidates.find((c) => c.account === read.account)?.vatUnknown === true
+}

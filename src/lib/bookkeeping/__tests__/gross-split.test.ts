@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { roundOre } from '@/lib/money'
-import { grossVat, HIGHEST_VAT_RATE, maxVatInGross, netVat, splitGrossVat, statedVatFitsRate, treatmentForRate, vatWithinGrossCeiling } from '../gross-split'
+import { grossVat, HIGHEST_VAT_RATE, maxVatInGross, netVat, rateOfStatedVat, splitGrossVat, statedVatFitsRate, treatmentForRate, vatWithinGrossCeiling } from '../gross-split'
 
 describe('netVat', () => {
   it('is the net times the rate', () => {
@@ -78,6 +78,30 @@ describe('statedVatFitsRate', () => {
   it('refuses several rates or a momsfri part under one rate', () => {
     expect(statedVatFitsRate(37, 200, 0.25)).toBe(false) // 100 at 25 % + 100 at 12 %
     expect(statedVatFitsRate(25, 200, 0.25)).toBe(false) // half momsfri
+  })
+})
+
+describe('rateOfStatedVat', () => {
+  it('reads a stated VAT as the Swedish rate it is of the net', () => {
+    expect(rateOfStatedVat(145, 580)).toBe(0.25)
+    expect(rateOfStatedVat(77.68, 647.32)).toBe(0.12)
+    expect(rateOfStatedVat(41.04, 683.96)).toBe(0.06)
+  })
+
+  it('reads no rate for a mixed invoice: 125 kr of moms on 725 kr', () => {
+    expect(rateOfStatedVat(125, 600)).toBeNull()
+  })
+
+  it('takes the nearer of two rates that fit a small amount', () => {
+    // 6 % of 4,72 kr is 0,28 kr; 25 % and 12 % are within a krona too.
+    expect(rateOfStatedVat(0.28, 4.72)).toBe(0.06)
+    expect(rateOfStatedVat(1.18, 4.72)).toBe(0.25)
+  })
+
+  it('reads nothing without moms or without a net', () => {
+    expect(rateOfStatedVat(0, 100)).toBeNull()
+    expect(rateOfStatedVat(25, 0)).toBeNull()
+    expect(rateOfStatedVat(25, -100)).toBeNull()
   })
 })
 

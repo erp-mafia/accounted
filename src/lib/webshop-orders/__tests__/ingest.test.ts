@@ -54,6 +54,7 @@ function existingRow(overrides: Record<string, unknown> = {}) {
   return {
     id: 'row-1',
     external_id: 'woo_butik.example.se_order_1001',
+    parent_order_id: null,
     journal_entry_id: null,
     invoice_id: null,
     manually_booked_at: null,
@@ -150,6 +151,31 @@ describe('upsertWebshopOrders', () => {
       row_type: 'refund',
       parent_order_id: 'order-id-1',
     })
+  })
+
+  it('links a refund stored before its order once the order is found, though nothing else changed', async () => {
+    const refundExternalId = 'woo_butik.example.se_refund_77'
+    mock.enqueueMany([
+      {
+        data: [
+          existingRow({ id: 'refund-row', external_id: refundExternalId, parent_order_id: null, total: -500, total_tax: -100, total_sek: -500 }),
+          existingRow({ id: 'order-row' }),
+        ],
+      },
+      { data: [] }, // legacy
+      { data: null }, // update
+    ])
+    const refund = makeUpsert({
+      row_type: 'refund',
+      parent_external_id: 'woo_butik.example.se_order_1001',
+      external_id: refundExternalId,
+      platform_order_id: '77',
+      total: -500,
+      total_tax: -100,
+    })
+    const result = await upsertWebshopOrders(supabase(), COMPANY, USER, [refund])
+    expect(result).toMatchObject({ updated: 1, unchanged: 0 })
+    expect((mock.findCall('webshop_orders', 'update')![0] as Record<string, unknown>).parent_order_id).toBe('order-row')
   })
 
   it('cross-marks rows whose external_id already exists in the transactions feed', async () => {

@@ -28,6 +28,8 @@ const TX_ROW = {
   counterparty_account: null,
   counterparty_iban: null,
   counterparty_org_number: null,
+  billing_country: null,
+  card_country: null,
   instructed_amount: null,
   instructed_currency: null,
   balance_after: '4875.00',

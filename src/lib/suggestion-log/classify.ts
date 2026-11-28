@@ -73,6 +73,8 @@ export interface SuggestionEvidence {
   reverse_charge_box_unconfirmed?: true
   /** Set only when true: a read on a row where an auto-learned mapping row no longer read would have proposed. */
   replaces_learned_rule?: true
+  /** Set only when true: a learned counterpart whose moms is no one Swedish rate, booked only after a review. */
+  vat_unknown?: true
 }
 
 /** The stored read as the log keeps it: the reasoning only as a hash. */
@@ -148,6 +150,7 @@ function evidenceOf(p: BookingProposal): SuggestionEvidence | undefined {
     ...(p.read_reverse_charge_kind ? { read_reverse_charge_kind: p.read_reverse_charge_kind } : {}),
     ...(p.reverse_charge_box_unconfirmed ? { reverse_charge_box_unconfirmed: true as const } : {}),
     ...(p.replaces_learned_rule ? { replaces_learned_rule: true as const } : {}),
+    ...(p.vat_unknown ? { vat_unknown: true as const } : {}),
   }
   return Object.keys(evidence).length > 0 ? evidence : undefined
 }

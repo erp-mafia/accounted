@@ -27,15 +27,25 @@ const LINES = [
   { account_number: '1930', debit_amount: 0, credit_amount: 12225 },
 ]
 
-/** A client that answers the transactions read and the journal_entry_lines read, recording their filters. */
-function makeClient(opts: { transaction?: unknown; lines?: unknown[]; transactionError?: { message: string } } = {}) {
+/**
+ * A client that answers the transactions read, the journal_entry_lines read
+ * and the company's VAT registration, recording their filters.
+ */
+function makeClient(opts: {
+  transaction?: unknown
+  lines?: unknown[]
+  transactionError?: { message: string }
+  vatRegistered?: boolean | null
+} = {}) {
   const reads: Array<{ table: string; filters: Record<string, unknown> }> = []
   const from = vi.fn((table: string) => {
     const filters: Record<string, unknown> = {}
     reads.push({ table, filters })
     const result = table === 'transactions'
       ? { data: opts.transaction ?? null, error: opts.transactionError ?? null }
-      : { data: opts.lines ?? [], error: null }
+      : table === 'company_settings'
+        ? { data: { vat_registered: opts.vatRegistered === undefined ? true : opts.vatRegistered }, error: null }
+        : { data: opts.lines ?? [], error: null }
     const chain = {
       select: () => chain,
       eq: (col: string, val: unknown) => {
@@ -71,8 +81,11 @@ describe('unlearnReversedBankBooking', () => {
     const entry = { ...makeJournalEntry({ source_type: 'bank_transaction', source_id: 'tx-1' }), lines: LINES }
 
     expect(await unlearnReversedBankBooking(client, 'company-1', entry as never)).toBe('deactivated')
-    expect(reads).toEqual([{ table: 'transactions', filters: { id: 'tx-1', company_id: 'company-1' } }])
-    expect(mockUnlearn).toHaveBeenCalledWith(client, 'company-1', BANK_TEXT, LINES)
+    expect(reads).toEqual([
+      { table: 'transactions', filters: { id: 'tx-1', company_id: 'company-1' } },
+      { table: 'company_settings', filters: { company_id: 'company-1' } },
+    ])
+    expect(mockUnlearn).toHaveBeenCalledWith(client, 'company-1', BANK_TEXT, LINES, true)
   })
 
   it('loads the lines when the event carried none', async () => {
@@ -82,7 +95,16 @@ describe('unlearnReversedBankBooking', () => {
     await unlearnReversedBankBooking(client, 'company-1', entry as never)
 
     expect(reads[1]).toEqual({ table: 'journal_entry_lines', filters: { journal_entry_id: 'je-1' } })
-    expect(mockUnlearn).toHaveBeenCalledWith(client, 'company-1', BANK_TEXT, LINES)
+    expect(mockUnlearn).toHaveBeenCalledWith(client, 'company-1', BANK_TEXT, LINES, true)
+  })
+
+  it('passes the company\'s VAT registration, so a booking without moms is read against it', async () => {
+    const { client } = makeClient({ transaction: BANK_TEXT, vatRegistered: false })
+    const entry = { ...makeJournalEntry({ source_type: 'bank_transaction', source_id: 'tx-1' }), lines: LINES }
+
+    await unlearnReversedBankBooking(client, 'company-1', entry as never)
+
+    expect(mockUnlearn).toHaveBeenCalledWith(client, 'company-1', BANK_TEXT, LINES, false)
   })
 
   it('does nothing when the bank line is not the company\'s', async () => {
@@ -141,7 +163,7 @@ describe('unlearnReversedBankBooking', () => {
       },
     })
 
-    expect(mockUnlearn).toHaveBeenCalledWith(client, 'company-1', BANK_TEXT, LINES)
+    expect(mockUnlearn).toHaveBeenCalledWith(client, 'company-1', BANK_TEXT, LINES, true)
   })
 })
 
@@ -187,7 +209,7 @@ describe('unlearnOnCorrection', () => {
 
     await unlearnOnCorrection(corrected(REVERSE_CHARGE, DOMESTIC_MOMS))
 
-    expect(mockUnlearn).toHaveBeenCalledWith(client, 'company-1', BANK_ROW, REVERSE_CHARGE)
+    expect(mockUnlearn).toHaveBeenCalledWith(client, 'company-1', BANK_ROW, REVERSE_CHARGE, true)
   })
 
   it('a correction on the same accounts (a new date or amount) leaves the template alone', async () => {
@@ -212,7 +234,7 @@ describe('unlearnOnCorrection', () => {
           filters[col] = val
           return chain
         },
-        maybeSingle: async () => ({ data: BANK_ROW, error: null }),
+        maybeSingle: async () => ({ data: table === 'company_settings' ? { vat_registered: true } : BANK_ROW, error: null }),
         then: (resolve: (v: unknown) => void) => {
           reads.push(`${table}:${String(filters.journal_entry_id)}`)
           resolve({ data: linesById[String(filters.journal_entry_id)] ?? [], error: null })
@@ -227,7 +249,7 @@ describe('unlearnOnCorrection', () => {
     await unlearnOnCorrection(payload)
 
     expect(reads.slice(0, 2)).toEqual(['journal_entry_lines:je-orig', 'journal_entry_lines:je-new'])
-    expect(mockUnlearn).toHaveBeenCalledWith(client, 'company-1', BANK_ROW, REVERSE_CHARGE)
+    expect(mockUnlearn).toHaveBeenCalledWith(client, 'company-1', BANK_ROW, REVERSE_CHARGE, true)
   })
 
   /** A client that holds verifikat rows by id, so the correction_of_id chain is read as production reads it. */
@@ -243,6 +265,7 @@ describe('unlearnOnCorrection', () => {
         },
         maybeSingle: async () => {
           if (table === 'transactions') return { data: filters.id === 'tx-1' ? BANK_ROW : null, error: null }
+          if (table === 'company_settings') return { data: { vat_registered: true }, error: null }
           reads.push(`${table}:${String(filters.id)}`)
           const row = entries[String(filters.id)]
           return { data: row ? { id: filters.id, source_type: row.source_type, source_id: row.source_id, correction_of_id: row.correction_of_id } : null, error: null }
@@ -275,7 +298,7 @@ describe('unlearnOnCorrection', () => {
     })
 
     expect(mockUnlearn).toHaveBeenCalledTimes(1)
-    expect(mockUnlearn).toHaveBeenCalledWith(client, 'company-1', BANK_ROW, REVERSE_CHARGE)
+    expect(mockUnlearn).toHaveBeenCalledWith(client, 'company-1', BANK_ROW, REVERSE_CHARGE, true)
   })
 
   it('a second correction after one that already changed the kontering takes nothing back again', async () => {
@@ -330,7 +353,7 @@ describe('unlearnOnCorrection', () => {
 
     await unlearnOnCorrection(corrected(withoutMoms, nonEuReverseCharge))
 
-    expect(mockUnlearn).toHaveBeenCalledWith(client, 'company-1', BANK_ROW, withoutMoms)
+    expect(mockUnlearn).toHaveBeenCalledWith(client, 'company-1', BANK_ROW, withoutMoms, true)
   })
 
   it('a correction that adds lines but drops a taught account takes the occurrence back', async () => {
@@ -344,7 +367,7 @@ describe('unlearnOnCorrection', () => {
 
     await unlearnOnCorrection(corrected(DOMESTIC_MOMS, otherCostPlusRounding))
 
-    expect(mockUnlearn).toHaveBeenCalledWith(client, 'company-1', BANK_ROW, DOMESTIC_MOMS)
+    expect(mockUnlearn).toHaveBeenCalledWith(client, 'company-1', BANK_ROW, DOMESTIC_MOMS, true)
   })
 
   it('a correction the system made (kontantmetod cut-off) keeps the template', async () => {
@@ -368,6 +391,6 @@ describe('unlearnOnCorrection', () => {
 
     await eventBus.emit({ type: 'journal_entry.corrected', payload: corrected(REVERSE_CHARGE, DOMESTIC_MOMS) })
 
-    expect(mockUnlearn).toHaveBeenCalledWith(client, 'company-1', BANK_ROW, REVERSE_CHARGE)
+    expect(mockUnlearn).toHaveBeenCalledWith(client, 'company-1', BANK_ROW, REVERSE_CHARGE, true)
   })
 })

@@ -142,7 +142,7 @@ export async function proposeForTransactions(
     readDirectBookingSettings(supabase, companyId),
     supabase
       .from('company_settings')
-      .select('entity_type')
+      .select('entity_type, vat_registered')
       .eq('company_id', companyId)
       .single(),
     // Batch counterparty template matching (1 DB query, in-memory matching)
@@ -194,6 +194,7 @@ export async function proposeForTransactions(
   const mappingRules = mappingRulesBesideSwitchedOff(readRules, switchedOffByName)
 
   const entityType = (settingsRead.data?.entity_type as EntityType) || undefined
+  const vatRegistered = (settingsRead.data as { vat_registered?: boolean | null } | null)?.vat_registered
 
   // The rows an auto-learned rule that is no longer read would have proposed
   // for: the assistant's read may take the row there, but only into a review
@@ -288,7 +289,7 @@ export async function proposeForTransactions(
     // counterpart learned as a cost is shown as the refund it books as.
     const directionMismatch = contradictsLearnedDirection(cpMatch.template, tx.amount)
     proposals[tx.id] = [
-      buildCounterpartySuggestion(template, cpMatch.confidence, { directionMismatch }),
+      buildCounterpartySuggestion(template, cpMatch.confidence, { directionMismatch, amount: tx.amount, entityType, vatRegistered }),
       ...(proposals[tx.id] || []),
     ]
   }
