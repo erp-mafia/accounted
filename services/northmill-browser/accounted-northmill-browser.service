@@ -1,0 +1,29 @@
+[Unit]
+Description=Accounted Northmill statement browser
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Adapt this checkout path before installing the unit.
+WorkingDirectory=/opt/accounted
+ExecStart=/usr/bin/node services/northmill-browser/main.mjs
+EnvironmentFile=%h/.config/accounted/northmill-browser.env
+Environment=NODE_ENV=production
+Environment=NODE_OPTIONS=--max-old-space-size=512
+Environment=NORTHMILL_BROWSER_SOCKET=%t/accounted-northmill-browser/worker.sock
+RuntimeDirectory=accounted-northmill-browser
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15
+KillMode=control-group
+MemoryMax=2G
+TasksMax=512
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+UMask=0077
+
+[Install]
+WantedBy=default.target

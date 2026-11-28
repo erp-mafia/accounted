@@ -21,6 +21,7 @@ import {
   ExclamationCircleIcon,
   SpinnerIcon,
 } from '@/components/icons'
+import NorthmillFetch from './NorthmillFetch'
 import type { BankFileFormatId } from '@/lib/import/bank-file/types'
 
 const FORMAT_NAMES: Record<string, string> = {
@@ -59,6 +60,7 @@ const EXPORT_PATH_KEYS: Partial<Record<BankFileFormatId, string>> = {
 
 interface BankFileUploadStepProps {
   onFileSelect: (file: File, formatOverride?: BankFileFormatId) => void
+  allowBankFetch?: boolean
   isLoading: boolean
   error: string | null
   errorTitle?: string | null
@@ -71,6 +73,7 @@ interface BankFileUploadStepProps {
 export default function BankFileUploadStep({
   onFileSelect,
   isLoading,
+  allowBankFetch = true,
   error,
   errorTitle,
   detectedFormat,
@@ -109,6 +112,11 @@ export default function BankFileUploadStep({
 
   return (
     <div className="space-y-6">
+      {allowBankFetch && <NorthmillFetch disabled={isLoading} onFile={file => {
+        setSelectedFile(file)
+        setFormatOverride('northmill')
+        onFileSelect(file, 'northmill')
+      }} />}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">

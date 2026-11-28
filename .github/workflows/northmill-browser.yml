@@ -1,0 +1,39 @@
+name: Northmill browser worker
+
+on:
+  pull_request:
+    paths:
+      - 'services/northmill-browser/**'
+      - '.github/workflows/northmill-browser.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'services/northmill-browser/**'
+      - '.github/workflows/northmill-browser.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: northmill-browser-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  worker:
+    name: Worker and synthetic bank export
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - run: npm ci --prefix services/northmill-browser --ignore-scripts
+      - name: Install matching Chromium and OS libraries
+        working-directory: services/northmill-browser
+        run: npx --no-install playwright install --with-deps chromium
+      - run: npm test --prefix services/northmill-browser
