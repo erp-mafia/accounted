@@ -7,6 +7,7 @@ import { upsertWebshopOrders } from '@/lib/webshop-orders/ingest'
 import {
   kustomImport,
   kustomOrderNumbers,
+  kustomPayoutExternalId,
   kustomPayoutRecord,
   parseKustomSettlementReport,
 } from '@/lib/webshop-orders/kustom-settlement'
@@ -100,6 +101,21 @@ export const POST = withRouteContext(
             .is('journal_entry_id', null)
       if (payoutError || refreshError) {
         opLog.error('kustom payout not saved', { error: (payoutError ?? refreshError)?.message })
+        return errorResponseFromCode('KUSTOM_SETTLEMENT_IMPORT_FAILED', opLog, { requestId })
+      }
+    } else if (payout.reference) {
+      // A corrected report whose payout reached no bank: the payout an earlier
+      // upload stored under the same reference is not proposed any more,
+      // unless a bank row already claimed or booked it.
+      const { error: withdrawError } = await service
+        .from('webshop_payouts')
+        .delete()
+        .eq('company_id', companyId)
+        .eq('external_id', kustomPayoutExternalId(payout))
+        .is('transaction_id', null)
+        .is('journal_entry_id', null)
+      if (withdrawError) {
+        opLog.error('kustom payout not withdrawn', { error: withdrawError.message })
         return errorResponseFromCode('KUSTOM_SETTLEMENT_IMPORT_FAILED', opLog, { requestId })
       }
     }

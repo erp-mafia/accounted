@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { randomUUID } from 'crypto'
 import { getPool, withUserContext } from './setup'
-import { seedCompany } from './fixtures'
+import { insertDraftJournalEntry, seedCompany } from './fixtures'
 
 /**
  * Covers 20261128091537_webshop_payouts: a payment provider's payout, stored
@@ -78,10 +78,12 @@ describe('webshop_payouts', () => {
   })
 
   it('refuses a payout booked on a verifikat without the bank row it was booked from', async () => {
-    const { userId, companyId } = await seedCompany()
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
     const { rows } = await insertPayout(companyId, userId)
+    // A real verifikat, so only the check can refuse it.
+    const entryId = await insertDraftJournalEntry({ companyId, userId, fiscalPeriodId })
     await expect(
-      getPool().query(`UPDATE public.webshop_payouts SET journal_entry_id = gen_random_uuid() WHERE id = $1`, [rows[0].id]),
-    ).rejects.toMatchObject({ code: expect.stringMatching(/^23(514|503)$/) })
+      getPool().query(`UPDATE public.webshop_payouts SET journal_entry_id = $2 WHERE id = $1`, [rows[0].id, entryId]),
+    ).rejects.toMatchObject({ code: '23514', constraint: 'webshop_payouts_booked_from_row' })
   })
 })

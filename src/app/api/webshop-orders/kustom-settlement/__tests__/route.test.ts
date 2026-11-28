@@ -6,13 +6,24 @@ import type { WebshopOrderUpsert } from '@/lib/webshop-orders/types'
 const { supabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 const payoutUpsert = vi.fn()
 const payoutRefresh = vi.fn()
+const payoutDelete = vi.fn()
 const refreshFilters: unknown[][] = []
+const deleteFilters: unknown[][] = []
 const serviceClient = {
   marker: 'service',
   from: (table: string) => {
     if (table !== 'webshop_payouts') throw new Error(`unexpected service table ${table}`)
     return {
       upsert: (...args: unknown[]) => payoutUpsert(...args),
+      delete: () => {
+        payoutDelete()
+        const chain = {
+          eq: (...args: unknown[]) => (deleteFilters.push(['eq', ...args]), chain),
+          is: (...args: unknown[]) => (deleteFilters.push(['is', ...args]), chain),
+          then: (resolve: (v: unknown) => unknown) => resolve({ error: null }),
+        }
+        return chain
+      },
       update: (patch: unknown) => {
         payoutRefresh(patch)
         const chain = {
@@ -206,6 +217,24 @@ describe('POST /api/webshop-orders/kustom-settlement', () => {
     // A payout no bank row has claimed takes the report's figures again.
     expect(payoutRefresh).toHaveBeenCalledWith(expect.objectContaining({ amount: 934.37 }))
     expect(refreshFilters).toEqual(
+      expect.arrayContaining([
+        ['eq', 'external_id', 'kustom_M100_payout_PAY123'],
+        ['is', 'transaction_id', null],
+        ['is', 'journal_entry_id', null],
+      ]),
+    )
+  })
+
+  it('withdraws the unclaimed payout a corrected report says never reached the bank', async () => {
+    enqueue({ data: [] })
+    deleteFilters.length = 0
+    const corrected = REPORT.replace(';PAY123;SEK;2026-11-19T00:00:00.000Z;M100', ';PAY123;SEK;;M100')
+    const { status, body } = await jsonOf(await POST(makeFileRequest(corrected), emptyParams))
+    expect(status).toBe(200)
+    expect(body.data.payout_recorded).toBe(false)
+    expect(payoutUpsert).not.toHaveBeenCalled()
+    expect(payoutDelete).toHaveBeenCalledTimes(1)
+    expect(deleteFilters).toEqual(
       expect.arrayContaining([
         ['eq', 'external_id', 'kustom_M100_payout_PAY123'],
         ['is', 'transaction_id', null],

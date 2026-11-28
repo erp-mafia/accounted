@@ -1613,8 +1613,19 @@ export async function categorizeTransaction(
   )
   if (updateError || !updated || updated.length === 0) {
     await reverseOrphanedJournalEntry(supabase, companyId, userId, bookedEntry.id, ORPHAN_REVERSAL_NOTE)
-    // The verifikat is reversed: the clearing record is free for the row's next booking.
-    await releaseClearing()
+    // The clearing record is free for the next booking only once the orphan
+    // is known reversed; a storno that failed leaves it posted, and the
+    // record stays claimed by this row (whose next booking takes it again).
+    if (clearingBooking) {
+      const { data: orphan, error: orphanError } = await supabase
+        .from('journal_entries')
+        .select('status')
+        .eq('id', bookedEntry.id)
+        .eq('company_id', companyId)
+        .maybeSingle()
+      if (!orphanError && orphan && (orphan as { status: string }).status !== 'posted') await releaseClearing()
+      else txLog.error('clearing record kept claimed: the orphaned verifikat may still be posted', orphanError ?? undefined, { journalEntryId: bookedEntry.id })
+    }
     if (updateError) {
       // Still busy after the retries: the retryable 409 the person can act
       // on ("vänta en stund och försök igen"), not a failure of ours.
