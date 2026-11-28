@@ -457,6 +457,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'DELETE /api/documents/:id': covered([`DELETE ${V}/documents/:id`, 'gnubok_delete_document']),
   'POST /api/documents/:id/link': covered([`POST ${V}/documents/:id/link`, 'gnubok_link_document_to_voucher']),
   'POST /api/documents/:id/detach': gap('P3', 'detach a duplicate underlag from a posted verifikat'),
+  'POST /api/documents/:id/strike': gap('P2', 'strike the link of an underlag attached to the wrong verifikat and give the right one a copy'),
   'POST /api/documents/:id/versions': gap('P3', 'new version of a document'),
   'POST /api/documents/:id/admission': gap('P3', 'admit or discard a held document'),
   'POST /api/documents/:id/classification': covered([`PUT ${V}/documents/:id/type`, 'gnubok_set_document_type']),
@@ -1198,5 +1199,8 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * one raise.
  * 162 -> 161 (2026-11-28): removing a deadline (DELETE /api/deadlines/:id),
  * through the staged gnubok_delete_deadline.
+ * 161 -> 162 (2026-11-28): striking the link of an underlag attached to the
+ * wrong verifikat (POST /api/documents/:id/strike), new and dashboard-only;
+ * an MCP door would be a staged operation of its own.
  */
-export const GAP_CEILING = 161
+export const GAP_CEILING = 162

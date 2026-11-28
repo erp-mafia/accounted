@@ -23,8 +23,9 @@ export interface UnderlagCounts {
  * (read in chunks of UNDERLAG_COUNTS_CHUNK). The ids must already be
  * validated UUIDs: they go into a PostgREST .or() filter.
  *
- * `counts` counts BOTH direct attachments (document_attachments.journal_entry_id)
- * and documents retained on a supplier invoice that references the entry
+ * `counts` counts BOTH direct attachments (document_attachments.journal_entry_id,
+ * a struck link left out) and documents retained on a supplier invoice that
+ * references the entry
  * (registration/payment FK or a supplier_invoice_payments row). BFL 5 kap 7 §
  * accepts underlag via hänvisning, and the expanded-row view
  * (JournalEntryAttachments) already lists referenced docs: counting only
@@ -75,6 +76,9 @@ async function countChunk(supabase: SupabaseClient, companyId: string, ids: stri
       .select('id, journal_entry_id')
       .eq('company_id', companyId)
       .eq('is_current_version', true)
+      // A struck link is not the verifikat's underlag (the document was on the
+      // wrong verifikat): as in verifikat_without_documents.
+      .is('link_struck_at', null)
       .in('journal_entry_id', ids),
     supabase
       .from('supplier_invoices')

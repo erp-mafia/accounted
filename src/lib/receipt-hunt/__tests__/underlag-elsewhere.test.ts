@@ -9,7 +9,7 @@ import { resolveUnderlagElsewhere } from '../underlag-elsewhere'
 
 type Row = Record<string, unknown>
 
-/** A Supabase stand-in that honours eq/in, so a wrong filter shows up as a wrong answer. */
+/** A Supabase stand-in that honours eq/in/is, so a wrong filter shows up as a wrong answer. */
 function mockSupabase(tables: Record<string, Row[]>) {
   return {
     from(table: string) {
@@ -25,6 +25,10 @@ function mockSupabase(tables: Record<string, Row[]>) {
       }
       chain.in = (column: string, values: unknown[]) => {
         filters.push((row) => values.includes(row[column]))
+        return chain
+      }
+      chain.is = (column: string, value: unknown) => {
+        filters.push((row) => (row[column] ?? null) === value)
         return chain
       }
       chain.range = (f: number, t: number) => {
@@ -216,6 +220,24 @@ describe('resolveUnderlagElsewhere', () => {
       journal_entries: [entry('inv-8', 'V', 8, '2026-01-02')],
       journal_entry_lines: [line('inv-8', '2440', 0, 300), ...paymentLines],
       document_attachments: [],
+    })
+
+    const result = await resolveUnderlagElsewhere(
+      supabase,
+      CO,
+      [{ journal_entry_id: 'pay-9', entry_date: '2026-02-01', description: 'Leverantörsfaktura betald till Teleoperatören (V8)' }],
+      byEntry(paymentLines),
+    )
+
+    expect(result.size).toBe(0)
+  })
+
+  it('does not offer a document whose link was struck on the invoice verifikat', async () => {
+    const paymentLines = [line('pay-9', '2440', 300, 0), line('pay-9', '1932', 0, 300)]
+    const supabase = mockSupabase({
+      journal_entries: [entry('inv-8', 'V', 8, '2026-01-02')],
+      journal_entry_lines: [line('inv-8', '2440', 0, 300), ...paymentLines],
+      document_attachments: [{ ...doc('doc-struck', 'inv-8'), link_struck_at: '2026-11-27T10:00:00Z' }],
     })
 
     const result = await resolveUnderlagElsewhere(

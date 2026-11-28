@@ -362,17 +362,27 @@ export async function linkDocumentCopyToVoucher(
     .eq('journal_entry_id', input.journal_entry_id)
     .eq('sha256_hash', source.sha256_hash)
     .eq('is_current_version', true)
-    .limit(1)
+    .limit(50)
   if (presentError) throw dbError(presentError, 'document copy: target lookup failed')
-  const already = (present as DocumentAttachment[] | null)?.[0]
+  const sameBytes = (present ?? []) as Array<DocumentAttachment & { link_struck_at?: string | null }>
+  // A row of these bytes whose link was struck there is not the verifikat's
+  // underlag (lib/documents/strike-link.ts): only an unstruck one is reused.
+  const already = sameBytes.find((row) => !row.link_struck_at)
   if (already) return { ok: true, document: already, source_document_id: source.id, target: check.target, reused: true }
+  // The copy's id is derived from its key, so a key a struck row already took
+  // would answer with that row: after a strike the key names the struck rows,
+  // and a retry still converges on one new copy.
+  const struckIds = sameBytes.filter((row) => row.link_struck_at).map((row) => row.id).sort()
+  const idempotencyKey = struckIds.length > 0
+    ? `document-copy:${source.id}:${input.journal_entry_id}:after:${struckIds.join(',')}`
+    : `document-copy:${source.id}:${input.journal_entry_id}`
 
   const document = await storeCopy(supabase, companyId, userId, source, {
     journal_entry_id: input.journal_entry_id,
     // A copy onto the verifikat the caller named.
     linkBasis: options.linkBasis ?? linkBasisColumns('user_confirmed'),
     ...(input.journal_entry_line_id ? { journal_entry_line_id: input.journal_entry_line_id } : {}),
-    idempotency_key: `document-copy:${source.id}:${input.journal_entry_id}`,
+    idempotency_key: idempotencyKey,
   })
   return { ok: true, document, source_document_id: source.id, target: check.target, reused: false }
 }

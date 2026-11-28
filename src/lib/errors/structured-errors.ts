@@ -6966,6 +6966,80 @@ const DOCUMENT: Record<string, StructuredErrorEntry> = {
     message_sv: 'Bilagan är kopplad till en bokförd verifikation och kan inte tas bort. Storno verifikationen först.',
     message_en: 'The document is the underlag of a journal entry and cannot be detached. Reverse the entry first.',
   },
+  // A wrongly linked underlag: the link is struck in place and the right
+  // verifikat gets a copy (lib/documents/strike-link.ts, migration
+  // 20261127160000). Each refusal names the way forward.
+  DOC_STRIKE_NOT_LINKED: {
+    httpStatus: 409,
+    message_sv: 'Underlaget är inte kopplat till någon verifikation, så det finns ingen koppling att stryka.',
+    message_en: 'The document is not linked to any verifikat, so there is no link to strike.',
+  },
+  DOC_STRIKE_ALREADY_STRUCK: {
+    httpStatus: 409,
+    message_sv: 'Kopplingen är redan struken. En strykning står kvar som den gjordes.',
+    message_en: 'The link is already struck. A strike stays as it was made.',
+  },
+  DOC_STRIKE_NOT_CURRENT: {
+    httpStatus: 409,
+    message_sv: 'Bara den aktuella versionen av ett underlag kan strykas.',
+    message_en: 'Only the current version of a document can be struck.',
+  },
+  DOC_STRIKE_NOT_POSTED: {
+    httpStatus: 409,
+    message_sv: 'Bara underlag på en bokförd verifikation kan strykas. Ett utkast ändras innan det bokförs, och en makulerad verifikation rättas med Rätta.',
+    message_en: 'Only a document on a posted verifikat can be struck. A draft is changed before it is posted, and a reversed verifikat is corrected with Correct.',
+  },
+  DOC_STRIKE_PERIOD_LOCKED: {
+    httpStatus: 409,
+    message_sv: 'Verifikationen ligger i en stängd eller låst period, eller före bokföringens låsdatum, och ändras inte längre. Underlaget står kvar som det är.',
+    message_en: 'The verifikat is in a closed or locked period, or before the books\' lock date, and no longer changes. The document stays as it is.',
+  },
+  DOC_STRIKE_PINNED_TRANSACTION: {
+    httpStatus: 409,
+    message_sv: 'Underlaget är banktransaktionens eget underlag och kan inte strykas här. Byt det från transaktionen.',
+    message_en: 'The document is the bank transaction\'s own underlag and cannot be struck here. Change it from the transaction.',
+  },
+  DOC_STRIKE_PINNED_SUPPLIER_INVOICE: {
+    httpStatus: 409,
+    message_sv: 'Underlaget är leverantörsfakturans originalunderlag och kan inte strykas här. Ändra det från leverantörsfakturan.',
+    message_en: 'The document is the supplier invoice\'s original underlag and cannot be struck here. Change it from the supplier invoice.',
+  },
+  DOC_STRIKE_SAME_VERIFIKAT: {
+    httpStatus: 400,
+    message_sv: 'Välj den verifikation underlaget hör till, inte den det redan sitter på.',
+    message_en: 'Choose the verifikat the document belongs to, not the one it is already on.',
+  },
+  DOC_STRIKE_TARGET_NOT_POSTED: {
+    httpStatus: 409,
+    message_sv: 'Verifikationen som ska få kopian är inte bokförd. Bokför den först.',
+    message_en: 'The verifikat that would get the copy is not posted. Post it first.',
+  },
+  DOC_STRIKE_TARGET_PERIOD_LOCKED: {
+    httpStatus: 409,
+    message_sv: 'Verifikationen som ska få kopian ligger i en stängd eller låst period och tar inte emot underlag. Inget ändrades.',
+    message_en: 'The verifikat that would get the copy is in a closed or locked period and takes no documents. Nothing was changed.',
+  },
+  DOC_STRIKE_REASON_REQUIRED: {
+    httpStatus: 400,
+    message_sv: 'Skriv varför kopplingen stryks.',
+    message_en: 'Say why the link is struck.',
+  },
+  DOC_STRIKE_ACTOR_REQUIRED: {
+    httpStatus: 403,
+    message_sv: 'Bara den som är medlem i bolaget kan stryka en koppling.',
+    message_en: 'Only a member of the company can strike a link.',
+  },
+  DOC_STRIKE_COPY_INVALID: {
+    httpStatus: 409,
+    message_sv: 'Kopian på den rätta verifikationen kunde inte bekräftas, så kopplingen ströks inte. Försök igen.',
+    message_en: 'The copy on the right verifikat could not be confirmed, so the link was not struck. Try again.',
+  },
+  DOC_STRIKE_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Kopplingen kunde inte strykas. Försök igen.',
+    message_en: 'The link could not be struck. Try again.',
+    retryable: true,
+  },
   DOC_DETACH_INBOX_UNLINK_FAILED: {
     httpStatus: 500,
     message_sv: 'Inkorgsposten kunde inte släppas, så underlaget är fortfarande kopplat. Försök igen.',

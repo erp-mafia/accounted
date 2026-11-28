@@ -192,6 +192,8 @@ async function fetchFirstDocuments(
           .select('id, journal_entry_id, created_at')
           .eq('company_id', companyId)
           .eq('is_current_version', true)
+          // A struck link is not that verifikat's underlag (lib/documents/strike-link.ts).
+          .is('link_struck_at', null)
           .in('journal_entry_id', ids)
           .order('created_at', { ascending: true })
           .order('id', { ascending: true })

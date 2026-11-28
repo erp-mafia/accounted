@@ -17,7 +17,7 @@ import {
 } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
-import { cn } from '@/lib/utils'
+import { cn, formatDate } from '@/lib/utils'
 import { openDeferredTab } from '@/lib/browser/deferred-tab'
 import { DocumentPreview } from '@/components/bookkeeping/DocumentPreview'
 import { documentPreviewKind } from '@/lib/documents/preview-kind'
@@ -41,6 +41,11 @@ import type { UploadedFile } from '@/components/bookkeeping/DocumentUploadZone'
 import { useViewerLock } from '@/components/ui/viewer-lock'
 import { useBranding } from '@/lib/branding/brand-context'
 import { DOCUMENT_UPLOAD_ACCEPT } from '@/lib/documents/upload-types'
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
+
+// "Fel verifikation": a dialog, mounted (and its code loaded) when an
+// underlag's link is first struck.
+const StrikeUnderlagDialog = dynamic(() => import('@/components/bookkeeping/StrikeUnderlagDialog'))
 
 // "Välj från inkorgen": mounted when it is first used, so the picker's code
 // loads then and not with every page that lists verifikat.
@@ -55,6 +60,16 @@ interface DocumentRecord {
   created_at: string
   sha256_hash?: string | null
   referenced?: boolean
+  /** Set when the link was struck: the document was on the wrong verifikat (lib/documents/strike-link.ts). */
+  link_struck_at?: string | null
+}
+
+/** GET /api/documents/:id/strike: who struck the link, when, why, and where the copy went. */
+interface StrikeRecord {
+  struck_at: string
+  struck_by_label: string | null
+  reason: string | null
+  copy: { voucher_series: string | null; voucher_number: number | null } | null
 }
 
 interface JournalEntryAttachmentsProps {
@@ -106,6 +121,10 @@ export default function JournalEntryAttachments({
   const [blockedDoc, setBlockedDoc] = useState<DocumentRecord | null>(null)
   const [replacingDocId, setReplacingDocId] = useState<string | null>(null)
   const [detachingDocId, setDetachingDocId] = useState<string | null>(null)
+  // "Fel verifikation": the underlag whose link is being struck, and the
+  // strikes of the links already struck here, read for who, when and why.
+  const [strikeDoc, setStrikeDoc] = useState<DocumentRecord | null>(null)
+  const [strikes, setStrikes] = useState<Record<string, StrikeRecord>>({})
   const replaceFileInputRef = useRef<HTMLInputElement | null>(null)
   const replaceTargetIdRef = useRef<string | null>(null)
   // The upload zone's own file input: "Lägg till underlag" opens the OS
@@ -168,9 +187,28 @@ export default function JournalEntryAttachments({
       }
 
       const allDocuments = [...direct, ...referenced]
+      // A struck link stays listed, struck through, with its record: who,
+      // when and why (BFL 5 kap 9 §). A record that cannot be read leaves the
+      // row struck without it.
+      const struck = direct.filter((document) => document.link_struck_at)
+      const records = await Promise.all(
+        struck.map(async (document) => {
+          try {
+            const res = await fetch(`/api/documents/${document.id}/strike`)
+            if (!res.ok) return null
+            const { data } = (await res.json()) as { data: StrikeRecord | null }
+            return data ? ([document.id, data] as const) : null
+          } catch {
+            // The row still reads as struck from its own columns.
+            return null
+          }
+        }),
+      )
       if (!mountedRef.current) return
+      setStrikes(Object.fromEntries(records.filter((record) => record !== null)))
       setDocuments(allDocuments)
-      onCountChangeRef.current?.(allDocuments.length)
+      // A struck link is not this verifikat's underlag: it does not count.
+      onCountChangeRef.current?.(allDocuments.filter((document) => !document.link_struck_at).length)
       setLoadFailed(false)
     } catch {
       setLoadFailed(true)
@@ -240,7 +278,9 @@ export default function JournalEntryAttachments({
   const hasDuplicateSibling = (doc: DocumentRecord) =>
     Boolean(doc.sha256_hash) &&
     documents.some(
-      (d) => !d.referenced && d.id !== doc.id && d.sha256_hash === doc.sha256_hash,
+      // A struck sibling is not this verifikat's underlag: it neither stays as
+      // the one that remains nor counts as the duplicate (the RPC agrees).
+      (d) => !d.referenced && !d.link_struck_at && d.id !== doc.id && d.sha256_hash === doc.sha256_hash,
     )
 
   const handleDetach = async (doc: DocumentRecord) => {
@@ -382,6 +422,8 @@ export default function JournalEntryAttachments({
             const kind = documentPreviewKind(doc.mime_type, doc.file_name)
             const previewable = kind === 'pdf' || kind === 'image'
             const isExpanded = expandedDoc === doc.id
+            const struck = Boolean(doc.link_struck_at)
+            const strike = strikes[doc.id]
             return (
               <div key={doc.id}>
                 <div className="flex items-center gap-2 text-sm py-1.5 px-2 rounded-sm bg-muted/50">
@@ -407,13 +449,18 @@ export default function JournalEntryAttachments({
                           <DocumentTextIcon className="h-4 w-4 text-muted-foreground shrink-0" />
                         )
                       )}
-                      <span className="truncate flex-1">{doc.file_name}</span>
+                      <span className={cn('truncate flex-1', struck && 'line-through text-muted-foreground')}>{doc.file_name}</span>
                     </button>
                   ) : (
                     <>
                       <DocumentTextIcon className="h-4 w-4 text-muted-foreground shrink-0" />
-                      <span className="truncate flex-1">{doc.file_name}</span>
+                      <span className={cn('truncate flex-1', struck && 'line-through text-muted-foreground')}>{doc.file_name}</span>
                     </>
+                  )}
+                  {struck && (
+                    <Badge variant="secondary" className="shrink-0">
+                      {t('struck_badge')}
+                    </Badge>
                   )}
                   {doc.referenced && (
                     <Badge variant="secondary" className="shrink-0">
@@ -424,7 +471,7 @@ export default function JournalEntryAttachments({
                     {formatFileSize(doc.file_size_bytes)}
                   </span>
 
-                  {!doc.referenced && (
+                  {!doc.referenced && !struck && (
                     <>
                       <Button
                         variant="ghost"
@@ -464,6 +511,21 @@ export default function JournalEntryAttachments({
                     <ArrowDownTrayIcon className="h-3 w-3" />
                   </Button>
                 </div>
+
+                {struck && (
+                  <p className="px-2 pt-1 text-xs text-muted-foreground">
+                    {strike
+                      ? t('struck_record', {
+                          date: formatDate(strike.struck_at),
+                          who: strike.struck_by_label ?? t('struck_someone'),
+                          reason: strike.reason ?? '',
+                        })
+                      : t('struck_record_date', { date: formatDate(doc.link_struck_at as string) })}
+                    {strike?.copy && strike.copy.voucher_number !== null && (
+                      <> {t('struck_copy_on', { voucher: formatVoucher(strike.copy) })}</>
+                    )}
+                  </p>
+                )}
 
                 {isExpanded && previewable && (
                   <div className="px-2 py-2">
@@ -516,7 +578,8 @@ export default function JournalEntryAttachments({
               <p className="text-muted-foreground">
                 {blockedDoc !== null && hasDuplicateSibling(blockedDoc)
                   ? t('detach_hint')
-                  : t('remove_blocked_hint')}
+                  : t('remove_blocked_hint')}{' '}
+                {t('strike_hint')}
               </p>
             </div>
           </div>
@@ -524,6 +587,15 @@ export default function JournalEntryAttachments({
           <DialogFooter>
             <Button variant="outline" onClick={() => setBlockedDoc(null)}>
               {t('remove_blocked_cancel_cta')}
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setStrikeDoc(blockedDoc)
+                setBlockedDoc(null)
+              }}
+            >
+              {t('strike_cta')}
             </Button>
             {blockedDoc !== null && hasDuplicateSibling(blockedDoc) && (
               <Button
@@ -555,6 +627,16 @@ export default function JournalEntryAttachments({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {strikeDoc !== null && (
+        <StrikeUnderlagDialog
+          open
+          onClose={() => setStrikeDoc(null)}
+          document={strikeDoc}
+          journalEntryId={journalEntryId}
+          onStruck={() => void fetchDocuments()}
+        />
+      )}
 
       {inboxPickerUsed && (
         <InboxDocumentPicker

@@ -62,6 +62,21 @@ describe('countUnderlagForJournalEntries', () => {
     expect(result.no_doc_required[uuid(999)]).toBeUndefined()
   })
 
+  it('leaves a struck link out of the direct attachments it counts', async () => {
+    const { supabase, findCalls } = createTableMockSupabase({
+      document_attachments: { data: [] },
+      supplier_invoices: { data: [] },
+      supplier_invoice_payments: { data: [] },
+      invoices: { data: [] },
+      invoice_payments: { data: [] },
+      journal_entry_no_doc_required: { data: [] },
+    })
+
+    await countUnderlagForJournalEntries(supabase as unknown as SupabaseClient, 'company-1', [uuid(1)])
+
+    expect(findCalls('document_attachments', 'is')).toEqual([['link_struck_at', null]])
+  })
+
   it('reads nothing for no ids', async () => {
     const { supabase, findCalls } = createTableMockSupabase()
     expect(await countUnderlagForJournalEntries(supabase as unknown as SupabaseClient, 'company-1', [])).toEqual({

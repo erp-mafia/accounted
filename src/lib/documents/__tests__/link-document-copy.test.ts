@@ -177,6 +177,20 @@ describe('linkDocumentCopyToVoucher', () => {
     expect(uploadDocument).not.toHaveBeenCalled()
   })
 
+  it('never reuses a row of these bytes whose link was struck there, and keys the new copy past it', async () => {
+    const { supabase } = supabaseFor([
+      { data: HELD_BY_ORIGINAL }, { data: CORRECTION }, { data: OPEN_PERIOD },
+      { data: SOURCE },
+      { data: [{ id: 'struck-1', journal_entry_id: JE, sha256_hash: SHA, link_struck_at: '2026-11-27T10:00:00Z' }] },
+    ])
+
+    const result = await linkDocumentCopyToVoucher(asClient(supabase), 'company-1', 'user-1', { document_id: DOC, journal_entry_id: JE })
+
+    expect(result).toMatchObject({ ok: true, reused: false, document: { id: 'copy-1' } })
+    // The struck row took the plain key's id: the new copy's key names it.
+    expect(uploadDocument.mock.calls[0]![4]).toMatchObject({ idempotency_key: `document-copy:${DOC}:${JE}:after:struck-1` })
+  })
+
   it('refuses to copy a file whose bytes no longer match the archived hash', async () => {
     download.mockResolvedValue({ data: new Blob([new TextEncoder().encode('something else')]), error: null })
     const { supabase } = supabaseFor([
