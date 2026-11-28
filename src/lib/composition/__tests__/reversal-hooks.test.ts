@@ -76,7 +76,11 @@ vi.mock('@/lib/expenses/claim-verifikat-reversal', () => ({
 }))
 
 import { REVERSAL_HOOKS } from '../reversal-hooks'
-import { REVERSAL_MIRROR_REQUIRED, type ReversalHookAfterContext } from '@/lib/bookkeeping/reversal-hooks'
+import {
+  REVERSAL_MIRROR_REQUIRED,
+  selectCorrectionReversalHooks,
+  type ReversalHookAfterContext,
+} from '@/lib/bookkeeping/reversal-hooks'
 import { PAYMENT_SOURCE_TYPES } from '@/lib/bookkeeping/payment-sync'
 import { VOUCHER_OWNER_SOURCES } from '@/lib/core/bookkeeping/voucher-owner'
 import { moduleForLibPath } from '@/lib/modules/resolve'
@@ -307,6 +311,73 @@ describe('reversal hook list: each hook wraps its function unchanged', () => {
     const refusal = { message: 'connection reset' }
     leaves.assertMigratedDeductionReversible.mockRejectedValueOnce(refusal)
     await expect(hook('migrated-deduction').beforeReversal!(ctx)).rejects.toBe(refusal)
+  })
+})
+
+describe('reversal hook list: the storno of a correction', () => {
+  const supabase = { sentinel: 'client' }
+  // entry-1 is the correction (source_type 'correction', no source_id); the
+  // verifikat it corrects is orig-1.
+  const correction = { id: 'entry-1', source_type: 'correction', source_id: null, lines: [] } as unknown as JournalEntry
+  const storno = { id: 'storno-1', entry_date: '2026-10-20' }
+  const ctxFor = (sourceType: JournalEntrySourceType, sourceId = 'record-1') =>
+    ({
+      supabase,
+      companyId: 'company-1',
+      userId: 'user-1',
+      entry: correction,
+      storno,
+      correctedOriginal: { id: 'orig-1', source_type: sourceType, source_id: sourceId },
+    }) as unknown as ReversalHookAfterContext
+  const hook = (id: string) => REVERSAL_HOOKS.find((h) => h.id === id)!
+
+  // Each other hook reads a record the rättelse leaves on the original (a
+  // begäran, a migrated deduction checked against the original's lines, a
+  // collections payout, a kundförlust or kvittning decision, an asset
+  // component, a salary run), so it stays off for a correction.
+  it('follows a correction exactly on the hooks whose record the rättelse moves to it', () => {
+    expect(REVERSAL_HOOKS.filter((h) => h.followsCorrection).map((h) => h.id)).toEqual([
+      'invoice-payment-status',
+      'supplier-invoice-registration',
+      'customer-invoice-verifikat',
+      'expense-claim-verifikat',
+    ])
+  })
+
+  it('selects by the corrected verifikat\'s source type, and never throws for a type whose hooks stay off', () => {
+    for (const type of REVERSAL_MIRROR_REQUIRED) {
+      const selected = selectCorrectionReversalHooks(REVERSAL_HOOKS, type)
+      expect(selected.every((h) => h.followsCorrection && (h.sourceTypes as readonly string[]).includes(type)), type).toBe(true)
+    }
+    expect(selectCorrectionReversalHooks(REVERSAL_HOOKS, 'salary_payment')).toEqual([])
+    expect(selectCorrectionReversalHooks(REVERSAL_HOOKS, 'rot_rut_reclaim')).toEqual([])
+    expect(selectCorrectionReversalHooks(REVERSAL_HOOKS, 'storno')).toEqual([])
+    expect(selectCorrectionReversalHooks(REVERSAL_HOOKS, null)).toEqual([])
+    expect(selectCorrectionReversalHooks(REVERSAL_HOOKS, 'supplier_invoice_registered').map((h) => h.id)).toEqual([
+      'supplier-invoice-registration',
+    ])
+  })
+
+  it('invoice-payment-status: the correction\'s id with the corrected verifikat\'s source columns, only on rows that name it', async () => {
+    await hook('invoice-payment-status').afterReversal!(ctxFor('invoice_paid', 'invoice-1'))
+    expect(leaves.syncInvoiceStatusFromPaymentEntry).toHaveBeenCalledExactlyOnceWith(
+      supabase,
+      'company-1',
+      { id: 'entry-1', source_type: 'invoice_paid', source_id: 'invoice-1' },
+      undefined,
+      { requirePaymentRow: true },
+    )
+  })
+
+  it('supplier-invoice-registration, customer-invoice-verifikat, expense-claim-verifikat: by the correction\'s own id', async () => {
+    await hook('supplier-invoice-registration').beforeReversal!(ctxFor('supplier_invoice_registered'))
+    await hook('supplier-invoice-registration').afterReversal!(ctxFor('supplier_invoice_registered'))
+    await hook('customer-invoice-verifikat').beforeReversal!(ctxFor('invoice_created'))
+    await hook('expense-claim-verifikat').beforeReversal!(ctxFor('expense_claim'))
+    expect(leaves.assertSupplierInvoiceRegistrationReversible).toHaveBeenCalledExactlyOnceWith(supabase, 'company-1', 'entry-1')
+    expect(leaves.releaseSupplierInvoiceRegistrationAfterReversal).toHaveBeenCalledExactlyOnceWith(supabase, 'company-1', 'entry-1')
+    expect(leaves.assertInvoiceVerifikatReversible).toHaveBeenCalledExactlyOnceWith(supabase, 'company-1', 'entry-1')
+    expect(leaves.assertExpenseClaimVerifikatReversible).toHaveBeenCalledExactlyOnceWith(supabase, 'company-1', 'entry-1')
   })
 })
 

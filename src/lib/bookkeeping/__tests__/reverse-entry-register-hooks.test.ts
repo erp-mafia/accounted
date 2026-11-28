@@ -21,12 +21,17 @@
  *     of a stray voucher of a run that is not booked;
  *   - a generic storno of a standing expense claim's verifikat is refused;
  *     Ta bort's own (expenseClaimRemoval) passes, and so does the storno of a
- *     verifikat no claim points at.
+ *     verifikat no claim points at;
+ *   - the storno of a correction of any of these refuses and mirrors as the
+ *     storno of the verifikat it corrects, on the records the rättelse moved
+ *     to the correction, and every module flow that reverses a correction on
+ *     purpose still passes.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { JournalEntrySourceType } from '@/types'
 
 vi.mock('@/lib/events', () => ({ eventBus: { emit: vi.fn(async () => []) } }))
+vi.mock('@/lib/collections/forward-hook', () => ({ scheduleCollectionForwardDrain: vi.fn() }))
 vi.mock('@/lib/bookkeeping/account-backfill', () => ({ backfillStandardBASAccounts: vi.fn().mockResolvedValue([]) }))
 vi.mock('@/lib/core/bookkeeping/storno-target', () => ({
   assertStornoTarget: vi.fn(async (_s: unknown, _c: unknown, original: { entry_date: string; fiscal_period_id: string }) => ({
@@ -39,6 +44,7 @@ vi.mock('@/lib/core/bookkeeping/storno-target', () => ({
 import { reverseEntry } from '../engine'
 import {
   BookedSalaryRunStornoError,
+  CannotReverseCollectedPaymentError,
   IssuedInvoiceStornoError,
   PaidExpenseClaimStornoError,
   RegisteredExpenseClaimStornoError,
@@ -65,7 +71,7 @@ function originalOf(sourceType: JournalEntrySourceType, sourceId: string) {
     notes: null,
     source_type: sourceType,
     source_id: sourceId,
-    correction_of_id: null,
+    correction_of_id: null as string | null,
     reverses_id: null,
     lines: [
       { account_number: '4010', debit_amount: 100, credit_amount: 0, line_description: 'Cost' },
@@ -77,9 +83,10 @@ function originalOf(sourceType: JournalEntrySourceType, sourceId: string) {
 /**
  * A client that walks the storno with register tables answered from rows
  * (eq and in filters applied), and records every table read and every write
- * with the rows its filters match.
+ * with the rows its filters match. A journal_entries read by the id of a
+ * `chain` row answers that row (the verifikat a correction corrects).
  */
-function clientFor(original: ReturnType<typeof originalOf>, tables: Record<string, Row[]>) {
+function clientFor(original: ReturnType<typeof originalOf>, tables: Record<string, Row[]>, chain: Record<string, Row> = {}) {
   const reads: string[] = []
   const writes: Array<{ table: string; op: string; payload: unknown; matched: string[] }> = []
   let journalReads = 0
@@ -87,6 +94,7 @@ function clientFor(original: ReturnType<typeof originalOf>, tables: Record<strin
   function builder(table: string) {
     let op: 'select' | 'insert' | 'update' | 'delete' = 'select'
     let payload: unknown
+    let idFilter: unknown
     const filters: Array<(row: Row) => boolean> = []
     const b: Record<string, unknown> = {}
     const write = (kind: 'insert' | 'update' | 'delete') => (p?: unknown) => {
@@ -99,6 +107,7 @@ function clientFor(original: ReturnType<typeof originalOf>, tables: Record<strin
     b.delete = write('delete')
     b.select = () => b
     b.eq = (column: string, value: unknown) => {
+      if (column === 'id') idFilter = value
       filters.push((row) => row[column] === value)
       return b
     }
@@ -117,6 +126,7 @@ function clientFor(original: ReturnType<typeof originalOf>, tables: Record<strin
         }
         journalReads++
         if (journalReads === 1) return { data: original, error: null }
+        if (typeof idFilter === 'string' && chain[idFilter]) return { data: chain[idFilter], error: null }
         return { data: { id: `read-${journalReads}`, status: 'posted', lines: [] }, error: null }
       }
       if (table === 'chart_of_accounts') return { data: CHART, error: null }
@@ -342,5 +352,279 @@ describe('an expense claim verifikat', () => {
     })
     await expect(reverseEntry(c.supabase as never, 'company-1', 'user-1', 'entry-1')).resolves.toBeTruthy()
     expect(c.reads).toEqual(['expense_claims'])
+  })
+})
+
+/**
+ * entry-1 as a correction (correctEntry: source_type 'correction', no
+ * source_id) of orig-1, the reversed verifikat of `rootType` booked from
+ * `rootSourceId`. The rättelse moved the records orig-1 booked to entry-1
+ * (correction-payment-relink.ts), so the rows below name entry-1.
+ */
+function correctionOf(rootType: JournalEntrySourceType, rootSourceId: string, root: Row = {}) {
+  return {
+    original: { ...originalOf('correction', null as unknown as string), correction_of_id: 'orig-1' },
+    chain: {
+      'orig-1': {
+        id: 'orig-1',
+        correction_of_id: null,
+        reverses_id: null,
+        voucher_series: 'A',
+        voucher_number: 3,
+        source_type: rootType,
+        source_id: rootSourceId,
+        status: 'reversed',
+        ...root,
+      },
+    } as Record<string, Row>,
+  }
+}
+
+function correctionClient(rootType: JournalEntrySourceType, rootSourceId: string, tables: Record<string, Row[]>, root: Row = {}) {
+  const { original, chain } = correctionOf(rootType, rootSourceId, root)
+  return clientFor(original, tables, chain)
+}
+
+describe('the storno of a correction: the rules of the verifikat it corrects', () => {
+  describe('of a supplier invoice registration', () => {
+    const invoice = (overrides: Row = {}) => ({
+      id: 'si-1',
+      company_id: 'company-1',
+      registration_journal_entry_id: 'entry-1',
+      status: 'approved',
+      paid_amount: 0,
+      ...overrides,
+    })
+
+    it('generic storno of an unpaid invoice\'s corrected registration: posts, and the invoice reads not booked', async () => {
+      const c = correctionClient('supplier_invoice_registered', 'si-1', {
+        supplier_invoices: [invoice()],
+        supplier_invoice_payments: [],
+      })
+      await expect(reverseEntry(c.supabase as never, 'company-1', 'user-1', 'entry-1')).resolves.toBeTruthy()
+      expect(c.committed()).toBe(true)
+      expect(c.registerWrites()).toEqual([
+        { table: 'supplier_invoices', op: 'update', payload: { registration_journal_entry_id: null }, matched: ['si-1'] },
+      ])
+    })
+
+    it('generic storno while the invoice has a payment: refused before anything is written', async () => {
+      const c = correctionClient('supplier_invoice_registered', 'si-1', {
+        supplier_invoices: [invoice({ status: 'partially_paid' })],
+        supplier_invoice_payments: [{ id: 'pay-1', company_id: 'company-1', supplier_invoice_id: 'si-1' }],
+      })
+      await expect(reverseEntry(c.supabase as never, 'company-1', 'user-1', 'entry-1')).rejects.toBeInstanceOf(
+        SupplierInvoiceRegistrationHasPaymentsError,
+      )
+      expect(c.supabase.rpc).not.toHaveBeenCalled()
+      expect(c.writes).toEqual([])
+    })
+
+    it('generic storno while the invoice is credited: refused before anything is written', async () => {
+      const c = correctionClient('supplier_invoice_registered', 'si-1', {
+        supplier_invoices: [invoice({ status: 'credited', is_credit_note: false })],
+        supplier_invoice_payments: [],
+      })
+      await expect(reverseEntry(c.supabase as never, 'company-1', 'user-1', 'entry-1')).rejects.toBeInstanceOf(
+        SupplierInvoiceRegistrationCreditedError,
+      )
+      expect(c.writes).toEqual([])
+    })
+
+    it('a correction no invoice points at (the pointer stayed on the original): passes, no invoice moves', async () => {
+      const c = correctionClient('supplier_invoice_registered', 'si-1', {
+        supplier_invoices: [invoice({ registration_journal_entry_id: 'orig-1', status: 'partially_paid', paid_amount: 50 })],
+        supplier_invoice_payments: [],
+      })
+      await expect(reverseEntry(c.supabase as never, 'company-1', 'user-1', 'entry-1')).resolves.toBeTruthy()
+      expect(c.registerWrites()).toEqual([
+        { table: 'supplier_invoices', op: 'update', payload: { registration_journal_entry_id: null }, matched: [] },
+      ])
+    })
+  })
+
+  describe('of a customer invoice verifikat', () => {
+    const invoice = (status: string) => ({ id: 'inv-1', company_id: 'company-1', journal_entry_id: 'entry-1', status })
+
+    it.each(['sent', 'paid'])('generic storno for a %s invoice: refused before anything is written', async (status) => {
+      const c = correctionClient('invoice_created', 'inv-1', { invoices: [invoice(status)] })
+      await expect(reverseEntry(c.supabase as never, 'company-1', 'user-1', 'entry-1')).rejects.toBeInstanceOf(
+        IssuedInvoiceStornoError,
+      )
+      expect(c.supabase.rpc).not.toHaveBeenCalled()
+      expect(c.writes).toEqual([])
+    })
+
+    it.each(['credited', 'written_off'])('generic storno for a %s invoice: refused before anything is written', async (status) => {
+      const c = correctionClient('invoice_created', 'inv-1', { invoices: [invoice(status)] })
+      await expect(reverseEntry(c.supabase as never, 'company-1', 'user-1', 'entry-1')).rejects.toBeInstanceOf(
+        WithdrawnInvoiceStornoError,
+      )
+      expect(c.writes).toEqual([])
+    })
+
+    it('generic storno for a draft invoice: passes', async () => {
+      const c = correctionClient('invoice_created', 'inv-1', { invoices: [invoice('draft')] })
+      await expect(reverseEntry(c.supabase as never, 'company-1', 'user-1', 'entry-1')).resolves.toBeTruthy()
+      expect(c.registerWrites()).toEqual([])
+    })
+  })
+
+  describe('of an expense claim verifikat', () => {
+    const claim = (status: string) => ({ id: 'claim-1', company_id: 'company-1', journal_entry_id: 'entry-1', status })
+
+    it('generic storno for a registered claim: refused, naming Ta bort', async () => {
+      const c = correctionClient('expense_claim', 'claim-1', { expense_claims: [claim('registered')], salary_line_items: [] })
+      await expect(reverseEntry(c.supabase as never, 'company-1', 'user-1', 'entry-1')).rejects.toBeInstanceOf(
+        RegisteredExpenseClaimStornoError,
+      )
+      expect(c.writes).toEqual([])
+    })
+
+    it('generic storno for a paid claim: refused, naming Rätta', async () => {
+      const c = correctionClient('expense_claim', 'claim-1', { expense_claims: [claim('paid')], salary_line_items: [] })
+      await expect(reverseEntry(c.supabase as never, 'company-1', 'user-1', 'entry-1')).rejects.toBeInstanceOf(
+        PaidExpenseClaimStornoError,
+      )
+      expect(c.writes).toEqual([])
+    })
+  })
+
+  describe('of a payment verifikat', () => {
+    const paidInvoice = { id: 'inv-1', company_id: 'company-1', status: 'paid', paid_amount: 1000, total: 1000, due_date: '2099-12-31' }
+    const paymentRow = (journalEntryId: string, source = 'manual') => ({
+      id: 'ip-1',
+      company_id: 'company-1',
+      invoice_id: 'inv-1',
+      journal_entry_id: journalEntryId,
+      amount: 1000,
+      transaction_id: null,
+      source,
+    })
+
+    it('generic storno: the invoice the original paid is reopened and the payment row that followed the correction goes', async () => {
+      const c = correctionClient('invoice_paid', 'inv-1', { invoices: [paidInvoice], invoice_payments: [paymentRow('entry-1')] })
+      await expect(reverseEntry(c.supabase as never, 'company-1', 'user-1', 'entry-1')).resolves.toBeTruthy()
+      expect(c.registerWrites()).toEqual([
+        {
+          table: 'invoices',
+          op: 'update',
+          payload: expect.objectContaining({ status: 'sent', paid_amount: 0, remaining_amount: 1000 }),
+          matched: ['inv-1'],
+        },
+        { table: 'invoice_payments', op: 'delete', payload: undefined, matched: ['ip-1'] },
+      ])
+    })
+
+    it('a payment row left on the reversed original: nothing is reverted (the payment did not follow)', async () => {
+      const c = correctionClient('invoice_paid', 'inv-1', { invoices: [paidInvoice], invoice_payments: [paymentRow('orig-1')] })
+      await expect(reverseEntry(c.supabase as never, 'company-1', 'user-1', 'entry-1')).resolves.toBeTruthy()
+      expect(c.registerWrites()).toEqual([])
+    })
+
+    it('a payment the collections provider collected, carried by the correction: refused before anything is written', async () => {
+      const c = correctionClient('invoice_paid', 'inv-1', {
+        invoices: [paidInvoice],
+        invoice_payments: [paymentRow('entry-1', 'collections')],
+        collection_collected_payments: [],
+      })
+      await expect(reverseEntry(c.supabase as never, 'company-1', 'user-1', 'entry-1')).rejects.toBeInstanceOf(
+        CannotReverseCollectedPaymentError,
+      )
+      expect(c.supabase.rpc).not.toHaveBeenCalled()
+      expect(c.writes).toEqual([])
+    })
+  })
+
+  describe('left off for a correction: the record stays on the verifikat it corrects', () => {
+    it('a booked salary run\'s verifikat: the run names the original, so the storno passes and the run is not read', async () => {
+      const c = correctionClient('salary_payment', 'run-1', {
+        salary_runs: [{ id: 'run-1', company_id: 'company-1', status: 'booked', salary_entry_id: 'orig-1' }],
+      })
+      await expect(reverseEntry(c.supabase as never, 'company-1', 'user-1', 'entry-1')).resolves.toBeTruthy()
+      expect(c.reads).toEqual([])
+    })
+
+    it.each([
+      ['tax_account', 'skattekonto_transactions'],
+      ['system', 'skattekonto_transactions'],
+      ['opening_balance', 'fiscal_periods'],
+      ['year_end', 'depreciation_schedules'],
+    ] as const)('a %s verifikat: the engine leaves %s alone', async (rootType, table) => {
+      const c = correctionClient(rootType, 'row-1', {
+        [table]: [{ id: 'row-1', company_id: 'company-1', journal_entry_id: 'entry-1', opening_balance_entry_id: 'entry-1' }],
+      })
+      await expect(reverseEntry(c.supabase as never, 'company-1', 'user-1', 'entry-1')).resolves.toBeTruthy()
+      expect(c.registerWrites()).toEqual([])
+    })
+
+    it('a correction of a storno: the storno is what it corrects, so no rule of what the storno reversed runs', async () => {
+      const c = correctionClient(
+        'storno',
+        'inv-1',
+        { invoices: [{ id: 'inv-1', company_id: 'company-1', journal_entry_id: 'entry-1', status: 'sent' }] },
+        { reverses_id: 'orig-0' },
+      )
+      await expect(reverseEntry(c.supabase as never, 'company-1', 'user-1', 'entry-1')).resolves.toBeTruthy()
+      expect(c.reads).toEqual([])
+    })
+  })
+
+  // The module flows that reverse a correction on purpose, each with the
+  // option it passes and the verifikat its correction corrects.
+  describe('module flows still pass', () => {
+    it('Korrigera lönekörning stornos the posted rättelse of a run verifikat (salaryRunCorrection)', async () => {
+      const c = correctionClient('salary_payment', 'run-1', {
+        salary_runs: [{ id: 'run-1', company_id: 'company-1', status: 'booked', salary_entry_id: 'orig-1' }],
+      })
+      await expect(
+        reverseEntry(c.supabase as never, 'company-1', 'user-1', 'entry-1', undefined, { salaryRunCorrection: true }),
+      ).resolves.toBeTruthy()
+      expect(c.committed()).toBe(true)
+    })
+
+    it('Ta bort on an utlägg stornos its corrected verifikat (expenseClaimRemoval): the claim is not read', async () => {
+      const c = correctionClient('expense_claim', 'claim-1', {
+        expense_claims: [{ id: 'claim-1', company_id: 'company-1', journal_entry_id: 'entry-1', status: 'registered' }],
+        salary_line_items: [],
+      })
+      await expect(
+        reverseEntry(c.supabase as never, 'company-1', 'user-1', 'entry-1', undefined, { expenseClaimRemoval: true }),
+      ).resolves.toBeTruthy()
+      expect(c.committed()).toBe(true)
+      expect(c.reads).toEqual([])
+    })
+
+    it('Ångra kreditering of a customer invoice stornos the credit note\'s corrected verifikat (credit_note)', async () => {
+      const c = correctionClient('credit_note', 'cn-1', {
+        invoices: [{ id: 'cn-1', company_id: 'company-1', journal_entry_id: 'entry-1', status: 'sent' }],
+      })
+      await expect(reverseEntry(c.supabase as never, 'company-1', 'user-1', 'entry-1')).resolves.toBeTruthy()
+      expect(c.reads).toEqual([])
+    })
+
+    it('Ångra kreditering of a supplier invoice stornos the credit note\'s corrected verifikat (supplier_credit_note)', async () => {
+      const c = correctionClient('supplier_credit_note', 'si-credit-1', {
+        supplier_invoices: [
+          { id: 'si-credit-1', company_id: 'company-1', registration_journal_entry_id: 'entry-1', status: 'credited', is_credit_note: true },
+        ],
+        supplier_invoice_payments: [],
+      })
+      await expect(reverseEntry(c.supabase as never, 'company-1', 'user-1', 'entry-1')).resolves.toBeTruthy()
+      expect(c.reads).toEqual([])
+      expect(c.registerWrites()).toEqual([])
+    })
+
+    it('a credit\'s periodisering stornos the corrected month\'s dissolution (accrual)', async () => {
+      const c = correctionClient('accrual', 'schedule-1', { accrual_schedule_installments: [] })
+      await expect(reverseEntry(c.supabase as never, 'company-1', 'user-1', 'entry-1')).resolves.toBeTruthy()
+      expect(c.reads).toEqual([])
+    })
+
+    it('Ångra on a bank row booked from it stornos the row\'s corrected verifikat (bank_transaction)', async () => {
+      const c = correctionClient('bank_transaction', 'tx-1', { invoices: [], supplier_invoices: [] })
+      await expect(reverseEntry(c.supabase as never, 'company-1', 'user-1', 'entry-1')).resolves.toBeTruthy()
+      expect(c.reads).toEqual([])
+    })
   })
 })
