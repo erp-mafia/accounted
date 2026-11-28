@@ -341,10 +341,17 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, jou
         if (!res.ok) {
           const json = (await res.json().catch(() => ({}))) as LinkFailure
           const failure = typeof json.error === 'object' ? json.error : undefined
-          const holder = failure?.details?.current_journal_entry_id
           // A link this sweep made whose answer was lost holds the document:
           // that verifikat has it, and this one takes a copy like the rest.
           // Held by any verifikat outside the selection, the refusal stands.
+          // The refusal names the holder, except when the database refused
+          // a write that raced it: then the document says who holds it.
+          let holder = failure?.details?.current_journal_entry_id
+          if (!copy && failure?.code === 'DOC_LINK_ALREADY_LINKED' && typeof holder !== 'string') {
+            holder = await fetch(`/api/documents/${doc.document_id}`)
+              .then(async (r) => (r.ok ? ((await r.json()) as { data?: { journal_entry_id?: string | null } }).data?.journal_entry_id : null))
+              .catch(() => null)
+          }
           if (!copy && failure?.code === 'DOC_LINK_ALREADY_LINKED' && typeof holder === 'string' && holder !== id && outcome.has(holder)) {
             outcome.set(holder, true)
             res = await post(id, true)
