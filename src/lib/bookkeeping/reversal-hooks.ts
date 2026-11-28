@@ -90,10 +90,12 @@ export interface ReversalHook {
   readonly sourceTypes: readonly JournalEntrySourceType[]
   /**
    * The hook also runs on the storno of a correction of a verifikat of one of
-   * sourceTypes (ReversalHookContext.correctedOriginal). Set only where the
+   * sourceTypes (ReversalHookContext.correctedOriginal). Set where the
    * record the hook reads is one the rättelse moves to the correction, so the
-   * hook finds it by the correction's id. A hook whose record stays on the
-   * original is left off for corrections.
+   * hook finds it by the correction's id, or where the hook reads its record
+   * by the corrected verifikat itself (the salary run, whose pointers stay on
+   * it). Any other hook whose record stays on the original is left off for
+   * corrections.
    */
   readonly followsCorrection?: true
   /** Before anything is written. A throw refuses the storno; no voucher number is spent. */

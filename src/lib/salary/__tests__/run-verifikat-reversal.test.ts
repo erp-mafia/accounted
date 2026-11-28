@@ -9,7 +9,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createRowsMockSupabase, createTableMockSupabase } from '@/tests/helpers'
 import { BookedSalaryRunStornoError } from '@/lib/bookkeeping/errors'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { assertSalaryRunVerifikatReversible } from '../run-verifikat-reversal'
+import { assertCorrectedSalaryRunVerifikatReversible, assertSalaryRunVerifikatReversible } from '../run-verifikat-reversal'
 
 const COMPANY = 'company-1'
 
@@ -80,5 +80,47 @@ describe('assertSalaryRunVerifikatReversible', () => {
     const refusal = new BookedSalaryRunStornoError('run-1')
     expect(getErrorMessage(refusal)).toMatch(/Korrigera lönekörning/)
     expect(getErrorMessage(refusal, { locale: 'en' })).toMatch(/Correct payroll run/)
+  })
+})
+
+describe('assertCorrectedSalaryRunVerifikatReversible', () => {
+  const original = (status: string) => ({ id: 'je-salary', company_id: COMPANY, status })
+
+  it('refuses when the run names the reversed verifikat the correction corrects', async () => {
+    const { supabase } = createRowsMockSupabase({ salary_runs: [run()], journal_entries: [original('reversed')] })
+    await expect(
+      assertCorrectedSalaryRunVerifikatReversible(supabase as never, COMPANY, voucher('je-salary')),
+    ).rejects.toMatchObject({ code: 'SALARY_RUN_STORNO_BOOKED', salaryRunId: 'run-1' })
+  })
+
+  it('lets it through when the corrected verifikat still stands (a correction moved out of a locked year)', async () => {
+    const { supabase, tables } = createRowsMockSupabase({ salary_runs: [run()], journal_entries: [original('posted')] })
+    await expect(
+      assertCorrectedSalaryRunVerifikatReversible(supabase as never, COMPANY, voucher('je-salary')),
+    ).resolves.toBeUndefined()
+    // The run is not read: the corrected verifikat decides first.
+    expect(tables()).toEqual(['journal_entries'])
+  })
+
+  it('lets it through when the run is not booked or does not name the corrected verifikat', async () => {
+    const corrected = createRowsMockSupabase({ salary_runs: [run({ status: 'corrected' })], journal_entries: [original('reversed')] })
+    await expect(
+      assertCorrectedSalaryRunVerifikatReversible(corrected.supabase as never, COMPANY, voucher('je-salary')),
+    ).resolves.toBeUndefined()
+    const stray = createRowsMockSupabase({
+      salary_runs: [run()],
+      journal_entries: [{ id: 'je-stray', company_id: COMPANY, status: 'reversed' }],
+    })
+    await expect(
+      assertCorrectedSalaryRunVerifikatReversible(stray.supabase as never, COMPANY, voucher('je-stray')),
+    ).resolves.toBeUndefined()
+  })
+
+  it('reads nothing when the corrected verifikat names no run', async () => {
+    const { supabase, tables } = createRowsMockSupabase({ salary_runs: [run()], journal_entries: [original('reversed')] })
+    await expect(
+      assertCorrectedSalaryRunVerifikatReversible(supabase as never, COMPANY, voucher('je-none', null)),
+    ).resolves.toBeUndefined()
+    expect(tables()).toEqual([])
   })
 })

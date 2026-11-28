@@ -334,12 +334,14 @@ describe('reversal hook list: the storno of a correction', () => {
   // Each other hook reads a record the rättelse leaves on the original (a
   // begäran, a migrated deduction checked against the original's lines, a
   // collections payout, a kundförlust or kvittning decision, an asset
-  // component, a salary run), so it stays off for a correction.
-  it('follows a correction exactly on the hooks whose record the rättelse moves to it', () => {
+  // component), so it stays off for a correction. The salary run stays on the
+  // original too, and its hook reads it by the corrected verifikat.
+  it('follows a correction on the hooks whose record the rättelse moves to it, and on the salary run', () => {
     expect(REVERSAL_HOOKS.filter((h) => h.followsCorrection).map((h) => h.id)).toEqual([
       'invoice-payment-status',
       'supplier-invoice-registration',
       'customer-invoice-verifikat',
+      'salary-run-verifikat',
       'expense-claim-verifikat',
     ])
   })
@@ -349,7 +351,7 @@ describe('reversal hook list: the storno of a correction', () => {
       const selected = selectCorrectionReversalHooks(REVERSAL_HOOKS, type)
       expect(selected.every((h) => h.followsCorrection && (h.sourceTypes as readonly string[]).includes(type)), type).toBe(true)
     }
-    expect(selectCorrectionReversalHooks(REVERSAL_HOOKS, 'salary_payment')).toEqual([])
+    expect(selectCorrectionReversalHooks(REVERSAL_HOOKS, 'salary_payment').map((h) => h.id)).toEqual(['salary-run-verifikat'])
     expect(selectCorrectionReversalHooks(REVERSAL_HOOKS, 'rot_rut_reclaim')).toEqual([])
     expect(selectCorrectionReversalHooks(REVERSAL_HOOKS, 'storno')).toEqual([])
     expect(selectCorrectionReversalHooks(REVERSAL_HOOKS, null)).toEqual([])

@@ -536,15 +536,41 @@ describe('the storno of a correction: the rules of the verifikat it corrects', (
     })
   })
 
-  describe('left off for a correction: the record stays on the verifikat it corrects', () => {
-    it('a booked salary run\'s verifikat: the run names the original, so the storno passes and the run is not read', async () => {
+  describe('of a booked salary run\'s verifikat', () => {
+    const bookedRun = { id: 'run-1', company_id: 'company-1', status: 'booked', salary_entry_id: 'orig-1' }
+
+    it('the run names the reversed verifikat the correction corrects: refused, naming Korrigera lönekörning', async () => {
       const c = correctionClient('salary_payment', 'run-1', {
-        salary_runs: [{ id: 'run-1', company_id: 'company-1', status: 'booked', salary_entry_id: 'orig-1' }],
+        salary_runs: [bookedRun],
+        journal_entries: [{ id: 'orig-1', company_id: 'company-1', status: 'reversed' }],
       })
-      await expect(reverseEntry(c.supabase as never, 'company-1', 'user-1', 'entry-1')).resolves.toBeTruthy()
-      expect(c.reads).toEqual([])
+      await expect(reverseEntry(c.supabase as never, 'company-1', 'user-1', 'entry-1')).rejects.toMatchObject({
+        code: 'SALARY_RUN_STORNO_BOOKED',
+        salaryRunId: 'run-1',
+      })
+      expect(c.committed()).toBe(false)
     })
 
+    it('a correction moved out of a locked year (the corrected verifikat still posted): passes', async () => {
+      const c = correctionClient(
+        'salary_payment',
+        'run-1',
+        { salary_runs: [bookedRun], journal_entries: [{ id: 'orig-1', company_id: 'company-1', status: 'posted' }] },
+        { status: 'posted' },
+      )
+      await expect(reverseEntry(c.supabase as never, 'company-1', 'user-1', 'entry-1')).resolves.toBeTruthy()
+    })
+
+    it('a run that is not booked: passes', async () => {
+      const c = correctionClient('salary_payment', 'run-1', {
+        salary_runs: [{ ...bookedRun, status: 'corrected' }],
+        journal_entries: [{ id: 'orig-1', company_id: 'company-1', status: 'reversed' }],
+      })
+      await expect(reverseEntry(c.supabase as never, 'company-1', 'user-1', 'entry-1')).resolves.toBeTruthy()
+    })
+  })
+
+  describe('left off for a correction: the record stays on the verifikat it corrects', () => {
     it.each([
       ['tax_account', 'skattekonto_transactions'],
       ['system', 'skattekonto_transactions'],

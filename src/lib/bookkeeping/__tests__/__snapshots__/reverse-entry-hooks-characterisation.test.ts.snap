@@ -1272,6 +1272,7 @@ exports[`reverseEntry: the storno of a correction runs the rules of the verifika
     "read journal_entries (*, lines:journal_entry_lines(*))",
     "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number, source_type, source_id)",
     "read journal_entries (id, correction_of_id, reverses_id, voucher_series, voucher_number)",
+    "assertCorrectedSalaryRunVerifikatReversible(<client>, "company-1", {"id":"orig-1","source_type":"salary_payment","source_id":"source-1"})",
     "assertStornoTarget",
     "insert journal_entries reverses_id=entry-1 source_type=storno status=draft",
     "insert journal_entry_lines x2",
