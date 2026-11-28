@@ -87,6 +87,10 @@ describe('the huvudbok export', () => {
       dimensionFilter: { dimNo: '1', code: 'KS01' },
     })
     expect(Object.fromEntries(exported)).toEqual(Object.fromEntries(fetched))
+    expect(exported.get('from_date')).toBe('2026-03-01')
+    expect(exported.get('to_date')).toBe('2026-03-31')
+    expect(exported.get('dim_no')).toBe('1')
+    expect(exported.get('dim_code')).toBe('KS01')
   })
 
   it('downloads every account when no range is applied', () => {
