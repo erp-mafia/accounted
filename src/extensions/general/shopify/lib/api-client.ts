@@ -519,7 +519,9 @@ export async function listOrdersPage(
 }
 
 /**
- * Shopify Payments payouts issued on or after a day, oldest first. The
+ * Shopify Payments payouts issued on or after a day, newest first (the caller
+ * also stops at the first older one, so a store whose API ignored the date
+ * filter still reads its recent payouts, not its first ones). The
  * payout object needs read_shopify_payments_payouts and the account it hangs
  * on read_shopify_payments_accounts: scopes a store's app may not have, so a
  * refusal is answered as `scopeMissing`, never as revoked credentials (the
@@ -529,7 +531,7 @@ export async function listOrdersPage(
 const PAYOUTS_QUERY = `
 query Payouts($first: Int!, $after: String, $query: String) {
   shopifyPaymentsAccount {
-    payouts(first: $first, after: $after, query: $query, sortKey: ISSUED_AT) {
+    payouts(first: $first, after: $after, query: $query, sortKey: ISSUED_AT, reverse: true) {
       pageInfo { hasNextPage endCursor }
       nodes {
         legacyResourceId

@@ -145,7 +145,13 @@ export async function syncShopifyPayouts(
       return summary
     }
     if (page.kind === 'no_account') return summary
+    let reachedOlder = false
     for (const payout of page.payouts) {
+      // Newest first: past the lookback, the rest is older still.
+      if (swedishDayOf(payout.issuedAt) < issuedOnOrAfter) {
+        reachedOlder = true
+        break
+      }
       const outcome = shopifyPayoutRecord(args.shopScope, payout)
       if (outcome.ok) records.push(outcome.record)
       else {
@@ -155,7 +161,7 @@ export async function syncShopifyPayouts(
         }
       }
     }
-    if (!page.hasNextPage) break
+    if (reachedOlder || !page.hasNextPage) break
     after = page.endCursor
   }
   await storeWebshopPayouts(service, args.companyId, args.userId, records)

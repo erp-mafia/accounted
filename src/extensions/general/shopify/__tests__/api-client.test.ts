@@ -538,7 +538,7 @@ describe('fetchGrantedScopes', () => {
 })
 
 describe('listPayoutsPage', () => {
-  it('reads the payouts issued since a day, oldest first, one page at a time', async () => {
+  it('reads the payouts issued since a day, newest first, one page at a time', async () => {
     const node = { legacyResourceId: '1', issuedAt: '2026-11-04T10:00:00Z', status: 'PAID', transactionType: 'DEPOSIT', net: { amount: '10.00', currencyCode: 'SEK' }, summary: {} }
     fetchMock.mockResolvedValueOnce(
       jsonResponse({ data: { shopifyPaymentsAccount: { payouts: { pageInfo: { hasNextPage: true, endCursor: 'c1' }, nodes: [node] } } } }),
@@ -546,7 +546,7 @@ describe('listPayoutsPage', () => {
     const page = await listPayoutsPage(SESSION, { issuedOnOrAfter: '2026-10-24', after: null })
     expect(page).toEqual({ kind: 'page', payouts: [node], hasNextPage: true, endCursor: 'c1' })
     const body = JSON.parse(String(fetchMock.mock.calls[0][1].body)) as { query: string; variables: Record<string, unknown> }
-    expect(body.query).toContain('sortKey: ISSUED_AT')
+    expect(body.query).toContain('sortKey: ISSUED_AT, reverse: true')
     expect(body.variables).toMatchObject({ after: null, query: 'issued_at:>=2026-10-24' })
   })
 

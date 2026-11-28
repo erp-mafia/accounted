@@ -116,6 +116,18 @@ describe('syncShopifyPayouts', () => {
     expect([companyId, userId, records.map((r) => r.external_id)]).toEqual(['company-1', 'user-1', [shopifyPayoutExternalId('butik.myshopify.com', '168750317903')]])
   })
 
+  it('stops at the first payout older than the lookback, even when the store ignored the date filter', async () => {
+    listPayoutsPage.mockResolvedValueOnce({
+      kind: 'page',
+      payouts: [payout(), payout({ legacyResourceId: 'old', issuedAt: '2026-10-20T10:00:00Z' })],
+      hasNextPage: true,
+      endCursor: 'c1',
+    })
+    const summary = await syncShopifyPayouts({} as never, {} as never, args, log)
+    expect(summary).toEqual({ stored: 1, skipped: 0, scopeMissing: false })
+    expect(listPayoutsPage).toHaveBeenCalledTimes(1)
+  })
+
   it('says the scopes are missing and stores nothing', async () => {
     listPayoutsPage.mockResolvedValueOnce({ kind: 'scope_missing' })
     expect(await syncShopifyPayouts({} as never, {} as never, args, log)).toEqual({ stored: 0, skipped: 0, scopeMissing: true })
