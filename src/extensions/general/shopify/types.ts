@@ -122,6 +122,12 @@ export interface ShopifyOrder {
   processedAt: string
   updatedAt: string
   displayFinancialStatus: string | null
+  /**
+   * When the order was cancelled in Shopify; null when it was not. A
+   * cancelled order's row gets the status 'cancelled' (the Orders page shows
+   * it as Avbruten), whatever its financial status.
+   */
+  cancelledAt: string | null
   /** Gateway display names; the booking dialog's payment-method map key. */
   paymentGatewayNames: string[]
   /**

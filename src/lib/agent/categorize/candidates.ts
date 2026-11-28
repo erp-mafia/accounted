@@ -33,7 +33,12 @@ export function candidateFromProposal(p: BookingProposal): AccountCandidate {
   return {
     account: slateAccount(p),
     label: p.name_sv,
-    vatTreatment: (p.booking.kind === 'account' ? p.booking.vat_treatment : p.vat_treatment) as VatTreatment | null,
+    // Unknown moms has no treatment: the review rate it opens with
+    // (withUnknownVat) is not one.
+    vatTreatment: p.vat_unknown
+      ? null
+      : ((p.booking.kind === 'account' ? p.booking.vat_treatment : p.vat_treatment) as VatTreatment | null),
+    ...(p.vat_unknown ? { vatUnknown: true } : {}),
     source:
       p.source === 'counterparty'
         ? 'counterparty_template'

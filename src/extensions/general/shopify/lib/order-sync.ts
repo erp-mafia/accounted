@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { WEBSHOP_ORDER_CANCELLED_STATUS } from '@/lib/webshop-orders/booking-status'
 import { upsertWebshopOrders } from '@/lib/webshop-orders/ingest'
 import type { WebshopOrderUpsert } from '@/lib/webshop-orders/types'
 import { createLogger, type Logger } from '@/lib/logger'
@@ -417,8 +418,13 @@ export function orderCountryOf(
   return shipsNothing(order) ? isoCountryOf(order.billingAddress) : null
 }
 
-/** Row status: the financial status lowercased (paid, partially_refunded, …). */
-function orderStatus(order: ShopifyOrder): string {
+/**
+ * Row status: 'cancelled' when the store cancelled the order (cancelledAt),
+ * else the financial status lowercased (paid, partially_refunded, …). The
+ * Orders page reads the cancelled status the same way for every platform.
+ */
+export function orderStatus(order: Pick<ShopifyOrder, 'cancelledAt' | 'displayFinancialStatus'>): string {
+  if (order.cancelledAt) return WEBSHOP_ORDER_CANCELLED_STATUS
   return (order.displayFinancialStatus ?? 'paid').toLowerCase()
 }
 

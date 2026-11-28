@@ -300,6 +300,25 @@ describe('ingestTransactions', () => {
 
   // desk crm#59: the v1 ingest endpoint binds by ledger without running
   // ensureManualCashAccount, so the re-enable lives at this chokepoint too.
+  it("stores a sale's billing address country and card country as two columns", async () => {
+    const { supabase, enqueue, inserts } = createQueueMockSupabase()
+    const raw = makeRaw({ amount: 500, billing_country: 'SE', card_country: 'US' })
+    const inserted = makeTransaction({ id: 'tx-1', external_id: raw.external_id })
+
+    enqueue({ data: [], error: null }) // booked map
+    enqueue({ data: [], error: null }) // unbooked map
+    enqueue({ data: [], error: null }) // supplier invoices
+    enqueue({ data: [], error: null }) // external_id dedup
+    enqueue({ data: cashAccountRows('ca-1686', '1686'), error: null }) // cash_accounts lookup
+    enqueue({ data: inserted, error: null }) // insert
+    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
+
+    const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw], { settlementAccount: '1686' })
+
+    expect(result.imported).toBe(1)
+    expect(inserts['transactions']?.[0]).toMatchObject({ billing_country: 'SE', card_country: 'US' })
+  })
+
   it('turns a disabled account no bank connection holds back on before binding rows to it', async () => {
     const { supabase, enqueue, inserts, updates } = createQueueMockSupabase()
     const raw = makeRaw({ amount: -100 })

@@ -67,6 +67,9 @@ export interface TransactionWithVouchers {
   /** The counterparty's IBAN as the bank sent it (a foreign payment's payee, the payer of an incoming transfer). */
   counterparty_iban: string | null
   counterparty_org_number: string | null
+  /** A Stripe sale: the buyer's billing address country and card country, apart (ISO 3166-1 alpha-2). */
+  billing_country: string | null
+  card_country: string | null
   instructed_amount: number | null
   instructed_currency: string | null
   balance_after: number | null

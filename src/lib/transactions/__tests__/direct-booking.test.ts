@@ -19,7 +19,7 @@ const OFF = { enabled: false }
 
 describe('DIRECT_BOOKING_POLICY_VERSION', () => {
   it('spells the thresholds into the recorded policy version', () => {
-    expect(DIRECT_BOOKING_POLICY_VERSION).toBe('direct-booking.5;assistant_sure=0.8;counterpart_seen=3;calibrator=none')
+    expect(DIRECT_BOOKING_POLICY_VERSION).toBe('direct-booking.6;assistant_sure=0.8;counterpart_seen=3;calibrator=none')
   })
 
   /**
@@ -34,7 +34,7 @@ describe('DIRECT_BOOKING_POLICY_VERSION', () => {
     expect({
       revision: DIRECT_BOOKING_POLICY_REVISION,
       sha256: createHash('sha256').update(source).digest('hex'),
-    }).toEqual({ revision: 5, sha256: '20381962a9ada8307687f9834b407339bd639d3ca3bf2e8a24c243ac2977b564' })
+    }).toEqual({ revision: 6, sha256: '3d768888310113090b3dc18e0833d10ce0267c81c3aa3e96744e53e95d347c36' })
   })
 
   it('a booking review rule match asks first, whatever the switch, the rule or the evidence (accounted#130 step 2)', () => {
@@ -150,6 +150,13 @@ describe('booksWithoutReview', () => {
     expect(booksWithoutReview(sure)).toBe(true)
     expect(booksWithoutReview({ ...sure, replaces_learned_rule: true })).toBe(false)
     expect(reviewReason({ ...sure, replaces_learned_rule: true }, DIRECT_BOOKING_ON)).toBe('evidence')
+  })
+  it('never books a counterpart whose moms is unknown, an auto rule included: the underlag states it', () => {
+    const habit = { source: 'counterparty' as const, seen_count: 7, confidence: 0.75, rule_mode: 'propose' as const }
+    expect(booksWithoutReview(habit)).toBe(true)
+    expect(booksWithoutReview({ ...habit, vat_unknown: true })).toBe(false)
+    expect(booksWithoutReview({ ...habit, rule_mode: 'auto', vat_unknown: true })).toBe(false)
+    expect(reviewReason({ ...habit, vat_unknown: true }, DIRECT_BOOKING_ON)).toBe('evidence')
   })
   it("never books the company's own earlier booking of the counterparty, whatever the count of earlier bookings", () => {
     for (const seen_count of [1, 3, 20, 500]) {

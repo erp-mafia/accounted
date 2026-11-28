@@ -25,6 +25,12 @@ import { cn, formatDate, formatRowAmount } from '@/lib/utils'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { getCountryName } from '@/lib/vat/country-codes'
+import {
+  isCancelledWithoutRefund,
+  isVoidable,
+  isVoidOutdated,
+  webshopOrderBookingStatus,
+} from '@/lib/webshop-orders/booking-status'
 import type { WebshopOrder, WebshopStoreSettings } from '@/types'
 
 const OrderBookingDialog = dynamic(() => import('@/components/orders/OrderBookingDialog'), {
@@ -48,7 +54,9 @@ const BulkOrderBookingDialog = dynamic(
  * would render: unbooked, uninvoiced, not marked as booked outside the
  * integration, and either a refund or a paid order. Legacy-overlap rows stay
  * selectable on purpose: the server guard decides and the per-order failure
- * report explains (no dead-end soft guard).
+ * report explains (no dead-end soft guard). An order the store cancelled
+ * without a refund is left out: the sweep refuses it, and its row offers
+ * Markera som makulerad instead (Bokför sits in its menu).
  */
 function isBulkBookable(order: WebshopOrder, canWrite: boolean): boolean {
   return (
@@ -56,7 +64,8 @@ function isBulkBookable(order: WebshopOrder, canWrite: boolean): boolean {
     order.journal_entry_id === null &&
     order.invoice_id === null &&
     order.manually_booked_at === null &&
-    (order.row_type === 'refund' || order.is_paid)
+    (order.row_type === 'refund' || order.is_paid) &&
+    !isCancelledWithoutRefund(order)
   )
 }
 
@@ -139,6 +148,12 @@ export default function OrdersPage() {
   useEffect(() => {
     void load()
   }, [load])
+  // The list the page shows now: an action that finishes after a filter
+  // change refreshes the new filter, not the one it started under.
+  const loadRef = useRef(load)
+  useEffect(() => {
+    loadRef.current = load
+  }, [load])
 
   useEffect(() => {
     fetch('/api/webshop-orders/settings')
@@ -191,6 +206,38 @@ export default function OrdersPage() {
       }
     },
     [load, t, toast, errorLocale],
+  )
+
+  // Markera som makulerad: an order the store cancelled leaves Att bokföra
+  // without a verifikat. Undone like the booked mark (unmarkOrder).
+  const voidOrder = useCallback(
+    async (order: WebshopOrder) => {
+      try {
+        const res = await fetch(`/api/webshop-orders/${order.id}/mark-booked`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ voided: true }),
+        })
+        const json = await res.json().catch(() => null)
+        if (!res.ok || json?.error) {
+          toast({
+            title: t('void_failed'),
+            description: getErrorMessage(json, {
+              context: 'transaction',
+              statusCode: res.status,
+              locale: errorLocale,
+            }),
+            variant: 'destructive',
+          })
+          return
+        }
+        toast({ title: t('void_done', { number: order.order_number }) })
+        void loadRef.current()
+      } catch {
+        toast({ title: t('void_failed'), variant: 'destructive' })
+      }
+    },
+    [t, toast, errorLocale],
   )
 
   // A booked order whose verifikat lacks its orderunderlag (archiving never
@@ -362,6 +409,7 @@ export default function OrdersPage() {
                   onBook={() => setBookingOrder(order)}
                   onInvoice={() => setInvoicingOrder(order)}
                   onMarkBooked={() => setMarkingOrder(order)}
+                  onVoid={() => void voidOrder(order)}
                   onUnmark={() => void unmarkOrder(order)}
                   onCreateUnderlag={() => void createUnderlag(order)}
                   t={t}
@@ -476,6 +524,7 @@ function OrderRow({
   onBook,
   onInvoice,
   onMarkBooked,
+  onVoid,
   onUnmark,
   onCreateUnderlag,
   t,
@@ -489,6 +538,7 @@ function OrderRow({
   onBook: () => void
   onInvoice: () => void
   onMarkBooked: () => void
+  onVoid: () => void
   onUnmark: () => void
   onCreateUnderlag: () => void
   t: ReturnType<typeof useTranslations<'webshop_orders'>>
@@ -512,9 +562,15 @@ function OrderRow({
   // button (the two-button layout used to overflow the panel width).
   const markable = canWrite && !booked && !invoiced && !manuallyMarked
   const unmarkable = canWrite && manuallyMarked
-  // Paid + invoiceable: Bokför holds the button, Skapa faktura is offered in
-  // the menu. Unpaid orders already show Skapa faktura as the button.
-  const invoiceViaMenu = bookable && invoiceable
+  // The store cancelled the order and refunded nothing: Markera som
+  // makulerad holds the button, and Bokför and Skapa faktura move to the
+  // menu (the status says Avbruten, so booking it is the exception).
+  const voidable = canWrite && isVoidable(order)
+  const primary = voidable ? 'void' : bookable ? 'book' : invoiceable ? 'invoice' : null
+  // Whatever does not hold the button is offered in the menu: Skapa faktura
+  // on a paid order (Bokför holds it), both on a voidable one.
+  const bookViaMenu = bookable && primary !== 'book'
+  const invoiceViaMenu = invoiceable && primary !== 'invoice'
 
   return (
     <tr
@@ -604,16 +660,20 @@ function OrderRow({
           {/* Hover-revealed (touch keeps it visible): the status chip
               already says which rows wait, so a button on every row only
               repeats it. */}
-          {bookable ? (
+          {primary === 'void' ? (
+            <Button variant="outline" className={HOVER_REVEAL_CLASS} onClick={onVoid}>
+              {t('action_void')}
+            </Button>
+          ) : primary === 'book' ? (
             <Button variant="outline" className={HOVER_REVEAL_CLASS} onClick={onBook}>
               {t('action_book')}
             </Button>
-          ) : invoiceable ? (
+          ) : primary === 'invoice' ? (
             <Button variant="outline" className={HOVER_REVEAL_CLASS} onClick={onInvoice}>
               {t('action_create_invoice')}
             </Button>
           ) : null}
-          {(invoiceViaMenu || markable || unmarkable || booked) && (
+          {(bookViaMenu || invoiceViaMenu || markable || unmarkable || booked) && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
@@ -627,6 +687,11 @@ function OrderRow({
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
+                {bookViaMenu && (
+                  <DropdownMenuItem onSelect={onBook}>
+                    {t('action_book')}
+                  </DropdownMenuItem>
+                )}
                 {invoiceViaMenu && (
                   <DropdownMenuItem onSelect={onInvoice}>
                     {t('action_create_invoice')}
@@ -639,7 +704,7 @@ function OrderRow({
                 )}
                 {unmarkable && (
                   <DropdownMenuItem onSelect={onUnmark}>
-                    {t('action_unmark_booked')}
+                    {order.manually_voided ? t('action_unvoid') : t('action_unmark_booked')}
                   </DropdownMenuItem>
                 )}
                 {/* Booked: the verifikat holds the orderunderlag; the
@@ -667,8 +732,10 @@ function OrderRow({
 
 /**
  * Chips mark exceptions only (design convention 5): booked rows render as
- * muted text; deviations (unbooked-but-paid, unpaid, legacy overlap, remote
- * drift) get a Badge.
+ * muted text; deviations (unbooked-but-paid, unpaid, cancelled in the store,
+ * legacy overlap, remote drift) get a Badge. Which one comes from
+ * webshopOrderBookingStatus, the same status the v1 and MCP order list
+ * reports.
  */
 function OrderStatus({
   order,
@@ -680,43 +747,52 @@ function OrderStatus({
   if (order.remote_changed_after_freeze) {
     return <Badge variant="warning">{t('status_remote_changed')}</Badge>
   }
-  if (order.journal_entry_id) {
-    return <span className="text-xs text-muted-foreground">{t('status_booked')}</span>
+  switch (webshopOrderBookingStatus(order)) {
+    case 'booked':
+      return <span className="text-xs text-muted-foreground">{t('status_booked')}</span>
+    // Marked as handled outside the integration: a normal done state, so
+    // muted text, not a chip (convention 5). Links to the referenced
+    // verifikat when the user picked one.
+    case 'marked_booked':
+      return order.manually_booked_journal_entry_id ? (
+        <Link
+          href={`/bookkeeping/${order.manually_booked_journal_entry_id}`}
+          className="text-xs text-muted-foreground underline decoration-foreground/25 underline-offset-4 hover:text-foreground"
+        >
+          {t('status_marked_booked')}
+        </Link>
+      ) : (
+        <span className="text-xs text-muted-foreground">{t('status_marked_booked')}</span>
+      )
+    // Voided after the store cancelled it: done, nothing booked. When the
+    // store has since reopened the order or refunded money on it, the void
+    // no longer holds: a warning chip, and the menu's undo is the way back.
+    case 'voided':
+      return isVoidOutdated(order) ? (
+        <Badge variant="warning">{t('status_voided_store_changed')}</Badge>
+      ) : (
+        <span className="text-xs text-muted-foreground">{t('status_voided')}</span>
+      )
+    case 'invoiced':
+      return (
+        <Link
+          href={`/invoices/${order.invoice_id}`}
+          className="text-xs text-muted-foreground underline decoration-foreground/25 underline-offset-4 hover:text-foreground"
+        >
+          {t('status_invoiced')}
+        </Link>
+      )
+    case 'in_transactions':
+      return (
+        <Link href="/transactions">
+          <Badge variant="outline">{t('status_in_transactions')}</Badge>
+        </Link>
+      )
+    case 'cancelled':
+      return <Badge variant="secondary">{t('status_cancelled')}</Badge>
+    case 'unpaid':
+      return <Badge variant="secondary">{t('status_unpaid')}</Badge>
+    case 'to_book':
+      return <Badge variant="warning">{t('status_to_book')}</Badge>
   }
-  // Marked as handled outside the integration: a normal done state, so muted
-  // text, not a chip (convention 5). Links to the referenced verifikat when
-  // the user picked one.
-  if (order.manually_booked_at) {
-    return order.manually_booked_journal_entry_id ? (
-      <Link
-        href={`/bookkeeping/${order.manually_booked_journal_entry_id}`}
-        className="text-xs text-muted-foreground underline decoration-foreground/25 underline-offset-4 hover:text-foreground"
-      >
-        {t('status_marked_booked')}
-      </Link>
-    ) : (
-      <span className="text-xs text-muted-foreground">{t('status_marked_booked')}</span>
-    )
-  }
-  if (order.invoice_id) {
-    return (
-      <Link
-        href={`/invoices/${order.invoice_id}`}
-        className="text-xs text-muted-foreground underline decoration-foreground/25 underline-offset-4 hover:text-foreground"
-      >
-        {t('status_invoiced')}
-      </Link>
-    )
-  }
-  if (order.legacy_transaction_id) {
-    return (
-      <Link href="/transactions">
-        <Badge variant="outline">{t('status_in_transactions')}</Badge>
-      </Link>
-    )
-  }
-  if (!order.is_paid && order.row_type === 'order') {
-    return <Badge variant="secondary">{t('status_unpaid')}</Badge>
-  }
-  return <Badge variant="warning">{t('status_to_book')}</Badge>
 }

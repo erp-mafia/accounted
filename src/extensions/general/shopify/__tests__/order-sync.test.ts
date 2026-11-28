@@ -132,6 +132,7 @@ function makeOrder(overrides: Partial<ShopifyOrder> = {}): ShopifyOrder {
     processedAt: '2026-08-01T09:04:30Z',
     updatedAt: '2026-08-01T09:05:00Z',
     displayFinancialStatus: 'PAID',
+    cancelledAt: null,
     paymentGatewayNames: ['Klarna'],
     taxesIncluded: true,
     totalPriceSet: money('1250.00'),
@@ -452,6 +453,14 @@ describe('mapOrderToWebshopRow', () => {
     expect(row.currency).toBe('EUR')
     expect(row.status).toBe('partially_refunded')
     expect(row.refunded_total).toBe(500)
+  })
+
+  it('takes the cancelled status from cancelledAt, whatever the financial status', () => {
+    const cancelled = makeOrder({ cancelledAt: '2026-08-02T08:00:00Z', displayFinancialStatus: 'REFUNDED' })
+    expect(mapOrderToWebshopRow(connection, 's', cancelled)[0].status).toBe('cancelled')
+    const paidCancelled = makeOrder({ cancelledAt: '2026-08-02T08:00:00Z' })
+    expect(mapOrderToWebshopRow(connection, 's', paidCancelled)[0].status).toBe('cancelled')
+    expect(mapOrderToWebshopRow(connection, 's', makeOrder())[0].status).toBe('paid')
   })
 
   it('joins multiple gateways into the title and keys on the first', () => {

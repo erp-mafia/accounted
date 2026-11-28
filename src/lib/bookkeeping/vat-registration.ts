@@ -1,3 +1,4 @@
+import type { SupabaseClient } from '@supabase/supabase-js'
 import type { VatTreatment } from '@/types'
 import { roundOre } from '@/lib/money'
 
@@ -108,4 +109,20 @@ export function sellerVatAsCostNote(sellerVat: number, payable: number): string 
   return 'The company is not VAT-registered, so it has no avdragsrätt for ingående moms (13 kap. ML 2023:200): '
     + (sellerVat !== 0 ? `the seller's VAT ${sellerVat} is added to the cost lines` : 'the lines carry no seller VAT')
     + `, nothing is booked on 2641, and 2440 is credited with ${payable}.`
+}
+
+/**
+ * The company's company_settings.vat_registered, for a path that has no
+ * settings row of its own (learning from a bank link, unlearning on a
+ * storno). A failed read is undefined: the caller then decides as one that
+ * does not load the flag.
+ */
+export async function readVatRegistration(supabase: SupabaseClient, companyId: string): Promise<VatRegistration> {
+  const { data, error } = await supabase
+    .from('company_settings')
+    .select('vat_registered')
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (error || !data) return undefined
+  return (data as { vat_registered: boolean | null }).vat_registered
 }

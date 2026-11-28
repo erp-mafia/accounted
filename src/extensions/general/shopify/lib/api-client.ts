@@ -374,8 +374,10 @@ async function requestGraphQL<T>(
  * the two apart; it rides with the addresses, so the fallback query without
  * them asks for exactly the fields that worked before either was added. Tax
  * lines, line items and shipping lines carry the booking underlag (per-rate
- * VAT, line snapshot). Refunds come inline (plain list, not a connection), so
- * no per-order follow-up requests are needed.
+ * VAT, line snapshot). cancelledAt says the store cancelled the order; it
+ * needs no scope beyond read_orders, so both queries ask for it. Refunds come
+ * inline (plain list, not a connection), so no per-order follow-up requests
+ * are needed.
  *
  * Shopify counts addresses as protected customer data (the protected field
  * "Address", level 2, covering billing and shipping alike). A store that
@@ -396,6 +398,7 @@ query OrdersFeed($first: Int!, $after: String, $query: String) {
       processedAt
       updatedAt
       displayFinancialStatus
+      cancelledAt
       paymentGatewayNames
       taxesIncluded
       totalPriceSet { shopMoney { amount currencyCode } }

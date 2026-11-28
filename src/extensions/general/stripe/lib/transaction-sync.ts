@@ -240,6 +240,27 @@ function chargeOf(txn: BalanceTxnLike): Stripe.Charge | null {
   return source.object === 'charge' ? (source as Stripe.Charge) : null
 }
 
+/** An ISO 3166-1 alpha-2 code as Stripe states it, upper case; null for anything else. */
+function countryCode(value: string | null | undefined): string | null {
+  const code = (value ?? '').trim().toUpperCase()
+  return /^[A-Z]{2}$/.test(code) ? code : null
+}
+
+/**
+ * The buyer's two countries on the charge behind a sale: the billing
+ * address's and the card's. Kept apart, never folded into one: they can
+ * differ, and the moms of the sale needs to see when they do. Null where
+ * the charge states none, and on every row that is no sale (a refund's
+ * charge is not expanded, a fee or payout has no buyer).
+ */
+function buyerCountries(txn: BalanceTxnLike): { billing_country: string | null; card_country: string | null } {
+  const charge = chargeOf(txn)
+  return {
+    billing_country: countryCode(charge?.billing_details?.address?.country),
+    card_country: countryCode(charge?.payment_method_details?.card?.country),
+  }
+}
+
 /**
  * Swedish-first display title per balance-transaction type. Deterministic
  * from immutable Stripe data (charges never change payer name after
@@ -329,6 +350,7 @@ export function mapBalanceTransaction(
       external_id: stripeExternalId(stripeAccountId, txn.id),
       import_source: STRIPE_IMPORT_SOURCE,
       transaction_method: methodForBalanceTxn(txn),
+      ...buyerCountries(txn),
     },
   ]
   if (txn.fee) {

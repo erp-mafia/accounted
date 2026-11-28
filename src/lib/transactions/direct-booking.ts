@@ -22,6 +22,9 @@ import type { CategorizationTemplate } from '@/types'
  * So does the assistant's read on a row where an auto-learned mapping row
  * that is no longer read would have proposed (replaces_learned_rule): the
  * read stands where a rule stood.
+ * So does a learned counterpart whose moms is unknown (vat_unknown): its
+ * bookings carried moms of no one Swedish rate, it books none of its own,
+ * and the underlag's moms is stated in the review.
  * Every direct booking carries Ångra on its toast.
  *
  * Before the evidence, the company and the rule have their say
@@ -50,7 +53,7 @@ export const ASSISTANT_LIKELY = 0.5
  * revision). The thresholds are spelled into the version, so changing one
  * changes the version on its own.
  */
-export const DIRECT_BOOKING_POLICY_REVISION = 5
+export const DIRECT_BOOKING_POLICY_REVISION = 6
 
 /**
  * The approval policy a decision's confidence band is evaluated under,
@@ -121,7 +124,7 @@ export function askedForReview(rule: RuleReviewFlags, settings: DirectBookingSet
 
 type PolicyEvidence = Pick<
   SuggestedTemplate,
-  'source' | 'seen_count' | 'confidence' | 'has_underlag' | 'rule_mode' | 'rule_own' | 'rule_requires_review' | 'contested' | 'read_reverse_charge_kind' | 'reverse_charge_box_unconfirmed' | 'direction_mismatch' | 'replaces_learned_rule'
+  'source' | 'seen_count' | 'confidence' | 'has_underlag' | 'rule_mode' | 'rule_own' | 'rule_requires_review' | 'contested' | 'read_reverse_charge_kind' | 'reverse_charge_box_unconfirmed' | 'direction_mismatch' | 'replaces_learned_rule' | 'vat_unknown'
 > &
   RuleReviewFlags
 
@@ -138,7 +141,7 @@ export function reviewRequired(s: PolicyEvidence, settings: DirectBookingSetting
 export function booksWithoutReview(
   s: Pick<
     SuggestedTemplate,
-    'source' | 'seen_count' | 'confidence' | 'has_underlag' | 'rule_mode' | 'rule_own' | 'rule_requires_review' | 'contested' | 'read_reverse_charge_kind' | 'reverse_charge_box_unconfirmed' | 'direction_mismatch' | 'replaces_learned_rule'
+    'source' | 'seen_count' | 'confidence' | 'has_underlag' | 'rule_mode' | 'rule_own' | 'rule_requires_review' | 'contested' | 'read_reverse_charge_kind' | 'reverse_charge_box_unconfirmed' | 'direction_mismatch' | 'replaces_learned_rule' | 'vat_unknown'
   >,
 ): boolean {
   // A match the assistant's read took down from the row is the opposite of a
@@ -157,6 +160,10 @@ export function booksWithoutReview(
   // A read on a row where an auto-learned mapping row that is no longer read
   // would have proposed: it takes the rule's place, never its one click.
   if (s.replaces_learned_rule) return false
+  // A counterpart whose moms is no one rate books none of its own: the
+  // underlag's moms is stated in the review, whatever the habit or the rule
+  // says (an 'auto' rule included).
+  if (s.vat_unknown) return false
   // How the counterparty was booked before is no rule: whatever its count, a
   // person reviews it. Only a counterparty rule turns a habit into one click.
   if (s.source === 'precedent') return false

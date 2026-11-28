@@ -320,6 +320,41 @@ describe('mapBalanceTransaction', () => {
     })
   })
 
+  it("keeps the buyer's billing address country and card country apart on the sale row, and on no other row", () => {
+    const rows = mapBalanceTransaction(
+      'acct_1',
+      makeCharge({
+        source: {
+          id: 'ch_1',
+          object: 'charge',
+          billing_details: { name: 'Anna Andersson', address: { country: 'se' } },
+          payment_method_details: { type: 'card', card: { country: 'US' } },
+        } as unknown as BalanceTxnLike['source'],
+      }),
+    )
+    expect(rows[0]).toMatchObject({ billing_country: 'SE', card_country: 'US' })
+    // The fee is Stripe's own: no buyer.
+    expect(rows[1]).not.toHaveProperty('billing_country')
+    expect(rows[1]).not.toHaveProperty('card_country')
+    // A payout has no buyer either.
+    expect(mapBalanceTransaction('acct_1', makePayoutTxn())[0]).toMatchObject({ billing_country: null, card_country: null })
+  })
+
+  it('leaves a country empty when Stripe states none, or none in ISO form', () => {
+    const rows = mapBalanceTransaction(
+      'acct_1',
+      makeCharge({
+        source: {
+          id: 'ch_1',
+          object: 'charge',
+          billing_details: { name: 'Anna Andersson', address: { country: null } },
+          payment_method_details: { type: 'card', card: { country: 'USA' } },
+        } as unknown as BalanceTxnLike['source'],
+      }),
+    )
+    expect(rows[0]).toMatchObject({ billing_country: null, card_country: null })
+  })
+
   it('uses the charge description when billing details carry no name', () => {
     const rows = mapBalanceTransaction(
       'acct_1',

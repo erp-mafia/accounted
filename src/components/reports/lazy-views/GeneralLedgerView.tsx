@@ -130,7 +130,9 @@ export default function GeneralLedgerView({ periodId, initialAccountFilter, dime
 
   // Only the request for the current parameters may land: the window changes
   // right after mount (the date-range control resolves its preset, or a
-  // drill-down's window), and the superseded answer is dropped.
+  // drill-down's window), and the superseded answer is dropped. The Excel
+  // file is asked for with the same parameters, so it holds the accounts the
+  // screen shows: a kontoanalys downloads its one account, not the whole ledger.
   const params = new URLSearchParams({ period_id: periodId })
   if (applied.from) params.set('account_from', applied.from)
   if (applied.to) params.set('account_to', applied.to)
@@ -183,7 +185,7 @@ export default function GeneralLedgerView({ periodId, initialAccountFilter, dime
 
   return (
     <div className="space-y-4">
-      <ReportExportMenu items={[{ format: 'xlsx', href: `/api/reports/general-ledger/xlsx?${reportQuery(periodId, dateRange, dimensionFilter)}` }]} />
+      <ReportExportMenu items={[{ format: 'xlsx', href: `/api/reports/general-ledger/xlsx?${params}` }]} />
       {/* Account range filter: flat toolbar on the panel, no box. The labels
           are hidden (field-label) and the placeholders say what the fields are. */}
       <div className="flex flex-wrap items-end gap-3">
