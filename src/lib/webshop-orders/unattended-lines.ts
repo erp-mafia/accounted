@@ -40,7 +40,7 @@ export type UnattendedLinesOutcome =
   | { ok: true; order: WebshopOrder; lines: CreateJournalEntryLineInput[] }
   /** A refusal with a structured-error code. */
   | { ok: false; code: string; details?: Record<string, unknown> }
-  /** buildOrderBooking threw; the caller maps the error. */
+  /** A guard's read or buildOrderBooking threw; the caller maps the error. */
   | { ok: false; code: null; error: unknown }
 
 export interface UnattendedLinesInput {
@@ -72,7 +72,14 @@ export async function deriveUnattendedOrderLines(
 ): Promise<UnattendedLinesOutcome> {
   const { supabase, companyId, order, settings, log } = input
 
-  const guardFailure = await assertOrderBookable(supabase, companyId, order)
+  // A guard whose read failed refuses this order alone: a bulk run or a day
+  // goes on with the rest.
+  let guardFailure: Awaited<ReturnType<typeof assertOrderBookable>>
+  try {
+    guardFailure = await assertOrderBookable(supabase, companyId, order)
+  } catch (err) {
+    return { ok: false, code: null, error: err }
+  }
   if (guardFailure) {
     return {
       ok: false,

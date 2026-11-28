@@ -103,9 +103,9 @@ describe('deriveUnattendedOrderLines', () => {
     const refund = order({ id: 'refund-1', row_type: 'refund', parent_order_id: 'order-0', status: 'refund', total: -125, total_tax: -25, total_sek: -125 })
     const chain = { select: () => chain, eq: () => chain, maybeSingle: async () => ({ data: null, error: { message: 'timeout' } }) }
     const supabase = { from: () => chain }
-    await expect(
-      deriveUnattendedOrderLines({ supabase: supabase as never, companyId: COMPANY, order: refund, settings: null, log }),
-    ).rejects.toThrow('refund parent lookup failed')
+    const outcome = await deriveUnattendedOrderLines({ supabase: supabase as never, companyId: COMPANY, order: refund, settings: null, log })
+    expect(outcome).toMatchObject({ ok: false, code: null })
+    expect(String((outcome as { error: unknown }).error)).toContain('refund parent lookup failed')
   })
 
   it('books a cancelled order the store refunded money on, like any other: its refund row books against it', async () => {
