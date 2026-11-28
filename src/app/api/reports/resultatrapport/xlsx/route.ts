@@ -15,7 +15,7 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
 import { fileResponse } from '@/lib/api/file-response'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { budgetDisclosure, parseBudgetParam, ReportBudgetError } from '@/lib/budgets/report-budget'
-import type { BudgetComparison } from '@/types'
+import type { BudgetComparison, ResultatrapportRow, ResultatrapportSubgroup } from '@/types'
 
 interface FlatRow {
   group: string
@@ -90,10 +90,10 @@ export const GET = withRouteContext('report.resultatrapport.xlsx', async (reques
     const withBudget = report.budget?.applied === true
 
     const rows: FlatRow[] = []
-    for (const g of report.groups) {
-      for (const r of g.rows) {
+    const pushRows = (group: string, accounts: ResultatrapportRow[], sum: FlatRow) => {
+      for (const r of accounts) {
         rows.push({
-          group: g.class_label,
+          group,
           account_number: r.account_number,
           account_name: r.account_name,
           current_period: r.current_period,
@@ -101,7 +101,36 @@ export const GET = withRouteContext('report.resultatrapport.xlsx', async (reques
           budget: r.budget,
         })
       }
-      rows.push({
+      rows.push(sum)
+    }
+    const pushSubgroup = (sub: ResultatrapportSubgroup) =>
+      pushRows(sub.label, sub.rows, {
+        group: sub.label,
+        account_number: '',
+        account_name: sub.total_label,
+        current_period: sub.subtotal_current,
+        prior_period: sub.subtotal_prior,
+        budget: sub.subtotal_budget,
+      })
+    for (const g of report.groups) {
+      if (g.subgroups) {
+        // Class 8 in the resultaträkning's blocks: Resultat efter finansiella
+        // poster after the blocks above that line.
+        g.subgroups.filter((sub) => sub.above_result_after_financial).forEach(pushSubgroup)
+        if (report.result_after_financial) {
+          rows.push({
+            group: 'Resultat',
+            account_number: '',
+            account_name: report.result_after_financial.label,
+            current_period: report.result_after_financial.current,
+            prior_period: report.result_after_financial.prior,
+            budget: report.result_after_financial.budget,
+          })
+        }
+        g.subgroups.filter((sub) => !sub.above_result_after_financial).forEach(pushSubgroup)
+        continue
+      }
+      pushRows(g.class_label, g.rows, {
         group: g.class_label,
         account_number: '',
         account_name: `Summa ${g.class_label}`,
