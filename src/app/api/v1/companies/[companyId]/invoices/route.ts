@@ -18,10 +18,12 @@ import { z } from 'zod'
 import { created, paginated } from '@/lib/api/v1/response'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import {
-  decodeDefaultCursor,
-  encodeDefaultCursor,
-  parsePaginationParams,
+  applyListPage,
+  nextListCursor,
   PaginationQueryShape,
+  parsePaginationParams,
+  parseUpdatedSince,
+  UpdatedSinceQueryShape,
 } from '@/lib/api/v1/pagination'
 import { parseExpand, expandQueryShape } from '@/lib/api/v1/expand'
 import { registerEndpoint, listEnvelope, dataEnvelope } from '@/lib/api/v1/registry'
@@ -146,6 +148,8 @@ const InvoiceSummary = z.object({
   payment_reference_type: z.enum(['ocr', 'invoice_number']).nullable(),
   paid_at: z.string().nullable(),
   created_at: z.string(),
+  /** Last change to the row; the watermark for ?updated_since. */
+  updated_at: z.string(),
 })
 
 const InvoicesListResponse = listEnvelope(InvoiceSummary)
@@ -156,7 +160,7 @@ const ALLOWED_EXPAND = ['customer', 'items'] as const
 // fields not in the summary schema. Schema migrations adding columns must
 // update this list before the field becomes visible on the public API.
 const INVOICE_SUMMARY_COLUMNS =
-  'id, invoice_number, external_invoice_number, is_self_billed, customer_id, invoice_date, due_date, status, document_type, valid_until, quote_status, currency, subtotal, vat_amount, total, remaining_amount, paid_at, created_at'
+  'id, invoice_number, external_invoice_number, is_self_billed, customer_id, invoice_date, due_date, status, document_type, valid_until, quote_status, currency, subtotal, vat_amount, total, remaining_amount, paid_at, created_at, updated_at'
 
 // Customer projections: three tiers for different contexts:
 //   - NAME_ONLY: default for the invoice list (inline customer_name only)
@@ -214,6 +218,7 @@ const ListFilters = z.object({
 
 const ListQuery = ListFilters.extend({
   ...PaginationQueryShape,
+  ...UpdatedSinceQueryShape,
   ...expandQueryShape(ALLOWED_EXPAND),
 })
 
@@ -229,6 +234,7 @@ registerEndpoint({
   doNotUseFor:
     'Fetching a single invoice you already know the id of: use GET /api/v1/companies/{companyId}/invoices/{id}. Supplier invoices are a different resource (supplier-invoices).',
   pitfalls: [
+    '?updated_since returns invoices whose own row changed: payment, crediting, sending and draft edits (line items included) all move updated_at. Three things do not: the reported status turning overdue as the due date passes (compare due_date yourself), the embedded customer fields (follow the customer list\'s own ?updated_since), and an unnumbered draft deleted outright, which leaves no row behind (a numbered draft is makulerad and does appear).',
     'Draft invoices have invoice_number=null until they are sent.',
     PAYMENT_REFERENCE_PITFALL,
     'remaining_amount is the unpaid portion (total − paid_amount); use status=paid or remaining_amount=0 to filter for closed invoices. Crediting an invoice sets its remaining_amount to 0: the credit note settles it.',
@@ -285,7 +291,8 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
   async (request, ctx) => {
     const url = new URL(request.url)
     const { limit, cursor } = parsePaginationParams(url)
-    const decoded = decodeDefaultCursor(cursor)
+    const since = parseUpdatedSince(url)
+    if (!since.ok) return v1ValidationError(ctx, since.error)
 
     // Validate ?expand against the allowlist; reject unknown values clearly.
     const expandResult = parseExpand(url, ALLOWED_EXPAND)
@@ -339,8 +346,6 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       .from('invoices')
       .select(selectClause)
       .eq('company_id', ctx.companyId!)
-      .order('created_at', { ascending: false })
-      .order('id', { ascending: true })
       .limit(limit + 1)
 
     // Overdue is derived from the due date and the open remainder
@@ -362,13 +367,8 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     if (filters.date_from) query = query.gte('invoice_date', filters.date_from)
     if (filters.date_to) query = query.lte('invoice_date', filters.date_to)
 
-    if (decoded) {
-      // Keyset on (created_at DESC, id ASC): created_at moves backward,
-      // id breaks ties within the same timestamp.
-      query = query.or(
-        `created_at.lt.${decoded.ts},and(created_at.eq.${decoded.ts},id.gt.${decoded.id})`,
-      )
-    }
+
+    query = applyListPage(query, { updatedSince: since.value, cursor, createdAscending: false })
 
     const { data, error } = await query
 
@@ -398,6 +398,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       remaining_amount: number
       paid_at: string | null
       created_at: string
+      updated_at: string
       customer: CustomerObj | CustomerObj[] | null
       items?: unknown
     } & AmountToPayRow & Record<string, unknown>
@@ -438,6 +439,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
         payment_reference_type: r.payment_reference_type,
         paid_at: r.paid_at,
         created_at: r.created_at,
+        updated_at: r.updated_at,
       }
       return {
         ...base,
@@ -448,7 +450,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
 
     const last = trimmed[trimmed.length - 1]
     const nextCursor = hasMore && last
-      ? encodeDefaultCursor({ id: last.id, created_at: last.created_at })
+      ? nextListCursor(last, since.value)
       : null
 
     // Register-coverage disclosure (meta.coverage): without it, an agent

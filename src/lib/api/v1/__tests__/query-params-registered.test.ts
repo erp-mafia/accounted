@@ -24,6 +24,7 @@ import '../load-routes'
 /** Shared helpers that read query parameters on a route's behalf. */
 const HELPER_PARAMS: Array<[RegExp, string[]]> = [
   [/\bparsePaginationParams\(/, ['cursor', 'limit']],
+  [/\bparseUpdatedSince\(/, ['updated_since']],
   [/\bloadPeriodFromQuery\(/, ['period_id']],
   [/\bloadRangeFromQuery\(/, ['from_date', 'to_date']],
   [/\basOfAlias:\s*true\b/, ['as_of']],

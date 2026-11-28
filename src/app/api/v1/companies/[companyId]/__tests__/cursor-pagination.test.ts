@@ -51,8 +51,11 @@ vi.mock('@supabase/supabase-js', async () => {
 })
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
-import { decodeDefaultCursor } from '@/lib/api/v1/pagination'
+import { decodeDefaultCursor, encodeDefaultCursor } from '@/lib/api/v1/pagination'
 import { GET as listInvoices } from '../invoices/route'
+import { GET as listCustomers } from '../customers/route'
+import { GET as listSuppliers } from '../suppliers/route'
+import { GET as listEmployees } from '../employees/route'
 import { GET as listJournalEntries } from '../journal-entries/route'
 import { GET as listSupplierInvoices } from '../supplier-invoices/route'
 import { GET as listTransactions } from '../transactions/route'
@@ -394,7 +397,7 @@ const ENDPOINTS: ListEndpointCase[] = [
   },
 ]
 
-const ALL_SCOPES = ENDPOINTS.map((e) => e.scope)
+const ALL_SCOPES = [...ENDPOINTS.map((e) => e.scope), 'customers:read', 'payroll:read']
 
 function makeRequest(url: string, withAuth = true): Request {
   return new Request(url, {
@@ -649,5 +652,172 @@ describe('business-date filters', () => {
     const { status, page } = await fetchPage(ENDPOINTS[3], 'limit=100&date_from=2026-07-01&date_to=2026-07-31')
     expect(status).toBe(200)
     expect(page.ids).toEqual(EXPECTED_ORDER.slice(1))
+  })
+})
+
+// ──────────────────────────────────────────────────────────────────
+// Change feed: ?updated_since (#3651)
+// ──────────────────────────────────────────────────────────────────
+
+// A change order unrelated to the created order. Rows 4 and 5 (IDS[3],
+// IDS[4]) share an updated_at so the id tie-break lands on a page boundary at
+// limit=2, and IDS[5] last changed before the watermark.
+const UPDATED_AT = [
+  '2026-07-26T09:00:03.000Z',
+  '2026-07-26T09:00:01.000Z',
+  '2026-07-26T09:00:05.000Z',
+  '2026-07-26T09:00:02.000Z',
+  '2026-07-26T09:00:02.000Z',
+  '2026-07-25T08:00:00.000Z',
+  '2026-07-26T09:00:04.000Z',
+]
+const WATERMARK = '2026-07-26T00:00:00.000Z'
+/** (updated_at ASC, id ASC) over the rows at or after WATERMARK. */
+const EXPECTED_CHANGE_ORDER = [IDS[1], IDS[3], IDS[4], IDS[0], IDS[6], IDS[2]]
+
+function withUpdatedAt(rows: Row[]): Row[] {
+  return rows.map((row, i) => ({ ...row, updated_at: UPDATED_AT[i] }))
+}
+
+function customerRows(): Row[] {
+  return IDS.map((id, i) => ({
+    id,
+    company_id: COMPANY_ID,
+    name: `Kund ${i}`,
+    customer_type: 'swedish_business',
+    email: null,
+    org_number: null,
+    vat_number: null,
+    default_payment_terms: 30,
+    party_id: null,
+    archived_at: null,
+    created_at: CREATED_AT[i],
+  }))
+}
+
+function supplierRows(): Row[] {
+  return IDS.map((id, i) => ({
+    id,
+    company_id: COMPANY_ID,
+    name: `Leverantör ${i}`,
+    supplier_type: 'swedish_business',
+    email: null,
+    org_number: null,
+    vat_number: null,
+    default_payment_terms: 30,
+    default_currency: 'SEK',
+    party_id: null,
+    archived_at: null,
+    created_at: CREATED_AT[i],
+  }))
+}
+
+function employeeRows(): Row[] {
+  return IDS.map((id, i) => ({
+    id,
+    company_id: COMPANY_ID,
+    first_name: `Anna ${i}`,
+    last_name: 'Andersson',
+    // Synthetic 12-digit test value, stored as plaintext: the decrypt helper
+    // passes legacy plaintext rows through before masking.
+    personnummer: '190001010008',
+    employment_type: 'employee',
+    personnel_category: null,
+    employment_start: '2026-01-01',
+    employment_end: null,
+    salary_type: 'monthly',
+    monthly_salary: 30000,
+    hourly_rate: null,
+    f_skatt_status: 'a_skatt',
+    is_active: true,
+    created_at: CREATED_AT[i],
+  }))
+}
+
+const CHANGE_FEED_ENDPOINTS: Array<Pick<ListEndpointCase, 'name' | 'segment' | 'table' | 'handler' | 'rows'>> = [
+  { name: 'invoices', segment: 'invoices', table: 'invoices', handler: listInvoices as ListHandler, rows: invoiceRows },
+  {
+    name: 'supplier-invoices',
+    segment: 'supplier-invoices',
+    table: 'supplier_invoices',
+    handler: listSupplierInvoices as ListHandler,
+    rows: supplierInvoiceRows,
+  },
+  { name: 'customers', segment: 'customers', table: 'customers', handler: listCustomers as ListHandler, rows: customerRows },
+  { name: 'suppliers', segment: 'suppliers', table: 'suppliers', handler: listSuppliers as ListHandler, rows: supplierRows },
+  { name: 'employees', segment: 'employees', table: 'employees', handler: listEmployees as ListHandler, rows: employeeRows },
+]
+
+describe.each(CHANGE_FEED_ENDPOINTS)('GET /api/v1/companies/:companyId/$name?updated_since', (endpoint) => {
+  const asCase = endpoint as ListEndpointCase
+
+  function mountRows() {
+    mockServiceClient.mockReturnValue(
+      makeKeysetSupabase({
+        company_members: MEMBERSHIP,
+        [endpoint.table]: withUpdatedAt(endpoint.rows()),
+      }),
+    )
+  }
+
+  const since = `updated_since=${encodeURIComponent(WATERMARK)}`
+
+  it('walks every changed row once, oldest change first, and skips rows before the watermark', async () => {
+    mountRows()
+    const seen: string[] = []
+    let cursor: string | undefined
+    for (let guard = 0; guard < 10; guard++) {
+      const query = cursor ? `limit=2&${since}&cursor=${encodeURIComponent(cursor)}` : `limit=2&${since}`
+      const { status, page } = await fetchPage(asCase, query)
+      expect(status).toBe(200)
+      seen.push(...page.ids)
+      cursor = page.nextCursor
+      if (!cursor) break
+    }
+    expect(seen).toEqual(EXPECTED_CHANGE_ORDER)
+  })
+
+  it('returns updated_at on every row, the watermark for the next call', async () => {
+    mountRows()
+    const { body } = await fetchPage(asCase, `limit=100&${since}`)
+    const stamps = body.data.map((row) => (row as unknown as { updated_at: string }).updated_at)
+    expect(stamps).toEqual([...stamps].sort())
+    expect(stamps.every((ts) => ts >= WATERMARK)).toBe(true)
+  })
+
+  it('starts from the watermark when handed a created_at cursor', async () => {
+    mountRows()
+    const createdCursor = encodeDefaultCursor({ id: IDS[0], created_at: CREATED_AT[0] })!
+    const { status, page } = await fetchPage(asCase, `limit=2&${since}&cursor=${encodeURIComponent(createdCursor)}`)
+    expect(status).toBe(200)
+    expect(page.ids).toEqual(EXPECTED_CHANGE_ORDER.slice(0, 2))
+  })
+
+  it('ignores a change-feed cursor without updated_since and keeps the created order', async () => {
+    mountRows()
+    const first = await fetchPage(asCase, `limit=2&${since}`)
+    const changeCursor = first.page.nextCursor!
+    expect(decodeDefaultCursor(changeCursor)).toBeNull()
+
+    const plainFirst = await fetchPage(asCase, 'limit=2')
+    const replayed = await fetchPage(asCase, `limit=2&cursor=${encodeURIComponent(changeCursor)}`)
+    expect(replayed.status).toBe(200)
+    expect(replayed.page.ids).toEqual(plainFirst.page.ids)
+  })
+
+  it('returns 400 VALIDATION_ERROR on a timestamp that is not ISO 8601', async () => {
+    mountRows()
+    const { status, body } = await fetchPage(asCase, 'updated_since=yesterday')
+    expect(status).toBe(400)
+    expect((body as unknown as { error: { code: string } }).error.code).toBe('VALIDATION_ERROR')
+  })
+
+  it('returns 401 UNAUTHORIZED without a bearer token', async () => {
+    mockServiceClient.mockReturnValue(makeKeysetSupabase({}))
+    const res = await endpoint.handler(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/${endpoint.segment}?${since}`, false),
+      companyParams(COMPANY_ID),
+    )
+    expect(res.status).toBe(401)
   })
 })

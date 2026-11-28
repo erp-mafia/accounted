@@ -20,10 +20,12 @@ import { z } from 'zod'
 import { created, paginated } from '@/lib/api/v1/response'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import {
-  decodeDefaultCursor,
-  encodeDefaultCursor,
-  parsePaginationParams,
+  applyListPage,
+  nextListCursor,
   PaginationQueryShape,
+  parsePaginationParams,
+  parseUpdatedSince,
+  UpdatedSinceQueryShape,
 } from '@/lib/api/v1/pagination'
 import { registerEndpoint, listEnvelope, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
@@ -55,6 +57,8 @@ const EmployeeSummary = z.object({
   f_skatt_status: FSkattStatus,
   is_active: z.boolean(),
   created_at: z.string(),
+  /** Last change to the row; the watermark for ?updated_since. */
+  updated_at: z.string(),
 })
 
 const EmployeesListResponse = listEnvelope(EmployeeSummary)
@@ -64,7 +68,7 @@ const EmployeesListResponse = listEnvelope(EmployeeSummary)
 // personnummer is loaded so the response can serve a masked form; the full
 // value never leaves this projection.
 const EMPLOYEE_SUMMARY_COLUMNS =
-  'id, first_name, last_name, personnummer, employment_type, personnel_category, employment_start, employment_end, salary_type, monthly_salary, hourly_rate, f_skatt_status, is_active, created_at'
+  'id, first_name, last_name, personnummer, employment_type, personnel_category, employment_start, employment_end, salary_type, monthly_salary, hourly_rate, f_skatt_status, is_active, created_at, updated_at'
 
 const ListFilters = z.object({
   employment_type: EmploymentType.optional().describe('Only employees with this employment type.'),
@@ -83,7 +87,7 @@ const ListFilters = z.object({
     .describe('true also returns inactive employees. Default: active only.'),
 })
 
-const ListQuery = ListFilters.extend(PaginationQueryShape)
+const ListQuery = ListFilters.extend({ ...PaginationQueryShape, ...UpdatedSinceQueryShape })
 
 registerEndpoint({
   operation: 'employees.list',
@@ -97,6 +101,7 @@ registerEndpoint({
   doNotUseFor:
     'Fetching a single employee you already know the id of: use GET /api/v1/companies/{companyId}/employees/{id}. Salary calculations live on /salary-runs/{id}.',
   pitfalls: [
+    '?updated_since sees removals only with include_inactive=true: removing an employee is a soft delete (is_active set to false), and the default filter hides inactive employees from the feed too.',
     'Inactive employees are hidden by default; soft-delete via DELETE sets is_active=false (BFL 7 kap retention).',
     'personnummer is masked in the list response (GDPR Art.5(1)(c) data minimisation). The detail endpoint returns the full value.',
     'salary_type drives which field is meaningful: monthly_salary for monthly, hourly_rate for hourly. The other is null.',
@@ -139,7 +144,8 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
   async (request, ctx) => {
     const url = new URL(request.url)
     const { limit, cursor } = parsePaginationParams(url)
-    const decoded = decodeDefaultCursor(cursor)
+    const since = parseUpdatedSince(url)
+    if (!since.ok) return v1ValidationError(ctx, since.error)
 
     const filtersResult = ListFilters.safeParse({
       employment_type: url.searchParams.get('employment_type') ?? undefined,
@@ -155,8 +161,6 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       .from('employees')
       .select(EMPLOYEE_SUMMARY_COLUMNS)
       .eq('company_id', ctx.companyId!)
-      .order('created_at', { ascending: true })
-      .order('id', { ascending: true })
       .limit(limit + 1)
 
     if (!includeInactive) {
@@ -178,11 +182,8 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       query = query.or(`first_name.ilike.%${term}%,last_name.ilike.%${term}%`)
     }
 
-    if (decoded) {
-      query = query.or(
-        `created_at.gt.${decoded.ts},and(created_at.eq.${decoded.ts},id.gt.${decoded.id})`,
-      )
-    }
+
+    query = applyListPage(query, { updatedSince: since.value, cursor, createdAscending: true })
 
     const { data, error } = await query
 
@@ -205,6 +206,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       f_skatt_status: string
       is_active: boolean
       created_at: string
+      updated_at: string
     } & Record<string, unknown>
 
     const rows = ((data ?? []) as unknown) as Row[]
@@ -229,11 +231,12 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       f_skatt_status: r.f_skatt_status,
       is_active: r.is_active,
       created_at: r.created_at,
+      updated_at: r.updated_at,
     }))
 
     const last = trimmed[trimmed.length - 1]
     const nextCursor = hasMore && last
-      ? encodeDefaultCursor({ id: last.id, created_at: last.created_at })
+      ? nextListCursor(last, since.value)
       : null
 
     return paginated(employees, {

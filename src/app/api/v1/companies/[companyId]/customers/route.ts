@@ -11,10 +11,12 @@
 import { z } from 'zod'
 import { paginated } from '@/lib/api/v1/response'
 import {
-  decodeDefaultCursor,
-  encodeDefaultCursor,
-  parsePaginationParams,
+  applyListPage,
+  nextListCursor,
   PaginationQueryShape,
+  parsePaginationParams,
+  parseUpdatedSince,
+  UpdatedSinceQueryShape,
 } from '@/lib/api/v1/pagination'
 import { registerEndpoint, listEnvelope, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
@@ -48,6 +50,8 @@ const CustomerSummary = z.object({
   party_id: z.string().uuid().nullable().optional(),
   archived_at: z.string().nullable(),
   created_at: z.string(),
+  /** Last change to the row; the watermark for ?updated_since. */
+  updated_at: z.string(),
 })
 
 const CustomersListResponse = listEnvelope(CustomerSummary)
@@ -55,7 +59,7 @@ const CustomersListResponse = listEnvelope(CustomerSummary)
 // Explicit projection: never SELECT *. Schema migrations adding columns
 // must update this list before the field becomes visible on the public API.
 const CUSTOMER_SUMMARY_COLUMNS =
-  'id, name, customer_type, email, org_number, vat_number, default_payment_terms, party_id, archived_at, created_at'
+  'id, name, customer_type, email, org_number, vat_number, default_payment_terms, party_id, archived_at, created_at, updated_at'
 
 const ListFilters = z.object({
   customer_type: CustomerType.optional().describe('Only customers of this type.'),
@@ -71,7 +75,7 @@ const ListFilters = z.object({
     .describe('true also returns archived customers. Default: false.'),
 })
 
-const ListQuery = ListFilters.extend(PaginationQueryShape)
+const ListQuery = ListFilters.extend({ ...PaginationQueryShape, ...UpdatedSinceQueryShape })
 
 registerEndpoint({
   operation: 'customers.list',
@@ -85,6 +89,7 @@ registerEndpoint({
   doNotUseFor:
     'Fetching a single customer you already know the id of: use GET /api/v1/companies/{companyId}/customers/{id}. Suppliers are a separate resource.',
   pitfalls: [
+    '?updated_since includes archived customers only with include_archived=true: archiving is a change to the row (archived_at set), and the default filter hides archived rows from the feed too.',
     'Archived customers are hidden by default; the dashboard makes the same choice.',
     'org_number is included so callers can match against external CRM identifiers, except where it is a natural person\'s identity number: a sole trader (enskild firma) has no org number of its own, so its org_number and vat_number come back null in the list. Read the record with GET /customers/{id} for the full value.',
   ],
@@ -120,7 +125,8 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
   async (request, ctx) => {
     const url = new URL(request.url)
     const { limit, cursor } = parsePaginationParams(url)
-    const decoded = decodeDefaultCursor(cursor)
+    const since = parseUpdatedSince(url)
+    if (!since.ok) return v1ValidationError(ctx, since.error)
 
     const filtersResult = ListFilters.safeParse({
       customer_type: url.searchParams.get('customer_type') ?? undefined,
@@ -137,8 +143,6 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       .from('customers')
       .select(CUSTOMER_SUMMARY_COLUMNS)
       .eq('company_id', ctx.companyId!)
-      .order('created_at', { ascending: true })
-      .order('id', { ascending: true })
       .limit(limit + 1)
 
     if (!includeArchived) {
@@ -160,11 +164,8 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       query = query.or(`name.ilike.%${term}%,org_number.ilike.${term}%`)
     }
 
-    if (decoded) {
-      query = query.or(
-        `created_at.gt.${decoded.ts},and(created_at.eq.${decoded.ts},id.gt.${decoded.id})`,
-      )
-    }
+
+    query = applyListPage(query, { updatedSince: since.value, cursor, createdAscending: true })
 
     const { data, error } = await query
 
@@ -182,6 +183,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       default_payment_terms: number
       archived_at: string | null
       created_at: string
+      updated_at: string
     } & Record<string, unknown>
 
     const rows = ((data ?? []) as unknown) as Row[]
@@ -224,12 +226,13 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
         default_payment_terms: r.default_payment_terms,
         archived_at: r.archived_at,
         created_at: r.created_at,
+        updated_at: r.updated_at,
       }
     })
 
     const last = trimmed[trimmed.length - 1]
     const nextCursor = hasMore && last
-      ? encodeDefaultCursor({ id: last.id, created_at: last.created_at })
+      ? nextListCursor(last, since.value)
       : null
 
     return paginated(customers, {
