@@ -252,11 +252,15 @@
       "name": "registered claim with its back-link: storno of its verifikat",
       "calls": [
         [
-          4,
+          6,
           "<supabase>",
           "00000000-0000-4000-8000-00000000c001",
           "00000000-0000-4000-8000-00000000a001",
-          "00000000-0000-4000-8000-0000000fe001"
+          "00000000-0000-4000-8000-0000000fe001",
+          "<undefined>",
+          {
+            "expenseClaimRemoval": true
+          }
         ]
       ]
     },
@@ -264,11 +268,15 @@
       "name": "registered claim whose back-link write failed: storno of the verifikat naming it",
       "calls": [
         [
-          4,
+          6,
           "<supabase>",
           "00000000-0000-4000-8000-00000000c001",
           "00000000-0000-4000-8000-00000000a001",
-          "00000000-0000-4000-8000-0000000fe002"
+          "00000000-0000-4000-8000-0000000fe002",
+          "<undefined>",
+          {
+            "expenseClaimRemoval": true
+          }
         ]
       ]
     }

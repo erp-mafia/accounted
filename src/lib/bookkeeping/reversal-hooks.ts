@@ -49,6 +49,13 @@ export interface ReversalHookContext {
    * salary run hook lets them through. Absent on every other storno.
    */
   readonly salaryRunCorrection?: true
+  /**
+   * Set only on the storno of an expense claim's removal (reverseEntry option
+   * expenseClaimRemoval, deleteExpenseClaim in lib/expenses/expense-claims-service.ts):
+   * the claim is removed right after its verifikat is reversed, so the
+   * expense claim hook lets it through. Absent on every other storno.
+   */
+  readonly expenseClaimRemoval?: true
 }
 
 /** What an afterReversal gets: the context plus the storno reverseEntry posted. */
@@ -87,12 +94,13 @@ export const REVERSAL_MIRROR_REQUIRED: readonly JournalEntrySourceType[] = Objec
   // A K3 component replacement (lib/bokslut/assets/component-reversal.ts);
   // every other system voucher passes the hook untouched.
   'system',
-  // A supplier invoice's registration, a customer invoice's verifikat and a
-  // salary run's: each hook acts only on a verifikat its invoice or run
-  // points at, and passes every other one untouched.
+  // A supplier invoice's registration, a customer invoice's verifikat, a
+  // salary run's and an expense claim's: each hook acts only on a verifikat
+  // its invoice, run or claim points at, and passes every other one untouched.
   'supplier_invoice_registered',
   'invoice_created',
   'salary_payment',
+  'expense_claim',
 ] satisfies JournalEntrySourceType[])
 
 /**

@@ -19,7 +19,10 @@
  *   - invoice_created: assertInvoiceVerifikatReversible before, nothing after;
  *   - salary_payment: assertSalaryRunVerifikatReversible before, nothing
  *     after, skipped on Korrigera lönekörning's own stornos
- *     (salaryRunCorrection).
+ *     (salaryRunCorrection);
+ *   - expense_claim: assertExpenseClaimVerifikatReversible before, nothing
+ *     after, skipped on the storno of Ta bort on the claim
+ *     (expenseClaimRemoval).
  * Every after-hook runs after the CAS to 'reversed', the bank-line release,
  * the IB unlink and the depreciation release, and before the emits. Nothing
  * catches a hook's throw: it propagates, the storno stands and the emits are
@@ -54,6 +57,7 @@ const h = vi.hoisted(() => {
     releaseSupplierInvoiceRegistrationAfterReversal: hook('releaseSupplierInvoiceRegistrationAfterReversal'),
     assertInvoiceVerifikatReversible: hook('assertInvoiceVerifikatReversible'),
     assertSalaryRunVerifikatReversible: hook('assertSalaryRunVerifikatReversible'),
+    assertExpenseClaimVerifikatReversible: hook('assertExpenseClaimVerifikatReversible'),
     emit: vi.fn(async (event: { type: string }) => {
       trace.push(`emit ${event.type}`)
       return []
@@ -90,6 +94,9 @@ vi.mock('@/lib/invoices/invoice-verifikat-reversal', () => ({
 }))
 vi.mock('@/lib/salary/run-verifikat-reversal', () => ({
   assertSalaryRunVerifikatReversible: h.assertSalaryRunVerifikatReversible,
+}))
+vi.mock('@/lib/expenses/claim-verifikat-reversal', () => ({
+  assertExpenseClaimVerifikatReversible: h.assertExpenseClaimVerifikatReversible,
 }))
 
 import { reverseEntry } from '../engine'
@@ -145,6 +152,7 @@ const HOOK_FUNCTIONS = [
   'releaseSupplierInvoiceRegistrationAfterReversal',
   'assertInvoiceVerifikatReversible',
   'assertSalaryRunVerifikatReversible',
+  'assertExpenseClaimVerifikatReversible',
 ] as const
 
 /** The before-hooks among HOOK_FUNCTIONS: each refuses before anything is written. */
@@ -153,6 +161,7 @@ const BEFORE_HOOK_CHECKS = [
   ['supplier_invoice_registered', 'assertSupplierInvoiceRegistrationReversible'],
   ['invoice_created', 'assertInvoiceVerifikatReversible'],
   ['salary_payment', 'assertSalaryRunVerifikatReversible'],
+  ['expense_claim', 'assertExpenseClaimVerifikatReversible'],
 ] as const
 
 const CHART = ['1510', '1513', '1930', '3001', '3002'].map((n) => ({ id: `acc-${n}`, account_number: n }))
@@ -351,8 +360,20 @@ describe('reverseEntry: reversal hooks per source type (characterisation)', () =
 
     // The other storno options leave the check in place.
     h.trace.length = 0
-    await runReverse('salary_payment', {}, { allowDeepChain: true, collectionsRebook: true })
+    await runReverse('salary_payment', {}, { allowDeepChain: true, collectionsRebook: true, expenseClaimRemoval: true })
     expect(h.assertSalaryRunVerifikatReversible).toHaveBeenCalledOnce()
+  })
+
+  it('skips the expense claim check on the storno of Ta bort on the claim (expenseClaimRemoval), and only there', async () => {
+    const removed = await runReverse('expense_claim', {}, { expenseClaimRemoval: true })
+    expect(removed.error).toBeUndefined()
+    expect(h.assertExpenseClaimVerifikatReversible).not.toHaveBeenCalled()
+    expect(removed.trace).toContain('rpc commit_journal_entry')
+
+    // The other storno options leave the check in place.
+    h.trace.length = 0
+    await runReverse('expense_claim', {}, { allowDeepChain: true, collectionsRebook: true, salaryRunCorrection: true })
+    expect(h.assertExpenseClaimVerifikatReversible).toHaveBeenCalledOnce()
   })
 
   it.each([
@@ -382,6 +403,7 @@ describe('correctEntry: runs no reversal hook (characterisation)', () => {
     'supplier_invoice_registered',
     'invoice_created',
     'salary_payment',
+    'expense_claim',
   ] as const)('%s', async (sourceType) => {
     const original = originalOf(sourceType)
     const client = recordingClient(original)

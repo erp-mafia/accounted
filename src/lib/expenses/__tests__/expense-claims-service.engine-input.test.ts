@@ -10,6 +10,11 @@
  * Regenerate only on purpose, from the code before the move:
  *   UPDATE_ENGINE_INPUT_FIXTURE=1 npx vitest run src/lib/expenses/__tests__/expense-claims-service.engine-input.test.ts
  *
+ * Regenerated once since, on purpose: the removal's storno now also carries
+ * the expenseClaimRemoval option, which lets it past the expense claim's
+ * reversal hook (a storno of a standing claim's verifikat alone is refused).
+ * Nothing else in the calls changed.
+ *
  * Since the producer posts through the posting port, the scenarios also run
  * with POSTING_EVENTS=shadow: the engine must get the same arguments plus
  * only the event link, and a refused event write must still post. The
@@ -302,11 +307,15 @@ describe('expense claims engine input (posting port parity)', () => {
     for (const [i, run] of remove.entries()) {
       const before = offRemove[i]!.calls[0]!
       const call = run.calls[0]!
-      expect(before[0]).toBe(4)
+      expect(before[0]).toBe(6)
       expect(call[0], run.name).toBe(6)
       expect(call.slice(1, 5), run.name).toEqual(before.slice(1, 5))
       expect(call[5], run.name).toBe('<undefined>')
-      expect(call[6], run.name).toEqual({ businessEvent: { id: expect.stringMatching(UUID), role: 'reversal', onFailure: 'log' } })
+      expect(before[6], run.name).toEqual({ expenseClaimRemoval: true })
+      expect(call[6], run.name).toEqual({
+        expenseClaimRemoval: true,
+        businessEvent: { id: expect.stringMatching(UUID), role: 'reversal', onFailure: 'log' },
+      })
       expect(run.events, run.name).toHaveLength(1)
     }
   })

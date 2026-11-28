@@ -36,8 +36,8 @@
       "measuredKb": 575
     },
     "/invoices": {
-      "jsBrotliKb": 620,
-      "measuredKb": 599
+      "jsBrotliKb": 640,
+      "measuredKb": 621
     },
     "/invoices/[id]": {
       "jsBrotliKb": 720,

@@ -1,20 +1,27 @@
 /**
- * reverseEntry with the real reversal hooks of the three registers a plain
- * storno used to leave behind: a supplier invoice's registration, a customer
- * invoice's verifikat and a booked salary run's. Each case is a door or a
- * module flow that reaches reverseEntry (lib/composition/reversal-hooks.ts):
+ * reverseEntry with the real reversal hooks of the registers a plain storno
+ * used to leave behind: a supplier invoice's registration, a customer
+ * invoice's verifikat, a booked salary run's and an expense claim's. Each
+ * case is a door or a module flow that reaches reverseEntry
+ * (lib/composition/reversal-hooks.ts):
  *   - a generic storno (Vänd, v1 reverse, MCP, the bank row's Ångra) of a
  *     registration whose invoice is unpaid posts and puts the invoice back to
- *     not booked; with a payment it is refused before anything is written;
+ *     not booked; with a payment, or while the invoice is credited, it is
+ *     refused before anything is written;
  *   - the supplier invoice create flow undoing a failed registration stornos
  *     a registration the invoice never pointed at: it passes, no invoice moves;
  *   - Ångra kreditering and a failed credit storno the credit note's
  *     verifikat (supplier_credit_note): no supplier invoice hook runs;
- *   - a generic storno of a sent or paid customer invoice's verifikat is
- *     refused; of a draft one's it passes;
+ *   - a generic storno of a sent, paid, credited or written-off customer
+ *     invoice's verifikat is refused; of a draft one's it passes; the undo of
+ *     a credit (the credit note's verifikat, credit_note) and of a kundförlust
+ *     (its customer_loss verifikat) run no customer invoice hook;
  *   - a generic storno of a booked run's verifikat is refused; Korrigera
  *     lönekörning's own (salaryRunCorrection) passes, and so does the storno
- *     of a stray voucher of a run that is not booked.
+ *     of a stray voucher of a run that is not booked;
+ *   - a generic storno of a standing expense claim's verifikat is refused;
+ *     Ta bort's own (expenseClaimRemoval) passes, and so does the storno of a
+ *     verifikat no claim points at.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { JournalEntrySourceType } from '@/types'
@@ -33,7 +40,11 @@ import { reverseEntry } from '../engine'
 import {
   BookedSalaryRunStornoError,
   IssuedInvoiceStornoError,
+  PaidExpenseClaimStornoError,
+  RegisteredExpenseClaimStornoError,
+  SupplierInvoiceRegistrationCreditedError,
   SupplierInvoiceRegistrationHasPaymentsError,
+  WithdrawnInvoiceStornoError,
 } from '../errors'
 
 type Row = Record<string, unknown>
@@ -195,6 +206,18 @@ describe('a supplier invoice registration verifikat', () => {
     expect(c.reads).toEqual([])
     expect(c.registerWrites()).toEqual([])
   })
+
+  it('generic storno while the invoice is credited: refused before anything is written', async () => {
+    const c = clientFor(originalOf('supplier_invoice_registered', 'si-1'), {
+      supplier_invoices: [invoice({ status: 'credited', is_credit_note: false })],
+      supplier_invoice_payments: [],
+    })
+    await expect(reverseEntry(c.supabase as never, 'company-1', 'user-1', 'entry-1')).rejects.toBeInstanceOf(
+      SupplierInvoiceRegistrationCreditedError,
+    )
+    expect(c.supabase.rpc).not.toHaveBeenCalled()
+    expect(c.writes).toEqual([])
+  })
 })
 
 describe('a customer invoice verifikat', () => {
@@ -214,6 +237,30 @@ describe('a customer invoice verifikat', () => {
     await expect(reverseEntry(c.supabase as never, 'company-1', 'user-1', 'entry-1')).resolves.toBeTruthy()
     expect(c.registerWrites()).toEqual([])
   })
+
+  it.each(['credited', 'written_off'])(
+    'generic storno of a %s invoice\'s verifikat: refused before anything is written',
+    async (status) => {
+      const c = clientFor(originalOf('invoice_created', 'inv-1'), { invoices: [invoice(status)] })
+      await expect(reverseEntry(c.supabase as never, 'company-1', 'user-1', 'entry-1')).rejects.toBeInstanceOf(
+        WithdrawnInvoiceStornoError,
+      )
+      expect(c.supabase.rpc).not.toHaveBeenCalled()
+      expect(c.writes).toEqual([])
+    },
+  )
+
+  it.each(['credit_note', 'customer_loss'] as const)(
+    'the undo of a credit or a kundförlust stornos the %s verifikat: the credited or written-off invoice is not read',
+    async (sourceType) => {
+      // Ångra kreditering reverses the credit note's verifikat; a kundförlust
+      // is undone by the storno of its own verifikat (whose hook reads
+      // invoice_write_offs, a table this client leaves empty).
+      const c = clientFor(originalOf(sourceType, 'inv-1'), { invoices: [invoice(sourceType === 'credit_note' ? 'credited' : 'written_off')] })
+      await expect(reverseEntry(c.supabase as never, 'company-1', 'user-1', 'entry-1')).resolves.toBeTruthy()
+      expect(c.reads).not.toContain('invoices')
+    },
+  )
 })
 
 describe('a salary run verifikat', () => {
@@ -249,5 +296,51 @@ describe('a salary run verifikat', () => {
     const c = clientFor(originalOf('salary_payment', 'run-1'), { salary_runs: [run('paid')] })
     await expect(reverseEntry(c.supabase as never, 'company-1', 'user-1', 'entry-1')).resolves.toBeTruthy()
     expect(c.reads).toEqual(['salary_runs'])
+  })
+})
+
+describe('an expense claim verifikat', () => {
+  const claim = (status: string, journalEntryId = 'entry-1') => ({
+    id: 'claim-1',
+    company_id: 'company-1',
+    journal_entry_id: journalEntryId,
+    status,
+  })
+
+  it('generic storno of a registered claim\'s verifikat: refused before anything is written, naming Ta bort', async () => {
+    const c = clientFor(originalOf('expense_claim', 'claim-1'), { expense_claims: [claim('registered')], salary_line_items: [] })
+    await expect(reverseEntry(c.supabase as never, 'company-1', 'user-1', 'entry-1')).rejects.toBeInstanceOf(
+      RegisteredExpenseClaimStornoError,
+    )
+    expect(c.supabase.rpc).not.toHaveBeenCalled()
+    expect(c.writes).toEqual([])
+  })
+
+  it('generic storno of a paid claim\'s verifikat: refused before anything is written, naming Rätta', async () => {
+    const c = clientFor(originalOf('expense_claim', 'claim-1'), { expense_claims: [claim('paid')], salary_line_items: [] })
+    await expect(reverseEntry(c.supabase as never, 'company-1', 'user-1', 'entry-1')).rejects.toBeInstanceOf(
+      PaidExpenseClaimStornoError,
+    )
+    expect(c.supabase.rpc).not.toHaveBeenCalled()
+    expect(c.writes).toEqual([])
+  })
+
+  it('Ta bort on the claim (expenseClaimRemoval): its storno passes, the claim is not read', async () => {
+    const c = clientFor(originalOf('expense_claim', 'claim-1'), { expense_claims: [claim('registered')], salary_line_items: [] })
+    await expect(
+      reverseEntry(c.supabase as never, 'company-1', 'user-1', 'entry-1', undefined, { expenseClaimRemoval: true }),
+    ).resolves.toBeTruthy()
+    expect(c.committed()).toBe(true)
+    expect(c.reads).toEqual([])
+    expect(c.registerWrites()).toEqual([])
+  })
+
+  it('a verifikat no claim points at (its claim points at a correction): passes', async () => {
+    const c = clientFor(originalOf('expense_claim', 'claim-1'), {
+      expense_claims: [claim('registered', 'entry-correction')],
+      salary_line_items: [],
+    })
+    await expect(reverseEntry(c.supabase as never, 'company-1', 'user-1', 'entry-1')).resolves.toBeTruthy()
+    expect(c.reads).toEqual(['expense_claims'])
   })
 })

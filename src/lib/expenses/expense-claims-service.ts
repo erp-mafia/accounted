@@ -856,6 +856,10 @@ export async function deleteExpenseClaim(
       companyId,
       userId,
       entryId,
+      // The claim goes right after its verifikat, so the expense claim's
+      // reversal hook, which refuses a storno of it while the claim stands,
+      // lets this one through.
+      options: { expenseClaimRemoval: true },
       event: () => expenseClaimRemovalBusinessEvent(claimId, todayIsoStockholm(), linkBasisColumns('user_created')),
       role: 'reversal',
     })
