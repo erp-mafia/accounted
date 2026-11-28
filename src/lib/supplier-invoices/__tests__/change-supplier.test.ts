@@ -107,6 +107,15 @@ describe('verifikatTextWithSupplier', () => {
     expect(verifikatTextWithSupplier('Leasing mars', inv, 'Fel AB', 'Rätt AB')).toBeNull()
     expect(verifikatTextWithSupplier('Leverantörsfaktura F-2041, Rätt AB (ankomstnr 7)', inv, 'Fel AB', 'Rätt AB')).toBeNull()
   })
+
+  it('the old name inside the new one or inside a longer word is no name of the old supplier', () => {
+    expect(verifikatTextWithSupplier('Faktura från Acme Nordic, mars', inv, 'Acme', 'Acme Nordic')).toBeNull()
+    expect(verifikatTextWithSupplier('Faktura från Acme, Acme Nordic tar över', inv, 'Acme', 'Acme Nordic')).toBe(
+      'Faktura från Acme Nordic, Acme Nordic tar över',
+    )
+    expect(verifikatTextWithSupplier('Faktura från Acmeco, mars', inv, 'Acme', 'Rätt AB')).toBeNull()
+    expect(verifikatTextWithSupplier('Faktura från Acme Nordic AB, mars', inv, 'Acme Nordic AB', 'Acme')).toBe('Faktura från Acme, mars')
+  })
 })
 
 describe('supplierChangeRowRefusal', () => {
@@ -208,6 +217,37 @@ describe('changeSupplierInvoiceSupplier', () => {
       { table: 'supplier_invoices', method: 'update', row: { supplier_id: RIGHT } },
       { table: 'supplier_invoices', method: 'update', row: { supplier_id: WRONG } },
     ])
+  })
+
+  it('an approval given while the invoice moved puts the old supplier back and refuses', async () => {
+    const rows = tables()
+    const writes: { table: string; method: string; row: unknown }[] = []
+    const record = writes.push.bind(writes)
+    writes.push = (...items) => {
+      // The first of two approvals lands between the checks and the move: approved_at stays null.
+      if (items.some((w) => (w.row as { supplier_id?: string }).supplier_id === RIGHT)) {
+        rows.supplier_invoice_attestations.push({
+          company_id: COMPANY,
+          supplier_invoice_id: 'si-1',
+          user_id: 'u-2',
+          decision: 'approved',
+          decided_at: '2026-03-03T08:00:00Z',
+        })
+      }
+      return record(...items)
+    }
+    const mock = createRowsMockSupabase(rows, writes)
+    const outcome = await changeSupplierInvoiceSupplier(
+      { supabase: mock.supabase as unknown as SupabaseClient, companyId: COMPANY, userId: 'user-1', log },
+      'si-1',
+      RIGHT,
+    )
+    expect(outcome).toMatchObject({ ok: false, code: 'SI_CHANGE_SUPPLIER_ATTESTED', details: { reason: 'approval_in_round' } })
+    expect([...writes]).toEqual([
+      { table: 'supplier_invoices', method: 'update', row: { supplier_id: RIGHT } },
+      { table: 'supplier_invoices', method: 'update', row: { supplier_id: WRONG } },
+    ])
+    expect(correctJournalEntryMetadata).not.toHaveBeenCalled()
   })
 
   it('is a no-op on the supplier it has', async () => {

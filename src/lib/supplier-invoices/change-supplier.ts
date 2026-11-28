@@ -93,8 +93,10 @@ const kindOf = (supplier: SupplierRow) => supplier.supplier_type ?? 'swedish_bus
  * The verifikat text with the new supplier: the text the registration wrote
  * ("Leverantörsfaktura <nr>, <leverantör> (ankomstnr <n>)", whatever name
  * the card had then) gets the new name in the supplier's place; a text
- * corrected by hand gets the old name replaced where it stands. Null when
- * the text does not name the old supplier: there is nothing to correct.
+ * corrected by hand gets the old name replaced where it stands as a name of
+ * its own, never inside a longer word or inside the new name ("Acme" in
+ * "Acme Nordic"). Null when the text does not name the old supplier: there is
+ * nothing to correct.
  */
 export function verifikatTextWithSupplier(
   current: string,
@@ -108,10 +110,18 @@ export function verifikatTextWithSupplier(
   const corrected =
     current.startsWith(`${head}, `) && current.endsWith(` ${suffix}`) && named.trim() !== ''
       ? buildSupplierDescription('Leverantörsfaktura', invoice.supplier_invoice_number, newName, suffix)
-      : oldName && current.includes(oldName)
-        ? current.split(oldName).join(newName)
+      : oldName
+        ? nameReplaced(current, oldName, newName)
         : null
   return corrected === current ? null : corrected
+}
+
+function nameReplaced(text: string, oldName: string, newName: string): string {
+  const escaped = oldName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const standing = new RegExp(`(?<![\\p{L}\\p{N}])${escaped}(?![\\p{L}\\p{N}])`, 'gu')
+  const replace = (part: string) => part.replace(standing, () => newName)
+  // Where the new name holds the old one, the text naming the new one already stays as it is.
+  return newName.includes(oldName) ? text.split(newName).map(replace).join(newName) : replace(text)
 }
 
 async function readSupplier(ctx: OperationContext, supplierId: string): Promise<SupplierRow | null> {
@@ -125,26 +135,37 @@ async function readSupplier(ctx: OperationContext, supplierId: string): Promise<
 }
 
 /**
+ * An approval in the current attest round, given before `before` when it is
+ * set: an approval is given for the supplier the invoice had then, and one of
+ * two approvals does not set approved_at. Null when there is none.
+ */
+async function approvalRefusal(ctx: OperationContext, invoiceId: string, before?: string): Promise<Failure | null> {
+  const { data, error } = await ctx.supabase
+    .from('supplier_invoice_attestations')
+    .select('user_id, decision, decided_at')
+    .eq('company_id', ctx.companyId)
+    .eq('supplier_invoice_id', invoiceId)
+  if (error) return { ok: false, code: 'UNKNOWN_ERROR', error }
+  const given = currentRound((data ?? []) as AttestationRecord[]).some(
+    (row) => row.decision === 'approved' && (!before || Date.parse(row.decided_at) < Date.parse(before)),
+  )
+  return given ? { ok: false, code: SUPPLIER_CHANGE_REFUSAL_CODES.attested, details: { reason: 'approval_in_round' } } : null
+}
+
+/**
  * The checks that need reads: a payment row, an approval in the attest
  * round, an open payment file or bank payment. Null when none applies.
  */
 async function readRefusal(ctx: OperationContext, invoice: InvoiceRow): Promise<Failure | null> {
   const { supabase, companyId } = ctx
-  const [payments, attestations] = await Promise.all([
+  const [payments, approval] = await Promise.all([
     supabase.from('supplier_invoice_payments').select('id').eq('company_id', companyId).eq('supplier_invoice_id', invoice.id).limit(1),
-    supabase
-      .from('supplier_invoice_attestations')
-      .select('user_id, decision, decided_at')
-      .eq('company_id', companyId)
-      .eq('supplier_invoice_id', invoice.id),
+    approvalRefusal(ctx, invoice.id),
   ])
   // Fail closed: an unread payment or attest is never read as none.
   if (payments.error) return { ok: false, code: 'UNKNOWN_ERROR', error: payments.error }
-  if (attestations.error) return { ok: false, code: 'UNKNOWN_ERROR', error: attestations.error }
   if ((payments.data ?? []).length > 0) return { ok: false, code: SUPPLIER_CHANGE_REFUSAL_CODES.not_unpaid, details: { reason: 'payments' } }
-  if (currentRound((attestations.data ?? []) as AttestationRecord[]).some((row) => row.decision === 'approved')) {
-    return { ok: false, code: SUPPLIER_CHANGE_REFUSAL_CODES.attested, details: { reason: 'approval_in_round' } }
-  }
+  if (approval) return approval
 
   let instruction
   try {
@@ -270,7 +291,7 @@ export async function changeSupplierInvoiceSupplier(
   const { data: moved, error: moveError } = await (entryId
     ? guarded.eq('registration_journal_entry_id', entryId)
     : guarded.is('registration_journal_entry_id', null)
-  ).select('id')
+  ).select('id, updated_at')
   if (moveError) {
     // The number is unique per supplier among live invoices: one registered on the new supplier in between.
     if ((moveError as { code?: string }).code === '23505') {
@@ -287,6 +308,29 @@ export async function changeSupplierInvoiceSupplier(
     return { ok: false, code: 'SI_CHANGE_SUPPLIER_CONFLICT', details: { reason: 'race' } }
   }
 
+  const moveBack = async (why: string) => {
+    const { error: revertError } = await supabase
+      .from('supplier_invoices')
+      .update({ supplier_id: invoice.supplier_id })
+      .eq('id', invoice.id)
+      .eq('company_id', companyId)
+      .eq('supplier_id', to.id)
+    if (revertError) {
+      log.error(`supplier change: ${why} left the invoice on the new supplier`, revertError as unknown as Error, {
+        supplierInvoiceId,
+        journalEntryId: entryId,
+      })
+    }
+  }
+
+  // One of two approvals sets no approved_at, so the guard above cannot see
+  // it: one given while the invoice moved was given for the old supplier.
+  const approvedMeanwhile = await approvalRefusal(ctx, invoice.id, (moved as { updated_at?: string }[])[0]?.updated_at)
+  if (approvedMeanwhile) {
+    await moveBack('an approval given meanwhile')
+    return approvedMeanwhile
+  }
+
   const done: ChangeSupplierResult = {
     supplier_invoice_id: invoice.id,
     supplier_id: to.id,
@@ -299,18 +343,7 @@ export async function changeSupplierInvoiceSupplier(
   const corrected = await correctJournalEntryMetadata(ctx, entryId, { description: newText })
   if (!corrected.ok) {
     // The verifikat still names the old supplier: so does the invoice again.
-    const { error: revertError } = await supabase
-      .from('supplier_invoices')
-      .update({ supplier_id: invoice.supplier_id })
-      .eq('id', invoice.id)
-      .eq('company_id', companyId)
-      .eq('supplier_id', to.id)
-    if (revertError) {
-      log.error('supplier change: the refused rättelse left the invoice on the new supplier', revertError as unknown as Error, {
-        supplierInvoiceId,
-        journalEntryId: entryId,
-      })
-    }
+    await moveBack('the refused rättelse')
     return lockedOrRefused(corrected)
   }
   return { ok: true, data: { ...done, corrected_journal_entry_id: entryId } }
