@@ -87,4 +87,45 @@ describe('GET /api/reports/income-statement/xlsx', () => {
       ['Sammanfattning', '', 'Resultat före bokslutstransaktioner', 600],
     ])
   })
+
+  it('gives Bokslutsdispositioner and Skatter sheets of their own, not rows under Finansiella poster', async () => {
+    enqueue({ data: PERIOD }) // fiscal_periods
+    enqueue({ data: { company_name: 'Test AB' } }) // company_settings
+    const section = (title: string, account: string, amount: number) => ({
+      title,
+      rows: [{ account_number: account, account_name: title, amount }],
+      subtotal: amount,
+    })
+    mockGenerate.mockResolvedValue({
+      ...report(),
+      financial_sections: [
+        section('Räntekostnader', '8410', -2000),
+        section('Bokslutsdispositioner', '8811', -50000),
+        section('Skatter och årets resultat', '8910', -68000),
+      ],
+      total_financial: -120000,
+      net_result: -119400,
+    } as unknown as Awaited<ReturnType<typeof generateIncomeStatement>>)
+
+    const res = await GET(request({ period_id: 'period-1' }), noParams)
+    expect(res.status).toBe(200)
+
+    const workbook = XLSX.read(new Uint8Array(await res.arrayBuffer()), { type: 'array' })
+    expect(workbook.SheetNames).toEqual(['Intäkter', 'Kostnader', 'Finansiella poster', 'Bokslutsdispositioner', 'Skatter', 'Sammanfattning'])
+    const sheet = (name: string) =>
+      XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[name]!, { header: 1, blankrows: false }).slice(1)
+    expect(sheet('Finansiella poster')).toEqual([
+      ['Räntekostnader', '8410', 'Räntekostnader', -2000],
+      ['Räntekostnader', '', 'Summa Räntekostnader', -2000],
+      ['Finansiella poster', '', 'Summa finansiella poster', -2000],
+    ])
+    expect(sheet('Skatter').at(-1)).toEqual(['Skatter', '', 'Summa skatter', -68000])
+    expect(sheet('Sammanfattning')).toEqual([
+      ['Sammanfattning', '', 'Rörelseresultat', 600],
+      ['Sammanfattning', '', 'Resultat efter finansiella poster', -1400],
+      ['Sammanfattning', '', 'Bokslutsdispositioner', -50000],
+      ['Sammanfattning', '', 'Skatt på årets resultat', -68000],
+      ['Sammanfattning', '', 'Resultat före bokslutstransaktioner', -119400],
+    ])
+  })
 })

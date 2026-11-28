@@ -120,6 +120,36 @@ describe('generateResultatrapport with a budget', () => {
     expect(report.net_result_budget).toEqual({ budget: 48000, deviation: 42000, deviation_percent: 87.5 })
   })
 
+  it('gives each class-8 block and Resultat efter finansiella poster its budget', async () => {
+    queued = { fiscal_periods: [{ data: PERIOD, error: null }] }
+    mockTrialBalance.mockResolvedValue(
+      tb([
+        tbRow({ account_number: '3001', period_credit: 120000 }),
+        tbRow({ account_number: '8410', account_name: 'Räntekostnader', account_class: 8, period_debit: 2000 }),
+        tbRow({ account_number: '8910', account_name: 'Skatt', account_class: 8, period_debit: 20000 }),
+      ]),
+    )
+    // Interest budgeted, a periodiseringsfond budgeted but never booked.
+    mockLoadBudget.mockResolvedValue(
+      loaded({ '3001': 100000, '8410': -1000, '8811': -10000 }, { accountNames: new Map([['8811', 'Avsättning till periodiseringsfond']]) }),
+    )
+
+    const report = await generateResultatrapport(client(), 'company-1', 'period-1', { budgetId: 'b1' })
+
+    const subgroups = report.groups.find((g) => g.class === 8)!.subgroups!
+    expect(subgroups.map((s) => [s.key, s.subtotal_current, s.subtotal_budget])).toEqual([
+      ['finansiella_poster', -2000, { budget: -1000, deviation: -1000, deviation_percent: -100 }],
+      ['bokslutsdispositioner', 0, { budget: -10000, deviation: 10000, deviation_percent: 100 }],
+      ['skatter', -20000, { budget: 0, deviation: -20000, deviation_percent: null }],
+    ])
+    expect(report.result_after_financial).toEqual({
+      label: 'Resultat efter finansiella poster',
+      current: 118000,
+      prior: 0,
+      budget: { budget: 99000, deviation: 19000, deviation_percent: 19.19 },
+    })
+  })
+
   it('passes the window and the dimension filter to the budget, and shows no figures when it cuts a month', async () => {
     queued = { fiscal_periods: [{ data: PERIOD, error: null }] }
     mockTrialBalance.mockResolvedValue(tb([tbRow({ period_credit: 5000 })]))
