@@ -4,7 +4,8 @@ import { useCallback, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { BookOpenIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
+import { AmountInput } from '@/components/ui/amount-input'
+import { parseAmountExpression } from '@/lib/money-expression'
 import { CategoryPopover } from '@/components/transactions/CategoryPopover'
 import TemplatePicker from '@/components/transactions/TemplatePicker'
 import { applyTemplate } from '@/lib/bookkeeping/template-library'
@@ -14,7 +15,7 @@ import { useCompany } from '@/contexts/CompanyContext'
 import { useToast } from '@/components/ui/use-toast'
 import { fetchProposalPreview } from '@/lib/hooks/use-proposal-preview'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { parseAmountInput, formatAmountInput } from '@/lib/money'
+import { formatAmountInput } from '@/lib/money'
 import type { BookingTemplateCategory, BookingTemplateLibrary, EntityType } from '@/types'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
 
@@ -28,8 +29,12 @@ interface Props {
 
 type Picked = { kind: 'library'; raw: BookingTemplateLibrary } | { kind: 'static'; template: BookingTemplate }
 
+// The field accepts arithmetic (1200+300, 4500*0,25), so read it with the
+// expression parser, which reads a plain amount exactly as parseAmountInput
+// does. Evaluating on every render also
+// keeps the submit button's enabled state honest while a sum is still typed.
 function parseAmount(raw: string): number {
-  const n = parseAmountInput(raw)
+  const n = parseAmountExpression(raw)
   return n !== null && n > 0 ? n : 0
 }
 
@@ -135,13 +140,12 @@ export default function TemplateApplyButton({ onApply, entityType, defaultAmount
             <label htmlFor="template-apply-amount" className="shrink-0 text-xs text-muted-foreground">
               {t('amount_label')}
             </label>
-            <Input
+            <AmountInput
               id="template-apply-amount"
               ref={amountRef}
-              inputMode="decimal"
               placeholder="0,00"
               value={amount}
-              onChange={(e) => setAmount(e.target.value)}
+              onValueChange={setAmount}
               className="h-8 flex-1 tabular-nums"
             />
             <Button type="submit" disabled={!picked || applying || parseAmount(amount) <= 0}>
