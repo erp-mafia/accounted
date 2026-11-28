@@ -149,7 +149,10 @@ export async function sendPayslips(
 
   if (mailbox) {
     const blocked = await payslipMailboxBlock(supabase, companyId, mailbox)
-    if (blocked) return { ok: false, code: blocked, details: { channel: mailbox } }
+    if (blocked) {
+      // Sending that is not active brings where it stands, its message and next step.
+      return { ok: false, ...blocked, details: { channel: mailbox, ...('details' in blocked ? blocked.details : {}) } }
+    }
   }
 
   const { data: company } = await supabase

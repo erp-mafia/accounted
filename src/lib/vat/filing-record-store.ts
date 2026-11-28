@@ -17,8 +17,10 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import {
   fiscalYearEndKey,
   fiscalYearEndMonthIn,
+  fiscalYearForDeadlines,
   fiscalYearsEndingIn,
   getVatDeadlineForPeriod,
+  type FiscalPeriodRowForDeadlines,
   type VatDeadlineCalculationSettings,
 } from '@/lib/tax/deadline-config'
 import { createLinkedReportPeriod } from '@/lib/tax/deadline-generator'
@@ -181,15 +183,12 @@ async function loadFilingSettings(
   const row = (data as FilingSettingsRow | null) ?? null
   const { data: years, error: yearsError } = await supabase
     .from('fiscal_periods')
-    .select('period_start, period_end')
+    .select('name, period_start, period_end')
     .eq('company_id', companyId)
   if (yearsError) throw yearsError
   const calendar = {
     ...row,
-    fiscal_years: ((years ?? []) as { period_start: string; period_end: string }[]).map((year) => ({
-      start: year.period_start,
-      end: year.period_end,
-    })),
+    fiscal_years: ((years ?? []) as FiscalPeriodRowForDeadlines[]).map(fiscalYearForDeadlines),
   }
   return {
     row,

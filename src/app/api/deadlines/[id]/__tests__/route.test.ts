@@ -35,7 +35,7 @@ function createCapturingSupabase(
     const result = results[idx++] ?? { data: null, error: null, count: null }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const b: any = {}
-    for (const m of ['select', 'eq', 'update', 'delete', 'single', 'maybeSingle']) {
+    for (const m of ['select', 'eq', 'neq', 'is', 'update', 'delete', 'single', 'maybeSingle']) {
       b[m] = () => b
     }
     b.then = (resolve: (v: unknown) => void) =>
@@ -114,6 +114,15 @@ describe('DELETE /api/deadlines/[id]', () => {
       await DELETE(createMockRequest('/x', { method: 'DELETE' }), idParams)
     )
     expect(status).toBe(404)
+  })
+
+  it('answers the 404 in the canonical envelope (the rule is shared with gnubok_delete_deadline)', async () => {
+    auth(createCapturingSupabase([{ data: null }]))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
+      await DELETE(createMockRequest('/x', { method: 'DELETE' }), idParams)
+    )
+    expect(status).toBe(404)
+    expect(body.error.code).toBe('DEADLINE_NOT_FOUND')
   })
 
   it('hard-deletes a user-created deadline', async () => {

@@ -1,5 +1,6 @@
 /**
- * Tests for POST (re-send) and DELETE (revoke) /api/company/members/invite/[id].
+ * Tests for POST (re-send), PATCH (role change) and DELETE (revoke)
+ * /api/company/members/invite/[id].
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { NextResponse } from 'next/server'
@@ -72,7 +73,7 @@ vi.mock('@/lib/email/invite-templates', () => ({
   generateInviteEmailText: () => 'text',
 }))
 
-import { POST, DELETE } from '../route'
+import { POST, PATCH, DELETE } from '../route'
 
 const routeParams = createMockRouteParams({ id: 'inv-1' })
 
@@ -338,5 +339,128 @@ describe('DELETE /api/company/members/invite/[id] (revoke)', () => {
     const updates = findCalls('company_invitations', 'update')
     expect(updates).toHaveLength(1)
     expect(updates[0]![0]).toEqual({ status: 'revoked' })
+  })
+})
+
+describe('PATCH /api/company/members/invite/[id] (role change)', () => {
+  const INVITE_ID = '3a9e5c21-7b4d-4f80-8c2e-5d6f7a8b9c01'
+  const pendingInvite = {
+    id: INVITE_ID,
+    company_id: 'company-1',
+    email: 'client@example.com',
+    role: 'viewer',
+    status: 'pending',
+  }
+
+  function patch(body: unknown, id = INVITE_ID) {
+    return PATCH(
+      createMockRequest(`/api/company/members/invite/${id}`, { method: 'PATCH', body }),
+      createMockRouteParams({ id }),
+    )
+  }
+
+  it('returns 401 when not authenticated', async () => {
+    requireAuthMock.mockResolvedValue({
+      user: null,
+      supabase: {},
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+    })
+    const res = await patch({ role: 'member' })
+    expect(res.status).toBe(401)
+    expect(findCalls('company_invitations', 'update')).toHaveLength(0)
+  })
+
+  it('returns 400 for a role an invitation cannot grant, owner included', async () => {
+    for (const body of [{ role: 'owner' }, { role: 'boss' }, {}]) {
+      const res = await patch(body)
+      expect(res.status).toBe(400)
+    }
+    expect(findCalls('company_members', 'select')).toHaveLength(0)
+    expect(findCalls('company_invitations', 'update')).toHaveLength(0)
+  })
+
+  it('returns 403 for a caller who is not owner or admin, before looking up the invite', async () => {
+    enqueue({ data: { role: 'member' } }) // caller membership
+
+    const { status, body } = await parseJsonResponse<{ error: string }>(await patch({ role: 'admin' }))
+
+    expect(status).toBe(403)
+    expect(body.error).toBe('Behörighet saknas.')
+    expect(findCalls('company_invitations', 'select')).toHaveLength(0)
+    expect(findCalls('company_invitations', 'update')).toHaveLength(0)
+  })
+
+  it('returns 404 when the invitation is not in the active company', async () => {
+    enqueue({ data: { role: 'owner' } })
+    enqueue({ data: null })
+
+    const { status } = await parseJsonResponse(await patch({ role: 'member' }))
+
+    expect(status).toBe(404)
+    expect(findCalls('company_invitations', 'eq')).toEqual(
+      expect.arrayContaining([
+        ['id', INVITE_ID],
+        ['company_id', 'company-1'],
+      ]),
+    )
+    expect(findCalls('company_invitations', 'update')).toHaveLength(0)
+  })
+
+  it('answers 404 for a path id that is not a uuid, before any read', async () => {
+    const { status } = await parseJsonResponse(await patch({ role: 'member' }, 'inv-1'))
+    expect(status).toBe(404)
+    expect(findCalls('company_members', 'select')).toHaveLength(0)
+  })
+
+  it('returns 409 when the invitation is no longer pending', async () => {
+    enqueue({ data: { role: 'admin' } })
+    enqueue({ data: { ...pendingInvite, status: 'accepted' } })
+
+    const { status } = await parseJsonResponse(await patch({ role: 'member' }))
+
+    expect(status).toBe(409)
+    expect(findCalls('company_invitations', 'update')).toHaveLength(0)
+  })
+
+  it('returns 409 when the invitation stopped being pending before the write', async () => {
+    enqueue({ data: { role: 'owner' } })
+    enqueue({ data: pendingInvite })
+    enqueue({ data: [] }) // conditional update matched no row
+
+    const { status } = await parseJsonResponse(await patch({ role: 'member' }))
+
+    expect(status).toBe(409)
+  })
+
+  it('changes the role of a pending invitation, conditional on it still being pending', async () => {
+    enqueue({ data: { role: 'admin' } })
+    enqueue({ data: pendingInvite })
+    enqueue({ data: [{ id: INVITE_ID }] })
+
+    const { status, body } = await parseJsonResponse<{ data: { id: string; role: string; status: string } }>(
+      await patch({ role: 'admin' }),
+    )
+
+    expect(status).toBe(200)
+    expect(body.data).toEqual({ id: INVITE_ID, email: 'client@example.com', role: 'admin', status: 'pending' })
+    expect(findCalls('company_invitations', 'update')).toEqual([[{ role: 'admin' }]])
+    expect(findCalls('company_invitations', 'eq').slice(-3)).toEqual([
+      ['id', INVITE_ID],
+      ['company_id', 'company-1'],
+      ['status', 'pending'],
+    ])
+    // A role change rotates no token and mails nothing.
+    expect(sendEmailMock).not.toHaveBeenCalled()
+    expect(getMultiUserStateMock).not.toHaveBeenCalled()
+  })
+
+  it('writes nothing when the role is unchanged', async () => {
+    enqueue({ data: { role: 'owner' } })
+    enqueue({ data: pendingInvite })
+
+    const { status } = await parseJsonResponse(await patch({ role: 'viewer' }))
+
+    expect(status).toBe(200)
+    expect(findCalls('company_invitations', 'update')).toHaveLength(0)
   })
 })

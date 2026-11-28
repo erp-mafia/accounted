@@ -557,6 +557,7 @@ async function buildDraftPreview(params: {
     reverse_charge_text: vatHeader.reverse_charge_text,
     vat_treatment_override: vatOverride.vat_treatment,
     delivery_country: vatOverride.delivery_country,
+    is_late_interest_invoice: input.is_late_interest_invoice === true,
     your_reference: optionalTrimmed(input.your_reference),
     our_reference: optionalTrimmed(input.our_reference),
     invoice_marking: optionalTrimmed(input.invoice_marking),

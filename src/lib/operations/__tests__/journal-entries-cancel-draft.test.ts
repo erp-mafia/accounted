@@ -206,7 +206,14 @@ describe('journal-entries.cancel-draft: run', () => {
           ],
         },
       })
-      expect((outcome as { messageSv?: string }).messageSv).toMatch(/2 bilagor/)
+      // The way out: delete the draft in the app, which keeps the underlag,
+      // or book it. Never "contact support".
+      const messageSv = (outcome as { messageSv?: string }).messageSv
+      expect(messageSv).toMatch(/^Utkastet har 2 bilagor som inte kan flyttas om utkastet makuleras\./)
+      expect(messageSv).toContain('Bokföring › verifikationen › Fler alternativ › Radera utkast')
+      expect(messageSv).toContain('bilagorna finns kvar och kan kopplas till en annan verifikation')
+      expect(messageSv).toMatch(/Eller bokför utkastet\.$/)
+      expect(messageSv).not.toMatch(/support/i)
       // Only this draft's current-version documents count.
       expect(findCalls('document_attachments', 'eq')).toEqual(
         expect.arrayContaining([

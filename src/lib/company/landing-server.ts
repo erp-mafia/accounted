@@ -2,6 +2,8 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { resolveBrandByHost } from '@/lib/branding/resolve'
 import { resolveBrandsForTeams } from '@/lib/branding/team-brands'
 import { isCockpitLandingRole, resolveLandingPath } from '@/lib/company/home-domain'
+import type { StartPagePath } from '@/lib/company/start-page'
+import { resolveStartPath } from '@/lib/company/start-page-server'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 
 interface ByraMembershipRow {
@@ -13,9 +15,10 @@ interface ByraMembershipRow {
  * Post-login landing decision (WL-14), callable server-side without an HTTP
  * round-trip: byrå owners/admins land in the cockpit ('/clients') when `host`
  * is their byrå's home domain: the byrå's brand domain, or the canonical
- * domain for a byrå without white label (WL-01). Plain byrå members and
- * everyone else get '/' so their flow stays byte-identical (role gate
- * 2026-08-27, see isCockpitLandingRole).
+ * domain for a byrå without white label (WL-01), and on '/' elsewhere, as
+ * before. Plain byrå members and everyone else land on their start page in
+ * the active company (lib/company/start-page.ts), which is '/' unless they
+ * chose another (role gate 2026-08-27, see isCockpitLandingRole).
  *
  * `supabase` must be authenticated as `userId` (RLS scopes the membership
  * query). Callers that redirect on the result should degrade to '/' on any
@@ -25,7 +28,22 @@ export async function resolveLandingDestination(
   supabase: SupabaseClient,
   userId: string,
   host: string,
-): Promise<'/clients' | '/'> {
+): Promise<'/clients' | StartPagePath> {
+  const cockpit = await resolveCockpitLanding(supabase, userId, host)
+  if (cockpit !== null) return cockpit
+  return resolveStartPath(supabase, userId)
+}
+
+/**
+ * The cockpit half of the landing, for byrå owners and admins: '/clients' on
+ * their home domain, else '/'. Also '/' when the membership read failed.
+ * Null for everyone else: they land on their start page.
+ */
+async function resolveCockpitLanding(
+  supabase: SupabaseClient,
+  userId: string,
+  host: string,
+): Promise<'/clients' | '/' | null> {
   const hostBrand = host ? await resolveBrandByHost(host) : null
 
   let memberships: ByraMembershipRow[]
@@ -49,7 +67,7 @@ export async function resolveLandingDestination(
   const byraTeamIds = memberships
     .filter((m) => isCockpitLandingRole(m.role as string))
     .map((m) => m.team_id as string)
-  if (byraTeamIds.length === 0) return '/'
+  if (byraTeamIds.length === 0) return null
 
   const brandByTeam = await resolveBrandsForTeams(byraTeamIds)
   return resolveLandingPath({

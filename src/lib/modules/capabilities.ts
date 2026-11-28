@@ -25,6 +25,10 @@
  *     `reasons` and `resolution`. The published v1 report and the briefing
  *     digest, unchanged.
  *
+ * Beside them `parts`: a part of an active module switched on company by
+ * company (ROLLOUT_PARTS), whose doors refuse a company outside it while the
+ * module itself is active.
+ *
  * resolveCapabilities() is pure over loaded inputs, so every rule is unit
  * tested without a database; loadCompanyCapabilities() loads those inputs in
  * one parallel wave, and capabilityInputsFromEntitlements() builds them from
@@ -36,6 +40,7 @@ import { isEntityType } from '@/lib/company/entity-type'
 import { offersPayroll } from '@/lib/company/offers-payroll'
 import { readCapabilityAxes } from '@/lib/entitlements/has-capability'
 import { CAPABILITY, type CapabilityKey } from '@/lib/entitlements/keys'
+import { commitmentsEnabledFor } from '@/lib/env/commitments-switch'
 import { isSelfHosted } from '@/lib/env/public-flags'
 import { MODULES, type ModuleDefinition, type ModuleId, type ModuleKind } from './manifest'
 import {
@@ -117,6 +122,38 @@ export interface ProfileRef {
   source: 'stored' | 'implicit'
 }
 
+/**
+ * Parts of a module switched on company by company: a staged rollout by
+ * company id, not a plan, a package or a setting the company can change.
+ * The module stays active (its other doors answer) while the part's doors
+ * refuse a company the rollout does not name, so the report says so beside
+ * the module instead of calling the whole of it active.
+ */
+export const ROLLOUT_PARTS = [
+  // Avtal och åtaganden (lib/commitments): agreements, ställda säkerheter,
+  // eventualförpliktelser and the group links, refused with
+  // COMMITMENTS_UNAVAILABLE outside BOLAGET_COMPANY_IDS.
+  { id: 'commitments', module: 'year-end', name: 'Agreements and commitments', nameSv: 'Avtal och åtaganden' },
+] as const satisfies ReadonlyArray<{ id: string; module: ModuleId; name: string; nameSv: string }>
+
+export type RolloutPartId = (typeof ROLLOUT_PARTS)[number]['id']
+
+/** Why a part is not active: it is switched on company by company and not for this one. */
+export const PART_REASONS = ['switched_on_per_company'] as const
+export type PartReason = (typeof PART_REASONS)[number]
+
+export interface ModulePartCapability {
+  id: RolloutPartId
+  name: string
+  name_sv: string
+  /** active: on for this company. off: the rollout does not name it. */
+  status: 'active' | 'off'
+  /** Empty when active. */
+  reasons: PartReason[]
+  /** One English sentence a client can show; null when active. */
+  resolution: string | null
+}
+
 type OwnReason = Exclude<CapabilityReason, 'dependency_unavailable'>
 
 const STATUS_FOR: Record<OwnReason, CapabilityStatus> = {
@@ -139,6 +176,8 @@ export interface ModuleCapability {
   reasons: CapabilityReason[]
   /** One English sentence a client can show; null when active. */
   resolution: string | null
+  /** Its parts switched on company by company (ROLLOUT_PARTS); empty for most modules. */
+  parts: ModulePartCapability[]
   /** The package the module belongs to; null for platform, agent and byra. Not published by v1 yet. */
   package: PackageId | null
   /**
@@ -220,6 +259,12 @@ export interface CapabilityInputs {
    * and a package without an entry is off.
    */
   openObligations?: Partial<Record<PackageId, readonly string[]>>
+  /**
+   * Whether each rollout part is switched on for the company (ROLLOUT_PARTS).
+   * Absent means not known, and a part not known reads active: a reader must
+   * never hide on a guess.
+   */
+  rolloutParts?: Partial<Record<RolloutPartId, boolean>>
 }
 
 /**
@@ -294,6 +339,25 @@ function resolutionFor(
       return `${mod.name} needs ${dep?.name ?? 'another module'}, which is ${why}.`
     }
   }
+}
+
+/** The rollout parts of one module, as the company has them. */
+function partsFor(mod: ModuleDefinition, input: CapabilityInputs): ModulePartCapability[] {
+  return ROLLOUT_PARTS.filter((part) => part.module === mod.id).map((part) => {
+    const on = input.rolloutParts?.[part.id] ?? true
+    return {
+      id: part.id,
+      name: part.name,
+      name_sv: part.nameSv,
+      status: on ? 'active' : 'off',
+      reasons: on ? [] : ['switched_on_per_company'],
+      resolution: on
+        ? null
+        : input.selfHosted
+          ? `${part.name} is switched on company by company: add the company id to BOLAGET_COMPANY_IDS on this instance.`
+          : `${part.name} is switched on company by company and is not on for this company: write to support@accounted.se to have it switched on.`,
+    }
+  })
 }
 
 /**
@@ -392,6 +456,7 @@ export function resolveCapabilities(input: CapabilityInputs): CompanyCapabilitie
         status: 'active',
         reasons: [],
         resolution: null,
+        parts: partsFor(mod, input),
         package: packageId,
         availability: 'on',
       })
@@ -417,6 +482,7 @@ export function resolveCapabilities(input: CapabilityInputs): CompanyCapabilitie
       status,
       reasons,
       resolution: reasons.length > 0 ? resolutionFor(mod, reasons[0], input, blocking) : null,
+      parts: partsFor(mod, input),
       package: packageId,
       availability: moduleAvailability(own, blocking?.absence ?? null, pkg),
     })
@@ -437,17 +503,23 @@ export function resolveCapabilities(input: CapabilityInputs): CompanyCapabilitie
   }
 }
 
+/** A module as the briefing digest lists it; `parts` only when one of its rollout parts is not active. */
+export type CapabilityDigestEntry = Pick<ModuleCapability, 'id' | 'status' | 'reasons'> & {
+  parts?: Array<Pick<ModulePartCapability, 'id' | 'status' | 'reasons'>>
+}
+
 /**
  * The compact form for the agent briefing: only the modules that are not
- * active, as id, status and reasons. An active module is implied by its
+ * active, as id, status and reasons, and an active module whose rollout part
+ * is not active, with that part. An active module is implied by its
  * absence, so a company with everything on costs an empty list.
  */
-export function capabilityDigest(
-  capabilities: CompanyCapabilities,
-): Array<Pick<ModuleCapability, 'id' | 'status' | 'reasons'>> {
-  return capabilities.modules
-    .filter((m) => m.status !== 'active')
-    .map((m) => ({ id: m.id, status: m.status, reasons: m.reasons }))
+export function capabilityDigest(capabilities: CompanyCapabilities): CapabilityDigestEntry[] {
+  return capabilities.modules.flatMap((m): CapabilityDigestEntry[] => {
+    const offParts = m.parts.filter((p) => p.status !== 'active').map((p) => ({ id: p.id, status: p.status, reasons: p.reasons }))
+    if (m.status === 'active' && offParts.length === 0) return []
+    return [{ id: m.id, status: m.status, reasons: m.reasons, ...(offParts.length > 0 ? { parts: offParts } : {}) }]
+  })
 }
 
 /** One module as GET /api/v1/companies/{companyId}/capabilities publishes it. */
@@ -486,6 +558,7 @@ export function publishedCapabilities(capabilities: CompanyCapabilities): Publis
       status: m.status,
       reasons: m.reasons,
       resolution: m.resolution,
+      parts: m.parts,
     })),
   }
 }
@@ -669,6 +742,7 @@ export async function loadCompanyCapabilities(
     selfHosted: isSelfHosted(),
     profile,
     packageChoices: packageChoicesFrom(axes.disabledConfigKeys, axes.enabledConfigKeys),
+    rolloutParts: { commitments: commitmentsEnabledFor(companyId) },
   }
   const resolved = resolveCapabilities(inputs)
   return options.obligations === false

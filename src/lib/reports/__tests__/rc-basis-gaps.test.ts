@@ -34,7 +34,7 @@ vi.mock('../vat-revenue-accounts', () => ({
   fetchDynamicVatAccounts: (...args: unknown[]) => fetchDynamicVatAccountsMock(...args),
 }))
 
-import { findRcBasisGaps, rcBasisReading, readVerifikatRcBasis } from '../rc-basis-gaps'
+import { findRcBasisGaps, rcBasisCountedTwice, rcBasisReading, readVerifikatRcBasis } from '../rc-basis-gaps'
 
 const supabase = {} as SupabaseClient
 
@@ -420,5 +420,91 @@ describe('readVerifikatRcBasis', () => {
     expect(rcBasisReading('4512', accounts)).toBeNull()
     expect(rcBasisReading('4536', accounts)).toBe(0.12)
     expect(rcBasisReading('6540', accounts)).toBeNull()
+  })
+})
+
+describe('rcBasisCountedTwice', () => {
+  // A purchase of EU services, 1 000 kr: fiktiv moms 250 on 2614 (ruta 30)
+  // and 2645 (ruta 48), paid from the bank.
+  const fiktiv = [line('e', '2645', 250), line('e', '2614', 0, 250)]
+  const pair = (account: string, amount: number) => [line('e', account, amount), line('e', '4598', 0, amount)]
+
+  it('flags a basis pair beside a cost account whose momskod reports its own ruta', async () => {
+    const accounts = await chart([{ account: '6541', treatment: 'reverse_charge_eu_services', rate: 0.25 }])
+    expect(
+      rcBasisCountedTwice([line('e', '6541', 1000), line('e', '1930', 0, 1000), ...pair('4535', 1000), ...fiktiv], accounts),
+    ).toEqual({
+      ownRutaAccounts: ['6541'],
+      basisAccounts: ['4535'],
+      reportedBasisAmount: 2000,
+      expectedBasisAmount: 1000,
+    })
+  })
+
+  it('flags a basis pair beside the cost booked on a BAS basis account itself', async () => {
+    const accounts = await chart([])
+    expect(
+      rcBasisCountedTwice([line('e', '4531', 1000), line('e', '2440', 0, 1000), ...pair('4531', 1000), ...fiktiv], accounts),
+    ).toEqual({ ownRutaAccounts: [], basisAccounts: ['4531'], reportedBasisAmount: 2000, expectedBasisAmount: 1000 })
+  })
+
+  it('flags an account with its own ruta at another sats than the pair: the purchase is in a box twice all the same', async () => {
+    const accounts = await chart([{ account: '6541', treatment: 'reverse_charge_eu_services', rate: 0.12 }])
+    expect(
+      rcBasisCountedTwice([line('e', '6541', 1000), line('e', '1930', 0, 1000), ...pair('4535', 1000), ...fiktiv], accounts),
+    ).toMatchObject({ ownRutaAccounts: ['6541'], reportedBasisAmount: 2000, expectedBasisAmount: 1000 })
+  })
+
+  it('leaves the booking every producer makes alone: an ordinary cost account with the pair', async () => {
+    const accounts = await chart([])
+    expect(
+      rcBasisCountedTwice([line('e', '6540', 1000), line('e', '1930', 0, 1000), ...pair('4535', 1000), ...fiktiv], accounts),
+    ).toBeNull()
+  })
+
+  it('leaves a 4598 credit alone when no basis account is debited beside it: there is no pair to remove', async () => {
+    const accounts = await chart([{ account: '6541', treatment: 'reverse_charge_eu_services', rate: 0.25 }])
+    // Understated fiktiv moms (100 on a 1 000 purchase) and a 4598 credit
+    // balanced against the cost account itself: no 44xx/45xx debit.
+    const understated = [line('e', '2645', 100), line('e', '2614', 0, 100)]
+    expect(
+      rcBasisCountedTwice(
+        [line('e', '6541', 1300), line('e', '1930', 0, 1000), line('e', '4598', 0, 300), ...understated],
+        accounts,
+      ),
+    ).toBeNull()
+  })
+
+  it('leaves an account with its own ruta alone without a pair', async () => {
+    const accounts = await chart([{ account: '6541', treatment: 'reverse_charge_eu_services', rate: 0.25 }])
+    expect(rcBasisCountedTwice([line('e', '6541', 1000), line('e', '1930', 0, 1000), ...fiktiv], accounts)).toBeNull()
+  })
+
+  it('leaves two purchases alone: one on an account with its own ruta, one with the pair, each with its fiktiv moms', async () => {
+    const accounts = await chart([{ account: '6541', treatment: 'reverse_charge_eu_services', rate: 0.25 }])
+    expect(
+      rcBasisCountedTwice(
+        [
+          line('e', '6541', 600),
+          line('e', '6540', 400),
+          line('e', '1930', 0, 1000),
+          ...pair('4535', 400),
+          ...fiktiv,
+        ],
+        accounts,
+      ),
+    ).toBeNull()
+  })
+
+  it('leaves lines without fiktiv moms alone: a basis-only correction cannot be told by its lines', async () => {
+    const accounts = await chart([{ account: '6541', treatment: 'reverse_charge_eu_services', rate: 0.25 }])
+    expect(rcBasisCountedTwice([line('e', '6541', 1000), line('e', '1930', 0, 1000), ...pair('4535', 1000)], accounts)).toBeNull()
+  })
+
+  it('leaves a pair that alone overstates the basis to another rule: no line besides the pair reports a box', async () => {
+    const accounts = await chart([])
+    expect(
+      rcBasisCountedTwice([line('e', '6540', 1000), line('e', '1930', 0, 1000), ...pair('4535', 2000), ...fiktiv], accounts),
+    ).toBeNull()
   })
 })

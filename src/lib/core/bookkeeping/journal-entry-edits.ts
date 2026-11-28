@@ -189,7 +189,9 @@ export interface JournalEntryHeader {
  * lock or the company lock date answers PERIOD_LOCKED, the verdict the lock
  * triggers would reach, before any write. A draft that holds underlag answers
  * DRAFT_HAS_DOCUMENTS and lists them: a cancelled draft's documents can never
- * be linked to another verifikat.
+ * be linked to another verifikat. Deleting the draft in the app (Radera
+ * utkast, the delete_last_voucher RPC) releases them instead, so the refusal
+ * names that way out beside booking the draft.
  *
  * Already cancelled answers the entry unchanged, on a dry run too: it is the
  * end state the caller asked for, not a conflict.
@@ -239,7 +241,7 @@ export async function cancelDraftJournalEntry(
     return {
       ok: false,
       code: 'DRAFT_HAS_DOCUMENTS',
-      messageSv: `Utkastet har ${documentCount} ${documentCount === 1 ? 'bilaga' : 'bilagor'} som inte kan flyttas när utkastet har makulerats. Bokför utkastet, eller kontakta supporten.`,
+      messageSv: `Utkastet har ${documentCount} ${documentCount === 1 ? 'bilaga som inte kan flyttas' : 'bilagor som inte kan flyttas'} om utkastet makuleras. Radera utkastet i Accounted i stället (Bokföring › verifikationen › Fler alternativ › Radera utkast): ${documentCount === 1 ? 'bilagan finns kvar' : 'bilagorna finns kvar'} och kan kopplas till en annan verifikation. Eller bokför utkastet.`,
       details: { journal_entry_id: entryId, document_count: documentCount, documents },
     }
   }

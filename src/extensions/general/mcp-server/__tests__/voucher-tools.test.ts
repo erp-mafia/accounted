@@ -1394,6 +1394,102 @@ describe('gnubok_correct_entry: importmoms without its ruta 50 base', () => {
   })
 })
 
+// A basis pair beside an account that reports ruta 20-24 itself counts the
+// purchase twice: the staged preview says so, the approval card too
+// (compliance_warning), and the rättelse still stages.
+describe('gnubok_correct_entry: a reverse-charge purchase counted twice', () => {
+  const blank = { line_description: null, currency: null, amount_in_currency: null, exchange_rate: null, tax_code: null, dimensions: null, cost_center: null, project: null }
+  const original = {
+    id: '11111111-1111-4111-8111-111111111111',
+    status: 'posted',
+    entry_date: '2026-05-12',
+    description: 'Molntjänst EU',
+    voucher_number: 12,
+    voucher_series: 'A',
+    fiscal_period_id: 'fp-1',
+    correction_of_id: null,
+    reverses_id: null,
+    source_type: 'manual',
+    fiscal_periods: { name: '2026', is_closed: false, locked_at: null },
+    lines: [
+      { ...blank, account_number: '6541', debit_amount: 1000, credit_amount: 0 },
+      { ...blank, account_number: '1930', debit_amount: 0, credit_amount: 1000 },
+    ],
+  }
+  // The company's kontoplan: 6541 reports ruta 21 itself (EU services, 25 %).
+  const chart = {
+    data: [
+      { account_number: '6541', account_name: 'Molntjänster EU', account_class: 6, default_vat_treatment: 'reverse_charge_eu_services', default_vat_rate: 0.25, vat_box: null },
+    ],
+    error: null,
+  }
+  const staging = () => {
+    const mock = createQueuedMockSupabase()
+    mock.enqueue({ data: original, error: null })
+    mock.enqueueMany(OPEN_STORNO_TARGET)
+    mock.enqueue(chart)
+    mock.enqueue({ data: { bookkeeping_locked_through: null }, error: null })
+    mock.enqueue({ data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null })
+    mock.enqueue({ data: { id: 'op-correct-basis' }, error: null })
+    return mock
+  }
+
+  it('stages the rättelse and warns in the preview and on the approval card that the purchase counts twice', async () => {
+    const mock = staging()
+    const result = (await correctEntry.execute(
+      {
+        entry_id: original.id,
+        lines: [
+          { account_number: '6541', debit_amount: 1000, credit_amount: 0 },
+          { account_number: '1930', debit_amount: 0, credit_amount: 1000 },
+          { account_number: '4535', debit_amount: 1000, credit_amount: 0 },
+          { account_number: '4598', debit_amount: 0, credit_amount: 1000 },
+          { account_number: '2645', debit_amount: 250, credit_amount: 0 },
+          { account_number: '2614', debit_amount: 0, credit_amount: 250 },
+        ],
+      },
+      'company-1',
+      'user-1',
+      mock.supabase as never,
+    )) as { staged: boolean; message: string; preview: { warnings?: string[]; compliance_warning?: string } }
+
+    expect(result.staged).toBe(true)
+    expect(mock.findCall('pending_operations', 'insert')).toBeDefined()
+    const warning = expect.stringMatching(/^Rättelsen skulle räkna samma inköp två gånger i momsdeklarationen: konto 6541 redovisar själv underlaget i ruta 20-24/)
+    expect(result.preview.warnings).toEqual([warning])
+    expect(result.preview.compliance_warning).toEqual(warning)
+    expect(result.message).toContain('WARNING: Rättelsen skulle räkna samma inköp två gånger')
+  })
+
+  it('reads no kontoplan and warns of nothing for corrected lines without a basis pair', async () => {
+    const mock = createQueuedMockSupabase()
+    mock.enqueue({ data: original, error: null })
+    mock.enqueueMany(OPEN_STORNO_TARGET)
+    mock.enqueue({ data: { bookkeeping_locked_through: null }, error: null })
+    mock.enqueue({ data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null })
+    mock.enqueue({ data: { id: 'op-correct-basis' }, error: null })
+    const result = (await correctEntry.execute(
+      {
+        entry_id: original.id,
+        lines: [
+          { account_number: '6541', debit_amount: 1000, credit_amount: 0 },
+          { account_number: '1930', debit_amount: 0, credit_amount: 1000 },
+          { account_number: '2645', debit_amount: 250, credit_amount: 0 },
+          { account_number: '2614', debit_amount: 0, credit_amount: 250 },
+        ],
+      },
+      'company-1',
+      'user-1',
+      mock.supabase as never,
+    )) as { staged: boolean; preview: { warnings?: string[]; compliance_warning?: string } }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.warnings).toBeUndefined()
+    expect(result.preview.compliance_warning).toBeUndefined()
+    expect(mock.findCall('chart_of_accounts', 'select')).toBeUndefined()
+  })
+})
+
 describe('gnubok_correct_entry / gnubok_reverse_journal_entry: chain-depth guard', () => {
   // Base row for a posted correction that already sits 3 links deep:
   // c3 → c2 → c1 → orig-0 (root, voucher A7).

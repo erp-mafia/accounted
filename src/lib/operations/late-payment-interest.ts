@@ -21,6 +21,7 @@ export const latePaymentInterestInputSchema = z.object({
 const PaidLate = z.object({
   invoice_id: z.string().uuid(),
   invoice_number: z.string(),
+  customer_id: z.string().uuid().nullable(),
   customer_name: z.string().nullable(),
   currency: z.string(),
   due_date: z.string(),
@@ -28,6 +29,15 @@ const PaidLate = z.object({
   last_payment_date: z.string(),
   days_late: z.number().describe('Days late of the latest late payment.'),
   interest: z.number().describe('Interest earned, in the invoice currency, rounded to öre.'),
+  fully_paid: z.boolean().describe('The invoice is paid in full, so its interest is final and a räntefaktura can charge it.'),
+  interest_invoice: z
+    .object({
+      id: z.string().uuid(),
+      invoice_number: z.string().describe('The räntefaktura number, or "(Utkast)" while it is an unnumbered draft.'),
+      status: z.string(),
+    })
+    .nullable()
+    .describe('The räntefaktura that already charges this interest (made with Skapa räntefaktura on the Dröjsmålsränta page); null when none does. A cancelled one does not count.'),
 })
 
 const OverdueOpen = z.object({
@@ -75,12 +85,14 @@ export const invoicesLatePaymentInterestGet = defineOperation({
       "or the company's own rate when it set one, on 365 days. Each payment that arrived after the due date earns interest on its own " +
       'amount from the due date to its payment date; an open invoice accrues on its remaining amount up to as_of. Only payments booked ' +
       'in Accounted count: payment dates that came with an import, payments linked to imported verifikat, credit notes, customer losses ' +
-      'and collection-provider payments are left out. Amounts are in each invoice\'s currency. Nothing is booked or sent.',
+      'and collection-provider payments are left out. A räntefaktura is never listed: it earns no interest itself. Each late-paid ' +
+      'invoice names the räntefaktura that already charges its interest. Amounts are in each invoice\'s currency. Nothing is booked or sent.',
     useWhen: 'Preparing a räntefaktura (interest invoice) after late payments, or checking what an overdue customer owes in interest.',
     doNotUseFor: 'Listing unpaid invoices without interest (GET /invoices) or invoices that could go to collection (GET /collections/candidates).',
     pitfalls: [
       'An invoice paid late before the company moved to Accounted is not listed: its payment date came with the import.',
       'The interest is per invoice currency; totals are grouped by currency, never converted.',
+      'Charge a row only once: one with interest_invoice set is already on a räntefaktura.',
     ],
     example: {
       response: {
@@ -92,6 +104,7 @@ export const invoicesLatePaymentInterestGet = defineOperation({
             {
               invoice_id: '7d1e…',
               invoice_number: 'F-1042',
+              customer_id: '2b9c…',
               customer_name: 'Kund AB',
               currency: 'SEK',
               due_date: '2026-09-01',
@@ -99,6 +112,8 @@ export const invoicesLatePaymentInterestGet = defineOperation({
               last_payment_date: '2026-09-21',
               days_late: 20,
               interest: 68.49,
+              fully_paid: true,
+              interest_invoice: null,
             },
           ],
           overdue_open: [],

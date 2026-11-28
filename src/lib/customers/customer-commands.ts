@@ -153,6 +153,8 @@ export async function createCustomer(
     // Blank is none (lib/customers/invoice-reference.ts reads it so too).
     invoice_reference: input.invoice_reference || null,
     invoice_marking: input.invoice_marking || null,
+    // Null follows the company's send order (lib/invoices/send-order.ts).
+    invoice_send_way: input.invoice_send_way ?? null,
     notes: input.notes ?? null,
   }
 
@@ -207,7 +209,7 @@ export async function createCustomer(
 const UPDATE_FIELDS = [
   'name', 'customer_type', 'contact_person', 'email', 'phone', 'invoice_email_cc_addresses',
   'invoice_email_bcc_addresses', 'address_line1', 'address_line2', 'postal_code', 'city', 'country',
-  'org_number', 'vat_number', 'language', 'default_payment_terms', 'notes', 'archived_at',
+  'org_number', 'vat_number', 'language', 'default_payment_terms', 'invoice_send_way', 'notes', 'archived_at',
 ] as const
 
 /**

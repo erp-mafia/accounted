@@ -10,6 +10,7 @@ import {
 } from '@/lib/vat/country-codes'
 import { isValidSwedishVatNumber, normalizeVatNumber } from '@/lib/vat/vat-number'
 import { isZeroRatedInvoiceTreatment } from '@/lib/bookkeeping/invoice-line-vat-treatment'
+import { isBasInterestIncomeAccount } from '@/lib/bookkeeping/result-account-ranges'
 
 export interface VatRateOption {
   rate: number
@@ -166,7 +167,8 @@ export function getPermittedVatRates(
 export interface VatRule {
   treatment: VatTreatment
   rate: number
-  momsRuta: string
+  /** null: no ruta at all (outside_scope: not a supply made in Sweden). */
+  momsRuta: string | null
   reverseChargeText?: string
 }
 
@@ -213,6 +215,17 @@ export const EU_GOODS_SUPPLY_NOTICE =
  * renders it in the document language (localizeVatNotice).
  */
 export const DOMESTIC_REVERSE_CHARGE_NOTICE = 'Omvänd betalningsskyldighet, byggtjänster, ML 16 kap. 13 §'
+/**
+ * No Swedish VAT on an amount that is not a supply made in Sweden (treatment
+ * outside_scope). Today that is dröjsmålsränta on a räntefaktura: interest
+ * for a late payment is not consideration for a good or a service
+ * (ML 8 kap. 2-3 §§; Skatteverket, Handledning för mervärdesskatt, avsnitt
+ * 11: "Dröjsmålsränta ... ska inte inräknas i beskattningsunderlaget"), so it
+ * is neither taxed nor exempt and the momsdeklaration has no ruta for it. Not
+ * the exemption notice: nothing here is undantaget under ML 10 kap. Stored in
+ * Swedish; the PDF renders it in the document language (localizeVatNotice).
+ */
+export const OUTSIDE_SCOPE_NOTICE_SV = 'Utanför svensk mervärdesskatt: ingen omsättning i Sverige'
 
 /**
  * Determine VAT treatment based on customer type and VAT validation status.
@@ -539,6 +552,24 @@ export {
   type InvoiceVatTreatmentOverride,
 } from '@/lib/invoices/invoice-vat-override'
 
+/**
+ * Why the lines of an outside_scope invoice cannot carry the treatment, or
+ * null. It says no Swedish VAT and no ruta, which holds today only for
+ * dröjsmålsränta: every priced line must book an interest-income account
+ * (isBasInterestIncomeAccount, e.g. 8313). A line without one would fall to a
+ * sales account that a ruta reads, and a sale of goods or services abroad is
+ * a case of its own (its ruta is not settled). `rows` are 1-based; the 0 %
+ * rate is the permitted-rate gate's.
+ */
+export function outsideScopeLineRefusal(
+  items: ReadonlyArray<{ line_type?: string | null; revenue_account?: string | null }>,
+): { rows: number[] } | null {
+  const rows = items.flatMap((item, index) =>
+    item.line_type === 'text' || (item.revenue_account && isBasInterestIncomeAccount(item.revenue_account)) ? [] : [index + 1],
+  )
+  return rows.length > 0 ? { rows } : null
+}
+
 export type InvoiceVatOverrideRefusalCode =
   /** export / reverse_charge without delivery_country, where the customer does not already get that treatment. */
   | 'INVOICE_VAT_TREATMENT_DELIVERY_COUNTRY_REQUIRED'
@@ -582,6 +613,12 @@ const DOMESTIC_REVERSE_CHARGE_RULE: VatRule = {
   rate: 0,
   momsRuta: '41',
   reverseChargeText: DOMESTIC_REVERSE_CHARGE_NOTICE,
+}
+const OUTSIDE_SCOPE_RULE: VatRule = {
+  treatment: 'outside_scope',
+  rate: 0,
+  momsRuta: null,
+  reverseChargeText: OUTSIDE_SCOPE_NOTICE_SV,
 }
 
 /**
@@ -633,6 +670,10 @@ function impliedTreatmentForDelivery(country: string): InvoiceVatTreatmentOverri
  *    on a property in Sweden. Whether the buyer is a construction business
  *    and the supply a construction service is the seller's statement; no
  *    customer field can show it, so it is never implied.
+ *  - outside_scope: no Swedish VAT and no ruta, for an amount that is not a
+ *    supply made in Sweden (0 %, the line's own account). Today only
+ *    dröjsmålsränta on a räntefaktura, so never with a delivery_country and
+ *    never implied; the builder holds its lines to interest-income accounts.
  *
  * The seller's VAT registration is the caller's gate, as for getVatRules().
  */
@@ -686,6 +727,27 @@ export function resolveInvoiceVatRules(
       ok: true,
       rules: DOMESTIC_REVERSE_CHARGE_RULE,
       permittedRates: [{ rate: 0, label: '0% (omvänd betalningsskyldighet)', treatment: 'reverse_charge_domestic' }],
+      explainFromCustomer: false,
+    }
+  }
+
+  if (treatment === 'outside_scope') {
+    // Goods sold abroad (a delivery from outside the EU to a customer in
+    // another member state) would be the other case, but its ruta and who
+    // imports are not settled, so a goods delivery is refused here. Which
+    // lines may carry the treatment is the builder's check
+    // (outsideScopeLineRefusal), which sees the lines.
+    if (deliveryCountry) {
+      return {
+        ok: false,
+        code: 'INVOICE_VAT_TREATMENT_DELIVERY_COUNTRY_MISMATCH',
+        details: { ...base, required: 'no_delivery_country' },
+      }
+    }
+    return {
+      ok: true,
+      rules: OUTSIDE_SCOPE_RULE,
+      permittedRates: [{ rate: 0, label: '0% (utanför svensk moms)', treatment: 'outside_scope' }],
       explainFromCustomer: false,
     }
   }
@@ -764,6 +826,7 @@ export function getVatTreatmentLabel(treatment: VatTreatment): string {
     reverse_charge_domestic: 'Omvänd betalningsskyldighet, byggtjänster (0%)',
     export: 'Export (0%)',
     exempt: 'Momsfritt',
+    outside_scope: 'Utanför svensk moms',
   }
   return labels[treatment]
 }

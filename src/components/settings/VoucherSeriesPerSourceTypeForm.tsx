@@ -109,27 +109,12 @@ export function VoucherSeriesPerSourceTypeForm({ settings, onSettingsUpdated }: 
   const [showAll, setShowAll] = useState(false)
   const method: 'accrual' | 'cash' = settings.accounting_method === 'cash' ? 'cash' : 'accrual'
 
-  // Same closed list as the manual verifikat form and the per-bankkonto
-  // picker: the fixed Swedish presets, then any letter already configured in
-  // settings that the presets do not cover. The saved map is read alongside
-  // the draft so a non-preset letter stays selectable after the user changes
-  // that row away from it (otherwise a misclick could not be undone without
-  // a reload) and so a letter that lands in settings after mount is offered.
-  // A free A-Z list would let a typo start an undocumented series. Names
-  // come from the company's own voucher_series_labels, presets as fallback.
+  // Same list as the manual verifikat form and the per-bankkonto picker: the
+  // Swedish presets, then every other letter A-Z. Names come from the
+  // company's own voucher_series_labels, presets as fallback.
   const seriesOptions = useMemo(
-    () =>
-      buildVoucherSeriesOptions(settings.voucher_series_labels, [
-        settings.default_voucher_series,
-        ...Object.values(settings.default_voucher_series_per_source_type ?? {}),
-        ...Object.values(draft),
-      ]),
-    [
-      settings.voucher_series_labels,
-      settings.default_voucher_series,
-      settings.default_voucher_series_per_source_type,
-      draft,
-    ],
+    () => buildVoucherSeriesOptions(settings.voucher_series_labels),
+    [settings.voucher_series_labels],
   )
 
   const handleChange = (sourceType: JournalEntrySourceType, value: string) => {
