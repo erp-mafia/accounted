@@ -21,7 +21,13 @@ export async function GET(request: Request) {
     response_types_supported: ['code'],
     grant_types_supported: ['authorization_code', 'refresh_token'],
     code_challenge_methods_supported: ['S256'],
-    token_endpoint_auth_methods_supported: ['none', 'client_secret_post'],
+    // What the token endpoint does (lib/auth/oauth-client-auth.ts): a public
+    // client sends no credentials and PKCE binds its code; a partner client
+    // that holds a secret authenticates with it in the Authorization header
+    // or the form body. Basic is the method RFC 6749 section 2.3.1 requires
+    // of a server that issues secrets. The register endpoint still answers
+    // every dynamic registration as a public client ('none').
+    token_endpoint_auth_methods_supported: ['none', 'client_secret_basic', 'client_secret_post'],
     // Client ID Metadata Documents (MCP auth spec 2025-11-25) are deliberately
     // NOT advertised yet. Advertising the flag makes Claude.ai, Claude Code
     // and Codex send an HTTPS URL as client_id, and the spec then expects the

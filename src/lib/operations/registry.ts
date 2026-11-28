@@ -143,6 +143,7 @@ import {
   paymentsVerificationStart,
 } from './payment-orders'
 import { paymentsCompanyGiroNumbers, paymentsLookupCreditor } from './bankgiro-lookup'
+import { companyLookupGet } from './company-lookup'
 import { supplierPayeesConfirm } from './supplier-payees'
 import {
   documentsDelete,
@@ -424,6 +425,8 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   // Bankgiro Lookup (premium, behind OPENPAYMENTS_BANKGIRO_LOOKUP): reads only.
   paymentsLookupCreditor,
   paymentsCompanyGiroNumbers,
+  // The public company register by organisationsnummer (v1; the register is the TIC extension's service, MCP keeps gnubok_lookup_company).
+  companyLookupGet,
   paymentsAvailability,
   paymentsUsage,
   paymentsVerification,

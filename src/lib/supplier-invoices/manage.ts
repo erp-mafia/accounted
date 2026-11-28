@@ -20,6 +20,8 @@
  *   - only from the original: a credit note's own id is refused, whatever
  *     its status (it rests at 'credited' too, so the status alone cannot
  *     tell the two apart);
+ *   - never once the underlag the credit released was registered again on a
+ *     live invoice (released-underlag.ts): the purchase would be booked twice;
  *   - the credit note's posted verifikat is cancelled with a storno
  *     (reverseEntry, through the posting port), never edited or deleted; an
  *     already reversed or never posted verifikat is fine and the row cleanup
@@ -61,6 +63,7 @@ import {
   resolveUnsettledStatus,
 } from '@/lib/supplier-invoices/lifecycle'
 import { loadAttestPolicyOn } from '@/lib/supplier-invoices/attest-policy-read'
+import { registeredAgainAs, type UnderlagHolder } from '@/lib/supplier-invoices/released-underlag'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
@@ -326,6 +329,13 @@ export async function uncreditSupplierInvoice(
     }
   }
 
+  // The credit released the underlag and it was registered again
+  // (released-underlag.ts): undone, the credit would bring this invoice back
+  // beside the new one, the purchase booked twice. Credit the new one first.
+  // Asked here, so the dry run refuses too, and again right before the storno.
+  const registeredAgain = await registeredAgainRefusal(ctx, original)
+  if (registeredAgain) return registeredAgain
+
   // Re-crediting after an earlier uncredit leaves a reversed credit row
   // behind, so only the live (non-reversed) one counts.
   const { data: creditNote } = await supabase
@@ -394,6 +404,14 @@ export async function uncreditSupplierInvoice(
     }
   }
 
+  // The last read before the first write: a registration of the underlag
+  // that landed since the check above still stops the undo. The two are
+  // separate requests and nothing locks across them, so a registration in
+  // the milliseconds between this read and the restore below is not seen
+  // here; the restore logs it (registeredAgainAfterRestore).
+  const registeredSince = await registeredAgainRefusal(ctx, original)
+  if (registeredSince) return registeredSince
+
   let reversalEntryId: string | null = null
   if (creditNote?.registration_journal_entry_id) {
     try {
@@ -461,6 +479,7 @@ export async function uncreditSupplierInvoice(
       details: { reversal_entry_id: reversalEntryId },
     }
   }
+  await registeredAgainAfterRestore(ctx, original)
 
   try {
     await eventBus.emit({
@@ -485,6 +504,47 @@ export async function uncreditSupplierInvoice(
       changed: true,
       reversed_credit_note_id: creditNote?.id ?? null,
     },
+  }
+}
+
+/**
+ * SI_UNCREDIT_REGISTERED_AGAIN while something else books the credited
+ * invoice's underlag (a live invoice or verifikat, details name it); fails
+ * closed.
+ */
+async function registeredAgainRefusal(
+  ctx: OperationContext,
+  original: { id: string; document_id?: string | null },
+): Promise<Failure | null> {
+  let registeredAgain: UnderlagHolder | null
+  try {
+    registeredAgain = await registeredAgainAs(ctx.supabase, ctx.companyId, original)
+  } catch (err) {
+    return failed(err)
+  }
+  return registeredAgain ? { ok: false, code: 'SI_UNCREDIT_REGISTERED_AGAIN', details: { ...registeredAgain } } : null
+}
+
+/**
+ * After the restore: a registration of the same underlag that slipped in
+ * between the last check and the restore leaves two live invoices for one
+ * purchase. Nothing can be undone from here (the storno is posted), so it is
+ * logged as an error with both ids, for a person to credit one of them.
+ */
+async function registeredAgainAfterRestore(
+  ctx: OperationContext,
+  original: { id: string; document_id?: string | null },
+): Promise<void> {
+  try {
+    const registeredAgain = await registeredAgainAs(ctx.supabase, ctx.companyId, original)
+    if (registeredAgain) {
+      ctx.log.error('uncredit: the underlag was registered again while the credit was undone', new Error('two live invoices for one underlag'), {
+        supplierInvoiceId: original.id,
+        registeredAgainAs: registeredAgain,
+      })
+    }
+  } catch (err) {
+    ctx.log.warn('uncredit: the check after the restore could not run', { supplierInvoiceId: original.id, reason: err instanceof Error ? err.message : String(err) })
   }
 }
 

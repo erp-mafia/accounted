@@ -616,8 +616,9 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     uses: [],
     // vendor-logos: each counterpart's own icon, fetched once per domain from its website.
     libFolders: ['parties', 'company-lookup', 'vendor-logos'],
-    operationPrefixes: [],
-    v1Segments: [],
+    // company-lookup: the public register by organisationsnummer (lib/company-lookup/registry-lookup.ts).
+    operationPrefixes: ['company-lookup'],
+    v1Segments: ['company-lookup'],
     jurisdictions: SE,
   },
   {
