@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useId, useState } from 'react'
+import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { ChevronDownIcon } from '@/components/icons'
 import { DetailSection, DefRow } from '@/components/ui/detail-section'
@@ -123,7 +124,13 @@ export default function BookingWhy({
               <DefRow key={row.id} label={row.label}>
                 {/* data-ph-mask: values carry names, labels and accounts. */}
                 <div data-ph-mask="">
-                  <span>{row.value}</span>
+                  {row.href ? (
+                    <Link href={row.href} className="underline underline-offset-2">
+                      {row.value}
+                    </Link>
+                  ) : (
+                    <span>{row.value}</span>
+                  )}
                   {row.items && row.items.length > 0 && (
                     <ul className="mt-1 space-y-1 text-xs tabular-nums text-muted-foreground">
                       {row.items.map((item, i) => (

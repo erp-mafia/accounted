@@ -57,7 +57,8 @@ export function actorHeaderValue(actor: CommitActor | undefined): string | null 
   )
 }
 
-function isPostgrestRequest(input: RequestInfo | URL): boolean {
+/** Whether a supabase-js request goes to PostgREST, the API that hands its headers to the transaction. */
+export function isPostgrestRequest(input: RequestInfo | URL): boolean {
   const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
   try {
     return new URL(url).pathname.includes('/rest/v1/')

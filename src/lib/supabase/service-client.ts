@@ -1,5 +1,6 @@
 import { createClient, type SupabaseClient, type SupabaseClientOptions } from '@supabase/supabase-js'
 import { withActorHeader } from '@/lib/supabase/actor-header'
+import { withTraceHeader } from '@/lib/supabase/trace-header'
 import { withEmptyPagePastEnd } from '@/lib/supabase/page-past-end'
 import { withShortGatewayErrorPage } from '@/lib/supabase/gateway-error-page'
 
@@ -53,7 +54,9 @@ export const SERVER_AUTH_OPTIONS = {
  * Every PostgREST request names the actor of the scope it runs in (the
  * x-accounted-actor header, lib/supabase/actor-header.ts), around the
  * caller's own fetch when it passes one: a service-role request has no
- * session, and the audit log reads the person from the header instead. A
+ * session, and the audit log reads the person from the header instead. It
+ * names the request's trace id too (x-accounted-trace,
+ * lib/supabase/trace-header.ts), which the audit log keeps on each row. A
  * counted page past the last row reads as an empty page, not a 416
  * (lib/supabase/page-past-end.ts), and a gateway's HTML error page as one
  * short message (lib/supabase/gateway-error-page.ts).
@@ -71,7 +74,7 @@ export function createServiceRoleClient(
     ...options,
     global: {
       ...options?.global,
-      fetch: withShortGatewayErrorPage(withEmptyPagePastEnd(withActorHeader(options?.global?.fetch))),
+      fetch: withShortGatewayErrorPage(withEmptyPagePastEnd(withActorHeader(withTraceHeader(options?.global?.fetch)))),
     },
     auth: { ...options?.auth, ...SERVER_AUTH_OPTIONS },
   })

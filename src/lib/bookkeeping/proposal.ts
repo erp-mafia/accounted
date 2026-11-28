@@ -111,6 +111,8 @@ export interface BookingProposal {
   /** Evidence: what the why line and the direct-booking policy read. */
   seen_count?: number
   rule_mode?: CategorizationTemplate['mode']
+  /** The version of the counterpart rule that proposed it (categorization_templates.version). */
+  template_version?: number
   rule_own?: boolean
   rule_requires_review?: boolean
   /** A learned counterpart rule a person set to always ask (categorization_templates.always_review). */

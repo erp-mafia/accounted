@@ -23,6 +23,7 @@ import {
   type RuleRow,
 } from '@/lib/rules/model'
 import type { RuleMatch } from '@/lib/rules/service'
+import type { RuleTrackRecord } from '@/lib/rules/track-record'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { DIRECT_BOOKING_ON, type DirectBookingSettings } from '@/lib/transactions/direct-booking'
 import { useViewerLock } from '@/components/ui/viewer-lock'
@@ -33,6 +34,8 @@ interface Payload {
   rule: RuleRow
   matches: RuleMatch[]
   direct_booking?: DirectBookingSettings
+  /** Null when it could not be read; absent from an older server. */
+  track_record?: RuleTrackRecord | null
 }
 
 async function fetchRule(url: string): Promise<Payload> {
@@ -271,10 +274,14 @@ export default function RuleDetail({ id }: { id: string }) {
             <Kv k={t('created_from')} v={t(`origin_${ruleOrigin(rule.source)}`)} />
             <Kv k={t('since')} v={formatDate(rule.created_at)} />
             <Kv k={t('edited')} v={rule.updated_at !== rule.created_at ? formatDate(rule.updated_at) : t('never')} />
+            {data.track_record?.version != null && (
+              <Kv k={t('version_label')} v={<span className="tabular-nums">{data.track_record.version}</span>} />
+            )}
           </Section>
           <Section title={t('sect_trust')}>
             <Kv k={t('mode_label')} v={<ModeChip mode={rule.mode} />} />
             <Kv k={t('hits_label')} v={t('hits_line', { hits: rule.occurrence_count, corrections: rule.corrections })} />
+            {data.track_record && <Kv k={t('track_label')} v={<TrackRecordValue record={data.track_record} />} />}
             <Kv
               k={t('th_one_click')}
               v={
@@ -308,6 +315,30 @@ export default function RuleDetail({ id }: { id: string }) {
           </Section>
         </aside>
       </div>
+    </>
+  )
+}
+
+/**
+ * How often the rule's suggestion was booked as proposed (lib/rules/track-record),
+ * and the same since its current version when it has been changed.
+ */
+function TrackRecordValue({ record }: { record: RuleTrackRecord }) {
+  const t = useTranslations('rules')
+  const overall =
+    record.decided === 0
+      ? t('track_none')
+      : t(record.capped ? 'track_capped' : 'track_line', { right: record.as_proposed, count: record.decided })
+  const current =
+    record.version != null && record.version > 1 && record.current
+      ? record.current.decided === 0
+        ? t('track_current_none', { version: record.version })
+        : t('track_current', { version: record.version, right: record.current.as_proposed, count: record.current.decided })
+      : null
+  return (
+    <>
+      <span className="tabular-nums">{overall}</span>
+      {current && <span className="block tabular-nums text-muted-foreground">{current}</span>}
     </>
   )
 }

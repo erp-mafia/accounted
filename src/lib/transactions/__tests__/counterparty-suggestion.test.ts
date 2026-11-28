@@ -51,6 +51,17 @@ describe('buildCounterpartySuggestion', () => {
     expect(s.seen_count).toBe(4)
   })
 
+  it('names the version of the rule that proposes it, and nothing before the column exists', () => {
+    expect(buildCounterpartySuggestion(makeTemplate({ version: 3 }), 0.9).template_version).toBe(3)
+    expect(buildCounterpartySuggestion(makeTemplate(), 0.9)).not.toHaveProperty('template_version')
+    const onRow = buildCounterpartySuggestion(
+      makeTemplate({ debit_account: '5010', vat_treatment: 'unknown', vat_account: '2641', version: 2 }),
+      0.9,
+      { amount: -725, entityType: 'aktiebolag', vatRegistered: true },
+    )
+    expect(onRow.template_version).toBe(2)
+  })
+
   it('carries the learned VAT treatment so the preview matches the booking', () => {
     const s = buildCounterpartySuggestion(
       makeTemplate({ debit_account: '5420', vat_treatment: 'standard_25', vat_account: '2641' }),

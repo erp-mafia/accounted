@@ -93,6 +93,33 @@ export interface BookingWhyData {
   /** Null when the receipts could not be read: unknown, not "none". */
   decisions: BookingWhyDecisions | null
   people: Record<string, BookingWhyPerson>
+  /**
+   * The counterpart rule the latest decision's chosen suggestion came from,
+   * while the rule exists. Absent or null: no rule to name.
+   */
+  rule?: BookingWhyRule | null
+  /**
+   * The other verifikat the request that committed this one committed, read
+   * by the request's trace id on their audit rows. Absent or null: none
+   * recorded, or not readable.
+   */
+  same_request?: BookingWhySameRequest | null
+}
+
+export interface BookingWhyRule {
+  id: string
+  /** The counterparty as the Regler page names it. */
+  name: string
+}
+
+/** At most this many of the request's other verifikat are named; the rest are counted. */
+export const MAX_SAME_REQUEST_VOUCHERS = 10
+
+export interface BookingWhySameRequest {
+  /** Their voucher references, at most MAX_SAME_REQUEST_VOUCHERS. */
+  vouchers: string[]
+  /** How many other verifikat the request committed. */
+  total: number
 }
 
 export interface BookingWhyOptions {
@@ -106,7 +133,18 @@ export interface BookingWhyOptions {
 
 export type EvidenceLevel = 'exact' | 'strong' | 'likely' | 'your_choice'
 
-export type BookingWhyRowId = 'decision' | 'proposal' | 'reason' | 'grounds' | 'changes' | 'checks' | 'review' | 'policy' | 'more'
+export type BookingWhyRowId =
+  | 'decision'
+  | 'proposal'
+  | 'rule'
+  | 'reason'
+  | 'grounds'
+  | 'changes'
+  | 'checks'
+  | 'review'
+  | 'policy'
+  | 'more'
+  | 'same_request'
 
 export interface BookingWhyRow {
   id: BookingWhyRowId
@@ -114,6 +152,8 @@ export interface BookingWhyRow {
   value: string
   /** A list under the value (the other decisions, one line each). */
   items?: string[]
+  /** Where the value leads (the rule's page). */
+  href?: string
 }
 
 export interface BookingWhyView {
@@ -450,6 +490,15 @@ function moreRow(d: BookingWhyDecisions, data: BookingWhyData, o: BookingWhyOpti
   return { id: 'more', label: o.t('row_more'), value: o.t('more_value', { count: d.total }), items }
 }
 
+/** What else the request that committed the verifikat committed: the vouchers named, the rest counted. */
+function sameRequestRow(same: BookingWhySameRequest | null | undefined, o: BookingWhyOptions): BookingWhyRow | null {
+  if (!same || same.total <= 0) return null
+  const items = same.vouchers.slice(0, MAX_SAME_REQUEST_VOUCHERS)
+  const rest = same.total - items.length
+  if (rest > 0) items.push(o.t('more_rest', { count: rest }))
+  return { id: 'same_request', label: o.t('row_same_request'), value: o.t('same_request_value', { count: same.total }), items }
+}
+
 /** Whether the review was shown, as recorded; nothing when the door did not say. */
 function reviewRow(r: ReceiptLike, o: BookingWhyOptions): string | null {
   if (r.review_shown === false) return o.t('review_skipped')
@@ -485,6 +534,7 @@ export function bookingWhy(data: BookingWhyData, o: BookingWhyOptions): BookingW
   push('decision', upperFirst([whoText, viaText(who, r?.decided_by.commit_method ?? entry.commit_method, o, how, r), when].filter(Boolean).join(' · ')))
   if (r) {
     push('proposal', proposalRow(r, data, o))
+    if (data.rule) rows.push({ id: 'rule', label: o.t('row_rule'), value: data.rule.name, href: `/rules/${data.rule.id}` })
     // The agent's own words, as recorded: shown as given, never paraphrased.
     push('reason', text(r.agent_reason))
     push('grounds', groundsRow(r, o))
@@ -495,6 +545,8 @@ export function bookingWhy(data: BookingWhyData, o: BookingWhyOptions): BookingW
     const more = data.decisions ? moreRow(data.decisions, data, o) : null
     if (more) rows.push(more)
   }
+  const same = sameRequestRow(data.same_request, o)
+  if (same) rows.push(same)
 
   return { summary: { text: upperFirst(summaryText(how, who, whoText, r, data, o)), when }, rows }
 }
