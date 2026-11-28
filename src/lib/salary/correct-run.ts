@@ -646,6 +646,11 @@ export async function correctSalaryRun(
       is_correction: true,
       corrects_run_id: originalRun.id,
       notes: correctionNotes(originalRun),
+      // An extra run's correction keeps its number (several runs in one
+      // month): the original is 'corrected' and out of the period index.
+      ...(typeof originalRun.run_number === 'number' && originalRun.run_number > 1
+        ? { run_number: originalRun.run_number }
+        : {}),
     })
     .select()
     .single()

@@ -20,6 +20,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { ISO_DATE_RE } from '@/lib/invariants'
 import { invalidateRunCalculation } from './invalidate-calculation'
+import { isSalaryExtraRunsEnabled } from '@/lib/env/salary-extra-runs-switch'
+import { findRosterClashes, readSiblingRuns, rosterClashDetails } from './extra-runs'
 
 export type UpdateRunResult<T> =
   | { ok: true; data: T }
@@ -159,6 +161,33 @@ export async function updateDraftSalaryRun(
       ok: false,
       code: 'SALARY_RUN_PATCH_NOT_DRAFT',
       details: { current_status: row.status },
+    }
+  }
+
+  // Several runs in one month (extra-runs.ts): a new payment date may not
+  // move the run into a payout month where another run already pays one of
+  // its employees.
+  if (changes.payment_date !== undefined && isSalaryExtraRunsEnabled(args.companyId)) {
+    const siblings = await readSiblingRuns(supabase, args.companyId, {
+      id: row.id,
+      period_year: row.period_year,
+      period_month: row.period_month,
+      payment_date: changes.payment_date,
+    })
+    if (!siblings.ok) return { ok: false, code: 'INTERNAL_ERROR', details: { message: 'sibling run read failed' } }
+    if (siblings.runs.length > 0) {
+      const { data: roster, error: rosterError } = await supabase
+        .from('salary_run_employees')
+        .select('employee_id')
+        .eq('salary_run_id', row.id)
+        .eq('company_id', args.companyId)
+      if (rosterError) return { ok: false, code: 'INTERNAL_ERROR', details: { message: rosterError.message } }
+      const employeeIds = ((roster ?? []) as Array<{ employee_id: string }>).map((sre) => sre.employee_id)
+      const clashes = await findRosterClashes(supabase, args.companyId, siblings.runs, employeeIds)
+      if (!clashes.ok) return { ok: false, code: 'INTERNAL_ERROR', details: { message: 'sibling roster read failed' } }
+      if (clashes.clashes.length > 0) {
+        return { ok: false, code: 'SALARY_RUN_EMPLOYEE_IN_OTHER_RUN', details: rosterClashDetails(clashes.clashes) }
+      }
     }
   }
 

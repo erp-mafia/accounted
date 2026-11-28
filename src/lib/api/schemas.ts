@@ -5945,6 +5945,8 @@ export const CreateSalaryRunWithDefaultsSchema = z.object({
   notes: z.string().max(2000).optional(),
   deviation_period_start: isoDate.optional(),
   deviation_period_end: isoDate.optional(),
+  // An extra run beside the period's run (SALARY_EXTRA_RUNS_COMPANY_IDS).
+  extra_run: z.boolean().optional(),
 })
 
 // A new version of a run's pain.001 (crm#1219). The confirmation is the

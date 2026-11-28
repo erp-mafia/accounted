@@ -3,7 +3,7 @@
  * same category, cap split, overrides and whole-krona computation, in the
  * month the AGI files the pay (the payment date).
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { declaredAvgifterForRun } from '@/lib/salary/declared-avgifter'
 import { generateAvgifterBasis } from '../avgifter-basis'
@@ -94,5 +94,35 @@ describe('generateAvgifterBasis', () => {
     const { rows } = await report()
     expect(rows).toHaveLength(1)
     expect(rows[0]).toMatchObject({ category: 'standard', basis: 60000, amount: 18852, employeeCount: 2 })
+  })
+})
+
+describe('generateAvgifterBasis: several runs in one month', () => {
+  const EARLY = { ...RUN, id: 'run-aug-2', period_month: 8, payment_date: '2026-09-05' }
+  const rows = () => [
+    row({ id: 'r1', avgifter_basis: 30002, salary_run: EARLY }),
+    row({ id: 'r2', avgifter_basis: 25002, salary_run: RUN }),
+  ]
+
+  const rolloutBefore = process.env.SALARY_EXTRA_RUNS_COMPANY_IDS
+  afterEach(() => {
+    if (rolloutBefore === undefined) delete process.env.SALARY_EXTRA_RUNS_COMPANY_IDS
+    else process.env.SALARY_EXTRA_RUNS_COMPANY_IDS = rolloutBefore
+  })
+
+  it("states the month's one declaration, summed over its runs", async () => {
+    process.env.SALARY_EXTRA_RUNS_COMPANY_IDS = 'c'
+    h.rows = rows()
+    const { rows: report_, totals } = await generateAvgifterBasis({} as SupabaseClient, 'c', 2026)
+    // trunc(55 004 × 31,42 %) = 17 282, what the AGI for September files.
+    expect(report_).toMatchObject([{ periodMonth: 9, category: 'standard', basis: 55004, amount: 17282, employeeCount: 2 }])
+    expect(totals.totalAmount).toBe(17282)
+  })
+
+  it('keeps one run per computation for a company outside the list', async () => {
+    delete process.env.SALARY_EXTRA_RUNS_COMPANY_IDS
+    h.rows = rows()
+    const { totals } = await generateAvgifterBasis({} as SupabaseClient, 'c', 2026)
+    expect(totals.totalAmount).toBe(9426 + 7855)
   })
 })

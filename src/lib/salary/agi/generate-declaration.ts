@@ -34,9 +34,9 @@ import {
   findMissingCompanyData,
 } from './xml-generator'
 import type { AGIEmployeeData, AGICompanyData, AGITotals, AGIUnderlag } from './xml-generator'
-import { agiReportingPeriod, formatAgiPeriodDashed } from './reporting-period'
-import { runCalculationState } from '../calculation-state'
-import { runDeviationWindow } from '../deviation-period'
+import { agiReportingPeriod, formatAgiPeriodDashed, type AgiReportingPeriod } from './reporting-period'
+import { runCalculationState, type RunCalculationSource } from '../calculation-state'
+import { runDeviationWindow, type RunDeviationSource } from '../deviation-period'
 import { FRANVARO_ABSENCE_TYPES, lateDayReaderRunIds, registerRowReadByRun } from '../late-days'
 import { VAXA_STOD_AGI_FIELDS_RETIRED_FROM } from '../vaxa-stod'
 import {
@@ -46,7 +46,7 @@ import {
   type TaxableBenefits,
 } from '../benefit-payments'
 import { eventBus } from '@/lib/events'
-import { truncateToWholeKronor } from '@/lib/money'
+import { roundOre, truncateToWholeKronor } from '@/lib/money'
 import { declaredAvgifterForRun, isFSkattStatus } from '../declared-avgifter'
 import { regionalSupportForRun } from '../regional-support'
 import { agiFiledForRun } from '../agi-submission-state'
@@ -60,6 +60,11 @@ import {
   agiPeriodConflictDetails,
   readOtherRunsPaidInPeriod,
 } from '@/lib/deadlines/agi-period-runs'
+import { AGI_RECEIPT_STATUSES } from '@/lib/deadlines/agi-filed'
+import { addMonthsIso, previousMonthEndIso } from '@/lib/dates/iso'
+import { isSalaryExtraRunsEnabled } from '@/lib/env/salary-extra-runs-switch'
+import { runPeriodLabelSv, sameDeclaredRates } from '../extra-runs'
+import { regionalSupportEnabled } from '../regional-support'
 
 // Strict runtime validation of the joined salary_run_employees row. Without
 // this, columns added by recent migrations (removed_from_agi,
@@ -240,6 +245,8 @@ function agiXmlWithoutCreatedStamp(xml: string): string {
 interface StoredAgiDeclaration {
   id: string
   salary_run_id: string | null
+  /** The runs a month's summed declaration covers; null: salary_run_id alone. */
+  salary_run_ids?: string[] | null
   status: string
   submitted_at: string | null
   xml_content?: string | null
@@ -318,6 +325,152 @@ export function decideAgiWrite(
   return 'conflict'
 }
 
+/** What a generation may do with the row of a month summed over several runs. */
+export type MonthAgiWriteDecision = 'insert' | 'update_own' | 'take_over' | 'filed' | 'awaiting_signature'
+
+/**
+ * The write decision for a company with several runs in one month
+ * (SALARY_EXTRA_RUNS_COMPANY_IDS): the month's one row covers every live run
+ * paid out in it (`runIds`), whichever of them generates.
+ *
+ * - no row: insert one.
+ * - a filed row (a receipt status) that covers exactly these runs: `filed`,
+ *   answered with the stored XML and never rewritten.
+ * - a filed row that covers other runs (a run joined the month after the
+ *   filing, or a covered run was corrected): `take_over`, a rättelse of the
+ *   month that starts unfiled.
+ * - a row awaiting signature at Skatteverket that covers other runs:
+ *   `awaiting_signature`, refused. The signing would file the runs it was
+ *   built from while the row named these.
+ * - any other row: `update_own`, rewritten in place under this run.
+ */
+export function decideMonthAgiWrite(
+  row: Pick<StoredAgiDeclaration, 'salary_run_id' | 'salary_run_ids' | 'status'> | null,
+  runIds: readonly string[],
+): MonthAgiWriteDecision {
+  if (!row) return 'insert'
+  const covered = row.salary_run_ids ?? (row.salary_run_id ? [row.salary_run_id] : [])
+  const same = covered.length === runIds.length && runIds.every((id) => covered.includes(id))
+  if (AGI_RECEIPT_STATUSES.includes(row.status)) return same ? 'filed' : 'take_over'
+  if (row.status === 'pending_signature' && !same) return 'awaiting_signature'
+  return 'update_own'
+}
+
+/** Whether two lists name the same runs. */
+function sameRunSet(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && b.every((id) => a.includes(id))
+}
+
+/** Why the runs of a month cannot be summed into one declaration. */
+type MonthRunsRefusalReason = 'same_employee' | 'different_rates' | 'regional_support' | 'correction_pending' | 'awaiting_signature'
+
+function monthRunsRefusal(
+  agiPeriod: AgiReportingPeriod,
+  reason: MonthRunsRefusalReason,
+  runs: ReadonlyArray<{ id: string }>,
+  message: string,
+): Extract<GenerateAgiDeclarationResult, { ok: false }> {
+  return {
+    ok: false,
+    code: 'AGI_MONTH_RUNS_NOT_COMBINED',
+    status: 409,
+    details: {
+      period: formatAgiPeriodDashed(agiPeriod),
+      reason,
+      salary_run_ids: runs.map((r) => r.id),
+      message,
+    },
+  }
+}
+
+/**
+ * The other live runs of the payout month, read in full for a declaration
+ * summed over them, with the checks that make the sum one declaration: no
+ * correction of one of them still in draft (the month would be declared
+ * without that run's people), one set of frozen rates (sats and caps), and
+ * no regionalt stöd, whose monthly cap each run claimed on its own. A month
+ * whose filed declaration covers exactly these runs is answered with it
+ * (`filed`), so the checks, which guard a new declaration, are not asked.
+ */
+async function readMonthRunsForAgi(
+  supabase: SupabaseClient,
+  companyId: string,
+  run: AgiSourceRun,
+  agiPeriod: AgiReportingPeriod,
+): Promise<{ ok: true; others: AgiSourceRun[]; filed: boolean } | Extract<GenerateAgiDeclarationResult, { ok: false }>> {
+  const listed = await readOtherRunsPaidInPeriod(supabase, companyId, agiPeriod, run)
+  if (!listed.ok) return { ok: false, code: 'DATABASE_ERROR', details: listed.error }
+
+  const { data: stored, error: storedError } = await supabase
+    .from('agi_declarations')
+    .select('salary_run_id, salary_run_ids, status')
+    .eq('company_id', companyId)
+    .eq('period_year', agiPeriod.periodYear)
+    .eq('period_month', agiPeriod.periodMonth)
+    .maybeSingle()
+  if (storedError) return { ok: false, code: 'DATABASE_ERROR', details: storedError }
+  const ids = [run.id, ...listed.runs.map((other) => other.id)]
+  const filed =
+    decideMonthAgiWrite(stored as Pick<StoredAgiDeclaration, 'salary_run_id' | 'salary_run_ids' | 'status'> | null, ids) ===
+    'filed'
+
+  const monthStart = `${formatAgiPeriodDashed(agiPeriod)}-01`
+  const monthEnd = previousMonthEndIso(addMonthsIso(monthStart, 1))
+  const { data: drafts, error: draftsError } = await supabase
+    .from('salary_runs')
+    .select('id, period_year, period_month, run_number, payment_date')
+    .eq('company_id', companyId)
+    .eq('status', 'draft')
+    .not('corrects_run_id', 'is', null)
+    .gte('payment_date', monthStart)
+    .lte('payment_date', monthEnd)
+  if (draftsError) return { ok: false, code: 'DATABASE_ERROR', details: draftsError }
+  const pending = (drafts ?? []) as Array<{ id: string; period_year: number; period_month: number; run_number?: number | null }>
+  if (!filed && pending.length > 0) {
+    return monthRunsRefusal(
+      agiPeriod,
+      'correction_pending',
+      pending,
+      `Rättelsen av lönekörningen för ${runPeriodLabelSv(pending[0])} är inte beräknad än. ` +
+        `Beräkna och granska den innan arbetsgivardeklarationen för ${formatAgiPeriodDashed(agiPeriod)} tas fram, ` +
+        'annars saknas dess anställda i deklarationen.',
+    )
+  }
+  if (listed.runs.length === 0) return { ok: true, others: [], filed }
+
+  const { data: rows, error: rowsError } = await supabase
+    .from('salary_runs')
+    .select('*')
+    .eq('company_id', companyId)
+    .in('id', listed.runs.map((other) => other.id))
+  if (rowsError) return { ok: false, code: 'DATABASE_ERROR', details: rowsError }
+  const others = ((rows ?? []) as AgiSourceRun[]).sort(
+    (a, b) => a.payment_date.localeCompare(b.payment_date) || a.id.localeCompare(b.id),
+  )
+  const all = [run, ...others]
+  if (filed) return { ok: true, others, filed }
+  if (all.some((r) => regionalSupportEnabled(r.calculation_params))) {
+    return monthRunsRefusal(
+      agiPeriod,
+      'regional_support',
+      all,
+      `Lönekörningarna med utbetalning i ${formatAgiPeriodDashed(agiPeriod)} är beräknade med regionalt stöd, ` +
+        'och avdraget har ett tak per månad som körningarna inte delar. Flera lönekörningar i en månad går inte ihop med regionalt stöd än.',
+    )
+  }
+  const differing = others.find((other) => !sameDeclaredRates(other.calculation_params, run.calculation_params))
+  if (differing) {
+    return monthRunsRefusal(
+      agiPeriod,
+      'different_rates',
+      all,
+      `Lönekörningen för ${runPeriodLabelSv(differing)} är beräknad med andra avgiftssatser än den här körningen. ` +
+        `Räkna om körningarna med utbetalning i ${formatAgiPeriodDashed(agiPeriod)} så att de har samma satser.`,
+    )
+  }
+  return { ok: true, others, filed }
+}
+
 /** The run holding the period's row, for the conflict answer. */
 interface AgiHolderRun {
   id: string
@@ -340,13 +493,21 @@ async function readAgiPeriod(
   companyId: string,
   period: { periodYear: number; periodMonth: number },
   run: AgiWriteRun,
+  options: { monthRuns?: boolean } = {},
 ): Promise<AgiPeriodRead> {
   // maybeSingle: no row is the first generation, not an error. The stored
   // XML and totals are read too, for the filed answer and writeOnlyIfChanged
-  // (one literal select, so the column guard can check it).
-  const { data, error } = await supabase
-    .from('agi_declarations')
-    .select('id, salary_run_id, status, submitted_at, xml_content, total_gross, total_tax, total_avgifter_basis, total_avgifter, employee_count')
+  // (literal selects, so the column guard can check them). salary_run_ids
+  // only for a month summed over several runs: everywhere else the read is
+  // the one it always was.
+  const { data, error } = await (options.monthRuns
+    ? supabase
+        .from('agi_declarations')
+        .select('id, salary_run_id, salary_run_ids, status, submitted_at, xml_content, total_gross, total_tax, total_avgifter_basis, total_avgifter, employee_count')
+    : supabase
+        .from('agi_declarations')
+        .select('id, salary_run_id, status, submitted_at, xml_content, total_gross, total_tax, total_avgifter_basis, total_avgifter, employee_count')
+  )
     .eq('company_id', companyId)
     .eq('period_year', period.periodYear)
     .eq('period_month', period.periodMonth)
@@ -376,6 +537,8 @@ interface AgiDeclarationContent {
   total_avgifter_basis: number
   total_avgifter: number
   employee_count: number
+  /** A month summed over several runs: every run it covers. Unset: salary_run_id alone. */
+  salary_run_ids?: string[]
 }
 
 /** A decision that writes, with the row it was made on. */
@@ -423,6 +586,7 @@ async function writeAgiDeclaration(
         total_avgifter_basis: content.total_avgifter_basis,
         total_avgifter: content.total_avgifter,
         employee_count: content.employee_count,
+        ...(content.salary_run_ids ? { salary_run_ids: content.salary_run_ids } : {}),
       })
       .select('id')
       .single()
@@ -444,6 +608,7 @@ async function writeAgiDeclaration(
           employee_count: content.employee_count,
           is_correction: true,
           salary_run_id: keys.salary_run_id,
+          ...(content.salary_run_ids ? { salary_run_ids: content.salary_run_ids } : {}),
           // A takeover clears the filing state. The period's one row then
           // takes another run's declaration: the run this one corrects (or a
           // corrected one before it). That declaration's filing state does
@@ -468,6 +633,7 @@ async function writeAgiDeclaration(
           employee_count: content.employee_count,
           is_correction: true,
           salary_run_id: keys.salary_run_id,
+          ...(content.salary_run_ids ? { salary_run_ids: content.salary_run_ids } : {}),
         })
   )
     .eq('id', row.id)
@@ -550,48 +716,43 @@ export async function findAgiCompanyDataGap(
   return identity ? findMissingCompanyData(identity) : null
 }
 
-export async function generateAgiDeclaration(
-  args: GenerateAgiDeclarationArgs,
-): Promise<GenerateAgiDeclarationResult> {
-  const { supabase, companyId, userId, userEmail, salaryRunId, log, requestId, writeOnlyIfChanged } = args
-  const opLog = log.child({ salaryRunId })
+/** The salary_runs row a declaration is built from (select '*'). */
+interface AgiSourceRun extends RunCalculationSource, RunDeviationSource {
+  id: string
+  status: string
+  payment_date: string
+  agi_submitted_at?: string | null
+  agi_generated_at?: string | null
+  corrects_run_id?: string | null
+  calculation_params?: Record<string, unknown> | null
+  total_gross?: unknown
+  run_number?: number | null
+}
 
-  // 1. Run + status precheck.
-  const { data: run, error: runError } = await supabase
-    .from('salary_runs')
-    .select('*')
-    .eq('id', salaryRunId)
-    .eq('company_id', companyId)
-    .single()
+/** One run's individuppgifter, or the refusal that stops the declaration. */
+type RunDeclarationRows =
+  | { ok: true; parsedRows: SalaryRunEmployeeRow[]; employeeData: AGIEmployeeData[] }
+  | Extract<GenerateAgiDeclarationResult, { ok: false }>
 
-  if (runError || !run) {
-    return { ok: false, code: 'SALARY_RUN_NOT_FOUND' }
-  }
-  if (!AGI_ELIGIBLE_RUN_STATUSES.includes((run.status as typeof AGI_ELIGIBLE_RUN_STATUSES[number]))) {
-    return {
-      ok: false,
-      code: 'AGI_GENERATE_NOT_BOOKABLE',
-      details: { current_status: run.status, eligible_statuses: AGI_ELIGIBLE_RUN_STATUSES },
-    }
-  }
-
-  // The redovisningsperiod is the PAYOUT month (kontantprincipen), which for
-  // lön i efterskott is the month after run.period_*; see reporting-period.ts.
-  const agiPeriod = agiReportingPeriod(run)
-
-  // 2. Company + settings + profile (for contact info).
-  const identity = await readAgiCompanyIdentity(supabase, companyId, userId, userEmail)
-  if (!identity) {
-    return { ok: false, code: 'COMPANY_NOT_FOUND' }
-  }
-
+/**
+ * A run's roster, frånvaro and benefits as the declaration reads them, checked
+ * and mapped to individuppgifter (steps 3 and 4 of generateAgiDeclaration).
+ * One run's declaration reads its own run; a month summed over several runs
+ * (several runs in one month, extra-runs.ts) reads each of them the same way.
+ */
+async function buildRunDeclarationRows(
+  supabase: SupabaseClient,
+  companyId: string,
+  run: AgiSourceRun,
+  agiPeriod: AgiReportingPeriod,
+): Promise<RunDeclarationRows> {
   // 3. Roster + line items + per-day absence.
   const { data: runEmployees } = await supabase
     .from('salary_run_employees')
     .select(
       '*, employee:employees(personnummer, specification_number, f_skatt_status, monthly_salary, housing_benefit_type), line_items:salary_line_items(*)',
     )
-    .eq('salary_run_id', salaryRunId)
+    .eq('salary_run_id', run.id)
 
   // An empty roster is valid: a registered employer must file a
   // nolldeklaration (HU-only, no individuppgifter) for months without payroll.
@@ -607,12 +768,6 @@ export async function generateAgiDeclaration(
   }
 
   // 4. Build AGI input shapes.
-  const companyData: AGICompanyData = {
-    ...identity,
-    periodYear: agiPeriod.periodYear,
-    periodMonth: agiPeriod.periodMonth,
-  }
-
   // Load per-day absence (VAB + parental only: sick days go to FK separately).
   // Read the days the calculation deducted, so the frånvarouppgifter match the
   // payslip: the run's avvikelseperiod (a company on "föregående månads
@@ -937,6 +1092,113 @@ export async function generateAgiDeclaration(
         (e.absenceEvents?.length ?? 0) > 0,
     )
 
+  return { ok: true, parsedRows, employeeData }
+}
+
+export async function generateAgiDeclaration(
+  args: GenerateAgiDeclarationArgs,
+): Promise<GenerateAgiDeclarationResult> {
+  const { supabase, companyId, userId, userEmail, salaryRunId, log, requestId, writeOnlyIfChanged } = args
+  const opLog = log.child({ salaryRunId })
+
+  // 1. Run + status precheck.
+  const { data: run, error: runError } = await supabase
+    .from('salary_runs')
+    .select('*')
+    .eq('id', salaryRunId)
+    .eq('company_id', companyId)
+    .single()
+
+  if (runError || !run) {
+    return { ok: false, code: 'SALARY_RUN_NOT_FOUND' }
+  }
+  if (!AGI_ELIGIBLE_RUN_STATUSES.includes((run.status as typeof AGI_ELIGIBLE_RUN_STATUSES[number]))) {
+    return {
+      ok: false,
+      code: 'AGI_GENERATE_NOT_BOOKABLE',
+      details: { current_status: run.status, eligible_statuses: AGI_ELIGIBLE_RUN_STATUSES },
+    }
+  }
+
+  // The redovisningsperiod is the PAYOUT month (kontantprincipen), which for
+  // lön i efterskott is the month after run.period_*; see reporting-period.ts.
+  const agiPeriod = agiReportingPeriod(run)
+
+  // 2. Company + settings + profile (for contact info).
+  const identity = await readAgiCompanyIdentity(supabase, companyId, userId, userEmail)
+  if (!identity) {
+    return { ok: false, code: 'COMPANY_NOT_FOUND' }
+  }
+
+  // 3. Roster + line items + per-day absence, mapped to individuppgifter.
+  const companyData: AGICompanyData = {
+    ...identity,
+    periodYear: agiPeriod.periodYear,
+    periodMonth: agiPeriod.periodMonth,
+  }
+  const own = await buildRunDeclarationRows(supabase, companyId, run as AgiSourceRun, agiPeriod)
+  if (!own.ok) return own
+  let { parsedRows, employeeData } = own
+
+  // Several runs in one month (SALARY_EXTRA_RUNS_COMPANY_IDS,
+  // lib/salary/extra-runs.ts): the payout month's declaration sums every
+  // live run paid out in it, one individuppgift per person. Null for every
+  // other company, and for a corrected run, which keeps its own declaration.
+  let monthRuns: AgiSourceRun[] | null = null
+  if (isSalaryExtraRunsEnabled(companyId) && run.status !== 'corrected') {
+    const month = await readMonthRunsForAgi(supabase, companyId, run as AgiSourceRun, agiPeriod)
+    if (!month.ok) return month
+    const built = new Map<string, { parsedRows: SalaryRunEmployeeRow[]; employeeData: AGIEmployeeData[] }>([
+      [run.id as string, { parsedRows, employeeData }],
+    ])
+    for (const other of month.others) {
+      let rows: RunDeclarationRows
+      try {
+        rows = await buildRunDeclarationRows(supabase, companyId, other, agiPeriod)
+      } catch (err) {
+        // A malformed row on another run of the month refuses like one on
+        // this run would be named, not as a server error.
+        if (err instanceof AGIIncompleteDataError) {
+          return { ok: false, code: 'AGI_INCOMPLETE_DATA', details: { missing_fields: err.missingFields, message: err.message } }
+        }
+        throw err
+      }
+      if (!rows.ok) return rows
+      built.set(other.id, rows)
+    }
+    // One order whichever run generates (payout day, then id), so the same
+    // month always gives the same XML.
+    monthRuns = [run as AgiSourceRun, ...month.others].sort(
+      (a, b) => a.payment_date.localeCompare(b.payment_date) || a.id.localeCompare(b.id),
+    )
+    parsedRows = monthRuns.flatMap((r) => built.get(r.id)?.parsedRows ?? [])
+    employeeData = monthRuns.flatMap((r) => built.get(r.id)?.employeeData ?? [])
+    // One person on two runs of the month (weekly pay) is step 2, not
+    // built: the IU would have to sum two payslips. The roster doors refuse
+    // it (extra-runs.ts); a month that has it anyway is refused here.
+    const seen = new Set<string>()
+    const twice = parsedRows.find((sre) => {
+      if (seen.has(sre.employee_id)) return true
+      seen.add(sre.employee_id)
+      return false
+    })
+    if (twice && !month.filed) {
+      return monthRunsRefusal(
+        agiPeriod,
+        'same_employee',
+        monthRuns,
+        `Anställd ${twice.employee?.specification_number ?? '?'} finns i mer än en lönekörning med utbetalning i ` +
+          `${formatAgiPeriodDashed(agiPeriod)}. En anställd kan vara med i en lönekörning per utbetalningsmånad: ` +
+          'ta bort den anställda från den ena körningen och räkna om den.',
+      )
+    }
+  }
+  const monthRunIds = monthRuns ? monthRuns.map((r) => r.id).sort() : null
+  // The month's pay, for the stored total_gross: every run it sums.
+  const totalGross = monthRuns
+    ? roundOre(monthRuns.reduce((sum, r) => sum + (Number(r.total_gross) || 0), 0))
+    : run.total_gross
+
   // 5. Build totals: whole-krona declared avgifter (öretal bortfaller, SFF
   // 2011:1261 22 kap. 1 §). Skatteverket does not use the filed FK487 for
   // the beslut: it recomputes the avgift from the declared per-IU underlag,
@@ -1057,8 +1319,26 @@ export async function generateAgiDeclaration(
     ...(filed ? { filed: true } : {}),
   })
   const readAndDecide = async (): Promise<{ answer: GenerateAgiDeclarationResult } | AgiWriteTarget> => {
-    const read = await readAgiPeriod(supabase, companyId, agiPeriod, run)
+    const read = await readAgiPeriod(supabase, companyId, agiPeriod, run, { monthRuns: monthRuns !== null })
     if (!read.ok) return { answer: { ok: false, code: 'DATABASE_ERROR', details: read.error } }
+    if (monthRuns && monthRunIds) {
+      const monthDecision = decideMonthAgiWrite(read.row, monthRunIds)
+      if (monthDecision === 'filed') return { answer: storedAnswer(read.row as StoredAgiDeclaration, true) }
+      if (monthDecision === 'awaiting_signature') {
+        return {
+          answer: monthRunsRefusal(
+            agiPeriod,
+            'awaiting_signature',
+            monthRuns,
+            `Arbetsgivardeklarationen för ${formatAgiPeriodDashed(agiPeriod)} väntar på signering hos Skatteverket och ` +
+              'omfattar inte alla lönekörningar som betalas ut i månaden. Signera den först; ta sedan fram deklarationen ' +
+              'igen, så lämnas en rättelse med alla körningar.',
+          ),
+        }
+      }
+      if (monthDecision === 'insert') return { decision: 'insert', row: null }
+      return { decision: monthDecision, row: read.row as StoredAgiDeclaration }
+    }
     const decision = decideAgiWrite(read.row, run, read.holder)
     if (decision === 'conflict') {
       return {
@@ -1162,7 +1442,7 @@ export async function generateAgiDeclaration(
   const content: AgiDeclarationContent = {
     xml_content: xml,
     individuppgifter: buildIndividuppgifterSnapshot(employeeData),
-    total_gross: run.total_gross,
+    total_gross: totalGross,
     // Declared whole-krona totals, exactly as serialised into the XML
     // (FK497/FK487): the amounts Skatteverket computes from the declared
     // underlag and draws from the skattekonto (modulo the two documented
@@ -1173,6 +1453,7 @@ export async function generateAgiDeclaration(
     total_avgifter_basis: totals.totalAvgifterBasis,
     total_avgifter: totals.totalAvgifterAmount,
     employee_count: employeeData.length,
+    ...(monthRunIds ? { salary_run_ids: monthRunIds } : {}),
   }
   const keys: AgiDeclarationKeys = {
     company_id: companyId,
@@ -1206,10 +1487,30 @@ export async function generateAgiDeclaration(
         xml,
         totals,
         employeeCount: employeeData.length,
-        totalGross: run.total_gross,
+        totalGross,
       })
     ) {
-      return storedAnswer(target.row, false)
+      // A month summed over several runs: the row may sit under another of
+      // its runs. The submit reads the row of the run it submits
+      // (declaration-prep.ts), so this run takes it over, nothing else
+      // changed and agi_generated_at left as it is.
+      // The runs it covers changed (a run with nothing to declare joined):
+      // written below, so the coverage follows.
+      const coverageChanged =
+        monthRuns !== null &&
+        !sameRunSet(target.row.salary_run_ids ?? (target.row.salary_run_id ? [target.row.salary_run_id] : []), monthRunIds ?? [])
+      if (!coverageChanged && monthRuns && target.row.salary_run_id !== run.id) {
+        const { data: moved, error: moveError } = await supabase
+          .from('agi_declarations')
+          .update({ salary_run_id: run.id })
+          .eq('id', target.row.id)
+          .eq('status', target.row.status)
+          .eq('salary_run_id', target.row.salary_run_id as string)
+          .select('id')
+        if (moveError) return { ok: false, code: 'DATABASE_ERROR', details: moveError }
+        if (((moved ?? []) as unknown[]).length === 0) continue
+      }
+      if (!coverageChanged) return storedAnswer(target.row, false)
     }
 
     const written = await writeAgiDeclaration(supabase, target, keys, content)
@@ -1231,11 +1532,10 @@ export async function generateAgiDeclaration(
     }
   }
 
-  // 9. Stamp generation timestamp on salary_runs.
-  await supabase
-    .from('salary_runs')
-    .update({ agi_generated_at: new Date().toISOString() })
-    .eq('id', salaryRunId)
+  // 9. Stamp generation timestamp on salary_runs: every run a month's
+  // summed declaration covers, so each of them shows the declaration.
+  const stamp = supabase.from('salary_runs').update({ agi_generated_at: new Date().toISOString() })
+  await (monthRunIds && monthRunIds.length > 1 ? stamp.in('id', monthRunIds).eq('company_id', companyId) : stamp.eq('id', salaryRunId))
 
   // 10. Emit agi.generated (best-effort: never block the success path).
   try {

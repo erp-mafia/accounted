@@ -5,8 +5,10 @@ import {
   type DeclaredAvgifterCategory,
   type DeclaredAvgifterRunRow,
 } from '@/lib/salary/declared-avgifter'
-import { regionalSupportForRun } from '@/lib/salary/regional-support'
+import { regionalSupportEnabled, regionalSupportForRun } from '@/lib/salary/regional-support'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { isSalaryExtraRunsEnabled } from '@/lib/env/salary-extra-runs-switch'
+import { sameDeclaredRates } from '@/lib/salary/extra-runs'
 
 /**
  * Arbetsgivaravgiftsunderlag: the avgifter the arbetsgivardeklarationer declare
@@ -111,7 +113,13 @@ export async function generateAvgifterBasis(
   const grouped = new Map<string, AvgifterBasisRow>()
   let regionalSupportDeduction = 0
 
-  for (const { run, rows } of byRun.values()) {
+  // Several runs in one month (SALARY_EXTRA_RUNS_COMPANY_IDS): the month's
+  // AGI is summed over its runs, and so is its computation here.
+  const declarations = isSalaryExtraRunsEnabled(companyId)
+    ? runsByPayoutMonth([...byRun.values()])
+    : [...byRun.values()]
+
+  for (const { run, rows } of declarations) {
     const { periodMonth } = agiReportingPeriod(run)
     const params = run.calculation_params
     regionalSupportDeduction += regionalSupportForRun(rows, params)?.deduction ?? 0
@@ -152,4 +160,31 @@ export async function generateAvgifterBasis(
     },
     year,
   }
+}
+
+/**
+ * The runs of one payout month as the one declaration that sums them
+ * (generate-declaration.ts): one group per month with the first run's rates.
+ * Runs the declaration cannot sum (other rates, regionalt stöd) stay apart.
+ */
+function runsByPayoutMonth(groups: Array<{ run: ReportRun; rows: RosterRow[] }>): Array<{ run: ReportRun; rows: RosterRow[] }> {
+  const months = new Map<number, Array<{ run: ReportRun; rows: RosterRow[] }>>()
+  for (const group of groups) {
+    const month = agiReportingPeriod(group.run).periodMonth
+    months.set(month, [...(months.get(month) ?? []), group])
+  }
+  const declarations: Array<{ run: ReportRun; rows: RosterRow[] }> = []
+  for (const inMonth of months.values()) {
+    const [first] = inMonth
+    const summable =
+      inMonth.length > 1 &&
+      inMonth.every(
+        (group) =>
+          !regionalSupportEnabled(group.run.calculation_params) &&
+          sameDeclaredRates(group.run.calculation_params, first.run.calculation_params),
+      )
+    if (summable) declarations.push({ run: first.run, rows: inMonth.flatMap((group) => group.rows) })
+    else declarations.push(...inMonth)
+  }
+  return declarations
 }

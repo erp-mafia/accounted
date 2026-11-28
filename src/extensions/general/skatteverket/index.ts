@@ -100,7 +100,8 @@ import {
 } from './lib/skattekonto-sync'
 import { fetchDeclarationView, fetchVatDeclarationStatus } from './lib/declaration-status'
 import { runPostConnectRefresh } from './lib/post-connect-refresh'
-import { declarationKvittens, newestAgiKvittens, promoteAgiDeclaration } from './lib/agi-kvittens-reconcile'
+import { declarationKvittens, filedRunIds, newestAgiKvittens, promoteAgiDeclaration } from './lib/agi-kvittens-reconcile'
+import { isSalaryExtraRunsEnabled } from '@/lib/env/salary-extra-runs-switch'
 import { recordAgiKvittenser } from './lib/agi-kvittens-history'
 import { readAgiSubmissionStatus } from './lib/agi-submission-status'
 import {
@@ -2086,15 +2087,33 @@ export const skatteverketExtension: Extension = {
             // Pin the receipt to the most recent declaration for this period
             // so a correction chain doesn't get its kvittens written onto a
             // superseded row.
-            const { data: latest } = await ctx.supabase
-              .from('agi_declarations')
-              .select('id, salary_run_id, status')
-              .eq('company_id', ctx.companyId)
-              .eq('period_year', periodYear)
-              .eq('period_month', periodMonth)
-              .order('created_at', { ascending: false })
-              .limit(1)
-              .maybeSingle()
+            // salary_run_ids only where a declaration can have it (several
+            // runs in one month): elsewhere the read is the one it always was.
+            const latestRead = isSalaryExtraRunsEnabled(ctx.companyId)
+              ? await ctx.supabase
+                  .from('agi_declarations')
+                  .select('id, salary_run_id, salary_run_ids, status')
+                  .eq('company_id', ctx.companyId)
+                  .eq('period_year', periodYear)
+                  .eq('period_month', periodMonth)
+                  .order('created_at', { ascending: false })
+                  .limit(1)
+                  .maybeSingle()
+              : await ctx.supabase
+                  .from('agi_declarations')
+                  .select('id, salary_run_id, status')
+                  .eq('company_id', ctx.companyId)
+                  .eq('period_year', periodYear)
+                  .eq('period_month', periodMonth)
+                  .order('created_at', { ascending: false })
+                  .limit(1)
+                  .maybeSingle()
+            const latest = latestRead.data as {
+              id: string
+              salary_run_id: string | null
+              salary_run_ids?: string[] | null
+              status: string
+            } | null
 
             // The declaration's own receipt, never an earlier filing's of the
             // month (declarationKvittens): the same pick the cron makes.
@@ -2211,7 +2230,18 @@ export const skatteverketExtension: Extension = {
                   })
                   .eq('id', latest.id)
 
-                if (latest.salary_run_id) {
+                // Every run a month summed over several runs covers.
+                const filedIds = filedRunIds(
+                  (latest.salary_run_id as string | null) ?? null,
+                  latest.salary_run_ids as string[] | null | undefined,
+                )
+                if (filedIds.length > 1) {
+                  await ctx.supabase
+                    .from('salary_runs')
+                    .update({ agi_submitted_at: submittedAt })
+                    .in('id', filedIds)
+                    .eq('company_id', ctx.companyId)
+                } else if (latest.salary_run_id) {
                   await ctx.supabase
                     .from('salary_runs')
                     .update({ agi_submitted_at: submittedAt })

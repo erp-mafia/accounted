@@ -12926,6 +12926,9 @@
     "start_run_for_period": "Starta lönekörning {period}",
     "start_run_choice_payout": "Utbetalning {date} · AGI för {agi_period}",
     "start_run_choice_exists": "Lönekörningen finns redan",
+    "start_extra_run_for_period": "Extra lönekörning {period}",
+    "start_extra_run_choice": "För anställda som inte är med i månadens andra körningar",
+    "run_period_extra": "{period}, körning {number}",
     "run_exists_opening": "Öppnar den befintliga lönekörningen.",
     "start_run_failed": "Lönekörningen kunde inte startas",
     "employees_load_failed": "Kunde inte ladda de anställda",
@@ -12966,6 +12969,7 @@
   },
   "salary_run": {
     "title": "Lönekörning {period}",
+    "title_extra": "Lönekörning {period}, körning {number}",
     "payment_date_label": "Utbetalning",
     "payment_date_edit_aria": "Ändra utbetalningsdag",
     "agi_period_note": "AGI redovisas för {period} (utbetalningsmånaden)",

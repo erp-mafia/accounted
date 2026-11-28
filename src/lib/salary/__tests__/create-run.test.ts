@@ -1,10 +1,14 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import {
   createSalaryRunWithEmployees,
   resolveSalaryRunSeries,
+  SalaryExtraRunError,
   SalaryRunExistsError,
 } from '../create-run'
+
+/** The rollout as the environment had it, restored after each test that sets it. */
+const rolloutBefore = process.env.SALARY_EXTRA_RUNS_COMPANY_IDS
 
 const mockEmit = vi.hoisted(() => vi.fn())
 vi.mock('@/lib/events', () => ({ eventBus: { emit: (...a: unknown[]) => mockEmit(...a) } }))
@@ -19,7 +23,7 @@ const STANDARD_SETTINGS = {
 function chain(result: { data?: unknown; error?: unknown }) {
   const promise = Promise.resolve({ data: null, error: null, ...result })
   const c: Record<string, unknown> = {}
-  for (const m of ['select', 'eq', 'neq', 'gte', 'lte', 'order', 'limit', 'in']) {
+  for (const m of ['select', 'eq', 'neq', 'gte', 'lte', 'order', 'limit', 'in', 'or', 'range']) {
     c[m] = () => c
   }
   c.single = () => promise
@@ -40,6 +44,8 @@ function mockDb(opts: {
   settings?: Record<string, unknown> | null
   /** Live runs the overlap guard sees. */
   existingRuns?: Array<Record<string, unknown>>
+  /** Roster rows of the other runs (several runs in one month). */
+  siblingRoster?: Array<Record<string, unknown>>
 }) {
   const inserts: Record<string, Array<Record<string, unknown>>> = {}
   const deletes: string[] = []
@@ -48,6 +54,7 @@ function mockDb(opts: {
     if (table === 'employees') return { data: opts.employees ?? [] }
     if (table === 'company_settings') return { data: opts.settings ?? null }
     if (table === 'salary_runs') return { data: opts.existingRuns ?? [] }
+    if (table === 'salary_run_employees') return { data: opts.siblingRoster ?? [] }
     return { data: null }
   }
 
@@ -405,5 +412,104 @@ describe('duplicate period (23505)', () => {
         paymentDate: '2026-06-25',
       }),
     ).rejects.toThrow('Salary run already exists for this period')
+  })
+})
+
+describe('an extra run (several runs in one month)', () => {
+  const hourlyEmployee = { ...monthlyEmployee, id: 'emp-hourly', salary_type: 'hourly', monthly_salary: null }
+  // The period's run, paying the hourly staff on the 5th.
+  const periodRun = {
+    id: 'run-1',
+    status: 'booked',
+    period_year: 2026,
+    period_month: 11,
+    run_number: 1,
+    payment_date: '2026-11-05',
+    deviation_period_start: '2026-11-01',
+    deviation_period_end: '2026-11-30',
+    corrects_run_id: null,
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockEmit.mockResolvedValue(undefined)
+    process.env.SALARY_EXTRA_RUNS_COMPANY_IDS = 'company-1'
+  })
+
+  afterEach(() => {
+    if (rolloutBefore === undefined) delete process.env.SALARY_EXTRA_RUNS_COMPANY_IDS
+    else process.env.SALARY_EXTRA_RUNS_COMPANY_IDS = rolloutBefore
+  })
+
+  it("takes the period's next number, shares its window, and seeds only the employees no other run pays", async () => {
+    const { client, inserts } = mockDb({
+      employees: [hourlyEmployee, monthlyEmployee],
+      existingRuns: [periodRun],
+      siblingRoster: [{ employee_id: 'emp-hourly', salary_run_id: 'run-1' }],
+    })
+
+    const created = await createSalaryRunWithEmployees(client, 'company-1', 'user-1', {
+      periodYear: 2026,
+      periodMonth: 11,
+      paymentDate: '2026-11-26',
+      extraRun: true,
+    })
+
+    expect(inserts.salary_runs[0]).toMatchObject({ run_number: 2, payment_date: '2026-11-26' })
+    expect(inserts.salary_run_employees.map((row) => row.employee_id)).toEqual(['emp-1'])
+    expect(created.employeeCount).toBe(1)
+  })
+
+  it('refuses an extra run for a company outside the list, before writing anything', async () => {
+    delete process.env.SALARY_EXTRA_RUNS_COMPANY_IDS
+    const { client, inserts } = mockDb({ employees: [monthlyEmployee], existingRuns: [periodRun] })
+
+    await expect(
+      createSalaryRunWithEmployees(client, 'company-1', 'user-1', {
+        periodYear: 2026,
+        periodMonth: 11,
+        paymentDate: '2026-11-26',
+        extraRun: true,
+      }),
+    ).rejects.toMatchObject({ name: 'SalaryExtraRunError', reason: 'not_enabled', code: 'SALARY_EXTRA_RUN_UNAVAILABLE' })
+    expect(inserts.salary_runs).toBeUndefined()
+  })
+
+  it('refuses an extra run for a company that calculates regionalt stöd', async () => {
+    const { client, inserts } = mockDb({
+      employees: [monthlyEmployee],
+      existingRuns: [periodRun],
+      settings: { salary_regional_support: true },
+    })
+
+    const attempt = createSalaryRunWithEmployees(client, 'company-1', 'user-1', {
+      periodYear: 2026,
+      periodMonth: 11,
+      paymentDate: '2026-11-26',
+      extraRun: true,
+    })
+    await expect(attempt).rejects.toBeInstanceOf(SalaryExtraRunError)
+    await expect(attempt).rejects.toMatchObject({ reason: 'regional_support' })
+    expect(inserts.salary_runs).toBeUndefined()
+  })
+
+  it("seeds an ordinary run without the employees another run of its payout month pays", async () => {
+    // The October run paid on 5 November has the hourly staff: November's
+    // ordinary run, paid on the 26th, seeds the monthly staff only.
+    const octoberRun = { ...periodRun, id: 'run-oct', period_month: 10, run_number: 2, deviation_period_start: '2026-10-01', deviation_period_end: '2026-10-31' }
+    const { client, inserts } = mockDb({
+      employees: [hourlyEmployee, monthlyEmployee],
+      existingRuns: [octoberRun],
+      siblingRoster: [{ employee_id: 'emp-hourly', salary_run_id: 'run-oct' }],
+    })
+
+    await createSalaryRunWithEmployees(client, 'company-1', 'user-1', {
+      periodYear: 2026,
+      periodMonth: 11,
+      paymentDate: '2026-11-26',
+    })
+
+    expect(inserts.salary_runs[0]).not.toHaveProperty('run_number')
+    expect(inserts.salary_run_employees.map((row) => row.employee_id)).toEqual(['emp-1'])
   })
 })

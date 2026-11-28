@@ -12926,6 +12926,9 @@
     "start_run_for_period": "Start payroll run {period}",
     "start_run_choice_payout": "Payout {date} · AGI for {agi_period}",
     "start_run_choice_exists": "This month already has a payroll run",
+    "start_extra_run_for_period": "Extra payroll run {period}",
+    "start_extra_run_choice": "For employees not on the month's other runs",
+    "run_period_extra": "{period}, run {number}",
     "run_exists_opening": "Opening the existing payroll run.",
     "start_run_failed": "Could not start the payroll run",
     "employees_load_failed": "Could not load the employees",
@@ -12966,6 +12969,7 @@
   },
   "salary_run": {
     "title": "Payroll run {period}",
+    "title_extra": "Payroll run {period}, run {number}",
     "payment_date_label": "Payment",
     "payment_date_edit_aria": "Change payment date",
     "agi_period_note": "AGI is declared for {period} (the payout month)",

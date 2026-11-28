@@ -61,6 +61,7 @@ import {
   type SalaryRunRow,
 } from '@/lib/salary/salary-entries'
 import { syncVacationLedgerForEmployees } from '@/lib/salary/vacation-ledger'
+import { loadMonthAvgifterContext, type MonthContextRun } from '@/lib/salary/extra-runs'
 import { runRemeasuresVacationLiability } from '@/lib/salary/vacation-liability-method'
 import { refreshRunYtd } from '@/lib/salary/ytd'
 import { validateRunForApproval, type ApprovalRosterRow } from '@/lib/salary/approve-run'
@@ -469,12 +470,13 @@ async function bookClaimedRun(
   // Rows -> engine input through the same mapper the journal preview route
   // uses (overrides, F-skatt avgifter rules, dimensions all live there), so
   // the voucher the user approved on screen is the voucher that posts.
-  const vouchers = await createSalaryRunEntries(
-    supabase,
-    companyId,
-    userId,
-    salaryRunDataFromRows(run as unknown as SalaryRunRow, roster),
-  )
+  const runData = salaryRunDataFromRows(run as unknown as SalaryRunRow, roster)
+  // A month with several runs: 2731 takes this run's share of the month's
+  // declared avgift (loadMonthAvgifterContext). Unread, nothing is posted.
+  const month = await loadMonthAvgifterContext(supabase, companyId, run as unknown as MonthContextRun)
+  if (!month.ok) return { ok: false, code: 'SALARY_RUN_BOOK_FAILED', dbError: month.error }
+  if (month.context) runData.month_avgifter = month.context
+  const vouchers = await createSalaryRunEntries(supabase, companyId, userId, runData)
 
   const flipped = await markClaimedRunBooked(supabase, args, claimId, vouchers)
   if (!flipped.ok) return flipped

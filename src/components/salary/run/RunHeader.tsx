@@ -294,7 +294,11 @@ export function RunHeader({
           where we are, so there is no back link. */}
       <RecordHeader
         parent={{ label: tNav('v2_salary_runs'), href: '/salary' }}
-        title={t('title', { period: periodLabel })}
+        title={
+          (run.run_number ?? 1) > 1
+            ? t('title_extra', { period: periodLabel, number: run.run_number ?? 1 })
+            : t('title', { period: periodLabel })
+        }
         status={statusChips}
         facts={runFacts}
         actions={<>

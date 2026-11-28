@@ -32,6 +32,7 @@ vi.mock('@/lib/deadlines/complete-tax-deadline', () => ({
 
 import {
   declarationKvittens,
+  filedRunIds,
   newestAgiKvittens,
   reconcileAgiDeclaration,
   promoteAgiDeclaration,
@@ -76,10 +77,12 @@ function makeSupabase(opts: {
   const claimStatuses: unknown[] = []
   const recorded: Array<{ rows: unknown[]; options: unknown }> = []
   const updates: Array<{ table: string; values: any }> = []
+  const stampedIds: unknown[] = []
   return {
     claimStatuses,
     recorded,
     updates,
+    stampedIds,
     supabase: {
       from(table: string) {
         let op: 'read' | 'mutate' = 'read'
@@ -93,6 +96,7 @@ function makeSupabase(opts: {
         }))
         chain.in = vi.fn((column: string, values: unknown) => {
           if (table === 'agi_declarations' && column === 'status') claimStatuses.push(values)
+          if (table === 'salary_runs' && column === 'id') stampedIds.push(values)
           return chain
         })
         chain.update = vi.fn((values: unknown) => {
@@ -446,6 +450,22 @@ describe('promoteAgiDeclaration: the interactive check shares the claim', () => 
     expect(mockCompleteTaxDeadline).not.toHaveBeenCalled()
   })
 
+  it("files every run a month's summed declaration covers", async () => {
+    const { supabase, stampedIds, updates } = makeSupabase({
+      claim: { data: [{ id: DECL.id, salary_run_ids: [DECL.salary_run_id, 'run-sibling'] }] },
+    })
+
+    const outcome = await promoteAgiDeclaration(supabase, DECL, kvittens, {
+      reconciledBy: 'interactive',
+      submittedBy: 'user-9',
+      notifyUserId: null,
+    })
+
+    expect(outcome).toEqual({ status: 'signed', kvittensnummer: 'uuid-1' })
+    expect(stampedIds).toEqual([[DECL.salary_run_id, 'run-sibling']])
+    expect(updates.find((u) => u.table === 'salary_runs')?.values).toEqual({ agi_submitted_at: expect.any(String) })
+  })
+
   it('refuses a kvittens without a number', async () => {
     const { supabase, mutatedTables } = makeSupabase()
 
@@ -566,5 +586,59 @@ describe('newestAgiKvittens', () => {
     expect(newestAgiKvittens([untimed, { uuidKvittens: 'd' }] as any)).toBe(untimed)
     expect(newestAgiKvittens([unnumbered] as any)).toBeNull()
     expect(newestAgiKvittens(undefined)).toBeNull()
+  })
+})
+
+describe('filedRunIds', () => {
+  it('is the holder alone for a one-run declaration, and every covered run of a summed month once', () => {
+    expect(filedRunIds('run-a', null)).toEqual(['run-a'])
+    expect(filedRunIds('run-a', ['run-a', 'run-b'])).toEqual(['run-a', 'run-b'])
+    expect(filedRunIds(null, undefined)).toEqual([])
+  })
+})
+
+describe('declarationKvittens: a month summed over several runs', () => {
+  const ORIGINAL = { uuidKvittens: 'k-original', signeradAv: '191212121212', signeradTid: '2026-12-02T09:00:00Z' }
+  const RATTELSE = { uuidKvittens: 'k-rattelse', signeradAv: '191212121212', signeradTid: '2026-12-08T14:00:00Z' }
+  const rolloutBefore = process.env.SALARY_EXTRA_RUNS_COMPANY_IDS
+
+  beforeEach(() => {
+    process.env.SALARY_EXTRA_RUNS_COMPANY_IDS = 'company-1'
+  })
+
+  afterEach(() => {
+    if (rolloutBefore === undefined) delete process.env.SALARY_EXTRA_RUNS_COMPANY_IDS
+    else process.env.SALARY_EXTRA_RUNS_COMPANY_IDS = rolloutBefore
+  })
+
+  // The month's rättelse is held by the run whose own filing it corrects
+  // (whichever run generates last holds the row): that run's stamp is the
+  // earlier filing the rättelse's kvittens must be newer than.
+  function db(filed: Array<{ agi_submitted_at: string }>) {
+    const calls: Array<{ method: string; args: unknown[] }> = []
+    const chain: any = {}
+    for (const method of ['select', 'eq', 'neq', 'gte', 'lte', 'not']) {
+      chain[method] = vi.fn((...args: unknown[]) => {
+        calls.push({ method, args })
+        return chain
+      })
+    }
+    chain.maybeSingle = vi.fn(async () => ({ data: { period_year: 2026, period_month: 11, payment_date: '2026-11-05' }, error: null }))
+    chain.then = (resolve: (v: unknown) => void) => resolve({ data: filed, error: null })
+    return { supabase: { from: () => chain } as any, calls }
+  }
+
+  it("reads the holder's own filing, and keeps the rättelse pending on the original's kvittens alone", async () => {
+    const { supabase, calls } = db([{ agi_submitted_at: '2026-12-02T09:00:00+00:00' }])
+    const result = await declarationKvittens(supabase, 'company-1', 'run-a', [ORIGINAL] as any)
+    expect(result).toEqual({ ok: true, kvittens: null })
+    expect(calls.filter((c) => c.method === 'neq')).toEqual([])
+    expect(calls).toContainEqual({ method: 'gte', args: ['payment_date', '2026-11-01'] })
+  })
+
+  it("promotes the rättelse on its own, newer kvittens", async () => {
+    const { supabase } = db([{ agi_submitted_at: '2026-12-02T09:00:00+00:00' }])
+    const result = await declarationKvittens(supabase, 'company-1', 'run-a', [ORIGINAL, RATTELSE] as any)
+    expect(result).toMatchObject({ ok: true, kvittens: { uuidKvittens: 'k-rattelse' } })
   })
 })

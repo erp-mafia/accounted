@@ -5,7 +5,7 @@
  * check, duplicate 409, snapshot semantics, base-line seeding with roundOre.
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import {
@@ -14,6 +14,9 @@ import {
   removeEmployeeFromRun,
   setRunEmployeeSalary,
 } from '@/lib/salary/run-employees'
+
+/** The rollout as the environment had it, restored after each test that sets it. */
+const rolloutBefore = process.env.SALARY_EXTRA_RUNS_COMPANY_IDS
 
 // The step every input write takes has its own suite (invalidate-calculation.test.ts).
 vi.mock('@/lib/salary/invalidate-calculation', async (original) => ({
@@ -801,5 +804,64 @@ describe('setRunEmployeeSalary', () => {
     }
     const fromCalls = (mock.supabase.from as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0])
     expect(fromCalls).toEqual(['salary_runs', 'salary_run_employees'])
+  })
+})
+
+describe('addEmployeeToRun: several runs in one month', () => {
+  const OTHER_RUN = {
+    id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+    status: 'booked',
+    period_year: 2026,
+    period_month: 10,
+    payment_date: '2026-11-05',
+    run_number: 2,
+    corrects_run_id: null,
+  }
+  const DRAFT = { id: RUN_ID, status: 'draft', period_year: 2026, period_month: 11, payment_date: '2026-11-26', corrects_run_id: null }
+
+  beforeEach(() => {
+    process.env.SALARY_EXTRA_RUNS_COMPANY_IDS = COMPANY_ID
+  })
+
+  afterEach(() => {
+    if (rolloutBefore === undefined) delete process.env.SALARY_EXTRA_RUNS_COMPANY_IDS
+    else process.env.SALARY_EXTRA_RUNS_COMPANY_IDS = rolloutBefore
+  })
+
+  it('refuses an employee another run of the payout month already pays, naming that run', async () => {
+    mock.enqueue({ data: DRAFT })
+    mock.enqueue({ data: MONTHLY_EMPLOYEE })
+    mock.enqueue({ data: null }) // not on this run
+    mock.enqueue({ data: [OTHER_RUN] }) // the period's and payout month's other runs
+    mock.enqueue({ data: [{ employee_id: EMPLOYEE_ID, salary_run_id: OTHER_RUN.id }] })
+
+    const result = await addEmployeeToRun(supabase, { companyId: COMPANY_ID, salaryRunId: RUN_ID, employeeId: EMPLOYEE_ID })
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: 'SALARY_RUN_EMPLOYEE_IN_OTHER_RUN',
+      details: {
+        employee_ids: [EMPLOYEE_ID],
+        other_salary_run_id: OTHER_RUN.id,
+        other_run_period: '2026-10',
+        other_run_number: 2,
+        other_payment_date: '2026-11-05',
+      },
+    })
+    expect(mock.findCall('salary_run_employees', 'insert')).toBeUndefined()
+  })
+
+  it('attaches an employee no other run of the month has', async () => {
+    mock.enqueue({ data: DRAFT })
+    mock.enqueue({ data: MONTHLY_EMPLOYEE })
+    mock.enqueue({ data: null })
+    mock.enqueue({ data: [OTHER_RUN] })
+    mock.enqueue({ data: [] }) // the other run pays someone else
+    mock.enqueue({ data: { id: SRE_ID } }) // salary_run_employees insert
+    mock.enqueue({ data: null }) // base line insert
+
+    const result = await addEmployeeToRun(supabase, { companyId: COMPANY_ID, salaryRunId: RUN_ID, employeeId: EMPLOYEE_ID })
+
+    expect(result.ok).toBe(true)
   })
 })

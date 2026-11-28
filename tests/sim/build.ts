@@ -133,6 +133,9 @@ export async function buildSimCompany(plan: SimPlan, key: AnswerKey, options: Bu
   const { supabase, userId, until, onProgress } = options
   const started = performance.now()
   installSimClock()
+  // The company pays one month in two runs (generate.ts, earlyPay): several
+  // runs in one month are switched on for it.
+  process.env.SALARY_EXTRA_RUNS_COMPANY_IDS = '*'
   setSimDay(SIM_COMPANY.firstDay)
   await ensurePayrollYears(supabase)
   const companyId = await createCompany(supabase, userId)
@@ -203,12 +206,28 @@ export async function buildSimCompany(plan: SimPlan, key: AnswerKey, options: Bu
     const committed = await doors.approve('gnubok_create_transactions', stagedRows.operations[0].operation_id)
     return committed.transaction_id
   }
-  const voucher = (date: string, description: string, lines: Array<Record<string, unknown>>) =>
-    doors.write('gnubok_create_voucher', { entry_date: date, description, lines })
+  const voucher = (
+    date: string,
+    description: string,
+    lines: Array<Record<string, unknown>>,
+    acknowledged: string[] = [],
+  ) =>
+    doors.write('gnubok_create_voucher', {
+      entry_date: date,
+      description,
+      lines,
+      ...(acknowledged.length > 0 ? { acknowledged_warnings: acknowledged } : {}),
+    })
   /** Every krona on 1930 has its bank row, so the bank and the ledger can be compared to the öre. */
-  const bankVoucher = async (date: string, description: string, amount: number, otherLines: Array<Record<string, unknown>>) => {
+  const bankVoucher = async (
+    date: string,
+    description: string,
+    amount: number,
+    otherLines: Array<Record<string, unknown>>,
+    acknowledged: string[] = [],
+  ) => {
     const bankLine = amount > 0 ? { debit_amount: amount } : { credit_amount: -amount }
-    const posted = await voucher(date, description, [...otherLines, { account_number: '1930', ...bankLine }])
+    const posted = await voucher(date, description, [...otherLines, { account_number: '1930', ...bankLine }], acknowledged)
     await linkBankRow(date, amount, description, posted.journal_entry_id)
     return posted
   }
@@ -307,9 +326,15 @@ export async function buildSimCompany(plan: SimPlan, key: AnswerKey, options: Bu
       }
       case 'purchase_payment': {
         const invoice = supplierInvoices.get(event.purchaseId)!
-        const posted = await bankVoucher(event.date, `Betalning leverantörsfaktura ${event.purchaseId}`, -invoice.gross, [
-          { account_number: '2440', debit_amount: invoice.gross },
-        ])
+        // The verifikat settles the open invoice it is linked to just below,
+        // which the person confirms when asked (OPEN_INVOICE_COVERS_POSTING).
+        const posted = await bankVoucher(
+          event.date,
+          `Betalning leverantörsfaktura ${event.purchaseId}`,
+          -invoice.gross,
+          [{ account_number: '2440', debit_amount: invoice.gross }],
+          ['OPEN_INVOICE_COVERS_POSTING'],
+        )
         await doors.write('gnubok_link_supplier_invoice_to_voucher', {
           supplier_invoice_id: invoice.id,
           journal_entry_id: posted.journal_entry_id,
@@ -379,6 +404,46 @@ export async function buildSimCompany(plan: SimPlan, key: AnswerKey, options: Bu
         })
         return
       case 'payroll': {
+        if (event.earlyPay) {
+          // Several runs in one month: the early run pays one employee, and
+          // the payday's extra run everyone else (lib/salary/extra-runs.ts).
+          const early = await doors.write('gnubok_create_salary_run', {
+            period_year: event.year,
+            period_month: event.month,
+            payment_date: event.earlyPay.date,
+          })
+          const earlyId = early.salary_run_id ?? early.id
+          const seeded = await doors.call('gnubok_get_salary_run', { salary_run_id: earlyId })
+          const earlyEmployee = employees.get(event.earlyPay.employee)
+          for (const row of seeded.employees as Array<{ employee_id: string }>) {
+            if (row.employee_id === earlyEmployee) continue
+            await doors.write('gnubok_remove_salary_run_employee', { salary_run_id: earlyId, employee_id: row.employee_id })
+          }
+          await doors.call('gnubok_calculate_salary_run', { salary_run_id: earlyId })
+          const earlyBooked = await doors.write('gnubok_book_salary_run', { salary_run_id: earlyId })
+          const earlyRun = await doors.call('gnubok_get_salary_run', { salary_run_id: earlyId })
+          await linkBankRow(
+            event.earlyPay.date,
+            -Number(earlyRun.total_net),
+            `Löner ${monthKey(event.year, event.month)} körning 1`,
+            earlyBooked.journal_entry_ids[0],
+          )
+
+          const rest = await doors.write('gnubok_create_salary_run', {
+            period_year: event.year,
+            period_month: event.month,
+            payment_date: event.date,
+            extra_run: true,
+          })
+          const restId = rest.salary_run_id ?? rest.id
+          await doors.call('gnubok_calculate_salary_run', { salary_run_id: restId })
+          const restBooked = await doors.write('gnubok_book_salary_run', { salary_run_id: restId })
+          await doors.write('gnubok_generate_agi', { salary_run_id: restId })
+          const restRun = await doors.call('gnubok_get_salary_run', { salary_run_id: restId })
+          await linkBankRow(event.date, -Number(restRun.total_net), `Löner ${monthKey(event.year, event.month)} körning 2`, restBooked.journal_entry_ids[0])
+          salaryRuns[monthKey(event.year, event.month)] = restId
+          return
+        }
         const run = await doors.write('gnubok_create_salary_run', {
           period_year: event.year,
           period_month: event.month,

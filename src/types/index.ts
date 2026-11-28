@@ -5392,6 +5392,8 @@ export interface SalaryRun {
   notes: string | null
   is_correction: boolean
   corrects_run_id: string | null
+  /** The run's number in its period: 1 for the ordinary run, 2 and up for an extra run (migration 20261128090000). */
+  run_number?: number
   // Payslip sections the employee copy was issued with (migration
   // 20260930200000). All null until the payslips first go to employees;
   // written once (lib/salary/payslips/section-snapshot).

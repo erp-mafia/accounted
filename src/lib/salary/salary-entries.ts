@@ -38,8 +38,10 @@ import { isTextRow } from './text-rows'
 import { isBenefitItemType } from './benefit-payments'
 import {
   computeDeclaredAvgifterWithOverrides,
+  declaredAvgifterRowsForRun,
   isFSkattStatus,
   resolveDeclaredAvgifterParams,
+  type DeclaredAvgifterRunRow,
 } from './declared-avgifter'
 import { calculateLoneVaxlingPensionProvision } from './lonevaxling'
 import { computeRegionalSupport, regionalSupportEnabled } from './regional-support'
@@ -119,6 +121,30 @@ export interface SalaryRunData {
   total_vacation_accrual: number
   calculation_params?: Record<string, unknown> | null
   employees: SalaryRunEmployee[]
+  /** An extra run of its period (several runs in one month): 2 and up. Absent for the ordinary run. */
+  run_number?: number
+  /**
+   * The payout month's other booked runs, for a company with several runs in
+   * one month (loadMonthAvgifterContext, extra-runs.ts): the 2731 liability
+   * then takes this run's share of the month's declared avgift.
+   */
+  month_avgifter?: MonthAvgifterContext | null
+}
+
+/**
+ * The other booked runs of the payout month whose pay the month's one AGI
+ * sums with this run's. Skatteverket drops öre once per sats on the month's
+ * summed underlag (declared-avgifter.ts), so the runs' own declared amounts
+ * can add up to a krona per sats below what it draws; each run books the
+ * month's declared avgift with it less what the month's other runs posted on
+ * 2731, and the month's 2731 credits add up to what the AGI declares, also
+ * after one of the runs is corrected.
+ */
+export interface MonthAvgifterContext {
+  /** Roster rows of the month's other booked runs, as stored. */
+  otherRows: DeclaredAvgifterRunRow[]
+  /** What those runs' avgifter verifikat posted on 2731 (credit less debit). */
+  otherPostedLiability: number
 }
 
 /** The salary_runs columns the run input reads. */
@@ -134,6 +160,7 @@ export interface SalaryRunRow {
   total_avgifter: number
   total_vacation_accrual: number
   calculation_params?: Record<string, unknown> | null
+  run_number?: number | null
 }
 
 /**
@@ -199,6 +226,7 @@ export function salaryRunDataFromRows(run: SalaryRunRow, roster: SalaryRosterRow
     // The exact payroll-rate snapshot approved with this run: reading current
     // config here could change SLP between calculation and booking.
     calculation_params: run.calculation_params ?? null,
+    ...(run.run_number != null && run.run_number > 1 ? { run_number: run.run_number } : {}),
     employees: roster.map((sre) => {
       const fSkatt = isFSkattStatus(sre.employee?.f_skatt_status)
       const taxWithheld = sre.tax_withheld_override ?? sre.tax_withheld
@@ -232,9 +260,14 @@ export function salaryRunDataFromRows(run: SalaryRunRow, roster: SalaryRosterRow
   }
 }
 
-/** Voucher description shared by the booking and the preview: "Lön YYYY-MM". */
-export function salaryRunDescription(run: Pick<SalaryRunRow, 'period_year' | 'period_month'>): string {
-  return `Lön ${run.period_year}-${String(run.period_month).padStart(2, '0')}`
+/**
+ * Voucher description shared by the booking and the preview: "Lön YYYY-MM",
+ * and "Lön YYYY-MM, körning N" for an extra run of the period, so the
+ * verifikat of a month's runs tell the runs apart.
+ */
+export function salaryRunDescription(run: Pick<SalaryRunRow, 'period_year' | 'period_month' | 'run_number'>): string {
+  const period = `Lön ${run.period_year}-${String(run.period_month).padStart(2, '0')}`
+  return run.run_number != null && run.run_number > 1 ? `${period}, körning ${run.run_number}` : period
 }
 
 function resolveLoneVaxlingPension(run: SalaryRunData): SalaryRunData {
@@ -928,6 +961,11 @@ function bucketByEmployeeDimensions(
  * declaration and the payment stay one number, and colleagues of an
  * overridden employee keep their SKV-exact declared amounts.
  *
+ * A run of a month with several runs (month_avgifter) books its share of the
+ * month's declared avgift instead: the month's declared avgift with it less
+ * the month's without it. The share can pass the run's own declared amount
+ * by a krona per sats, so its remainder may then be a small debit on 3740.
+ *
  * Exported so the journal preview route computes the identical split.
  */
 export function splitAvgifterLiability(
@@ -943,6 +981,7 @@ export function splitAvgifterLiability(
       >
     >
     calculation_params?: Record<string, unknown> | null
+    month_avgifter?: MonthAvgifterContext | null
   },
   roundedAvgifter: number,
 ): { liabilityAvgifter: number; oresutjamning: number } {
@@ -957,26 +996,35 @@ export function splitAvgifterLiability(
   if (!haveInputs) {
     return { liabilityAvgifter: roundedAvgifter, oresutjamning: 0 }
   }
-  const declared = computeDeclaredAvgifterWithOverrides(
-    run.employees.map((e) => ({
-      basis: e.avgifter_basis ?? 0,
-      rate: e.avgifter_rate,
-      category: e.avgifter_category ?? null,
-      overrideAmount: e.avgifter_amount_overridden === true ? e.avgifter_amount : null,
-    })),
-    resolveDeclaredAvgifterParams(run.calculation_params),
-  )
-  const remainder = roundOre(roundedAvgifter - declared.totalAmount)
+  const params = resolveDeclaredAvgifterParams(run.calculation_params)
+  const ownRows = run.employees.map((e) => ({
+    basis: e.avgifter_basis ?? 0,
+    rate: e.avgifter_rate,
+    category: e.avgifter_category ?? null,
+    overrideAmount: e.avgifter_amount_overridden === true ? e.avgifter_amount : null,
+  }))
+  const declared = computeDeclaredAvgifterWithOverrides(ownRows, params)
+  let liability = declared.totalAmount
+  // Each truncation cell the month's other runs share with this one can move
+  // the share by under a krona: at most one per sats and category.
+  let monthDrift = 0
+  if (run.month_avgifter && run.month_avgifter.otherRows.length > 0) {
+    const otherRows = declaredAvgifterRowsForRun(run.month_avgifter.otherRows)
+    const together = computeDeclaredAvgifterWithOverrides([...otherRows, ...ownRows], params).totalAmount
+    liability = roundOre(together - run.month_avgifter.otherPostedLiability)
+    monthDrift = 3
+  }
+  const remainder = roundOre(roundedAvgifter - liability)
   // Per-IU truncation loses under 1 kr per employee and each truncation cell
   // strictly under 1 kr more; a remainder outside this band means the
   // roster's stored amounts diverge from its underlag (corrupt or legacy
   // data), and the entry keeps the öre-exact liability rather than
   // manufacturing a fake utjämning.
   const maxTruncationDrift = run.employees.length + 2
-  if (remainder < 0 || remainder >= maxTruncationDrift) {
+  if (remainder < -monthDrift || remainder >= maxTruncationDrift) {
     return { liabilityAvgifter: roundedAvgifter, oresutjamning: 0 }
   }
-  return { liabilityAvgifter: declared.totalAmount, oresutjamning: remainder }
+  return { liabilityAvgifter: liability, oresutjamning: remainder }
 }
 
 /**
@@ -1071,7 +1119,18 @@ function buildAvgifterLines(run: SalaryRunData, desc: string): CreateJournalEntr
             line_description: `${desc}: Öres- och kronutjämning`,
           } satisfies CreateJournalEntryLineInput,
         ]
-      : []),
+      : oresutjamning < 0
+        ? [
+            // A month with several runs: this run's share of the month's
+            // declared avgift passed its own öre-exact cost.
+            {
+              account_number: SALARY_ACCOUNTS.ORESUTJAMNING,
+              debit_amount: roundOre(-oresutjamning),
+              credit_amount: 0,
+              line_description: `${desc}: Öres- och kronutjämning`,
+            } satisfies CreateJournalEntryLineInput,
+          ]
+        : []),
     ...(regionalDeduction > 0
       ? [
           {

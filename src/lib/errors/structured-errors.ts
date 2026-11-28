@@ -8429,6 +8429,34 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     message_sv: 'En lönekörning för perioden finns redan.',
     message_en: 'A salary run for that period already exists.',
   },
+  // Several runs in one month (SALARY_EXTRA_RUNS_COMPANY_IDS, lib/salary/extra-runs.ts).
+  SALARY_EXTRA_RUN_UNAVAILABLE: {
+    httpStatus: 409,
+    message_sv:
+      'En extra lönekörning i samma månad går inte att skapa för det här företaget: flera lönekörningar i en månad är inte påslaget, eller så räknar företaget med regionalt stöd.',
+    message_en:
+      'An extra salary run in the same month cannot be created for this company: several runs in one month are not switched on, or the company calculates regionalt stöd.',
+    remediation: {
+      description:
+        "details.reason is not_enabled (the company is not in the rollout; create no extra run, put every employee in the period's run) or regional_support (the reduction's monthly cap cannot be shared by several runs yet).",
+    },
+  },
+  SALARY_RUN_EMPLOYEE_IN_OTHER_RUN: {
+    httpStatus: 409,
+    message_sv:
+      'Den anställda finns redan i en annan lönekörning med samma utbetalningsmånad eller period. En anställd kan vara med i en lönekörning per utbetalningsmånad och period.',
+    message_en:
+      'The employee is already on another salary run with the same payout month or period. An employee can be on one salary run per payout month and period.',
+    remediation: {
+      description:
+        'details.other_salary_run_id names the run that has the employee (details.employee_ids). Remove the employee from that run first, or pay the employee in that run. The same person on several runs of one month is not supported.',
+    },
+  },
+  SALARY_RUN_SEVERAL_IN_PERIOD: {
+    httpStatus: 409,
+    message_sv: 'Perioden har flera lönekörningar. Ange vilken med salary_run_id.',
+    message_en: 'The period has several salary runs. Name the one you mean with salary_run_id.',
+  },
   SALARY_RUN_UNDERLAG_NOT_BOOKED: {
     httpStatus: 409,
     message_sv: 'Bokföringsunderlaget skapas när lönekörningen är bokförd.',
@@ -8681,6 +8709,19 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     remediation: {
       description:
         "details.other_salary_run_id (and details.other_runs) name the other runs paid out in details.period. Do not generate or submit the AGI for one of them alone: it would declare only that run, and a second declaration for the month does not add to the first (an individuppgift with the same specifikationsnummer replaces the earlier one). Tell the user to file the month in Skatteverket's e-service with the runs' combined figures.",
+    },
+  },
+  // A company with several runs in one month (SALARY_EXTRA_RUNS_COMPANY_IDS)
+  // whose month's runs cannot be summed into one declaration.
+  AGI_MONTH_RUNS_NOT_COMBINED: {
+    httpStatus: 409,
+    message_sv:
+      'Lönekörningarna med utbetalning i månaden går inte att summera till en arbetsgivardeklaration som de är: en anställd finns i två av dem, de är beräknade med olika avgiftssatser eller med regionalt stöd, en rättelse av en av dem är inte beräknad, eller månadens deklaration väntar på signering hos Skatteverket.',
+    message_en:
+      "The salary runs paid out in the month cannot be summed into one employer declaration as they are: an employee is on two of them, they were calculated with different rates or with regionalt stöd, a correction of one of them is not calculated, or the month's declaration awaits signing at Skatteverket.",
+    remediation: {
+      description:
+        'details.reason says why: same_employee (one person on two runs of the month: remove them from one), different_rates (recalculate the runs with the same rates), regional_support (not supported with several runs), correction_pending (calculate the correction of a run first) or awaiting_signature (sign the declaration Skatteverket holds, then generate again for a rättelse). details.message is the sentence to show.',
     },
   },
   // The paying side of AGI_PERIOD_CONFLICT (crm#1768): an unfiled declaration
