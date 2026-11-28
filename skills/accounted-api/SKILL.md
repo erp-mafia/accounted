@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 480 endpoints.
+  pagination, scopes), and all 481 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -225,7 +225,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 480 operations. Paths are shown without
+API version `2026-05-12`, 481 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.accounted.se/api/v1`).
 
 ### Core (25)
@@ -425,7 +425,7 @@ POST /companies/{companyId}/customers/merge : Merge duplicate customers into one
 POST /companies/{companyId}/customers/merges/{mergeId}/undo : Undo a customer merge [scope:customers:write risk:medium idempotent dry-run reversible]
 ```
 
-### Suppliers (AP) (50)
+### Suppliers (AP) (51)
 
 Full detail: [references/suppliers.md](references/suppliers.md)
 
@@ -458,6 +458,7 @@ POST /companies/{companyId}/supplier-invoices/{id}/approve : Approve a registere
 GET /companies/{companyId}/supplier-invoices/{id}/attestations : Where the attest of one supplier invoice stands: who attested, who is left, every decision [scope:suppliers:read risk:low idempotent]
 POST /companies/{companyId}/supplier-invoices/{id}/bank-entered : Mark a supplier invoice as entered in the internet bank ("inlagd i banken"), or clear the mark [scope:suppliers:write risk:low idempotent dry-run reversible]
 POST /companies/{companyId}/supplier-invoices/{id}/book : Book a registered supplier invoice that was registered without a verifikat (the deferred Bokför step) [scope:suppliers:write risk:high idempotent dry-run]
+POST /companies/{companyId}/supplier-invoices/{id}/change-supplier : Move an unpaid, unattested supplier invoice to another supplier, correcting the registration verifikat's text inline [scope:suppliers:write risk:high idempotent dry-run reversible]
 POST /companies/{companyId}/supplier-invoices/{id}/credit : Issue a credit note for a supplier invoice [scope:suppliers:write risk:high idempotent dry-run]
 PATCH /companies/{companyId}/supplier-invoices/{id}/items/{itemId} : Move one supplier-invoice line to another account, correcting the registration verifikat inline [scope:suppliers:write risk:high idempotent dry-run reversible]
 POST /companies/{companyId}/supplier-invoices/{id}/mark-paid : Record a payment against a supplier invoice [scope:suppliers:write risk:medium idempotent dry-run]

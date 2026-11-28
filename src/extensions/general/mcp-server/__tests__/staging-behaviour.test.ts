@@ -1098,6 +1098,15 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
   // The harness answers one row per table, so the single 6580 line nets to
   // zero (800/800): no exact match, the plan splits it into 6580 credit 500 +
   // 6550 debit 500, and the corrected entry has two lines and balances.
+  // Byt leverantör on an unbooked, unpaid invoice nobody attested: the move
+  // is staged; no number, so no other invoice of the new supplier can hold it.
+  gnubok_change_supplier_invoice_supplier: {
+    rows: {
+      supplier_invoices: { supplier_id: OTHER_INVOICE_UUID, status: 'registered', is_credit_note: false, is_self_billed: false, approved_at: null, paid_amount: 0, remaining_amount: 125, bank_entered_at: null, supplier_invoice_number: null, arrival_number: 1, registration_journal_entry_id: null },
+      suppliers: { name: 'Kontorsleverantören AB', supplier_type: 'swedish_business', archived_at: null },
+    },
+    empty: ['supplier_invoice_payments', 'supplier_invoice_attestations', 'supplier_payment_batch_items', 'payment_orders'],
+  },
   gnubok_update_supplier_invoice_item_account: {
     args: { account_number: '6550' },
     rows: {

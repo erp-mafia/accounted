@@ -2336,6 +2336,83 @@ Example response `200`:
 
 ---
 
+### `POST /api/v1/companies/{companyId}/supplier-invoices/{id}/change-supplier`
+
+**Move an unpaid, unattested supplier invoice to another supplier, correcting the registration verifikat's text inline.**
+`scope:suppliers:write · risk:high · idempotent · dry-run · reversible`
+
+Byt leverantör: for a supplier invoice registered on the wrong supplier. Only while nothing has been decided on it: unsettled (registered or overdue), nothing paid, not attested (no attest mark and no approval in the attest round), no payment file, bank payment or "inlagd i banken" mark under way, never a credit note or a självfaktura. The new supplier must be of the same kind (svensk, EU, utanför EU), since the kind decides how the moms is booked, and must not already hold a live invoice with the same number. A posted registration verifikat names the supplier in its text (the motpart, BFL 5 kap 7 §): the text is corrected inside the same verifikat through the inline rättelse, logged with who and when (BFL 5 kap 5 § and 9 §), which only an open, unlocked period takes. Amounts, accounts, lines and dates do not change. The payee check follows the new supplier's card from then on. Idempotent. Dry-runnable: the preview carries the new verifikat text.
+
+**Use when:** A supplier invoice was registered on the wrong supplier (a similar name, a mismatched bank account in the payee alert) and is not yet attested or paid.
+**Do not use for:** Attested, paid or credited invoices, a verifikat in a closed or locked period, or a supplier of another kind: credit the invoice (accounted_credit_supplier_invoice) and register its inbox item again on the right supplier. Not for correcting the supplier card itself (accounted_update_supplier).
+
+**Pitfalls:**
+- An attested invoice answers 409 SI_CHANGE_SUPPLIER_ATTESTED: an attest is never moved to another payee.
+- A payment recorded, or a paid or credited status, answers 409 SI_CHANGE_SUPPLIER_NOT_UNPAID; a payment file, bank payment or the inlagd-i-banken mark answers 409 SI_CHANGE_SUPPLIER_PAYMENT_UNDER_WAY.
+- A new supplier of another kind answers 409 SI_CHANGE_SUPPLIER_OTHER_KIND; one already holding the number answers 409 SI_CHANGE_SUPPLIER_DUPLICATE_NUMBER with details.existing.
+- A registration verifikat in a closed or locked period, or behind the lock date, answers 409 SI_CHANGE_SUPPLIER_PERIOD_LOCKED: past a lock only a credit and a new registration correct it.
+- A payment, attest or booking that lands between staging and approval answers 409 SI_CHANGE_SUPPLIER_CONFLICT: read the invoice again and stage anew.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{ supplier_id: string }
+```
+
+Example request:
+```json
+{
+  "supplier_id": "7a8b…"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    supplier_invoice_id: string,
+    supplier_id: string,
+    previous_supplier_id: string,
+    changed: boolean,
+    corrected_journal_entry_id: string | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string }, payment_order_id?: string, supplier_invoice_id?: string }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "supplier_invoice_id": "3b4c…",
+    "supplier_id": "7a8b…",
+    "previous_supplier_id": "1c2d…",
+    "changed": true,
+    "corrected_journal_entry_id": "6d7e…"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `POST /api/v1/companies/{companyId}/supplier-invoices/{id}/credit`
 
 **Issue a credit note for a supplier invoice.**

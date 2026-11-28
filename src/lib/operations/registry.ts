@@ -107,6 +107,7 @@ import {
 import { suppliersArchive, suppliersCreate, suppliersUpdate } from './suppliers'
 import { customersMerge, customersMergeUndo } from './customers'
 import {
+  supplierInvoicesChangeSupplier,
   supplierInvoicesDelete,
   supplierInvoicesMarkBankEntered,
   supplierInvoicesUncredit,
@@ -400,6 +401,7 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   supplierInvoicesUncredit,
   supplierInvoicesUpdate,
   supplierInvoicesUpdateItemAccount,
+  supplierInvoicesChangeSupplier,
   supplierInvoicesMarkBankEntered,
   // expense-claims
   expenseClaimsList,

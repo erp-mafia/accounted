@@ -6,6 +6,7 @@
  *   POST   /api/v1/companies/:companyId/supplier-invoices/:id/uncredit
  *   PATCH  /api/v1/companies/:companyId/supplier-invoices/:id/items/:itemId
  *   POST   /api/v1/companies/:companyId/supplier-invoices/:id/bank-entered
+ *   POST   /api/v1/companies/:companyId/supplier-invoices/:id/change-supplier
  *
  * The rules under test are the services' (lib/supplier-invoices/manage.ts,
  * item-account.ts): a booked invoice is never deleted, the credit note's
@@ -57,6 +58,7 @@ import { generateOpenApiSpec } from '@/lib/api/v1/registry'
 import { POST as uncredit } from '../uncredit/route'
 import { PATCH as moveItem } from '../items/[itemId]/route'
 import { POST as bankEntered } from '../bank-entered/route'
+import { POST as changeSupplier } from '../change-supplier/route'
 import { isIdempotencyClaim, routeRpcCalls } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
@@ -561,6 +563,77 @@ describe('PATCH /api/v1/companies/:companyId/supplier-invoices/:id/items/:itemId
     expect(routeRpcCalls(client.rpc)).toEqual([])
     expect(backfillMock).not.toHaveBeenCalled()
     expect(wrote(client)).toBe(false)
+  })
+})
+
+describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/change-supplier', () => {
+  const RIGHT = '12121212-1212-4121-8121-121212121212'
+  const WRONG = '34343434-3434-4343-8343-343434343434'
+  const post = (body: unknown, query = '') =>
+    changeSupplier(request(`${BASE}/change-supplier${query}`, { method: 'POST', body: JSON.stringify(body) }), params())
+  const supplier = (id: string, name: string) => ({ data: { id, name, supplier_type: 'swedish_business', archived_at: null } })
+  const unpaid = () => invoice({ supplier_id: WRONG, approved_at: null, paid_amount: 0 })
+
+  it('401 when the API key is rejected', async () => {
+    mockValidate.mockResolvedValue({ error: 'Invalid API key', status: 401 })
+    mockServiceClient.mockReturnValue(makeClient({}))
+    expect((await post({ supplier_id: RIGHT })).status).toBe(401)
+  })
+
+  it('400 VALIDATION_ERROR without a supplier id', async () => {
+    mockServiceClient.mockReturnValue(makeClient({ company_members: OWNER }))
+    const res = await post({ supplier_id: 'not-a-uuid' })
+    expect(res.status).toBe(400)
+    expect((await res.json()).error.code).toBe('VALIDATION_ERROR')
+  })
+
+  it('404 SI_NOT_FOUND for an unknown invoice', async () => {
+    mockServiceClient.mockReturnValue(makeClient({ company_members: OWNER, supplier_invoices: { data: null, error: null } }))
+    const res = await post({ supplier_id: RIGHT })
+    expect(res.status).toBe(404)
+    expect((await res.json()).error.code).toBe('SI_NOT_FOUND')
+  })
+
+  it('moves an unbooked invoice to the right supplier, guarded on what it read, and books nothing', async () => {
+    const client = makeClient({
+      company_members: OWNER,
+      supplier_invoices: [{ data: unpaid() }, { data: [] }, { data: [{ id: SI_ID }] }],
+      suppliers: [supplier(WRONG, 'Fel AB'), supplier(RIGHT, 'Rätt AB')],
+      supplier_invoice_payments: { data: [] },
+      supplier_invoice_attestations: { data: [] },
+      supplier_payment_batch_items: { data: [] },
+      payment_orders: { data: [] },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post({ supplier_id: RIGHT })
+    expect(res.status).toBe(200)
+    expect((await res.json()).data).toEqual({
+      supplier_invoice_id: SI_ID,
+      supplier_id: RIGHT,
+      previous_supplier_id: WRONG,
+      changed: true,
+      corrected_journal_entry_id: null,
+    })
+    expect(client.calls).toContainEqual({ table: 'supplier_invoices', method: 'update', args: [{ supplier_id: RIGHT }] })
+    expect(client.calls).toContainEqual({ table: 'supplier_invoices', method: 'eq', args: ['supplier_id', WRONG] })
+    expect(client.calls.some((c) => c.method === 'rpc' && !isIdempotencyClaim(c))).toBe(false)
+  })
+
+  it('refuses an attested invoice (409 SI_CHANGE_SUPPLIER_ATTESTED) and writes nothing', async () => {
+    const client = makeClient({
+      company_members: OWNER,
+      supplier_invoices: { data: invoice({ supplier_id: WRONG, status: 'approved', approved_at: '2026-09-04T08:00:00Z' }) },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post({ supplier_id: RIGHT })
+    expect(res.status).toBe(409)
+    expect((await res.json()).error.code).toBe('SI_CHANGE_SUPPLIER_ATTESTED')
+    expect(wrote(client)).toBe(false)
+  })
+
+  it('is published in the OpenAPI document', () => {
+    const spec = generateOpenApiSpec('https://x.test') as { paths: Record<string, Record<string, unknown>> }
+    expect(spec.paths['/api/v1/companies/{companyId}/supplier-invoices/{id}/change-supplier']).toHaveProperty('post')
   })
 })
 
