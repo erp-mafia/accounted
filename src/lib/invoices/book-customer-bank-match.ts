@@ -45,6 +45,7 @@ import { bankBookingContext } from '@/lib/bookkeeping/bank-booking-context'
 import { findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
 import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
+import { isKronorCurrency } from '@/lib/bookkeeping/currency-utils'
 import { findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { AccountsNotInChartError, isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { invoicePaymentBusinessEvent, type InvoicePaymentPostingContext } from '@/lib/bookkeeping/invoice-business-events'
@@ -61,6 +62,7 @@ import { releaseDoubtfulReserveAfterChange } from '@/lib/customer-loss/doubtful'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { eventBus } from '@/lib/events/bus'
 import { guardDuplicatePaymentVoucher, recordDuplicateCandidateOverride } from '@/lib/invoices/already-explained-guard'
+import { paidLinesOreLeft } from '@/lib/invoices/apply-invoice-payment'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
 import { invoiceDocumentRefusal, type InvoiceDocumentFields } from '@/lib/transactions/invoice-document-refusal'
 import { recordInvoicePaymentRow } from '@/lib/invoices/invoice-payment-row'
@@ -446,12 +448,23 @@ export async function bookCustomerBankMatch(
   const description = invoiceMatchPaymentDescription(invoice)
   let paymentLines: CreateJournalEntryLineInput[]
   try {
+    // Edited rows that settle the invoice in full clear what 1510 carries
+    // for it when its verifikat booked the öresavrundning, the rule of
+    // Markera som betald and the other settlement doors: the plan above reads
+    // the bank row only, so rows at the reskontra's öre figure would mark the
+    // invoice paid with the öre left on 1510. Kronor on both sides only: a
+    // foreign bank row's gap is a kursdifferens, not öresavrundning.
+    const checksEditedRows = !!customLines && isFullyPaid && !fx.required && isKronorCurrency(invoice.currency)
     const carriedSek =
-      customLines || useCashEntry
+      useCashEntry || (customLines && !checksEditedRows)
         ? null
         : salePlan.required
           ? salePlan.receivableSek
           : await carriedSekOf(supabase, companyId, 'customer', invoice)
+    if (customLines && checksEditedRows) {
+      const oreLeft = paidLinesOreLeft(invoice, customLines, invoice.currency, carriedSek)
+      if (oreLeft) return { ok: false, code: 'INVOICE_PAID_ORE_LEFT', details: oreLeft }
+    }
     paymentLines = customLines
       ? customLines
       : useCashEntry

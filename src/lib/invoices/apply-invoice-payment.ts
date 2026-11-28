@@ -26,6 +26,7 @@ import { roundOre, sumOre, equalOre, isZeroOre, ORE_TOLERANCE, ORE_ROUNDING_ACCO
 import { bookedOreRounding, oreSettlementResidual } from '@/lib/bookkeeping/ore-rounding'
 import { isKronorCurrency } from '@/lib/bookkeeping/currency-utils'
 import { isCustomerReceivableAccount } from '@/lib/bookkeeping/customer-receivable-lines'
+import { storedLineAmount } from '@/lib/bookkeeping/line-balance'
 
 /** Half an öre: anything over the remaining by more than this is a real overpayment. */
 export const PAYMENT_OVERSHOOT_TOLERANCE = ORE_TOLERANCE
@@ -218,9 +219,32 @@ export function planInvoicePaymentForLines(
 
   const payment = planLinesPayment(invoice, paymentAmountInInvoiceCurrency, lines, absorbEligible, carriedSek)
   if (!payment.ok || !booked || payment.plan.newStatus !== 'paid') return payment
+  const oreLeft = oreLeftByBookedOre(booked)
+  return oreLeft ? { ok: false, code: 'INVOICE_PAID_ORE_LEFT', details: oreLeft } : payment
+}
+
+/**
+ * What lines that settle a SEK customer invoice in full would leave on 1510,
+ * for an invoice whose own verifikat booked the öresavrundning: the refusal
+ * planInvoicePaymentForLines answers, for a door that plans the payment from
+ * something other than the lines, as the bank match does from the bank row
+ * (bookCustomerBankMatch). Null when the lines clear what 1510 carries, or
+ * when 1510 carries the remainder.
+ */
+export function paidLinesOreLeft(
+  invoice: InvoicePaymentTotals,
+  lines: PaymentLine[],
+  invoiceCurrency: string,
+  carriedSek: number | null | undefined,
+): { carried: number; cleared: number; left: number } | null {
+  if (!isKronorCurrency(invoiceCurrency)) return null
+  const booked = bookedOreClearing(invoice, lines, carriedSek)
+  return booked ? oreLeftByBookedOre(booked) : null
+}
+
+function oreLeftByBookedOre(booked: { carried: number; cleared: number }): { carried: number; cleared: number; left: number } | null {
   const left = oreSettlementResidual(booked.carried, booked.cleared)
-  if (left === 0) return payment
-  return { ok: false, code: 'INVOICE_PAID_ORE_LEFT', details: { carried: booked.carried, cleared: booked.cleared, left } }
+  return left === 0 ? null : { carried: booked.carried, cleared: booked.cleared, left }
 }
 
 type PaymentLine = { account_number: string; debit_amount: number; credit_amount: number }
@@ -283,7 +307,9 @@ function bookedOreClearing(
   const cleared = sumOre(
     lines
       .filter((l) => isCustomerReceivableAccount(l.account_number) && l.account_number !== ROT_RUT_RECEIVABLE_ACCOUNT)
-      .map((l) => (Number(l.credit_amount) || 0) - (Number(l.debit_amount) || 0)),
+      // Each side as journal_entry_lines stores it (storedLineAmount): rows
+      // of 333,334 x 3 clear 999,99 on 1510, not the 1 000 their raw sum says.
+      .map((l) => storedLineAmount(l.credit_amount) - storedLineAmount(l.debit_amount)),
   )
   return { remaining, carried: roundOre(carriedSek!), cleared }
 }
