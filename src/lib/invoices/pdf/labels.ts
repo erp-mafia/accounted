@@ -3,6 +3,7 @@ import {
   EXPORT_GOODS_NOTICE_SV,
   EXPORT_SERVICES_NOTICE_SV,
   LEGACY_EXPORT_NOTICE_SV,
+  OUTSIDE_SCOPE_NOTICE_SV,
 } from '@/lib/invoices/vat-rules'
 import type { PdfLang } from '@/lib/invoices/pdf/format'
 
@@ -60,6 +61,10 @@ export const PDF_LABELS = {
     colUnitPrice: 'à-pris',
     colVat: 'Moms',
     colTotal: 'Belopp',
+    // After the ex-VAT columns on a document to a private person
+    // (inclVatColumnsShown): the same figures with the row's VAT.
+    colUnitPriceInclVat: 'à-pris\ninkl. moms',
+    colTotalInclVat: 'Belopp\ninkl. moms',
     discountLine: (percent: number) => `Rabatt ${percent} %`,
     // Totals
     subtotal: 'Delsumma:',
@@ -101,6 +106,7 @@ export const PDF_LABELS = {
     exportGoodsNotice: EXPORT_GOODS_NOTICE_SV,
     legacyExportNotice: LEGACY_EXPORT_NOTICE_SV,
     domesticReverseChargeNotice: DOMESTIC_REVERSE_CHARGE_NOTICE,
+    outsideScopeNotice: OUTSIDE_SCOPE_NOTICE_SV,
     notVatRegisteredNotice: 'Företaget är inte momsregistrerat. Mervärdesskatt redovisas ej.',
     // Footer
     orgNoLong: 'Org.nr:',
@@ -149,6 +155,8 @@ export const PDF_LABELS = {
     colUnitPrice: 'Unit price',
     colVat: 'VAT',
     colTotal: 'Amount',
+    colUnitPriceInclVat: 'Unit price\nincl. VAT',
+    colTotalInclVat: 'Amount\nincl. VAT',
     discountLine: (percent: number) => `Discount ${percent}%`,
     subtotal: 'Subtotal:',
     net: (rate: number) => `Net ${rate}%:`,
@@ -182,6 +190,7 @@ export const PDF_LABELS = {
     legacyExportNotice: 'Sale outside the EU, exempt from Swedish VAT (ML 10 kap., Swedish VAT Act).',
     // Skatteverket accepts "Reverse charge" as the English notation (dnr 8-724682).
     domesticReverseChargeNotice: 'Reverse charge, construction services: the buyer accounts for the VAT (ML 16 kap. 13 §, Swedish VAT Act).',
+    outsideScopeNotice: 'Outside the scope of Swedish VAT: no supply in Sweden.',
     notVatRegisteredNotice: 'The seller is not VAT-registered. No VAT is charged on this invoice.',
     orgNoLong: 'Reg. no.:',
     registeredOffice: 'Registered office:',
@@ -212,6 +221,7 @@ export function localizeVatNotice(text: string, lang: PdfLang): string {
   if (text === EXPORT_GOODS_NOTICE_SV) return PDF_LABELS[lang].exportGoodsNotice
   if (text === LEGACY_EXPORT_NOTICE_SV) return PDF_LABELS[lang].legacyExportNotice
   if (text === DOMESTIC_REVERSE_CHARGE_NOTICE) return PDF_LABELS[lang].domesticReverseChargeNotice
+  if (text === OUTSIDE_SCOPE_NOTICE_SV) return PDF_LABELS[lang].outsideScopeNotice
   return text
 }
 

@@ -13,6 +13,24 @@ export const DIGITAL_MAILBOX_PROVIDER_NAMES: Record<DigitalMailboxProviderId, st
   billo: 'Billo',
 }
 
+/**
+ * Where the company's sending through a provider stands: active; pending,
+ * while the provider has not yet accepted Accounted's access request (the
+ * company already sends through it via another service); rejected, when the
+ * provider declined that request; off otherwise (never switched on, or
+ * switched off). The Inkorg row shows it, and a send refused while it is not
+ * active names it (lib/digital-mailboxes/sending-not-active.ts).
+ */
+export type DigitalMailboxSendingState = 'off' | 'pending' | 'rejected' | 'active'
+
+/** See DigitalMailboxSendingState: from the connection's send_state and its access request (ConnectionSummary). */
+export function sendingStateOf(
+  connection: { send_state?: string | null; send_request?: 'pending' | 'rejected' | null } | null,
+): DigitalMailboxSendingState {
+  if (connection?.send_state === 'active') return 'active'
+  return connection?.send_request ?? 'off'
+}
+
 interface ProviderStatusEntry {
   available?: { send?: unknown } | null
   connection?: { send_state?: unknown } | null

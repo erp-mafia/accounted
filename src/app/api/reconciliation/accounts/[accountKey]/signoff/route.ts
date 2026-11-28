@@ -11,7 +11,7 @@ const SignoffBodySchema = z.object({
   through_date: z.string().regex(ISO_DATE_RE),
   note: z.string().max(2000).nullable().optional(),
   force: z.boolean().optional(),
-  /** Manual accounts without a system specification: the balance per the signer's underlag, ledger sign. */
+  /** Manual accounts without a system specification, and bank accounts without a bank connection: the balance per the signer's underlag (the statement), ledger sign. */
   external_balance: z.number().finite().nullable().optional(),
   dry_run: z.boolean().optional(),
 })

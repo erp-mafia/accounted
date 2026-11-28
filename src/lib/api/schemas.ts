@@ -809,7 +809,7 @@ export const InvoiceVatOverrideShape = {
     .nullable()
     .optional()
     .describe(
-      "This invoice's own VAT treatment instead of the customer's. standard = Swedish VAT at the line rates (ruta 05). export with delivery_country = export of goods (0 %, 3105, ruta 36); reverse_charge with delivery_country = intra-EU supply of goods (0 %, 3108, ruta 35). Without delivery_country, export / reverse_charge are the services treatments and only accepted where the customer already gets them. reverse_charge_domestic = omvänd betalningsskyldighet for construction services (0 %, 3231, ruta 41, ML 16 kap. 13 §): only to a swedish_business customer with a Swedish VAT number (SE + 12 digits), never with delivery_country; every line 0 %. Omit to let the customer decide; null clears.",
+      "This invoice's own VAT treatment instead of the customer's. standard = Swedish VAT at the line rates (ruta 05). export with delivery_country = export of goods (0 %, 3105, ruta 36); reverse_charge with delivery_country = intra-EU supply of goods (0 %, 3108, ruta 35). Without delivery_country, export / reverse_charge are the services treatments and only accepted where the customer already gets them. reverse_charge_domestic = omvänd betalningsskyldighet for construction services (0 %, 3231, ruta 41, ML 16 kap. 13 §): only to a swedish_business customer with a Swedish VAT number (SE + 12 digits), never with delivery_country; every line 0 %. outside_scope = no Swedish VAT and no ruta, for an amount that is not a supply (a räntefaktura's dröjsmålsränta): every line 0 % with revenue_account on an interest-income account (e.g. 8313), never with delivery_country. Omit to let the customer decide; null clears.",
     ),
   delivery_country: z
     .string()
@@ -1091,6 +1091,9 @@ export const InvoicePreviewSchema = z.object({
   qr_mode: z.union([InvoiceQrModeSchema, z.literal('')]).nullish().transform((v) => v || null),
   ore_rounding: z.boolean().nullish(),
   ...InvoiceVatOverrideShape,
+  // A räntefaktura draft (is_late_interest_invoice): no late-payment terms
+  // on its PDF, so the preview prints none either.
+  is_late_interest_invoice: z.boolean().optional(),
   deduction_personnummer: z.string().max(20).nullish(),
   deduction_housing_designation: z.string().max(128).nullish(),
   deduction_apartment_number: z.string().max(25).nullish(),
@@ -1547,6 +1550,16 @@ export const LinkInvoiceAttachmentsSchema = z.object({
   document_ids: z.array(uuid).min(1).max(10),
 })
 
+/**
+ * POST /api/invoices/[id]/uncredit: Ångra kreditering
+ * (lib/invoices/uncredit-invoice.ts). attest_not_delivered is the person's
+ * word that a credit note marked as sent never reached the customer.
+ */
+export const UncreditInvoiceSchema = z.object({
+  dry_run: z.boolean().optional(),
+  attest_not_delivered: z.boolean().optional(),
+})
+
 /** POST /api/invoices/preview-email: the preview draft plus this send's own texts. */
 export const InvoiceEmailPreviewSchema = InvoicePreviewSchema.extend(InvoiceEmailOverrideShape)
 
@@ -1611,6 +1624,17 @@ const CustomerInvoiceMarkingSchema = z
  */
 const CustomerAddressStateSchema = z.string().trim().max(100).optional()
 
+/**
+ * Skickas som: one of the ways of the company's send order, tried first for
+ * this customer (lib/invoices/send-order.ts sendOrderForCustomer). Null
+ * follows the company's order; on update it clears a stored way.
+ */
+const CustomerInvoiceSendWaySchema = z
+  .enum(SEND_ORDER_WAYS)
+  .nullable()
+  .optional()
+  .describe("The way this customer's invoices go out first: peppol, kivra, billo or email. The invoice editor picks it when the invoice can go that way, else the company's invoice_send_order decides. Null follows the company's order.")
+
 export const CreateCustomerSchema = z.object({
   name: z.string().min(1, 'Customer name is required'),
   customer_type: CustomerTypeSchema,
@@ -1647,6 +1671,7 @@ export const CreateCustomerSchema = z.object({
   default_payment_terms: z.number().int().min(0).max(365).optional(),
   invoice_reference: CustomerInvoiceReferenceSchema,
   invoice_marking: CustomerInvoiceMarkingSchema,
+  invoice_send_way: CustomerInvoiceSendWaySchema,
   notes: z.string().optional(),
 }).superRefine((customer, ctx) => {
   if (customer.personal_number && customer.customer_type !== 'individual') {
@@ -1801,6 +1826,7 @@ export const UpdateCustomerSchema = z.object({
   default_payment_terms: z.number().int().min(0).max(365).optional(),
   invoice_reference: CustomerInvoiceReferenceSchema,
   invoice_marking: CustomerInvoiceMarkingSchema,
+  invoice_send_way: CustomerInvoiceSendWaySchema,
   notes: z.string().optional(),
 }).superRefine((customer, ctx) => {
   if (
@@ -2539,6 +2565,15 @@ export const CreateDashboardJournalEntrySchema = CreateJournalEntrySchema.extend
   // (lib/reports/vat-settlement-booking.ts, accounted#58). Lazy because the
   // period shape is declared further down this module.
   vat_settlement_period: z.lazy(() => VatSettlementPeriodSchema).optional(),
+  // "Inget underlag krävs" chosen in the form's no-underlag step: the route
+  // marks the posted verifikat through setNoDocumentRequired, the function
+  // POST /journal-entries/[id]/no-document-required runs, with the same
+  // optional reason (max 200 characters). Ignored with ?as_draft: only a
+  // posting is marked.
+  no_document_required: z
+    .object({ reason: z.string().trim().max(200).nullable().optional() })
+    .strict()
+    .optional(),
 })
 
 /** Body of the dashboard's draft commit: only the confirmed warnings. */
@@ -4080,6 +4115,9 @@ export const UpdateSettingsSchema = z.object({
   tax_contact_email: z.string().email().nullable().optional().or(z.literal('')),
   fiscal_year_start_month: z.number().int().min(1).max(12).optional(),
   preliminary_tax_monthly: z.number().nullable().optional(),
+  // The first förfallodag in Skatteverket's decision on debiterad
+  // preliminärskatt: no F-skatt payment deadline for a month before it.
+  preliminary_tax_first_due_date: saneIsoDate.nullable().optional(),
   // Share capital per Bolagsverket (annual report aktiekapital note).
   aktiekapital: z.number().int('Aktiekapital anges i hela kronor').positive('Aktiekapital måste vara större än 0').nullable().optional(),
   antal_aktier: z.number().int('Antal aktier måste vara ett heltal').positive('Antal aktier måste vara större än 0').nullable().optional(),

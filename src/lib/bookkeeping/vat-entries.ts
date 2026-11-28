@@ -39,6 +39,7 @@ export function getVatRate(treatment: VatTreatment): number {
     case 'reverse_charge_domestic':
     case 'export':
     case 'exempt':
+    case 'outside_scope':
       return 0
     default:
       return 0.25

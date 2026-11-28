@@ -24,6 +24,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { isKronorCurrency, sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import { bookedOreRounding } from '@/lib/bookkeeping/ore-rounding'
+import { hasOreToRound } from '@/lib/bookkeeping/invoice-rounding'
 import { dbError } from '@/lib/errors/db-error'
 import { ORE_TOLERANCE, equalOre, roundOre } from '@/lib/money'
 
@@ -86,9 +87,12 @@ export async function carriedSek(
  * that clears the remainder would book the öre a second time. For that
  * invoice the ledger's figure is answered (bookedOreRounding non-zero); for
  * every other kronor document null, as before, so its doors keep clearing the
- * remainder. Only a customer invoice with an issue verifikat and öre left to
- * pay costs a read. A supplier document costs none: its rounding is an item
- * of the invoice, inside its total (supplier-invoice-rounding-item.ts).
+ * remainder. Only a customer invoice with an issue verifikat and öre in its
+ * remainder or its total costs a read (hasOreToRound): the total too, since a
+ * part payment can leave whole kronor open while 151x still carries the
+ * issue's öre, and the payment of those kronor would leave them there. A
+ * supplier document costs none: its rounding is an item of the invoice,
+ * inside its total (supplier-invoice-rounding-item.ts).
  */
 export async function carriedSekOf(
   supabase: Pick<SupabaseClient, 'rpc'>,
@@ -106,10 +110,9 @@ export async function carriedSekOf(
 ): Promise<number | null> {
   if (isKronorCurrency(document.currency)) {
     if (side !== 'customer' || document.journal_entry_id === null) return null
-    // Rounding to whole kronor leaves a gap only when the remainder has öre:
-    // a whole-krona remainder costs no read.
     const remaining = kronorRemaining(document)
-    if (remaining === null || Number.isInteger(remaining)) return null
+    if (remaining === null) return null
+    if (Number.isInteger(remaining) && !hasOreToRound({ currency: document.currency, total: document.total ?? remaining })) return null
     const carried = await carriedSek(supabase, companyId, side, document.id)
     return carried.ok && bookedOreRounding(remaining, carried.sek) !== 0 ? carried.sek : null
   }

@@ -44,6 +44,8 @@ import { useCompanySettings } from '@/lib/reference-data/hooks'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { postalPlaceLine } from '@/lib/invoices/postal-address'
+import { parseSendWay } from '@/lib/invoices/send-order'
+import { DIGITAL_MAILBOX_PROVIDER_NAMES } from '@/lib/digital-mailboxes/sending-status'
 
 const CUSTOMER_TYPE_KEY: Record<CustomerType, string> = {
   individual: 'type_individual',
@@ -97,6 +99,7 @@ export default function CustomerDetailPage({
   const tParties = useTranslations('parties')
   const tInvoices = useTranslations('invoices')
   const tCommon = useTranslations('common')
+  const tWays = useTranslations('invoice_send_order')
   // The Swedish calendar day the invoices' overdue line reads (lib/invoices/overdue.ts).
   const today = todayIsoStockholm()
   // The company's öresavrundning, for an invoice without a choice of its own.
@@ -288,6 +291,9 @@ export default function CustomerDetailPage({
     )
   }
 
+  // Skickas som: the way this customer's invoices go out first; none = the company's order.
+  const sendWay = parseSendWay(customer.invoice_send_way)
+
   return (
     <div className="space-y-8 stagger-enter">
       {/* Header: serif name over a quiet type kicker, quiet actions right */}
@@ -426,6 +432,15 @@ export default function CustomerDetailPage({
         )}
         {customer.invoice_marking && (
           <DefRow label={t('def_invoice_marking')}>{customer.invoice_marking}</DefRow>
+        )}
+        {sendWay && (
+          <DefRow label={t('def_send_way')}>
+            {sendWay === 'peppol'
+              ? tWays('way_peppol')
+              : sendWay === 'email'
+                ? tWays('way_email')
+                : DIGITAL_MAILBOX_PROVIDER_NAMES[sendWay]}
+          </DefRow>
         )}
       </DetailSection>
 

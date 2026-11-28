@@ -45,6 +45,7 @@ const SE_EXPECTED: Record<AccountRole, { account: string; name: string }> = {
   export_goods_sales: { account: '3105', name: 'Försäljning varor till land utanför EU' },
   foreign_per_diem_tax_free: { account: '7323', name: 'Skattefria traktamenten, utlandet' },
   foreign_per_diem_taxable: { account: '7324', name: 'Skattepliktiga traktamenten, utlandet' },
+  late_payment_interest_income: { account: '8313', name: 'Ränteintäkter från kortfristiga fordringar' },
 }
 
 function caught(fn: () => unknown): AccountRoleError {

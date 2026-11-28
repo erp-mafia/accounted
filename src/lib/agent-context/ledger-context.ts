@@ -1,9 +1,16 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
 import { addMonthsIso, todayIsoStockholm } from '@/lib/dates/iso'
-import { mappingPatternNamesCounterparty } from '@/lib/bookkeeping/counterparty-templates'
+import {
+  mappingPatternNamesCounterparty,
+  readSwitchedOffRulesByName,
+  type SwitchedOffCounterpartyRule,
+} from '@/lib/bookkeeping/counterparty-templates'
 import { mappingRuleAccount } from '@/lib/bookkeeping/bank-leg'
-import { AUTO_LEARNED_MAPPING_SOURCE, readsAutoLearnedMappingRules } from '@/lib/bookkeeping/mapping-engine'
+import { AUTO_LEARNED_MAPPING_SOURCE, mappingRulesBesideSwitchedOff, readsAutoLearnedMappingRules } from '@/lib/bookkeeping/mapping-engine'
+import { createLogger } from '@/lib/logger'
+
+const log = createLogger('ledger-context')
 
 // Ledger context: derived booking patterns for the Accounted://ledger/context
 // MCP resource. Everything here is computed by code from ledger data; the LLM
@@ -174,7 +181,7 @@ function share(agree: number, seen: number): number {
 function explicitRulesRead(supabase: SupabaseClient, companyId: string, autoLearned: boolean) {
   const rules = supabase
     .from('mapping_rules')
-    .select('rule_name, merchant_pattern, description_pattern, debit_account, credit_account, vat_treatment')
+    .select('rule_name, merchant_pattern, description_pattern, debit_account, credit_account, vat_treatment, company_id, source')
     .eq('company_id', companyId)
     .eq('is_active', true)
   return (autoLearned ? rules : rules.neq('source', AUTO_LEARNED_MAPPING_SOURCE))
@@ -190,6 +197,8 @@ interface ExplicitRuleRow {
   debit_account: string | null
   credit_account?: string | null
   vat_treatment: string | null
+  company_id?: string | null
+  source?: string | null
 }
 
 /**
@@ -241,7 +250,7 @@ export async function buildLedgerContext(
   const today = todayIsoStockholm(now)
   const fromDate = addMonthsIso(today, -WINDOW_MONTHS)
 
-  const [statsRes, settingsRes, rulesRes, templatesRes, entryCountRes, voucherSeriesRes, salaryRes] =
+  const [statsRes, settingsRes, rulesRes, templatesRes, entryCountRes, voucherSeriesRes, salaryRes, switchedOffByName] =
     await Promise.all([
       supabase.rpc('get_ledger_usage_stats', {
         p_company_id: companyId,
@@ -285,6 +294,18 @@ export async function buildLedgerContext(
         .select('id', { count: 'exact', head: true })
         .eq('company_id', companyId)
         .gte('payment_date', fromDate),
+
+      // The switched-off counterparty rules by name, where the learned rows
+      // are read. A failed read lists the learned rows as stored.
+      readsAutoLearnedMappingRules(companyId)
+        ? readSwitchedOffRulesByName(supabase, companyId).catch((err: unknown) => {
+            log.warn('switched-off counterparty rules read failed; learned rules are listed as stored', {
+              companyId,
+              error: err instanceof Error ? err.message : String(err),
+            })
+            return new Map<string, SwitchedOffCounterpartyRule[]>()
+          })
+        : Promise.resolve(new Map<string, SwitchedOffCounterpartyRule[]>()),
     ])
 
   if (statsRes.error) {
@@ -412,7 +433,9 @@ export async function buildLedgerContext(
     })
   }
 
-  const explicitRules = explicitRulesFrom(rulesRes.data)
+  // A learned row whose counterparty rule the company switched off is no
+  // instruction either (mappingRulesBesideSwitchedOff).
+  const explicitRules = explicitRulesFrom(mappingRulesBesideSwitchedOff(rulesRes.data ?? [], switchedOffByName))
 
   const voucherSeries = voucherSeriesInUse(voucherSeriesRes.data)
 

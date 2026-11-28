@@ -131,6 +131,22 @@ describe('monthly tax and employer deadlines', () => {
     expect(dates[7].day).toBe(17)
   })
 
+  it('starts preliminary tax in the month of the first förfallodag, never before it', () => {
+    const config = getConfig('f_skatt')
+    const first = makeSettings({ preliminary_tax_monthly: 2500, preliminary_tax_first_due_date: '2026-09-14' })
+
+    // The month of the date is the first row, whatever day was typed.
+    expect(config.generateDates(2026, first).map((d) => d.period)).toEqual([
+      '2026-09', '2026-10', '2026-11', '2026-12',
+    ])
+    expect(config.generateDates(2026, first)[0].day).toBe(12)
+    // A later year is whole; an earlier year has nothing.
+    expect(config.generateDates(2027, first)).toHaveLength(12)
+    expect(config.generateDates(2025, first)).toEqual([])
+    // No date: every month, as before.
+    expect(config.generateDates(2026, makeSettings({ preliminary_tax_first_due_date: null }))).toHaveLength(12)
+  })
+
   it('keeps the 12th in August for storföretag preliminary tax (January-only 17th)', () => {
     const dates = getConfig('f_skatt').generateDates(2026, makeSettings({
       moms_period: 'monthly',

@@ -284,7 +284,18 @@ describe('lacksMomsRuta', () => {
     reverse_charge_domestic: true,
     export: true,
     exempt: false,
+    outside_scope: false,
   }
+
+  it('is false for an outside_scope row without VAT, whoever sells: no supply in Sweden, no ruta', () => {
+    for (const settings of [registered, outsideTheRegister]) {
+      expect(lacksMomsRuta({ ...momsfriSale, vat_treatment: 'outside_scope' }, settings)).toBe(false)
+    }
+  })
+
+  it('is true for an outside_scope row with VAT on it', () => {
+    expect(lacksMomsRuta({ ...momsfriSale, vat_treatment: 'outside_scope', vat_amount: 25 }, registered)).toBe(true)
+  })
 
   it.each(Object.keys(STATES_A_RUTA).filter((treatment) => STATES_A_RUTA[treatment as VatTreatment]))(
     'is true for %s, which states one, whoever sells',

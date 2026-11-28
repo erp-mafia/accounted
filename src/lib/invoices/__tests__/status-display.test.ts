@@ -133,3 +133,20 @@ describe('invoiceRowStatus: a credit note imported without a link', () => {
     expect(invoiceRowStatus(imported('cancelled'), TODAY).kind).toBe('cancelled')
   })
 })
+
+describe('invoiceRowStatus: a credit note whose credit was undone (Ångra kreditering)', () => {
+  const undone = (overrides: Partial<InvoiceRowStatusInput> = {}) =>
+    row({ status: 'cancelled', credited_invoice_id: 'original-1', total: -500, remaining_amount: 0, ...overrides })
+
+  it('reads as Ångrad, not as a cancelled draft', () => {
+    expect(invoiceRowStatus(undone({ credit_undone_at: '2026-11-27T10:00:00Z' }), TODAY)).toEqual({
+      kind: 'cancelled',
+      labelKey: 'status_credit_undone',
+      chip: 'secondary',
+    })
+  })
+
+  it('a cancelled credit note without the mark still reads as cancelled', () => {
+    expect(invoiceRowStatus(undone(), TODAY)).toMatchObject({ kind: 'cancelled', labelKey: 'status_cancelled' })
+  })
+})

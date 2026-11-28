@@ -160,6 +160,7 @@ export function TaxSettingsContent() {
       tax_contact_phone: (formData.get('tax_contact_phone') as string) || null,
       tax_contact_email: (formData.get('tax_contact_email') as string) || null,
       preliminary_tax_monthly: parseFloat(formData.get('preliminary_tax_monthly') as string) || null,
+      preliminary_tax_first_due_date: (formData.get('preliminary_tax_first_due_date') as string) || null,
       kontrolluppgifter_enabled: formData.get('kontrolluppgifter_enabled') === 'true',
       rot_rut_enabled: formData.get('rot_rut_enabled') === 'true',
       // OSS/IOSS/Intrastat presuppose VAT registration; retire them with it.

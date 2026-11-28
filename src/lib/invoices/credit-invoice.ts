@@ -140,7 +140,7 @@ export type CreditNoteDraftResult =
   | { ok: true; creditNote: CreditRow; outcome: 'created' | 'existing' | 'reopened' }
   | {
       ok: false
-      code: 'INVOICE_CREATE_INSERT_FAILED' | 'INVOICE_CREATE_ITEMS_FAILED' | 'DB_ERROR'
+      code: 'INVOICE_CREATE_INSERT_FAILED' | 'INVOICE_CREATE_ITEMS_FAILED' | 'INVOICE_CREDIT_UNDONE_BEFORE' | 'DB_ERROR'
       dbError?: { code?: string; message?: string } | null
     }
 
@@ -148,9 +148,11 @@ export type CreditNoteDraftResult =
  * The credit note of `original` as a draft, created once: an existing one is
  * returned (idempotent), a cancelled draft that was never booked is reopened
  * so its deterministic KR number is reused, and a half-written one (items
- * failed) is removed again. The caller has run creditNoteRefusal. Issuing it
- * is issueCreditNoteDraft's job: until then nothing is booked and the
- * original keeps its status.
+ * failed) is removed again. A credit note whose credit was undone
+ * (lib/invoices/uncredit-invoice.ts) is never reopened: it was issued, and
+ * it keeps its number. The caller has run creditNoteRefusal. Issuing it is
+ * issueCreditNoteDraft's job: until then nothing is booked and the original
+ * keeps its status.
  */
 export async function createCreditNoteDraft(
   supabase: SupabaseClient,
@@ -176,6 +178,7 @@ export async function createCreditNoteDraft(
     return { ok: false, code: 'DB_ERROR', dbError: existingError }
   }
   if (existing) {
+    if (existing.credit_undone_at) return { ok: false, code: 'INVOICE_CREDIT_UNDONE_BEFORE' }
     if (existing.status === 'cancelled' && !existing.journal_entry_id) {
       const { error: reopenError } = await supabase
         .from('invoices')
@@ -239,6 +242,7 @@ export async function createCreditNoteDraft(
         .eq('company_id', companyId)
         .eq('creation_complete', true)
         .maybeSingle()
+      if (raced?.credit_undone_at) return { ok: false, code: 'INVOICE_CREDIT_UNDONE_BEFORE' }
       if (raced) return { ok: true, creditNote: raced as CreditRow, outcome: 'existing' }
     }
     log.error('credit note insert failed', creditNoteError)

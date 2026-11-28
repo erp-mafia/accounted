@@ -290,6 +290,11 @@ export interface UserUiState {
   // JournalEntryList). Per person, for every company and device: a sign-out
   // empties the browser's storage, so it is kept here.
   journal_density?: 'compact' | 'comfortable'
+  // Startsida, keyed per company (companyId -> start page id,
+  // lib/company/start-page.ts): where a sign-in or a company switch lands
+  // when nothing asked for another page. Read through storedStartPages: an
+  // id this build does not know reads as no choice.
+  start_page?: Record<string, string>
 }
 
 export type AgentPanelMode = 'docked' | 'floating'
@@ -381,6 +386,7 @@ export type VatTreatment =
   | 'reverse_charge_domestic' // Domestic reverse charge, construction services (0%, ruta 41)
   | 'export'            // Non-EU export (0%)
   | 'exempt'            // VAT exempt
+  | 'outside_scope'     // No Swedish VAT: not a supply made in Sweden (dröjsmålsränta on a räntefaktura, no ruta)
 
 // Accounting method (bokföringsmetod)
 export type AccountingMethod = 'accrual' | 'cash'
@@ -585,6 +591,12 @@ export interface CompanySettings {
 
   // Preliminary tax
   preliminary_tax_monthly: number | null
+  /**
+   * First förfallodag of the debiterad preliminärskatt per Skatteverket's
+   * decision (YYYY-MM-DD). No F-skatt payment deadline is generated for a
+   * month before it. Null: none.
+   */
+  preliminary_tax_first_due_date?: string | null
 
   // Share capital per Bolagsverket (aktiekapital note in the annual report).
   // Kvotvärde is derived as aktiekapital / antal_aktier, never stored.
@@ -1245,6 +1257,15 @@ export interface Customer {
    */
   invoice_marking: string | null
 
+  /**
+   * Skickas som: the way this customer's invoices go out first (peppol,
+   * kivra, billo, email), tried before company_settings.invoice_send_order
+   * (lib/invoices/send-order.ts sendOrderForCustomer). Null = the company's
+   * order. Optional in TS: a row read before the column's migration has it
+   * absent.
+   */
+  invoice_send_way?: string | null
+
   // Notes
   notes: string | null
 
@@ -1817,6 +1838,13 @@ export interface Invoice {
   // for pre-migration fixtures.
   vat_treatment_override?: import('@/lib/invoices/invoice-vat-override').InvoiceVatTreatmentOverride | null
   delivery_country?: string | null
+  // Räntefaktura (migration 20261127160500). On an invoice paid late: the
+  // räntefaktura that charges its dröjsmålsränta, set once (null = not
+  // charged). On the räntefaktura itself: true, so it earns no dröjsmålsränta
+  // and prints no late-payment terms. Optional in TS for pre-migration
+  // fixtures.
+  late_interest_invoice_id?: string | null
+  is_late_interest_invoice?: boolean
 
   // Reference
   your_reference: string | null
@@ -1864,6 +1892,10 @@ export interface Invoice {
 
   // Credit note reference
   credited_invoice_id: string | null
+  // On a cancelled credit note: when its credit was undone (Ångra
+  // kreditering, lib/invoices/uncredit-invoice.ts, migration
+  // 20261127170000). Optional in TS for pre-migration fixtures.
+  credit_undone_at?: string | null
 
   // Autogiro: the payer number the invoice is debited on. Follows the
   // customer's active mandate while a draft and freezes at issue (migration
@@ -2231,6 +2263,8 @@ export interface CreateCustomerInput {
   default_payment_terms?: number
   invoice_reference?: string | null
   invoice_marking?: string | null
+  /** Skickas som; null follows the company's send order. */
+  invoice_send_way?: string | null
   notes?: string
 }
 
