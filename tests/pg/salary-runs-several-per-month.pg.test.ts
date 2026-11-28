@@ -4,7 +4,7 @@ import { insertAuthUser, insertCompany } from '@/tests/pg/fixtures'
 import { getPool } from '@/tests/pg/setup'
 
 /**
- * 20261127120000_salary_runs_several_per_month.sql: one live run per
+ * 20261128090000_salary_runs_several_per_month.sql: one live run per
  * (company, period, run_number). Run number 1 keeps the old one-run-per-period
  * guarantee; an extra run takes 2 and up; a corrected run frees its number for
  * its correction.
