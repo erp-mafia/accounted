@@ -26,6 +26,7 @@ import { roundOre, sumOre, equalOre, isZeroOre, ORE_TOLERANCE, ORE_ROUNDING_ACCO
 import { bookedOreRounding, oreSettlementResidual } from '@/lib/bookkeeping/ore-rounding'
 import { isKronorCurrency } from '@/lib/bookkeeping/currency-utils'
 import { isCustomerReceivableAccount } from '@/lib/bookkeeping/customer-receivable-lines'
+import { storedLineAmount } from '@/lib/bookkeeping/line-balance'
 
 /** Half an öre: anything over the remaining by more than this is a real overpayment. */
 export const PAYMENT_OVERSHOOT_TOLERANCE = ORE_TOLERANCE
@@ -306,7 +307,9 @@ function bookedOreClearing(
   const cleared = sumOre(
     lines
       .filter((l) => isCustomerReceivableAccount(l.account_number) && l.account_number !== ROT_RUT_RECEIVABLE_ACCOUNT)
-      .map((l) => (Number(l.credit_amount) || 0) - (Number(l.debit_amount) || 0)),
+      // Each side as journal_entry_lines stores it (storedLineAmount): rows
+      // of 333,334 x 3 clear 999,99 on 1510, not the 1 000 their raw sum says.
+      .map((l) => storedLineAmount(l.credit_amount) - storedLineAmount(l.debit_amount)),
   )
   return { remaining, carried: roundOre(carriedSek!), cleared }
 }

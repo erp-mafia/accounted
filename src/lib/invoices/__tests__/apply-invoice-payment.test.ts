@@ -436,6 +436,12 @@ describe('paidLinesOreLeft', () => {
     expect(paidLinesOreLeft(UP, [row('1930', 999.75, 0), row('3740', 0.25, 0), row('1510', 0, 1000)], 'SEK', 1000)).toBeNull()
   })
 
+  it('sums what each row stores, to the öre, not the raw amounts', () => {
+    // 333,334 x 3 reads 1 000 raw; journal_entry_lines stores 333,33 x 3.
+    const rows = [row('1930', 1000, 0), row('1510', 0, 333.334), row('1510', 0, 333.334), row('1510', 0, 333.332), row('3740', 0, 0.01)]
+    expect(paidLinesOreLeft(UP, rows, 'SEK', 1000)).toEqual({ carried: 1000, cleared: 999.99, left: 0.01 })
+  })
+
   it('1513 is Skatteverket\'s share, never what the rows clear for the customer', () => {
     expect(paidLinesOreLeft(UP, [row('1930', 1000.25, 0), row('1510', 0, 1000), row('1513', 0, 0.25)], 'SEK', 1000)).toBeNull()
   })
