@@ -427,6 +427,12 @@ describe('taxes', () => {
       '2027-01-18',
     ])
   })
+
+  it('starts F-skatt at the first förfallodag the company states', () => {
+    expect(
+      fSkattDueDates(WINDOW, { vat_registered: true, vat_taxable_base_over_40m: false, preliminary_tax_first_due_date: '2027-01-18' }),
+    ).toEqual(['2027-01-18'])
+  })
 })
 
 describe('recurring invoices', () => {

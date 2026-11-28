@@ -59,6 +59,13 @@ export interface OperationContext {
    * undefined on every other door.
    */
   door?: 'mcp'
+  /**
+   * The API key a v1 request came with (ApiV1Context.apiKeyId), set by the v1
+   * door only: for an operation that charges a per-key budget the MCP door
+   * charges by the same key (the register lookup's daily cap), so one key
+   * has one cap whichever door it calls.
+   */
+  apiKeyId?: string
 }
 
 /** A non-blocking note about a write that went through, in both languages. */

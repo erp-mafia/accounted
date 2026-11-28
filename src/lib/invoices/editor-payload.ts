@@ -100,7 +100,8 @@ export function sanitizeDeductionItems<T extends DeductionItemFields>(
  * services (crm#1007); null clears a stored statement.
  */
 export interface EditorVatStatement {
-  vat_treatment: 'reverse_charge_domestic' | null
+  /** outside_scope only ever rides on a preview: a räntefaktura draft keeps its own on save. */
+  vat_treatment: 'reverse_charge_domestic' | 'outside_scope' | null
   delivery_country: null
 }
 

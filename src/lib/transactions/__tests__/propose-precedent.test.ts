@@ -5,7 +5,8 @@
  *
  * Off: the proposals, their order, what the log records and the one-click
  * decision are what they were, and neither the precedent read nor the read
- * of switched-off rules is made.
+ * of switched-off rules by the row is made (only their names, for the
+ * learned rows: propose-auto-learned.test.ts).
  *
  * On: the precedent leads the row exactly when no counterparty rule matches
  * it (active or switched off), no rule of the company's own proposes for it
@@ -212,10 +213,11 @@ describe('switch off: nothing changes', () => {
     expect(reviewReason(rowProposal(out.proposals['tx-bare'])!, DIRECT_BOOKING_ON)).toBe('evidence')
   })
 
-  it('makes neither the precedent read nor the read of switched-off rules', async () => {
+  it('makes neither the precedent read nor the read of switched-off rules by the row', async () => {
     const { mock } = await run()
     expect(mock.supabase.rpc).not.toHaveBeenCalled()
-    expect(mock.tables()).not.toContain('categorization_templates')
+    // Only the read by name, which the learned rows are read beside (propose-auto-learned.test.ts).
+    expect(mock.findCalls('categorization_templates', 'select')).toEqual([['id, counterparty_name, counterparty_aliases, debit_account, credit_account']])
   })
 
   it('the switch of another company leaves this one exactly as unset', async () => {

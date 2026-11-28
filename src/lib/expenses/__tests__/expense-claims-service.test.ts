@@ -828,6 +828,25 @@ describe('deleteExpenseClaim', () => {
     expect(findCall('expense_claims', 'delete')).toBeTruthy()
   })
 
+  // After a rättelse the claim names the corrected verifikat (correctEntry
+  // moves the pointer with the correction): that one is in the books, so that
+  // one is stornoed. Left on the reversed original, the claim would read as
+  // stornoed already and go without a storno, the correction still posted.
+  it('stornos the corrected verifikat a claim names after a rättelse, never skipping the storno', async () => {
+    enqueue({ data: { id: 'c1', status: 'registered', journal_entry_id: 'je-correction' } })
+    enqueue({ data: { status: 'posted', reversed_by_id: null } }) // the correction's status
+    enqueue({ data: null }) // delete
+
+    const result = await deleteExpenseClaim(sb, COMPANY, USER, 'c1')
+    expect(result).toEqual({ ok: true, reversal_entry_id: 'je-storno' })
+    expect(reverseEntryMock).toHaveBeenCalledTimes(1)
+    expect(reverseEntryMock).toHaveBeenCalledWith(sb, COMPANY, USER, 'je-correction')
+    // Read by the claim's own pointer: the original it was first booked as is not looked up.
+    expect(findCalls('journal_entries', 'eq')).toContainEqual(['id', 'je-correction'])
+    expect(findCalls('journal_entries', 'eq')).not.toContainEqual(['source_type', 'expense_claim'])
+    expect(findCall('expense_claims', 'delete')).toBeTruthy()
+  })
+
   it('refuses a paid claim', async () => {
     enqueue({ data: { id: 'c1', status: 'paid', journal_entry_id: 'je-1' } })
     const result = await deleteExpenseClaim(sb, COMPANY, USER, 'c1')

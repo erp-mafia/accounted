@@ -13,6 +13,7 @@ import { AGI_RECEIPT_STATUSES } from '@/lib/deadlines/agi-filed'
 const log = createLogger('deadline-generator')
 import {
   fiscalYearEndKey,
+  fiscalYearForDeadlines,
   fiscalYearsEndingIn,
   getApplicableDeadlineConfigs,
   helarsmomsDeadline,
@@ -20,6 +21,7 @@ import {
   type CompanySettingsForDeadlines,
   type DeadlineFiscalYear,
   type DeadlineInstance,
+  type FiscalPeriodRowForDeadlines,
   type FiscalYearForDeadlines,
   type TaxAssessmentNoticeForDeadline,
 } from './deadline-config'
@@ -97,6 +99,7 @@ export const TAX_RELEVANT_FIELDS = [
   'moms_period',
   'f_skatt',
   'preliminary_tax_monthly',
+  'preliminary_tax_first_due_date',
   'vat_registered',
   'pays_salaries',
   'employer_registered',
@@ -118,7 +121,7 @@ export const TAX_RELEVANT_FIELDS = [
 ] as const
 
 export const DEADLINE_SETTINGS_SELECT =
-  'company_id, entity_type, moms_period, f_skatt, preliminary_tax_monthly, vat_registered, pays_salaries, employer_registered, employer_seasonal, fiscal_year_start_month, vat_taxable_base_over_40m, vat_has_eu_trade, vat_filing_method, periodisk_sammanstallning_enabled, periodisk_sammanstallning_period, periodisk_sammanstallning_filing_method, kontrolluppgifter_enabled, rot_rut_enabled, oss_enabled, ioss_enabled, intrastat_enabled, punktskatt_enabled, fyllnadsinbetalning_enabled' as const
+  'company_id, entity_type, moms_period, f_skatt, preliminary_tax_monthly, preliminary_tax_first_due_date, vat_registered, pays_salaries, employer_registered, employer_seasonal, fiscal_year_start_month, vat_taxable_base_over_40m, vat_has_eu_trade, vat_filing_method, periodisk_sammanstallning_enabled, periodisk_sammanstallning_period, periodisk_sammanstallning_filing_method, kontrolluppgifter_enabled, rot_rut_enabled, oss_enabled, ioss_enabled, intrastat_enabled, punktskatt_enabled, fyllnadsinbetalning_enabled' as const
 
 export function hasTaxRelevantFields(body: Record<string, unknown>): boolean {
   return TAX_RELEVANT_FIELDS.some((field) => Object.prototype.hasOwnProperty.call(body, field))
@@ -136,6 +139,7 @@ export function toDeadlineSettings(
     moms_period: settings.moms_period ?? null,
     f_skatt: settings.f_skatt ?? true,
     preliminary_tax_monthly: settings.preliminary_tax_monthly ?? null,
+    preliminary_tax_first_due_date: settings.preliminary_tax_first_due_date ?? null,
     vat_registered: settings.vat_registered ?? false,
     pays_salaries: settings.pays_salaries ?? false,
     employer_registered: settings.employer_registered ?? null,
@@ -225,11 +229,11 @@ async function fetchFiscalYears(
   supabase: SupabaseClient,
   companyId?: string,
 ): Promise<Map<string, FiscalYearForDeadlines[]>> {
-  const rows = await fetchAllRows<{ company_id: string; period_start: string; period_end: string }>(
+  const rows = await fetchAllRows<FiscalPeriodRowForDeadlines & { company_id: string }>(
     ({ from, to }) => {
       let query = supabase
         .from('fiscal_periods')
-        .select('company_id, period_start, period_end')
+        .select('company_id, name, period_start, period_end')
       if (companyId) query = query.eq('company_id', companyId)
       return query.order('id', { ascending: true }).range(from, to)
     },
@@ -237,7 +241,7 @@ async function fetchFiscalYears(
   const byCompany = new Map<string, FiscalYearForDeadlines[]>()
   for (const row of rows) {
     const current = byCompany.get(row.company_id) ?? []
-    current.push({ start: row.period_start, end: row.period_end })
+    current.push(fiscalYearForDeadlines(row))
     byCompany.set(row.company_id, current)
   }
   return byCompany

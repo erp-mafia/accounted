@@ -678,6 +678,66 @@ describe('POST /journal-entries/:id/correct: importmoms without its base', () =>
   })
 })
 
+describe('POST /journal-entries/:id/correct: a reverse-charge purchase counted twice', () => {
+  const post = (body: unknown, query = '') =>
+    correctLines(
+      request(`${BASE}/${ENTRY_ID}/correct${query}`, { method: 'POST', body: JSON.stringify(body) }),
+      entryParams,
+    )
+  // 6541 reports ruta 21 itself in this company's kontoplan.
+  const tables = () =>
+    makeClient({
+      company_members: OWNER,
+      journal_entries: { data: { ...POSTED, correction_of_id: null, reverses_id: null }, error: null },
+      fiscal_periods: OPEN_PERIOD,
+      company_settings: NO_LOCK,
+      chart_of_accounts: {
+        data: [
+          { account_number: '6541', account_name: 'Molntjänster EU', account_class: 6, default_vat_treatment: 'reverse_charge_eu_services', default_vat_rate: 0.25, vat_box: null },
+        ],
+        error: null,
+      },
+    })
+  const purchase = (pair: boolean) => ({
+    lines: [
+      { account_number: '6541', debit_amount: 1000, credit_amount: 0 },
+      { account_number: '1930', debit_amount: 0, credit_amount: 1000 },
+      ...(pair
+        ? [
+            { account_number: '4535', debit_amount: 1000, credit_amount: 0 },
+            { account_number: '4598', debit_amount: 0, credit_amount: 1000 },
+          ]
+        : []),
+      { account_number: '2645', debit_amount: 250, credit_amount: 0 },
+      { account_number: '2614', debit_amount: 0, credit_amount: 250 },
+    ],
+  })
+
+  it('dry run: 200 with warnings[] REVERSE_CHARGE_BASIS_TWICE for a 4535/4598 pair beside 6541', async () => {
+    const client = tables()
+    mockServiceClient.mockReturnValue(client)
+    const res = await post(purchase(true), '?dry_run=true')
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.preview.warnings).toEqual([
+      expect.objectContaining({
+        code: 'REVERSE_CHARGE_BASIS_TWICE',
+        message_sv: expect.stringMatching(/^Rättelsen skulle räkna samma inköp två gånger/),
+        message_en: expect.stringMatching(/^The correction would count the purchase twice/),
+      }),
+    ])
+    expect(wrote(client)).toBe(false)
+  })
+
+  it('dry run: no warning for the same purchase on 6541 without the pair', async () => {
+    mockServiceClient.mockReturnValue(tables())
+    const res = await post(purchase(false), '?dry_run=true')
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.preview.warnings).toBeUndefined()
+  })
+})
+
 // ---------------------------------------------------------------------------
 // redate
 // ---------------------------------------------------------------------------

@@ -48,6 +48,7 @@ export const INVOICER_OUTSIDE_ALLOWLIST: readonly string[] = [
   'POST /api/invoices/:id/refresh-exchange-rate',
   'POST /api/invoices/:id/resend',
   'POST /api/invoices/:id/send-payment-confirmation',
+  'POST /api/invoices/:id/uncredit',
   'POST /api/invoices/:id/underlag',
   'POST /api/invoices/autogiro/debit-files',
   'POST /api/invoices/autogiro/debit-files/:id/withdraw',
@@ -56,6 +57,7 @@ export const INVOICER_OUTSIDE_ALLOWLIST: readonly string[] = [
   'POST /api/invoices/autogiro/reports',
   'POST /api/invoices/autogiro/settle',
   'POST /api/invoices/bulk-book',
+  'POST /api/invoices/late-payment-interest/invoices',
   'POST /api/invoices/recurring',
   'POST /api/invoices/recurring/:id/run',
   'POST /api/invoices/self-billed',
@@ -95,6 +97,7 @@ export const OWNER_ONLY: readonly string[] = [
   'POST /api/billing/payment-packs',
   'POST /api/company/:id/delete',
   'POST /api/company/:id/migration-reset',
+  'PATCH /api/company/members/:id',
 ]
 
 /**

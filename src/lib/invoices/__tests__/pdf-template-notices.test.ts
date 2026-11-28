@@ -16,6 +16,7 @@ import {
   EXPORT_SERVICES_NOTICE_SV,
   getVatRules,
   LEGACY_EXPORT_NOTICE_SV,
+  OUTSIDE_SCOPE_NOTICE_SV,
   resolveInvoiceVatRules,
 } from '@/lib/invoices/vat-rules'
 import { makeCompanySettings, makeCustomer, makeInvoice } from '@/tests/helpers'
@@ -166,5 +167,59 @@ describe('domestic reverse charge for construction services (crm#1007)', () => {
     )
     expect(resolved.ok && resolved.rules.reverseChargeText).toBe(DOMESTIC_REVERSE_CHARGE_NOTICE)
     expect(localizeVatNotice(DOMESTIC_REVERSE_CHARGE_NOTICE, 'sv')).toBe(DOMESTIC_REVERSE_CHARGE_NOTICE)
+  })
+})
+
+describe('outside the scope of Swedish VAT (a räntefaktura)', () => {
+  const interestItems: InvoiceItem[] = [
+    { ...items[0], description: 'Dröjsmålsränta faktura 1042', unit_price: 68.49, line_total: 68.49, revenue_account: '8313' } as InvoiceItem,
+  ]
+  const interestInvoice = (): InvoicePdfInvoice =>
+    makeInvoice({
+      id: 'inv-rf',
+      status: 'sent',
+      currency: 'SEK',
+      subtotal: 68.49,
+      vat_rate: 0,
+      vat_amount: 0,
+      total: 68.49,
+      vat_treatment: 'outside_scope',
+      moms_ruta: null,
+      reverse_charge_text: OUTSIDE_SCOPE_NOTICE_SV,
+    })
+  const render = (language: 'sv' | 'en') =>
+    treeText(
+      InvoicePDF({
+        invoice: interestInvoice(),
+        customer: makeCustomer({ language, customer_type: 'swedish_business', country: 'SE' }),
+        items: interestItems,
+        company,
+        paymentQr: null,
+      }),
+    ).replaceAll(' ', ' ')
+
+  it('prints the notice, not the exemption notice, and no VAT rate: not even 0 %', () => {
+    const text = render('sv')
+    expect(text).toContain(OUTSIDE_SCOPE_NOTICE_SV)
+    expect(text).not.toContain('Undantag från skatteplikt')
+    expect(text).not.toMatch(/Moms 0\s?%/)
+    // The same lines as a momsfri sale do print the 0 % row.
+    const exempt = treeText(
+      InvoicePDF({
+        invoice: { ...interestInvoice(), vat_treatment: 'exempt', reverse_charge_text: null },
+        customer: makeCustomer({ language: 'sv', customer_type: 'swedish_business', country: 'SE' }),
+        items: interestItems,
+        company,
+        paymentQr: null,
+      }),
+    )
+    expect(exempt).toMatch(/Moms 0\s?%/)
+  })
+
+  it('prints the notice in English on an English PDF', () => {
+    const text = render('en')
+    expect(text).toContain('Outside the scope of Swedish VAT')
+    expect(text).not.toContain(OUTSIDE_SCOPE_NOTICE_SV)
+    expect(localizeVatNotice(OUTSIDE_SCOPE_NOTICE_SV, 'sv')).toBe(OUTSIDE_SCOPE_NOTICE_SV)
   })
 })

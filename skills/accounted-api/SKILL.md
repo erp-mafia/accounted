@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 478 endpoints.
+  pagination, scopes), and all 480 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -225,10 +225,10 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 478 operations. Paths are shown without
+API version `2026-05-12`, 480 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.accounted.se/api/v1`).
 
-### Core (24)
+### Core (25)
 
 Full detail: [references/core.md](references/core.md)
 
@@ -237,6 +237,7 @@ GET /api-key : Show what the calling API key may do: mode, scopes and company ac
 GET /companies : List companies the API key can access [scope:companies:read risk:low idempotent]
 POST /companies : Create a company and set it up for bookkeeping [scope:companies:write risk:medium dry-run]
 GET /companies/{companyId}/capabilities : Which building blocks this company can use, and why not [scope:companies:read risk:low idempotent]
+POST /companies/{companyId}/company-lookup : Look up a Swedish company in the public register by organisationsnummer [scope:companies:read risk:low idempotent]
 GET /companies/{companyId}/packages : List the company packages with their status and what keeps a switched-off one winding down [scope:companies:read risk:low idempotent]
 POST /companies/{companyId}/packages/{packageId}/disable : Stage switching a package off, for an owner or admin to approve [scope:companies:write risk:low idempotent dry-run reversible]
 POST /companies/{companyId}/packages/{packageId}/enable : Stage switching a package on, for an owner or admin to approve [scope:companies:write risk:low idempotent dry-run reversible]
@@ -481,7 +482,7 @@ DELETE /companies/{companyId}/suppliers/{id} : Archive a supplier (soft-delete) 
 POST /companies/{companyId}/suppliers/bulk-create : Create up to 50 suppliers in one call (partial-success) [scope:suppliers:write risk:low idempotent dry-run reversible]
 ```
 
-### Documents (25)
+### Documents (26)
 
 Full detail: [references/documents.md](references/documents.md)
 
@@ -493,6 +494,7 @@ DELETE /companies/{companyId}/documents/{id} : Delete a document that no verifik
 GET /companies/{companyId}/documents/{id}/download : Get a time-limited signed download URL for a document [scope:documents:read risk:low idempotent]
 POST /companies/{companyId}/documents/{id}/link : Link a document to a journal entry [scope:documents:write risk:medium idempotent dry-run]
 PUT /companies/{companyId}/documents/{id}/type : Set what an archived document is (its type in Dokument) [scope:documents:write risk:low idempotent dry-run reversible]
+GET /companies/{companyId}/documents/search : Search the archive: document text and file names, and where the company brain runs, agreements and facts [scope:documents:read risk:low idempotent]
 GET /companies/{companyId}/inbox-items : List invoice-inbox items (Underlag) with a summary of what was read from each [scope:documents:read risk:low idempotent]
 POST /companies/{companyId}/inbox-items : Deliver a supplier invoice or receipt into the Inkorg for a person to book [scope:documents:write risk:low idempotent]
 GET /companies/{companyId}/inbox-items/{id} : Read one inbox item with its full reading and e-mail text [scope:documents:read risk:low idempotent]

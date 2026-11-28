@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server'
 import crypto from 'crypto'
-import { isAllowedRedirectUri } from '@/lib/auth/oauth-allowlist'
+import { isAllowedRedirectUri, registrableRedirectUris } from '@/lib/auth/oauth-allowlist'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { checkRateLimit } from '@/lib/auth/rate-limit-http'
 import { truncateIp } from '@/lib/api/v1/with-api-v1'
+import { createLogger } from '@/lib/logger'
 
 /**
  * RFC 7591: Dynamic Client Registration.
@@ -29,6 +30,8 @@ import { truncateIp } from '@/lib/api/v1/with-api-v1'
  *  - Error responses are uniform across "built-in", "DB-registered", and
  *    "disallowed" so an attacker cannot distinguish between them.
  */
+
+const log = createLogger('mcp-oauth/register')
 
 const REGISTER_RATE_LIMIT = {
   // 10 attempts per minute per /24: enough headroom for a developer
@@ -72,19 +75,26 @@ export async function POST(request: Request) {
     allowlistClient = undefined
   }
 
-  const redirectUris = Array.isArray(body.redirect_uris) ? body.redirect_uris : []
+  const requestedUris: unknown[] = Array.isArray(body.redirect_uris) ? body.redirect_uris : []
   // Each URI that is not built in costs a database read below, and a
   // partner's callbacks are public (a prefix row matches endless distinct
   // URIs), so one anonymous request may not hold more than a client needs:
   // Cursor, the most so far, registers three.
-  if (redirectUris.length > MAX_REDIRECT_URIS) {
+  if (requestedUris.length > MAX_REDIRECT_URIS) {
     return NextResponse.json(
       { error: 'invalid_redirect_uri', error_description: `At most ${MAX_REDIRECT_URIS} redirect URIs` },
       { status: 400 }
     )
   }
+  const redirectUris = registrableRedirectUris(requestedUris)
   for (const uri of redirectUris) {
     if (typeof uri !== 'string' || !(await isAllowedRedirectUri(uri, allowlistClient))) {
+      // The origin only: a path can carry a per-user id. Without this line a
+      // client whose callbacks changed fails here with nothing in the log.
+      log.warn('redirect_uri refused', {
+        origin: refusedOrigin(uri),
+        requested: requestedUris.length,
+      })
       // Single error shape regardless of whether the URI is malformed,
       // unknown, or revoked: prevents the endpoint being used as an
       // enumeration oracle for the user-managed allowlist (CC6.6).
@@ -105,4 +115,14 @@ export async function POST(request: Request) {
     response_types: ['code'],
     token_endpoint_auth_method: 'none',
   }, { status: 201 })
+}
+
+function refusedOrigin(uri: unknown): string {
+  if (typeof uri !== 'string') return typeof uri
+  try {
+    return new URL(uri).origin
+  } catch {
+    // Not a URL: the log line only needs to say so, the request is refused anyway.
+    return 'unparseable'
+  }
 }

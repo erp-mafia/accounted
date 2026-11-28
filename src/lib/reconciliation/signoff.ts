@@ -27,7 +27,9 @@ const log = createLogger('reconciliation/signoff')
  * On a bank account the bridge compares movements in the window, never
  * balances. Beside it the sign-off carries the bank's own balance against the
  * books at the end of the date (bank_balance) and a warning when they differ
- * or the bank has no balance for the date. The warning never blocks.
+ * or the bank has no balance for the date. The warning never blocks. A bank
+ * account no bank connection feeds may instead be signed against the
+ * statement's balance (external_balance), judged as on a manual account.
  */
 
 export type SignoffErrorCode =
@@ -105,9 +107,11 @@ export interface SignoffInput {
   force?: boolean
   /**
    * The balance per the signer's underlag, in ledger sign (liabilities
-   * negative). Only for manual accounts without a system specification; the
-   * bank, the skattekonto and the reskontra/semesterskuld accounts have their
-   * own outside truth and refuse it.
+   * negative). For manual accounts without a system specification, and bank
+   * accounts no bank connection feeds (the statement's balance at the end of
+   * the date); a connected bank account, the skattekonto and the
+   * reskontra/semesterskuld accounts have their own outside truth and refuse
+   * it. Judged against the booked balance at the end of the date.
    */
   external_balance?: number | null
 }
@@ -177,6 +181,25 @@ async function fiscalPeriodStartFor(
   }
   const start = (data as { period_start?: string | null } | null)?.period_start
   return typeof start === 'string' && ISO_DATE_RE.test(start) ? start : null
+}
+
+/**
+ * Whether a bank connection feeds the cash account: the same test the
+ * account list makes for its source (psd2 when it has one). A failed read
+ * is no answer, so it throws rather than let a stated balance through, and a
+ * row that is gone (removed while the sign-off ran) counts as connected:
+ * only an account known to have no connection takes a stated balance.
+ */
+async function hasBankConnection(supabase: SupabaseClient, companyId: string, cashAccountId: string): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('cash_accounts')
+    .select('bank_connection_id')
+    .eq('company_id', companyId)
+    .eq('id', cashAccountId)
+    .maybeSingle()
+  if (error) throw new Error(`Kunde inte läsa kassakontot: ${error.message}`)
+  const row = data as { bank_connection_id?: string | null } | null
+  return row === null || Boolean(row.bank_connection_id)
 }
 
 /**
@@ -322,24 +345,48 @@ export async function signOffAccount(
 
   // A stated outside balance is the manual adapter's outside truth for the
   // date. Where the system keeps a specification (or a feed) the stated
-  // number would only hide a real difference, so it is refused there.
-  if (input.external_balance != null) {
-    if (status.kind !== 'manual' || status.manual?.specification) {
-      throw new ReconciliationSignoffError(
-        'Kontot har redan en sanning utanför bokföringen (bank, Skatteverket, reskontra eller beräkning). Ange inget saldo manuellt; signera med en notering om något avviker.',
-        'EXTERNAL_BALANCE_NOT_ALLOWED',
-      )
-    }
-    const external = roundOre(input.external_balance)
-    const difference = status.ledger_balance == null ? null : roundOre(status.ledger_balance - external)
-    status.external_balance = external
-    status.difference = difference
-    status.unexplained_difference = difference
-    status.is_reconciled = difference != null && Math.abs(difference) < 0.005
+  // number would only hide a real difference, so it is refused there. A bank
+  // account no bank connection feeds, though it has a cash account (a card
+  // or a cash box kept by hand or from files), has no balance from the bank
+  // to hold the books against: there the statement's balance for the date is
+  // taken as on a manual account (decision 2026-11-23).
+  const stated = input.external_balance != null ? roundOre(input.external_balance) : null
+  const statedOnBank =
+    stated != null &&
+    parsed.kind === 'bank' &&
+    status.kind === 'bank' &&
+    !(await hasBankConnection(supabase, companyId, parsed.cashAccountId))
+  if (stated != null && !statedOnBank && (status.kind !== 'manual' || status.manual?.specification)) {
+    throw new ReconciliationSignoffError(
+      'Kontot har redan en sanning utanför bokföringen (bank, Skatteverket, reskontra eller beräkning). Ange inget saldo manuellt; signera med en notering om något avviker.',
+      'EXTERNAL_BALANCE_NOT_ALLOWED',
+    )
+  }
+  const bankRefusal = (status.bank as { balance_check_refusal?: BankBalanceCheckRefusal | null } | null)?.balance_check_refusal
+  if (statedOnBank && bankRefusal === 'FOREIGN_CURRENCY_ACCOUNT') {
+    throw new ReconciliationSignoffError(
+      'Kontot förs i en annan valuta än bokföringen, så ett angivet saldo kan inte jämföras med det bokförda. Signera utan saldo, med en notering om något avviker.',
+      'EXTERNAL_BALANCE_NOT_ALLOWED',
+    )
   }
 
   const bankBalance = await bankBalanceAt(supabase, companyId, status, throughDate)
-  const warning = bankBalanceWarning(bankBalance, status.account_number, status.currency)
+  let warning = bankBalanceWarning(bankBalance, status.account_number, status.currency)
+
+  if (stated != null) {
+    // The booked side at the end of the date. A bank account's own
+    // ledger_balance is what the books moved in the window, so on a bank
+    // account it is the booked side of the bank balance comparison.
+    const ledger = statedOnBank ? (bankBalance?.booked_balance ?? null) : status.ledger_balance
+    const difference = ledger == null ? null : roundOre(ledger - stated)
+    status.external_balance = stated
+    status.ledger_balance = ledger
+    status.difference = difference
+    status.unexplained_difference = difference
+    status.is_reconciled = difference != null && Math.abs(difference) < 0.005
+    // The statement's balance is the one the bank had none of.
+    if (warning?.code === 'NO_BANK_BALANCE') warning = null
+  }
 
   // The sign-off's rule is the explained difference (decision 2026-08-23):
   // open rows that the bridge lists are the specification an attestation may

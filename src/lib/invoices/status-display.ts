@@ -42,6 +42,8 @@ export interface InvoiceRowStatusInput extends OverdueInvoiceInput {
   quote_status?: string | null
   valid_until?: string | null
   paid_at?: string | null
+  /** A cancelled credit note whose credit was undone (lib/invoices/uncredit-invoice.ts). */
+  credit_undone_at?: string | null
 }
 
 /**
@@ -83,6 +85,11 @@ function fromDisplay(kind: InvoiceRowStatusKind, status: InvoiceStatus): Invoice
  * remainder (lib/invoices/overdue.ts), never the stored status alone.
  */
 export function invoiceRowStatus(invoice: InvoiceRowStatusInput, today?: string): InvoiceRowStatus {
+  // Ångrad: issued, then its credit undone. Kept with its number, so it
+  // reads apart from a draft that was cancelled before it was issued.
+  if (invoice.status === 'cancelled' && invoice.credit_undone_at) {
+    return { kind: 'cancelled', labelKey: 'status_credit_undone', chip: 'secondary' }
+  }
   if (invoice.status === 'cancelled') return fromDisplay('cancelled', 'cancelled')
   // Whatever status an import gave it: invoices_credit_note_not_paid keeps a
   // linked one out of 'paid', an unlinked one can carry it.

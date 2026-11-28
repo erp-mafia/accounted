@@ -25,10 +25,10 @@ const SERIES_LETTER_RE = /^[A-Z]$/
 /**
  * The conventional Swedish verifikationsserier and what each one is for.
  *
- * The column accepts any A-Z letter, but a free-text field invites typos and
- * lets the same letter mean different things across a company's ledger, so the
- * entry form offers this fixed set (plus whatever series the company has
- * already configured or used).
+ * The column accepts any A-Z letter. The pickers list this set first, with
+ * these names, and the remaining letters after it (buildVoucherSeriesOptions),
+ * so the conventional layout is what a company sees first while a ledger that
+ * gives its letters other meanings (S for skattekontot) can keep them.
  *
  * The letters are NOT prescribed by law: BFL 5 kap. 7 § only requires an
  * unbroken, systematically ordered numbering within each series. This list is
@@ -83,37 +83,34 @@ export function voucherSeriesLabel(
   return match ? match.label : ''
 }
 
+/** Every letter a voucher series can be: one uppercase letter, A-Z. */
+const SERIES_LETTERS: readonly string[] = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
+
 /**
- * The closed list every series picker offers: the presets in their fixed
- * order, then every other letter the company already uses or has named,
- * deduplicated and sorted. Each entry carries the display name resolved by
- * voucherSeriesLabel, so a custom name overrides a preset in place.
+ * The list every series picker offers: the presets in their fixed order, then
+ * every other single letter A-Z in alphabetical order. Each entry carries the
+ * display name resolved by voucherSeriesLabel, so a custom name overrides a
+ * preset in place and a non-preset letter shows the company's name for it, or
+ * none.
  *
- * `extraLetters` may hold anything (settings values, draft state, account
- * rows); only single uppercase letters survive, so an empty string, null or a
- * typo never becomes an option. A free A-Z list would let a slip start an
- * undocumented series (BFNAR 2013:2 p. 9.2-9.15 wants the series in use
- * enumerated in the systemdokumentation).
+ * Still a fixed list, never free text: a series is one letter A-Z, the same
+ * rule the settings schema and the DB columns hold. Any letter is lawful:
+ * BFL 5 kap. 7 § asks for an unbroken, systematically ordered numbering within
+ * each series, and commit_journal_entry numbers each letter on its own per
+ * company and räkenskapsår. BFNAR 2013:2 p. 9.2-9.15 wants the series in use
+ * enumerated in the systemdokumentation, which lists every series that has
+ * vouchers (voucher_sequences) and every configured one, under the company's
+ * name for it or "Egen serie", so a letter outside the presets is documented
+ * the moment it is used.
  */
 export function buildVoucherSeriesOptions(
   labels: VoucherSeriesLabels | null | undefined,
-  extraLetters: Iterable<unknown>,
 ): Array<{ letter: string; label: string }> {
-  const seen = new Set(VOUCHER_SERIES_PRESETS.map((p) => p.letter))
-  const extras = new Set<string>()
-  const consider = (value: unknown) => {
-    if (typeof value === 'string' && SERIES_LETTER_RE.test(value) && !seen.has(value)) {
-      extras.add(value)
-    }
-  }
-  for (const value of extraLetters) consider(value)
-  for (const key of Object.keys(labels ?? {})) consider(key)
+  const presetLetters = new Set(VOUCHER_SERIES_PRESETS.map((p) => p.letter))
   return [
-    ...VOUCHER_SERIES_PRESETS.map((p) => ({ letter: p.letter, label: voucherSeriesLabel(p.letter, labels) })),
-    ...Array.from(extras)
-      .sort()
-      .map((letter) => ({ letter, label: voucherSeriesLabel(letter, labels) })),
-  ]
+    ...VOUCHER_SERIES_PRESETS.map((p) => p.letter),
+    ...SERIES_LETTERS.filter((letter) => !presetLetters.has(letter)),
+  ].map((letter) => ({ letter, label: voucherSeriesLabel(letter, labels) }))
 }
 
 /**

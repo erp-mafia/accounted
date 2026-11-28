@@ -1070,6 +1070,35 @@ describe('header fallback and payment path: strict FX conversion', () => {
     ])
   })
 
+  it('a whole-krona remainder while 1510 still carries the issue öre: the bank takes the kronor left, 3740 the gap', () => {
+    const rows = (lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>) =>
+      lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])
+    // 999,75 issued at 1 000 (Cr 3740 0,25), 499,75 paid: 500 open, 1510 carries 500,25.
+    const up = makeInvoice({ currency: 'SEK', total: 999.75, remaining_amount: 500, paid_amount: 499.75 })
+    expect(rows(buildInvoicePaymentLines({ ...up, carried_sek: 500.25 }, undefined, '1930').lines)).toEqual([
+      ['1930', 500, 0],
+      ['1510', 0, 500.25],
+      ['3740', 0.25, 0],
+    ])
+    // 12 500,25 issued at 12 500 (Dr 3740 0,25), 5 000,25 paid: 7 500 open, 1510 carries 7 499,75.
+    const down = makeInvoice({ currency: 'SEK', total: 12500.25, remaining_amount: 7500, paid_amount: 5000.25 })
+    expect(rows(buildInvoicePaymentLines({ ...down, carried_sek: 7499.75 }, undefined, '1930').lines)).toEqual([
+      ['1930', 7500, 0],
+      ['1510', 0, 7499.75],
+      ['3740', 0, 0.25],
+    ])
+    // No ledger figure: the remainder, as before.
+    expect(rows(buildInvoicePaymentLines(up, undefined, '1930').lines)).toEqual([
+      ['1930', 500, 0],
+      ['1510', 0, 500],
+    ])
+    // A ledger figure a krona or more off is no rounding: the bank takes it, as before, and the lines balance.
+    expect(rows(buildInvoicePaymentLines({ ...up, carried_sek: 520 }, undefined, '1930').lines)).toEqual([
+      ['1930', 520, 0],
+      ['1510', 0, 520],
+    ])
+  })
+
   describe('a stated difference, measured from the rate, on a ledger that says otherwise', () => {
     const rows = (lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>) =>
       lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])

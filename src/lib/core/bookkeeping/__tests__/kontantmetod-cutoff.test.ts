@@ -2347,7 +2347,7 @@ describe('postKontantmetodCutoff (per invoice)', () => {
       p_company_id: 'co-1', p_fiscal_period_id: 'fp-1', p_journal_entry_id: 'je-2',
       p_invoice_id: null, p_supplier_invoice_id: 'si-1',
     })
-    expect(anchorCustomerInvoiceDocument).toHaveBeenCalledWith(supabase, 'co-1', 'inv-1')
+    expect(anchorCustomerInvoiceDocument).toHaveBeenCalledWith(supabase, 'co-1', 'inv-1', 'user-1')
     expect(anchorSupplierInvoiceDocument).toHaveBeenCalledWith(supabase, 'co-1', 'si-1')
     expect(reverseEntry).not.toHaveBeenCalled()
   })
