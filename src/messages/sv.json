@@ -22529,28 +22529,18 @@
     "empty_all_closed": "Periodiseringar görs efter att räkenskapsårets slutdatum har passerat. Alla räkenskapsår har redan sitt bokslut eller är stängda."
   },
   "invoice_send_order": {
-    "heading": "Hur ska fakturorna gå ut?",
-    "intro": "Vi provar uppifrån och ner för varje kund.",
-    "customers_here": "{count, plural, one {# kund finns här.} other {# kunder finns här.}}",
-    "customers_none": "Inga kunder här än. Det här gäller från er första faktura.",
+    "ways_label": "Vägar",
+    "ways_help": "När du skapar en faktura väljs den första vägen i ordningen som kunden har uppgifter för: e-faktura för ett bolag eller en förening med organisationsnummer, Kivra eller Billo för en kund med person- eller organisationsnummer, annars e-post. En kund med en egen väg (Skickas som) får den först. I fakturan kan du alltid välja en annan väg.",
     "way_peppol": "E-faktura",
     "way_email": "E-post",
     "line_peppol": "Direkt in i kundens system",
     "line_mailbox": "Till kundens digitala brevlåda",
     "line_email": "Som PDF i ett mejl",
-    "reach_count": "{count, plural, one {# kund} other {# kunder}}",
-    "move_up": "Flytta {way} upp",
     "use_way": "Använd {way}",
-    "split_label": "Så fördelas kunderna över vägarna i den här ordningen",
-    "without_way": "{count} utan väg",
-    "apply": "Använd den här ordningen",
-    "turn_one_on": "Slå på minst ett sätt.",
-    "cancel": "Avbryt",
-    "saved": "Sparat. Varje faktura går ut den bästa vägen kunden har.",
     "save_failed": "Kunde inte spara ordningen",
-    "row_label": "Ordning för utskick",
-    "row_help": "Varje faktura går ut den första vägen i ordningen som kunden har. Saknar kunden alla går fakturan ut som vanligt.",
-    "recommended_order": "Rekommenderad ordning",
-    "change": "Ändra"
+    "always": "Alltid",
+    "move": "Flytta {way}",
+    "saved_toast": "Ordningen sparad",
+    "mailbox_swapped": "{on} används nu i stället för {off}"
   }
 }

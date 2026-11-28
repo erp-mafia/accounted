@@ -14,6 +14,10 @@ interface SortableRowProps<T> {
   /** Disable dragging (e.g. a single-row list). */
   disabled?: boolean
   className?: string
+  /** Called once when a drag ends, so a list can save the order it settled on. */
+  onDragEnd?: () => void
+  /** Moves the row one place with the arrow keys on the focused handle: -1 up, 1 down. */
+  onMove?: (step: -1 | 1) => void
 }
 
 /**
@@ -34,6 +38,8 @@ export function SortableRow<T>({
   handleLabel,
   disabled = false,
   className,
+  onDragEnd,
+  onMove,
 }: SortableRowProps<T>) {
   const controls = useDragControls()
   const reduceMotion = useReducedMotion()
@@ -45,6 +51,7 @@ export function SortableRow<T>({
       dragListener={false}
       dragControls={controls}
       transition={reduceMotion ? { duration: 0 } : undefined}
+      onDragEnd={onDragEnd}
       className={className}
     >
       <div className="flex items-stretch gap-2">
@@ -56,6 +63,13 @@ export function SortableRow<T>({
             if (disabled) return
             e.preventDefault()
             controls.start(e)
+          }}
+          onKeyDown={(e) => {
+            if (disabled || !onMove) return
+            const step = e.key === 'ArrowUp' ? -1 : e.key === 'ArrowDown' ? 1 : 0
+            if (!step) return
+            e.preventDefault()
+            onMove(step)
           }}
           className="flex shrink-0 touch-none cursor-grab items-center px-1 text-muted-foreground transition-colors duration-150 hover:text-foreground active:cursor-grabbing disabled:cursor-default disabled:opacity-30"
         >

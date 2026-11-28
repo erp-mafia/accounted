@@ -7,15 +7,14 @@ import {
   defaultChannelByOrder,
   hasOrderToChoose,
   initialSendOrderRows,
+  isAlwaysOnWay,
+  isMailboxWay,
   isValidSendOrder,
-  moveSendOrderRowUp,
+  moveSendOrderRow,
   orderOfRows,
   parseSendOrder,
-  splitCustomers,
   toggleSendOrderRow,
-  type CustomerReachCount,
 } from '@/lib/invoices/send-order'
-import { countCustomerReach, customerReach } from '@/lib/invoices/send-order-reach'
 
 function option(channel: ChannelOption['channel'], available = true): ChannelOption {
   return { channel, available, reason: available ? null : 'peppol_send_limit' }
@@ -75,79 +74,6 @@ describe('defaultChannelByOrder', () => {
   })
 })
 
-describe('splitCustomers', () => {
-  const counts: CustomerReachCount[] = [
-    { reach: { peppol: true, mailbox: true, email: true }, count: 5 },
-    { reach: { peppol: false, mailbox: true, email: true }, count: 3 },
-    { reach: { peppol: false, mailbox: false, email: true }, count: 2 },
-    { reach: { peppol: false, mailbox: false, email: false }, count: 1 },
-  ]
-
-  it('counts each customer for the first way in the order that reaches it', () => {
-    const split = splitCustomers(counts, ['peppol', 'kivra', 'email'])
-    expect(split.perWay).toEqual({ peppol: 5, kivra: 3, billo: 0, email: 2 })
-    expect(split.none).toBe(1)
-    expect(split.total).toBe(11)
-  })
-
-  it('moves customers when the order changes', () => {
-    const split = splitCustomers(counts, ['email', 'peppol'])
-    expect(split.perWay).toEqual({ peppol: 0, kivra: 0, billo: 0, email: 10 })
-    expect(split.none).toBe(1)
-  })
-
-  it('counts a customer no listed way reaches as without a way', () => {
-    const split = splitCustomers(counts, ['peppol'])
-    expect(split.perWay.peppol).toBe(5)
-    expect(split.none).toBe(6)
-  })
-
-  it('serves Kivra and Billo from the same mailbox answer', () => {
-    const split = splitCustomers(counts, ['billo', 'kivra'])
-    expect(split.perWay).toEqual({ peppol: 0, kivra: 0, billo: 8, email: 0 })
-  })
-
-  it('splits nothing without customers', () => {
-    expect(splitCustomers([], ['email'])).toEqual({
-      perWay: { peppol: 0, kivra: 0, billo: 0, email: 0 },
-      none: 0,
-      total: 0,
-    })
-  })
-})
-
-describe('customer reach', () => {
-  it('reads the three answers the editor gives', () => {
-    expect(customerReach({ customer_type: 'swedish_business', org_number: '5560360793', email: 'a@b.se' })).toEqual({
-      peppol: true,
-      mailbox: true,
-      email: true,
-    })
-    expect(customerReach({ customer_type: 'individual', personal_number: 'x', email: null })).toEqual({
-      peppol: false,
-      mailbox: true,
-      email: false,
-    })
-    expect(customerReach({ customer_type: 'eu_business', email: 'not-an-address' })).toEqual({
-      peppol: false,
-      mailbox: false,
-      email: false,
-    })
-  })
-
-  it('counts customers per combination', () => {
-    const counts = countCustomerReach([
-      { customer_type: 'eu_business', email: 'a@b.se' },
-      { customer_type: 'eu_business', email: 'c@d.se' },
-      { customer_type: 'eu_business', email: null },
-    ])
-    const total = counts.reduce((sum, c) => sum + c.count, 0)
-    expect(total).toBe(3)
-    expect(counts).toHaveLength(2)
-    expect(splitCustomers(counts, ['email'])).toMatchObject({ none: 1, total: 3 })
-  })
-})
-
 describe('the order list', () => {
   it('starts from the recommended order, all on, without a saved order', () => {
     expect(initialSendOrderRows(['peppol', 'email'], null)).toEqual([
@@ -168,14 +94,62 @@ describe('the order list', () => {
     expect(orderOfRows(initialSendOrderRows(['email'], ['billo', 'email']))).toEqual(['email'])
   })
 
-  it('moves a row up, keeps the first row, and turns rows off', () => {
+  it('keeps e-post on where a saved order left it out', () => {
+    expect(initialSendOrderRows(['peppol', 'kivra', 'email'], ['kivra'])).toEqual([
+      { way: 'kivra', on: true },
+      { way: 'email', on: true },
+      { way: 'peppol', on: false },
+    ])
+  })
+
+  it('moves a row one place up or down and keeps a row at the end it moves toward', () => {
     const rows = initialSendOrderRows(['peppol', 'kivra', 'email'], null)
-    expect(orderOfRows(moveSendOrderRowUp(rows, 'email'))).toEqual(['peppol', 'email', 'kivra'])
-    expect(orderOfRows(moveSendOrderRowUp(rows, 'peppol'))).toEqual(['peppol', 'kivra', 'email'])
+    expect(orderOfRows(moveSendOrderRow(rows, 'email', -1))).toEqual(['peppol', 'email', 'kivra'])
+    expect(orderOfRows(moveSendOrderRow(rows, 'peppol', 1))).toEqual(['kivra', 'peppol', 'email'])
+    expect(orderOfRows(moveSendOrderRow(rows, 'peppol', -1))).toEqual(['peppol', 'kivra', 'email'])
+    expect(orderOfRows(moveSendOrderRow(rows, 'email', 1))).toEqual(['peppol', 'kivra', 'email'])
+  })
+
+  it('turns a way off and on again, and never e-post', () => {
+    const rows = initialSendOrderRows(['peppol', 'kivra', 'email'], null)
     expect(orderOfRows(toggleSendOrderRow(rows, 'kivra'))).toEqual(['peppol', 'email'])
-    let none = rows
-    for (const way of ['peppol', 'kivra', 'email'] as const) none = toggleSendOrderRow(none, way)
-    expect(orderOfRows(none)).toEqual([])
+    expect(orderOfRows(toggleSendOrderRow(toggleSendOrderRow(rows, 'kivra'), 'kivra'))).toEqual(['peppol', 'kivra', 'email'])
+    let all = rows
+    for (const way of ['peppol', 'kivra', 'email'] as const) all = toggleSendOrderRow(all, way)
+    expect(orderOfRows(all)).toEqual(['email'])
+    expect(isAlwaysOnWay('email')).toBe(true)
+    expect(isAlwaysOnWay('kivra')).toBe(false)
+  })
+
+  it('starts with only the first of Kivra and Billo on, and the ways that are on first', () => {
+    expect(initialSendOrderRows(['peppol', 'kivra', 'billo', 'email'], null)).toEqual([
+      { way: 'peppol', on: true },
+      { way: 'kivra', on: true },
+      { way: 'email', on: true },
+      { way: 'billo', on: false },
+    ])
+    expect(orderOfRows(initialSendOrderRows(['peppol', 'kivra', 'billo', 'email'], ['billo', 'kivra', 'email']))).toEqual([
+      'billo',
+      'email',
+    ])
+  })
+
+  it('switches Kivra off when Billo is switched on, Billo taking its place, and the other way round', () => {
+    const rows = initialSendOrderRows(['peppol', 'kivra', 'billo', 'email'], null)
+    const billo = toggleSendOrderRow(rows, 'billo')
+    expect(billo).toEqual([
+      { way: 'peppol', on: true },
+      { way: 'billo', on: true },
+      { way: 'email', on: true },
+      { way: 'kivra', on: false },
+    ])
+    expect(orderOfRows(toggleSendOrderRow(billo, 'kivra'))).toEqual(['peppol', 'kivra', 'email'])
+  })
+
+  it('leaves the other mailbox off when one is switched off', () => {
+    const rows = initialSendOrderRows(['kivra', 'billo', 'email'], null)
+    expect(orderOfRows(toggleSendOrderRow(rows, 'kivra'))).toEqual(['email'])
+    expect([isMailboxWay('kivra'), isMailboxWay('billo'), isMailboxWay('peppol'), isMailboxWay('email')]).toEqual([true, true, false, false])
   })
 
   it('offers e-faktura and each mailbox only where the company can use it, and email always', () => {
