@@ -1198,6 +1198,7 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
         unexplained={status.unexplained_difference}
         currency={currency}
         askExternalBalance={isManual && !specification}
+        askStatementBalance={!isSkv && !isManual && account.source.type !== 'psd2'}
         ledgerBalance={status.ledger_balance}
         onPreview={previewSignoff}
         onSubmit={submitSignoff}

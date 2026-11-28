@@ -176,7 +176,7 @@ import {
   type PeppolSending,
 } from '@/lib/invoices/editor/channel'
 import { fetchPeppolSending } from '@/lib/invoices/editor/peppol-sending'
-import { parseSendOrder } from '@/lib/invoices/send-order'
+import { sendOrderForCustomer } from '@/lib/invoices/send-order'
 import { countTextRowsLeftOutOfPeppol } from '@/lib/invoices/peppol-lines'
 import { DIGITAL_MAILBOX_PROVIDER_NAMES, fetchActiveSendingProviders } from '@/lib/digital-mailboxes/sending-status'
 import {
@@ -383,6 +383,10 @@ type ConfirmIntent = Extract<EditorIntent, { kind: 'send' } | { kind: 'create' }
 // The one VAT treatment the editor states for the invoice itself (crm#1007):
 // omvänd betalningsskyldighet for construction services (ML 16 kap. 13 §).
 const DOMESTIC_REVERSE_CHARGE: InvoiceVatOverride = { vat_treatment: 'reverse_charge_domestic', delivery_country: null }
+// The treatment a räntefaktura draft carries (Skapa räntefaktura on the
+// Dröjsmålsränta page): no Swedish VAT, lines on 8313. The editor never sets
+// it; a draft that has it keeps it, and the server keeps it on every save.
+const OUTSIDE_SCOPE = { vat_treatment: 'outside_scope', delivery_country: null } as const
 
 export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'create' }) {
   // Edit mode pre-fills the form from an existing draft and saves via PATCH.
@@ -737,6 +741,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // statement about this invoice, ticked by hand, never derived from the
   // customer. A draft that states it, or a copy of one, starts ticked.
   const storedDomesticReverseCharge = initial?.vat_treatment_override === 'reverse_charge_domestic'
+  // A räntefaktura draft: its treatment and its lines are the server's
+  // (outside_scope, 8313), so the rules, the rates and the preview read it.
+  const storedOutsideScope = initial?.vat_treatment_override === 'outside_scope'
   const [domesticReverseCharge, setDomesticReverseCharge] = useState<boolean>(
     storedDomesticReverseCharge || copyInitial?.domestic_reverse_charge === true,
   )
@@ -1759,7 +1766,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         if (!isSwedishBusiness) setDomesticReverseCharge(false)
         const nextPlan = resolveLineVatRates(
           customer,
-          isSwedishBusiness && domesticReverseChargeArmedRef.current ? DOMESTIC_REVERSE_CHARGE : null,
+          storedOutsideScope
+            ? OUTSIDE_SCOPE
+            : isSwedishBusiness && domesticReverseChargeArmedRef.current ? DOMESTIC_REVERSE_CHARGE : null,
         )
         const nextDefaultRate = nextPlan.defaultRate
         if (didInitialCustomerSync.current) {
@@ -1862,7 +1871,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       prefilledMarkingRef.current = markingPlan.prefilled
       if (markingPlan.value !== currentMarking) setValue('invoice_marking', markingPlan.value, { shouldDirty: true })
     }
-  }, [watchCustomerId, customers, setValue, getValues, mode])
+  }, [watchCustomerId, customers, setValue, getValues, mode, storedOutsideScope])
 
   // One-click VIES check from the draft (#2749). /api/vat/validate has
   // already stamped the customer row; mirror it on the local copy so the
@@ -1966,8 +1975,11 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // as the server would book them, and the checkbox says what is missing.
   domesticReverseChargeArmedRef.current =
     domesticReverseCharge && vatRegistered && mode !== 'self_billed' && watchDocumentType !== 'delivery_note'
+  // A räntefaktura draft keeps its own treatment: no checkbox can restate it.
+  const outsideScopeOn = storedOutsideScope && vatRegistered && mode !== 'self_billed'
+  const outsideScopeRules = outsideScopeOn && selectedCustomer ? resolveInvoiceVatRules(selectedCustomer, OUTSIDE_SCOPE) : null
   const domesticReverseChargeAvailable = selectedCustomer?.customer_type === 'swedish_business' &&
-    vatRegistered && mode !== 'self_billed' && watchDocumentType !== 'delivery_note'
+    vatRegistered && mode !== 'self_billed' && watchDocumentType !== 'delivery_note' && !storedOutsideScope
   const domesticReverseChargeOn = domesticReverseCharge && domesticReverseChargeAvailable
   const domesticReverseChargeRules =
     domesticReverseChargeOn && selectedCustomer ? resolveInvoiceVatRules(selectedCustomer, DOMESTIC_REVERSE_CHARGE) : null
@@ -1981,17 +1993,22 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     stored: storedDomesticReverseCharge,
   })
 
-  const vatRules = domesticReverseChargeRules?.ok
-    ? domesticReverseChargeRules.rules
-    : selectedCustomer
-      ? getVatRules(selectedCustomer.customer_type, selectedCustomer.vat_number_validated, selectedCustomer.country)
-      : null
+  const vatRules = outsideScopeRules?.ok
+    ? outsideScopeRules.rules
+    : domesticReverseChargeRules?.ok
+      ? domesticReverseChargeRules.rules
+      : selectedCustomer
+        ? getVatRules(selectedCustomer.customer_type, selectedCustomer.vat_number_validated, selectedCustomer.country)
+        : null
 
   // Rendered options and the default are deliberately two different sets:
   // `options` is what may LAWFULLY appear on a line (getPermittedVatRates),
   // `defaultRates` / `defaultRate` is what the form OFFERS by itself
   // (getAvailableVatRates). See components/invoices/line-vat-rates.ts.
-  const vatRatePlan = resolveLineVatRates(selectedCustomer, domesticReverseChargeOn ? DOMESTIC_REVERSE_CHARGE : null)
+  const vatRatePlan = resolveLineVatRates(
+    selectedCustomer,
+    outsideScopeOn ? OUTSIDE_SCOPE : domesticReverseChargeOn ? DOMESTIC_REVERSE_CHARGE : null,
+  )
 
   // Ticking moves every priced line to 0 % (the only lawful rate under
   // omvänd betalningsskyldighet); unticking moves them back to the
@@ -2062,8 +2079,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // draft page, the MCP approval card and the API responses carry. Empty
   // when there is nothing to explain. Swedish VAT to an EU customer whose
   // reverse charge is blocked needs an explicit confirm before creation.
+  // A räntefaktura's treatment is its own, not the customer's: nothing to explain.
   const vatWarnings =
-    selectedCustomer && vatRegistered ? explainVatTreatment(selectedCustomer, effectiveLineVatRates) : []
+    selectedCustomer && vatRegistered && !outsideScopeOn ? explainVatTreatment(selectedCustomer, effectiveLineVatRates) : []
   const needsSwedishVatAcknowledgement = requiresSwedishVatAcknowledgement(vatWarnings, effectiveLineVatRates)
   // A non-momsregistrerad company never charges VAT: hide the Moms column and
   // book every line momsfritt. `vatRegistered` is the single switch the whole
@@ -3199,8 +3217,13 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     }),
   }
   const channelOptions = resolveChannelOptions(channelContext)
-  // The company's saved send order picks the default channel; none saved = today's default.
-  const channel = resolveEffectiveChannel(channelChoice, channelContext, parseSendOrder(companySettings?.invoice_send_order))
+  // The customer's own way (Skickas som), then the company's saved send order,
+  // picks the default channel; neither set = today's default.
+  const channel = resolveEffectiveChannel(
+    channelChoice,
+    channelContext,
+    sendOrderForCustomer(selectedCustomer?.invoice_send_way, companySettings?.invoice_send_order),
+  )
   // The Mejl tab is off, with the reason, whenever this send emails nothing.
   const emailTabBlock = emailPreviewBlock(channel, channelOptions)
   const emailDisabledReason =
@@ -3237,7 +3260,8 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         oreRounding,
         defaultDims,
         invoiceNumber: printedNumber ?? null,
-        vatStatement: domesticReverseChargeRules?.ok ? vatStatement : undefined,
+        vatStatement: outsideScopeOn ? OUTSIDE_SCOPE : domesticReverseChargeRules?.ok ? vatStatement : undefined,
+        lateInterestInvoice: initial?.is_late_interest_invoice === true,
       })
   const previewBody = previewRequest ? JSON.stringify(previewRequest) : null
   const emailRequestBody = previewRequest
@@ -5586,7 +5610,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                   lang: documentLanguage,
                   showOcr: companySettings?.invoice_show_ocr ?? true,
                 })}
-                terms={paymentTermsTexts(companySettings, documentLanguage)}
+                terms={paymentTermsTexts(companySettings, documentLanguage, {
+                  lateInterestInvoice: initial?.is_late_interest_invoice === true,
+                })}
                 canEditCompany={isCompanyAdmin && canWrite}
                 addForm={
                   addingPayee ? (

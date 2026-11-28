@@ -554,7 +554,7 @@ Flips a draft journal entry to status=cancelled through the engine. A draft hold
 - Only status=draft can be cancelled. Anything posted returns 409 CANNOT_CANCEL_NON_DRAFT with details.currentStatus; storno it instead.
 - No voucher number is released or burned: drafts never held one, so the unbroken series BFL 5 kap 7 § requires is untouched and there is no gap to document. The cancelled header stays visible via GET /{id} and via the list endpoint with status=cancelled.
 - A draft in a locked or closed period, or behind the company lock date, returns PERIOD_LOCKED: unlock the period first rather than retrying.
-- A draft that holds documents returns 409 DRAFT_HAS_DOCUMENTS with details.documents: once cancelled its documents could never be linked to another verifikat, so book the draft instead.
+- A draft that holds documents returns 409 DRAFT_HAS_DOCUMENTS with details.documents: once cancelled its documents could never be linked to another verifikat. The user deletes the draft in Accounted instead (Bokföring › the verifikat › Fler alternativ › Radera utkast), which keeps the documents so they can be linked to another verifikat, or books the draft.
 - Idempotency-Key is optional here (unlike the other journal-entries writes) because the call is idempotent by construction: a second DELETE returns the same cancelled entry.
 
 | Parameter | In | Type | Required | Notes |
@@ -642,7 +642,7 @@ Atomically advances the voucher series and flips the draft to posted. The vouche
 Request body:
 ```ts
 {
-  acknowledged_warnings?: ("INPUT_VAT_ABOVE_RATE" | "OUTPUT_VAT_ABOVE_RATE" | "INPUT_VAT_ON_OUTPUT_ACCOUNT" | "REVERSE_CHARGE_ONE_SIDED" | "REVENUE_DEBITED_IN_PURCHASE" | "POSSIBLE_DUPLICATE_VOUCHER" | "BANK_MOVEMENT_ALREADY_BOOKED" | "VAT_PERIOD_ALREADY_FILED" | "VAT_OF_MOVED_CORRECTION" | "OPEN_INVOICE_COVERS_POSTING")[]
+  acknowledged_warnings?: ("INPUT_VAT_ABOVE_RATE" | "OUTPUT_VAT_ABOVE_RATE" | "INPUT_VAT_ON_OUTPUT_ACCOUNT" | "REVERSE_CHARGE_ONE_SIDED" | "REVENUE_DEBITED_IN_PURCHASE" | "POSSIBLE_DUPLICATE_VOUCHER" | "BANK_MOVEMENT_ALREADY_BOOKED" | "VAT_PERIOD_ALREADY_FILED" | "VAT_OF_MOVED_CORRECTION" | "OPEN_INVOICE_COVERS_POSTING" | "REVERSE_CHARGE_BASIS_TWICE")[]
 }
 ```
 
@@ -715,6 +715,7 @@ Per Bokföringslagen 5 kap 5 §, posted entries cannot be modified. This endpoin
 - A chain 3+ corrections deep returns CORRECTION_CHAIN_TOO_DEEP (409). Compute the net effect of the whole chain and book ONE correction, or pass allow_deep_chain=true to override.
 - Lines that are the original with debit and credit swapped return MEANINGLESS_CORRECTION (400, details.reason negates_original): the storno already reverses the original. To only cancel an entry use /reverse; pass sides_swapped=true only when the original itself was booked with the sides swapped.
 - Lines crediting import VAT (2615/2625/2635, boxes 60-62) need the taxable amount in box 50 (4545-4547) in the same lines, else 400 IMPORT_VAT_WITHOUT_BASE; reverse charge books its output VAT on 2614/2624/2634.
+- Lines with a 45xx/4598 basis pair beside an account that reports boxes 20-24 itself (a cost account with a reverse-charge momskod, or a basis account booked as the cost) count the purchase twice: warnings[] carries REVERSE_CHARGE_BASIS_TWICE. The correction still posts; remove the pair unless it is meant.
 - The answer carries owned_by when an invoice, credit note, supplier invoice, periodisering, asset or payroll run owns the verifikat (else null): the change is posted, but that object does not follow it, so prefer owned_by.tool (e.g. accounted_credit_supplier_invoice) or owned_by.action_href. Nothing is refused.
 - An entry linked to a bank transaction keeps its amount on that transaction's bank ledger account (the account the bank says the money moved on): lines that move it to another bank account (19xx or a cash account ledger) return 409 CORRECTION_BANK_ACCOUNT_CHANGED (details.bank_account, details.moved_to). If the transaction does not belong to the entry, reverse the entry instead.
 

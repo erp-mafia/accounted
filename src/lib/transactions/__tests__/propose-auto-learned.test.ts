@@ -7,7 +7,7 @@
  * without a review.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createTableMockSupabase, makeTransaction } from '@/tests/helpers'
+import { createTableMockSupabase, makeCategorizationTemplate, makeTransaction } from '@/tests/helpers'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CounterpartyTemplateMatch } from '@/lib/bookkeeping/counterparty-templates'
 
@@ -103,12 +103,15 @@ const sureRead = () => ({
 })
 
 /** The company's own rules answer the company read, the system defaults the other. */
-function ledger(opts: { company?: unknown[]; system?: unknown[]; reads?: unknown[] }) {
+function ledger(opts: { company?: unknown[]; system?: unknown[]; reads?: unknown[]; switchedOff?: unknown[]; switchedOffError?: boolean }) {
   return createTableMockSupabase({
     mapping_rules: (chain) => ({
       data: chain.some((c) => c.method === 'is') ? (opts.system ?? []) : (opts.company ?? []),
       error: null,
     }),
+    categorization_templates: opts.switchedOffError
+      ? { data: null, error: { message: 'read failed' } }
+      : { data: opts.switchedOff ?? [], error: null },
     company_settings: { data: { entity_type: 'aktiebolag', direct_booking_enabled: true }, error: null },
     transaction_assistant_reads: { data: opts.reads ?? [], error: null },
   })
@@ -206,5 +209,88 @@ describe('a described row beside an auto-learned one, on and off', () => {
     const list = await propose({ company: [learned(), described()] })
     expect(rowProposal(list)).toMatchObject({ source: 'rule', template_id: 'office_supplies_general', rule_own: true })
     expect(reviewReason(rowProposal(list)!, DIRECT_BOOKING_ON)).toBeNull()
+  })
+})
+
+describe('a counterparty rule the company paused silences the learned row beside it', () => {
+  // The booking that learns a counterparty rule writes an auto-learned row
+  // beside it; the Regler page shows the rule only, and a paused rule matches nothing.
+  // By default learned on money out, like the learned row, and paused after it was learned.
+  const paused = (counterparty = 'nordverk', over: Parameters<typeof makeCategorizationTemplate>[0] = {}) =>
+    makeCategorizationTemplate({
+      counterparty_name: counterparty,
+      counterparty_aliases: [counterparty],
+      debit_account: '5410',
+      credit_account: '1930',
+      mode: 'paused',
+      is_active: false,
+      paused_at: '2026-11-01T00:00:00Z',
+      ...over,
+    })
+
+  it('the learned row proposes nothing for the row, and no one click', async () => {
+    const list = await propose({ company: [learned()], switchedOff: [paused()] })
+    expect(list.some((p) => p.source === 'rule')).toBe(false)
+  })
+
+  it('a paused rule one letter from the name silences nothing: the link is the name, never a fuzzy match', async () => {
+    const list = await propose({ company: [learned()], switchedOff: [paused('nordverq')] })
+    expect(shape(list)).toEqual([['rule', 'equipment_small']])
+  })
+
+  it('a payout learned on money in (D 1930 / K 3001) books by one click until its rule is paused, then proposes nothing', async () => {
+    const payout = makeTransaction({ id: 'tx-payout', amount: 8180.1, merchant_name: 'Shop payout', description: 'Shop payout 000123', original_description: 'Shop payout 000123' })
+    const learnedIn = rule({ merchant_pattern: 'Shop payout', rule_name: 'Learned: Shop payout', debit_account: '1930', credit_account: '3001' })
+    const run = async (switchedOff: unknown[]) => {
+      const { supabase } = ledger({ company: [learnedIn], switchedOff })
+      return (await proposeForTransactions(supabase as unknown as SupabaseClient, COMPANY, [payout])).proposals['tx-payout'] ?? []
+    }
+
+    const before = await run([])
+    expect(rowProposal(before)).toMatchObject({ source: 'rule', credit_account: '3001', rule_own: true })
+    expect(reviewReason(rowProposal(before)!, DIRECT_BOOKING_ON)).toBeNull()
+
+    const after = await run([paused('shop payout', { debit_account: '1930', credit_account: '3001' })])
+    expect(after.some((p) => p.source === 'rule')).toBe(false)
+
+    // A paused rule of the same counterparty learned the other way round (its fees, money out) leaves it.
+    const fees = await run([paused('shop payout', { debit_account: '6570', credit_account: '1930' })])
+    expect(rowProposal(fees)).toMatchObject({ source: 'rule', credit_account: '3001' })
+  })
+
+  it('a row learned from a booking by hand after the pause proposes nothing either; resuming the rule brings it back', async () => {
+    const rebooked = rule({ id: 'rule-rebooked', created_at: '2026-11-20T00:00:00Z' })
+    expect(await propose({ company: [rebooked], switchedOff: [paused()] })).toEqual([])
+    expect(shape(await propose({ company: [rebooked], switchedOff: [] }))).toEqual([['rule', 'equipment_small']])
+  })
+
+  it('a row a person described still leads and books by one click', async () => {
+    const list = await propose({ company: [learned(), described()], switchedOff: [paused()] })
+    expect(rowProposal(list)).toMatchObject({ source: 'rule', template_id: 'office_supplies_general', rule_own: true })
+    expect(reviewReason(rowProposal(list)!, DIRECT_BOOKING_ON)).toBeNull()
+  })
+
+  it('a system default still proposes, into a review', async () => {
+    const list = await propose({ company: [learned()], system: [systemDefault()], switchedOff: [paused()] })
+    expect(shape(list)).toEqual([['rule', 'office_supplies_general']])
+    expect(reviewReason(rowProposal(list)!, DIRECT_BOOKING_ON)).toBe('evidence')
+  })
+
+  it('a paused rule of another counterparty silences nothing', async () => {
+    const list = await propose({ company: [learned()], switchedOff: [paused('sydkraft')] })
+    expect(shape(list)).toEqual([['rule', 'equipment_small']])
+  })
+
+  it('a failed read of the switched-off rules leaves the learned row as stored', async () => {
+    const list = await propose({ company: [learned()], switchedOffError: true })
+    expect(shape(list)).toEqual([['rule', 'equipment_small']])
+  })
+
+  it('a company whose learned rows are not read makes no read of the switched-off rules by name', async () => {
+    vi.stubEnv('BOOKING_PRECEDENT_COMPANY_IDS', COMPANY)
+    const { supabase, findCalls } = ledger({ company: [learned()], switchedOff: [paused()] })
+    await proposeForTransactions(supabase as unknown as SupabaseClient, COMPANY, [makeTransaction({ id: 'tx-2', amount: -1, merchant_name: 'Annan' })])
+    // Only the precedent path's read of the switched-off rules, by the row and with every column.
+    expect(findCalls('categorization_templates', 'select')).toEqual([['*']])
   })
 })

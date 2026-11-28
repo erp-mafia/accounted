@@ -16,6 +16,12 @@ vi.mock('@/lib/company/context', async (importOriginal) => ({
   setActiveCompany: vi.fn(),
 }))
 
+// The start page lookup has its own tests (lib/company/__tests__/start-page-server.test.ts).
+const resolveStartPathMock = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/company/start-page-server', () => ({
+  resolveStartPath: (...args: unknown[]) => resolveStartPathMock(...args),
+}))
+
 import { createClient } from '@/lib/supabase/server'
 import { CompanyContextError, setActiveCompany } from '@/lib/company/context'
 import { POST } from '../route'
@@ -52,6 +58,7 @@ beforeEach(() => {
   supabase = buildSupabase({ user: { id: 'user-1' } })
   mockCreateClient.mockResolvedValue(supabase as never)
   mockSetActiveCompany.mockResolvedValue(undefined)
+  resolveStartPathMock.mockResolvedValue('/')
 })
 
 describe('POST /api/company/switch', () => {
@@ -100,8 +107,34 @@ describe('POST /api/company/switch', () => {
     )
 
     expect(status).toBe(200)
-    expect(body).toEqual({ data: { company_id: COMPANY_ID } })
+    expect(body).toEqual({ data: { company_id: COMPANY_ID, start_path: '/' } })
     expect(mockSetActiveCompany).toHaveBeenCalledWith(supabase, 'user-1', COMPANY_ID)
+  })
+
+  it("answers the person's start page in the company switched to", async () => {
+    resolveStartPathMock.mockResolvedValue('/supplier-invoices')
+
+    const { status, body } = await parseJsonResponse<{ data: { company_id: string; start_path: string } }>(
+      await POST(switchRequest({ company_id: COMPANY_ID })),
+    )
+
+    expect(status).toBe(200)
+    expect(body.data.start_path).toBe('/supplier-invoices')
+    // Asked for the company switched to, after the switch was saved.
+    expect(resolveStartPathMock).toHaveBeenCalledWith(supabase, 'user-1', COMPANY_ID)
+    expect(mockSetActiveCompany.mock.invocationCallOrder[0]).toBeLessThan(
+      resolveStartPathMock.mock.invocationCallOrder[0],
+    )
+  })
+
+  it('never asks for a start page when the switch is refused', async () => {
+    mockSetActiveCompany.mockRejectedValueOnce(
+      new CompanyContextError('User is not a member of this company', 'not_member'),
+    )
+
+    await POST(switchRequest({ company_id: COMPANY_ID }))
+
+    expect(resolveStartPathMock).not.toHaveBeenCalled()
   })
 
   it('maps a missing membership to COMPANY_SWITCH_NOT_MEMBER (403)', async () => {

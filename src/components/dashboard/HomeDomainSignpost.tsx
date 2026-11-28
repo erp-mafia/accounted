@@ -28,7 +28,8 @@ export default function HomeDomainSignpost({
 
   const handleSwitch = async (companyId: string) => {
     setPendingId(companyId)
-    const result = await performCompanySwitch(companyId, { destination: '/' })
+    // Lands on the person's start page in the company (lib/company/start-page.ts).
+    const result = await performCompanySwitch(companyId)
     if (result?.error) {
       setPendingId(null)
       toast({ title: t('switch_failed'), variant: 'destructive' })

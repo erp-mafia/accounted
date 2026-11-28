@@ -12,6 +12,7 @@
 import { z } from 'zod'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { maskCustomerRow } from '@/lib/customers/protect-personal-number'
+import { SEND_ORDER_WAYS } from '@/lib/invoices/send-order'
 import type { OperationOutcome } from '@/lib/operations/types'
 
 export const CustomerRecordSchema = z.object({
@@ -43,6 +44,8 @@ export const CustomerRecordSchema = z.object({
   invoice_reference: z.string().nullable(),
   /** Märkning: the invoice_marking a new invoice to this customer gets when the request states none. */
   invoice_marking: z.string().nullable(),
+  /** Skickas som: the way this customer's invoices go out first; null follows the company's invoice_send_order. */
+  invoice_send_way: z.enum(SEND_ORDER_WAYS).nullable(),
   notes: z.string().nullable(),
   /** The party (motpart) behind the customer: one per counterpart, shared with the supplier side and the ledger. Null for private individuals. */
   party_id: z.string().uuid().nullable(),
@@ -60,7 +63,7 @@ export type CustomerRecord = z.infer<typeof CustomerRecordSchema>
  * rows; the test pins it to exactly the schema's fields, in order.
  */
 export const CUSTOMER_RECORD_COLUMNS =
-  'id, name, customer_type, customer_number, contact_person, email, phone, invoice_email_cc_addresses, invoice_email_bcc_addresses, address_line1, address_line2, postal_code, city, address_state, country, org_number, vat_number, vat_number_validated, personal_number, language, default_payment_terms, invoice_reference, invoice_marking, notes, party_id, archived_at, created_at, updated_at'
+  'id, name, customer_type, customer_number, contact_person, email, phone, invoice_email_cc_addresses, invoice_email_bcc_addresses, address_line1, address_line2, postal_code, city, address_state, country, org_number, vat_number, vat_number_validated, personal_number, language, default_payment_terms, invoice_reference, invoice_marking, invoice_send_way, notes, party_id, archived_at, created_at, updated_at'
 
 /**
  * One customer of the company, personnummer masked, or null when no customer

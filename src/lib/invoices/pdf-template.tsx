@@ -15,6 +15,7 @@ import type { ReactNode } from 'react'
 import type { Invoice, InvoiceItem, Customer, CompanySettings, InvoiceDocumentType } from '@/types'
 import type { InvoicePdfPaymentQr } from '@/lib/invoices/payment-qr'
 import { getAmountToPay } from '@/lib/bookkeeping/invoice-rounding'
+import { computeLineVat } from '@/lib/bookkeeping/invoice-line-amounts'
 import { isTextLikeLine } from '@/lib/invoices/display'
 import { maskedDeductionPersonnummer } from '@/lib/invoices/deduction-personnummer'
 import { GRON_TEKNIK_WORK_TYPES, workTypeLabel } from '@/lib/bookkeeping/rot-rut-rules'
@@ -104,6 +105,35 @@ export function articleNumberColumnShown(
 ): boolean {
   if (company.invoice_show_article_number !== true) return false
   return items.some((item) => !isTextLikeLine(item) && Boolean(item.article_number?.trim()))
+}
+
+/**
+ * Whether the line table prints the prices including moms after the ex-VAT
+ * columns: on a document with prices to a private person, when a row carries
+ * VAT. The ex-VAT unit price and amount (ML 17 kap 24 § p.9) stay as they
+ * are; these two columns come in addition. A document without VAT on any row
+ * (a seller that is not VAT-registered, an export) would print the same
+ * figures twice, so it gets none.
+ */
+export function inclVatColumnsShown(
+  customer: Pick<Customer, 'customer_type'>,
+  documentType: InvoiceDocumentType,
+  items: InvoiceItem[],
+): boolean {
+  if (customer.customer_type !== 'individual') return false
+  if (documentType === 'delivery_note') return false
+  return items.some((item) => !isTextLikeLine(item) && (item.vat_rate ?? 0) > 0)
+}
+
+/**
+ * A row's unit price including moms: the unit price plus its VAT at the
+ * row's own rate (computeLineVat, the one per-line VAT rule), to the öre. A
+ * row that carries no VAT prints its unit price unchanged, like its amount.
+ */
+export function unitPriceInclVat(item: Pick<InvoiceItem, 'unit_price' | 'vat_rate' | 'vat_amount'>): number {
+  const unitPrice = item.unit_price ?? 0
+  const rate = (item.vat_amount ?? 0) === 0 ? 0 : (item.vat_rate ?? 0)
+  return roundOre(unitPrice + computeLineVat(unitPrice, rate))
 }
 
 export function buildPdfVatBreakdown(items: InvoiceItem[]): Map<number, { base: number; vat: number }> {
@@ -375,6 +405,10 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
   // payable faktura), no payment link. Its expiry replaces the due date.
   const isQuote = docType === 'quote'
 
+  // À-pris and belopp including moms for a private person, after the ex-VAT
+  // columns (inclVatColumnsShown).
+  const showInclVatColumns = inclVatColumnsShown(customer, docType, items)
+
   // Shared with the invoice email (lib/email/invoice-templates.ts) so the
   // mail and the PDF always state the same "Att betala".
   const amountToPay = getAmountToPay(invoice, company)
@@ -466,7 +500,9 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
   // document that asks for a payment: never on a quote, a kreditfaktura or a
   // följesedel. In the invoice's language: the English texts on an English
   // invoice, each falling back to the Swedish one (crm#1735).
-  const { lateFee, creditTerms } = invoiceFinePrint(company, lang)
+  const { lateFee, creditTerms } = invoiceFinePrint(company, lang, {
+    lateInterestInvoice: invoice.is_late_interest_invoice === true,
+  })
   const finePrint = isQuote || isDeliveryNote || isCreditNote
     ? []
     : [lateFee, creditTerms].filter((t): t is string => t !== null)
@@ -808,6 +844,13 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
             {!isDeliveryNote && (
               <Text style={[styles.colTotal, styles.tableHeaderText]}>{L.colTotal}</Text>
             )}
+            {/* Two lines each: the figure, then "inkl. moms". */}
+            {showInclVatColumns && (
+              <Text style={[styles.colPrice, styles.tableHeaderText]}>{L.colUnitPriceInclVat}</Text>
+            )}
+            {showInclVatColumns && (
+              <Text style={[styles.colTotal, styles.tableHeaderText]}>{L.colTotalInclVat}</Text>
+            )}
           </View>
 
           {items.map((item, index) =>
@@ -852,6 +895,14 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                 )}
                 {!isDeliveryNote && (
                   <Text style={styles.colTotal}>{formatPdfAmount(item.line_total, lang)}</Text>
+                )}
+                {/* The row's own figures with its VAT; the totals below are
+                    the stored ones, never a sum of these. */}
+                {showInclVatColumns && (
+                  <Text style={styles.colPrice}>{formatPdfAmount(unitPriceInclVat(item), lang)}</Text>
+                )}
+                {showInclVatColumns && (
+                  <Text style={styles.colTotal}>{formatPdfAmount(lineInclVat(item), lang)}</Text>
                 )}
               </View>
             )
@@ -923,7 +974,10 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                   // A non-registered seller who states VAT (warned at create time
                   // per ML 16 kap. 23 §) still gets the totals row so the printed
                   // invoice matches what the customer is being asked to pay.
-                  !(company.vat_registered === false && invoice.vat_amount === 0) && (
+                  // Nor on an outside_scope invoice without VAT: not a supply,
+                  // so no rate, not even 0 %; its notice says why.
+                  !(company.vat_registered === false && invoice.vat_amount === 0) &&
+                  !(invoice.vat_treatment === 'outside_scope' && invoice.vat_amount === 0) && (
                     <View style={styles.totalRow}>
                       <Text style={styles.totalLabel}>{bareLabel(L.vatRow(invoice.vat_rate ?? (vatByRate.size === 1 ? (vatByRate.keys().next().value ?? 0) : 0)))}</Text>
                       <Text style={styles.totalValue}>{formatPdfAmount(invoice.vat_amount, lang)}</Text>

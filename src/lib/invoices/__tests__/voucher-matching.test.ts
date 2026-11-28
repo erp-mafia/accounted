@@ -1041,7 +1041,7 @@ describe('linkInvoiceToVoucher', () => {
 
     expect(result.ok).toBe(true)
     expect(mockAnchorCustomerDoc).toHaveBeenCalledTimes(1)
-    expect(mockAnchorCustomerDoc).toHaveBeenCalledWith(supabase, 'company-1', 'inv-1')
+    expect(mockAnchorCustomerDoc).toHaveBeenCalledWith(supabase, 'company-1', 'inv-1', 'user-1')
   })
 
   it('does not touch the invoice PDF when the RPC rejects the link', async () => {

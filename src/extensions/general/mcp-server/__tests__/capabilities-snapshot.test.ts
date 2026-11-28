@@ -10,8 +10,13 @@
  * a visible change. Update the snapshot only when the catalog itself changes
  * (a tool added to or removed from the default catalog), never to absorb a
  * capabilities change.
+ *
+ * The rollout parts (ROLLOUT_PARTS) add an entry for an active module whose
+ * part is off: year-end, whose Avtal och åtaganden none of these companies
+ * has (BOLAGET_COMPANY_IDS is empty here). It is taken out before the
+ * snapshot and pinned beside it, so the snapshot stays what it was.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { eventBus } from '@/lib/events/bus'
 import { ALL_SCOPES, DEFAULT_SCOPES } from '@/lib/auth/scope-catalog'
 import { createTableMockSupabase } from '@/tests/helpers'
@@ -92,6 +97,11 @@ beforeEach(() => {
   vi.clearAllMocks()
   eventBus.clear()
   resetReachableCompanyCountCache()
+  vi.stubEnv('BOLAGET_COMPANY_IDS', '')
+})
+
+afterEach(() => {
+  vi.unstubAllEnvs()
 })
 
 describe('tools/list for each representative company', () => {
@@ -130,7 +140,11 @@ describe('the agent briefing for each representative company', () => {
       'user-1',
       supabase as never,
       { type: 'api_key', label: 'Snapshot key' },
-    )) as { capabilities?: unknown; recommended_tools: unknown }
-    expect({ capabilities: result.capabilities, recommended_tools: result.recommended_tools }).toMatchSnapshot()
+    )) as { capabilities?: Array<{ id: string; parts?: unknown }>; recommended_tools: unknown }
+    const capabilities = result.capabilities?.filter((entry) => !entry.parts)
+    expect({ capabilities, recommended_tools: result.recommended_tools }).toMatchSnapshot()
+    expect(result.capabilities?.filter((entry) => entry.parts)).toEqual([
+      { id: 'year-end', status: 'active', reasons: [], parts: [{ id: 'commitments', status: 'off', reasons: ['switched_on_per_company'] }] },
+    ])
   })
 })

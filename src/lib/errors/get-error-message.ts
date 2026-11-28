@@ -789,11 +789,13 @@ export function getErrorMessage(
       // who or which account and what to do, so an English UI gets the
       // English one, not the registry's generic line. A role refusal is the
       // same: it says why this person may not (readOnlyRefusal), and without
-      // its own sentence it carries the registry's.
+      // its own sentence it carries the registry's. So is a mailbox send
+      // refused while sending is off, waits for the provider or was declined.
       if (
         locale === 'en' &&
         (structured.code === 'SALARY_RUN_VACATION_PAY_UNDETERMINED' ||
           structured.code === 'SALARY_RUN_PAYMENT_FILE_MISSING_BANK_DETAILS' ||
+          structured.code === 'DIGITAL_MAILBOX_SENDING_NOT_ACTIVE' ||
           structured.code === 'FORBIDDEN') &&
         typeof structured.message_en === 'string' &&
         structured.message_en.trim()

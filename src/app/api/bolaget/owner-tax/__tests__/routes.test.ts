@@ -94,6 +94,24 @@ describe('GET /api/bolaget/owner-tax', () => {
     expect(vi.mocked(loadK10Year).mock.calls[0]![1]).toBe(2026)
     expect(vi.mocked(loadBoardLoansNote).mock.calls[0]![1]).toBe('2026-12-31')
   })
+
+  it('without a year, reads the year the page opens on: last year in January', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2027-01-15T10:00:00Z'))
+    try {
+      vi.mocked(loadK10Year).mockResolvedValue(K10_VIEW as never)
+      vi.mocked(loadOwnerLoansView).mockResolvedValue({ as_of: '2027-01-15', loans: [], reconciliation: [], flagged: 0 })
+      vi.mocked(loadKu20Status).mockResolvedValue({ income_year: 2026, recipients: [], blockers: [], ready: false } as never)
+      vi.mocked(loadBoardLoansNote).mockResolvedValue({ balance_date: '2026-12-31', applicable: false } as never)
+      const res = await getPage(req('/api/bolaget/owner-tax', undefined, 'GET'), noParams)
+      expect(res.status).toBe(200)
+      expect((await res.json()).data.year).toBe(2026)
+      expect(vi.mocked(loadK10Year).mock.calls[0]![1]).toBe(2026)
+      expect(vi.mocked(loadKu20Status).mock.calls[0]![1]).toBe(2026)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
 
 describe('PUT /api/bolaget/owner-tax/k10/{year}/owners/{partyId}', () => {

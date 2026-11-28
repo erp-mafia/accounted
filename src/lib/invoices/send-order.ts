@@ -26,6 +26,29 @@ export function parseSendOrder(value: unknown): SendOrderWay[] | null {
   return isValidSendOrder(value) ? [...value] : null
 }
 
+/** A customer's own way (customers.invoice_send_way) as the editor reads it: null when none is set or the stored value is not a way. */
+export function parseSendWay(value: unknown): SendOrderWay | null {
+  return isSendOrderWay(value) ? value : null
+}
+
+/**
+ * The order the editor tries for an invoice to one customer: the customer's
+ * own way ("Skickas som", customers.invoice_send_way) first, then the
+ * company's saved order (company_settings.invoice_send_order) without it.
+ * Null when neither is set, so the editor keeps its own default.
+ *
+ * A customer's way the invoice cannot use (no Peppol id for the buyer, no
+ * email address) is passed over by defaultChannelByOrder, and what decides
+ * then is exactly what decides for a customer without one: the company's
+ * order, or with no order the editor's default.
+ */
+export function sendOrderForCustomer(customerWay: unknown, companyOrder: unknown): SendOrderWay[] | null {
+  const way = parseSendWay(customerWay)
+  const order = parseSendOrder(companyOrder)
+  if (!way) return order
+  return [way, ...(order ?? []).filter((other) => other !== way)]
+}
+
 /**
  * The channel the editor acts on without a pick by hand, under a saved
  * order: the first way in the order that is listed and choosable for this

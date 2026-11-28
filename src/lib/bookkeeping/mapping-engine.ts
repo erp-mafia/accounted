@@ -12,11 +12,15 @@ import {
   findCounterpartyTemplate,
   buildMappingResultFromCounterpartyTemplate,
   mappingPatternNamesCounterparty,
+  mappingPatternText,
   namesCounterparty,
+  normalizeCounterpartyName,
+  readSwitchedOffRulesByName,
+  type SwitchedOffCounterpartyRule,
 } from './counterparty-templates'
 import { coerceDimensionsBag, dimensionsBagKey } from './dimension-resolver'
 import { detectOwnAccountTransfer } from './own-account-detector'
-import { bankSideOf, settleBankLeg } from './bank-leg'
+import { bankSideOf, pairLearnedOnMoneyIn, settleBankLeg } from './bank-leg'
 import { loadCardLedgers, needsCardLedgers } from '@/lib/cash-accounts/load-card-ledgers'
 import type {
   MappingRule,
@@ -82,7 +86,7 @@ export const AUTO_LEARNED_MAPPING_SOURCE = 'auto'
  * (company_id null) is never one, whatever its source says; a row a person
  * described (source 'user_description') is not one either.
  */
-export function isAutoLearnedMappingRule(rule: Pick<MappingRule, 'company_id' | 'source'>): boolean {
+export function isAutoLearnedMappingRule(rule: { company_id?: string | null; source?: string | null }): boolean {
   return rule.company_id != null && rule.source === AUTO_LEARNED_MAPPING_SOURCE
 }
 
@@ -101,13 +105,58 @@ export function readsAutoLearnedMappingRules(companyId: string): boolean {
  * or those without the company's auto-learned rows where they are not read
  * (readsAutoLearnedMappingRules). Every reader of mapping_rules passes here:
  * the proposals (lib/transactions/propose.ts), evaluateMappingRules below and
- * the MCP suggestion tool.
+ * the MCP suggestion tool. Each then reads them beside the company's
+ * switched-off counterparty rules (mappingRulesBesideSwitchedOff).
  */
 export function mappingRulesRead<T extends Pick<MappingRule, 'company_id' | 'source'>>(
   companyId: string,
   rules: readonly T[],
 ): T[] {
   return readsAutoLearnedMappingRules(companyId) ? [...rules] : rules.filter((rule) => !isAutoLearnedMappingRule(rule))
+}
+
+/** The fields of a mapping row mappingRulesBesideSwitchedOff reads. */
+type LearnedRowFields = {
+  company_id?: string | null
+  source?: string | null
+  merchant_pattern: string | null
+  debit_account?: string | null
+  credit_account?: string | null
+}
+
+/**
+ * The mapping rules read beside the company's switched-off counterparty
+ * rules (readSwitchedOffRulesByName): those handed in, less each auto-learned
+ * row of a rule the company switched off. The booking that learns a
+ * counterparty rule writes the auto-learned row from the same merchant text,
+ * and the Regler page shows only the counterparty rule, so a pause there
+ * silences the row too: a paused rule matches nothing, and resuming it brings
+ * the row back.
+ *
+ * The row is that rule's when both hold: its merchant text, or that text's
+ * counterparty key, is the rule's key or an alias; and it books the same way
+ * round (money in or money out, pairLearnedOnMoneyIn), since a rule holds one
+ * direction. A row a person described and a system default are rules of
+ * their own and stand.
+ */
+export function mappingRulesBesideSwitchedOff<T extends LearnedRowFields>(
+  rules: T[],
+  switchedOff: ReadonlyMap<string, readonly SwitchedOffCounterpartyRule[]>,
+): T[] {
+  if (switchedOff.size === 0) return rules
+  return rules.filter((rule) => !(isAutoLearnedMappingRule(rule) && learnedWithSwitchedOffRule(rule, switchedOff)))
+}
+
+function learnedWithSwitchedOffRule(
+  rule: LearnedRowFields,
+  switchedOff: ReadonlyMap<string, readonly SwitchedOffCounterpartyRule[]>,
+): boolean {
+  if (!rule.merchant_pattern) return false
+  const merchant = mappingPatternText(rule.merchant_pattern)
+  const moneyIn = pairLearnedOnMoneyIn(rule)
+  return [merchant.trim().toLowerCase(), normalizeCounterpartyName(merchant)].some((name) =>
+    (switchedOff.get(name) ?? []).some((off) => pairLearnedOnMoneyIn(off) === moneyIn),
+  )
 }
 
 /**
@@ -212,7 +261,25 @@ async function evaluateMappingRulesUnsettled(
     .or(`company_id.eq.${companyId},company_id.is.null`)
     .order('priority', { ascending: true })
   // Without the company's auto-learned rows where they are not read.
-  const rules = storedRules ? mappingRulesRead(companyId, storedRules as MappingRule[]) : storedRules
+  const readRules = storedRules ? mappingRulesRead(companyId, storedRules as MappingRule[]) : storedRules
+  // Beside the switched-off counterparty rules, read only when an
+  // auto-learned row is the first to match (mappingRulesBesideSwitchedOff).
+  // A failed read leaves the rules as read.
+  const firstMatch = readRules?.find((rule) => matchesRule(rule, transaction))
+  const rules =
+    readRules && firstMatch && isAutoLearnedMappingRule(firstMatch)
+      ? mappingRulesBesideSwitchedOff(
+          readRules,
+          await readSwitchedOffRulesByName(supabase, companyId).catch((err: unknown) => {
+            log.warn('switched-off counterparty rules read failed; learned rows are read as stored', {
+              companyId,
+              transactionId: transaction.id,
+              error: err instanceof Error ? err.message : String(err),
+            })
+            return new Map<string, SwitchedOffCounterpartyRule[]>()
+          }),
+        )
+      : readRules
 
   if (error || !rules || rules.length === 0) {
     // Try counterparty templates before static template fallback

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getAmountToPay, getDisplayTotal } from '@/lib/bookkeeping/invoice-rounding'
+import { getAmountToPay, getDisplayTotal, hasOreToRound } from '@/lib/bookkeeping/invoice-rounding'
 
 const inv = (total: number, currency: 'SEK' | 'EUR' = 'SEK') => ({ total, currency })
 const co = (ore_rounding: boolean) => ({ ore_rounding })
@@ -129,5 +129,21 @@ describe('getAmountToPay', () => {
     const r = getAmountToPay({ ...inv(1234.56, 'EUR'), deduction_total: 100 }, co(true))
     expect(r.rounding.applies).toBe(false)
     expect(r.toPay).toBe(1134.56)
+  })
+})
+
+describe('hasOreToRound', () => {
+  it('a kronor total with öre, of an invoice or a credit note, and a numeric string', () => {
+    expect(hasOreToRound({ currency: 'SEK', total: 999.75 })).toBe(true)
+    expect(hasOreToRound({ currency: null, total: -999.75 })).toBe(true)
+    expect(hasOreToRound({ currency: 'sek', total: '1000.40' })).toBe(true)
+  })
+
+  it('not a whole-krona total, a foreign currency or a row without its total', () => {
+    expect(hasOreToRound({ currency: 'SEK', total: 1000 })).toBe(false)
+    expect(hasOreToRound({ currency: 'SEK', total: 1000.001 })).toBe(false)
+    expect(hasOreToRound({ currency: 'EUR', total: 999.75 })).toBe(false)
+    expect(hasOreToRound({ currency: 'SEK', total: null })).toBe(false)
+    expect(hasOreToRound({ currency: 'SEK' })).toBe(false)
   })
 })

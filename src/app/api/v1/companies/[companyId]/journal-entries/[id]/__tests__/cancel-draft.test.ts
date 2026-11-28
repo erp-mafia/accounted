@@ -193,13 +193,21 @@ describe('DELETE /api/v1/companies/:companyId/journal-entries/:id', () => {
       makeSupabase([DRAFT], [{ id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', file_name: 'kvitto.pdf' }]),
     )
     const res = await DELETE(makeRequest(), routeParams())
-    const body = (await res.json()) as { error: { code: string; details: Record<string, unknown> } }
+    const body = (await res.json()) as {
+      error: { code: string; message: string; message_en?: string; recovery_hint?: string; details: Record<string, unknown> }
+    }
     expect(res.status).toBe(409)
     expect(body.error.code).toBe('DRAFT_HAS_DOCUMENTS')
     expect(body.error.details).toMatchObject({
       document_count: 1,
       documents: [{ document_id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', file_name: 'kvitto.pdf' }],
     })
+    // The way out the user has: delete the draft in the app (the underlag
+    // stays), or book it. Never "contact support".
+    expect(body.error.message).toContain('Radera utkast')
+    expect(body.error.message).toContain('finns kvar och kan kopplas till en annan verifikation')
+    expect(body.error.recovery_hint).toContain('Fler alternativ › Radera utkast')
+    expect(JSON.stringify(body.error)).not.toMatch(/support/i)
     expect(mockCancel).not.toHaveBeenCalled()
   })
 

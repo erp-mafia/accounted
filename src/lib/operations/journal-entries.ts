@@ -567,7 +567,7 @@ export const journalEntriesCancelDraft = defineOperation({
       'Only status draft can be cancelled: a posted entry answers CANNOT_CANCEL_NON_DRAFT with details.currentStatus.',
       'A draft in a locked or closed period, or behind the company lock date, answers PERIOD_LOCKED: the lock is the user\'s decision, never lift it to make a cancel fit.',
       'A draft that is already cancelled is not staged again (JOURNAL_ENTRY_ALREADY_CANCELLED): nothing is left to do.',
-      'A draft that holds underlag is refused with DRAFT_HAS_DOCUMENTS (details.documents lists them): a cancelled draft\'s documents can never be moved to another verifikat, so it must be booked instead.',
+      'A draft that holds underlag is refused with DRAFT_HAS_DOCUMENTS (details.documents lists them): a cancelled draft\'s documents can never be moved to another verifikat. The user deletes the draft in Accounted instead (Bokföring › the verifikat › Fler alternativ › Radera utkast), which keeps the documents so they can be linked to another verifikat, or books it.',
     ],
     example: {
       request: { journal_entry_id: '0e9c…' },

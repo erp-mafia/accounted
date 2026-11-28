@@ -3,7 +3,7 @@ import { isKronorCurrency } from '@/lib/bookkeeping/currency-utils'
 import { findFiscalPeriod } from './engine'
 import { coerceDimensionsBag } from './dimension-resolver'
 import { clearedSek, statedSettlement } from './ledger-carried-sek'
-import { fxDifferenceLine } from './ore-rounding'
+import { fxDifferenceLine, oreRoundingLine, oreSettlementResidual } from './ore-rounding'
 import { createLogger } from '@/lib/logger'
 import { ORE_TOLERANCE, equalOre, roundOre, sumOre } from '@/lib/money'
 import { postingPort } from '@/lib/posting/port'
@@ -274,11 +274,26 @@ export function buildInvoicePaymentLines(
           rate: invoice.exchange_rate ?? 0,
         })
       : sekAtRate
-  const { bankSek, gainSek } = statedSettlement({
-    cleared: bookedSekAmount,
-    sekAtRate,
-    difference: isPartial ? undefined : exchangeRateDifference,
-  })
+  // On the settlement of a kronor remainder in whole kronor while 1510 still
+  // carries the issue's öre (a part payment paid them), there is nothing to
+  // round: the customer pays the kronor left, 1510 gives up what it carries
+  // and 3740 takes the gap, only öresavrundning (inside the öre band). A
+  // remainder with öre keeps the rounded figure 1510 carries on the bank, as
+  // before.
+  const wholeKronorLeft =
+    invoice.carried_sek != null &&
+    !kronorPart &&
+    isKronorCurrency(invoice.currency) &&
+    !exchangeRateDifference &&
+    Number.isInteger(roundOre(paymentAmount ?? outstanding)) &&
+    oreSettlementResidual(bookedSekAmount, paymentAmount ?? outstanding) !== 0
+  const { bankSek, gainSek } = wholeKronorLeft
+    ? { bankSek: roundOre(paymentAmount ?? outstanding), gainSek: 0 }
+    : statedSettlement({
+        cleared: bookedSekAmount,
+        sekAtRate,
+        difference: isPartial ? undefined : exchangeRateDifference,
+      })
 
   // Debit the settlement account (bank by default) at the SEK received, credit
   // kundfordringar at the SEK booked. Received more than booked is a gain
@@ -288,6 +303,8 @@ export function buildInvoicePaymentLines(
     { account_number: '1510', debit_amount: 0, credit_amount: roundOre(bookedSekAmount), line_description: desc },
   ]
   if (gainSek !== 0) lines.push(fxDifferenceLine(gainSek))
+  const issueOre = wholeKronorLeft ? oreSettlementResidual(bookedSekAmount, bankSek) : 0
+  if (issueOre !== 0) lines.push(oreRoundingLine(issueOre, 'customer'))
 
   if (defaultDimensions) {
     // Copy per line: a shared bag object would let one line's mutation

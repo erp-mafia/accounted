@@ -40,6 +40,8 @@ export interface EditorPreviewOptions {
   invoiceNumber: string | null
   /** The invoice's own VAT treatment, so the preview prints its notice. */
   vatStatement?: EditorVatStatement
+  /** The draft is a räntefaktura: the preview prints no late-payment terms, like the sent PDF. */
+  lateInterestInvoice?: boolean
 }
 
 export function buildEditorPreviewRequest<
@@ -58,6 +60,7 @@ export function buildEditorPreviewRequest<
     // '' is "the company default" in the form; the preview reads null so.
     payment_cash_account_id: values.payment_cash_account_id || null,
     invoice_number: options.invoiceNumber,
+    ...(options.lateInterestInvoice ? { is_late_interest_invoice: true } : {}),
   }
 }
 
