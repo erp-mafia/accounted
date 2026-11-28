@@ -23,7 +23,6 @@ import {
 } from '@/lib/bookkeeping/errors'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import type { OperationContext, OperationOutcome, OperationWarning } from '@/lib/operations/types'
-import { BOOKED_EXITS_FILTER } from '@/lib/webshop-orders/booking-status'
 import { checkOrderBankRow, type OrderBankRow } from '@/lib/webshop-orders/order-bank-row'
 import type {
   CreateJournalEntryLineInput,
@@ -35,9 +34,13 @@ import {
   assertOrderBookable,
   bookWebshopOrder,
   loadWebshopOrder,
+  placeOrderBooking,
   resolveOrderFx,
   type BookWebshopOrderOutcome,
+  type OrderBookingPlacement,
 } from './book-order'
+import { whereWebshopOrderBooked } from './booking-status'
+import { readCompanyReleasedWebshopBookings, readReleasedWebshopBookings } from './released-booking'
 import {
   WEBSHOP_PREFILL_ACCOUNTS,
   buildOrderBooking,
@@ -152,9 +155,27 @@ const DEFAULT_LIMIT = 50
 export async function listWebshopOrders(
   ctx: OperationContext,
   input: ListWebshopOrdersInput,
-): Promise<OperationOutcome<{ orders: WebshopOrder[]; total: number }>> {
+): Promise<
+  OperationOutcome<{
+    orders: WebshopOrder[]
+    total: number
+    /** The listed orders' verifikat that a storno released (isWebshopBookingReleased). */
+    releasedEntryIds: string[]
+  }>
+> {
   const limit = input.limit ?? DEFAULT_LIMIT
   const offset = input.offset ?? 0
+  // The booked split needs the company's released verifikat before the
+  // query; without it, the page's own are read after.
+  let companyReleased: string[] | null = null
+  if (input.booked) {
+    try {
+      companyReleased = Array.from((await readCompanyReleasedWebshopBookings(ctx.supabase, ctx.companyId)).keys())
+    } catch (err) {
+      ctx.log.error('failed to read released webshop bookings', err as Error)
+      return { ok: false, code: 'WEBSHOP_ORDER_READ_FAILED' }
+    }
+  }
   let query = ctx.supabase
     .from('webshop_orders')
     .select('*', { count: 'exact' })
@@ -170,18 +191,26 @@ export async function listWebshopOrders(
   // Same split as the Orders page: "booked" is every exit that books (booked
   // here or marked as booked outside, never a voided row), "unbooked" the
   // open set.
-  if (input.booked === 'booked') {
-    query = query.or(BOOKED_EXITS_FILTER)
-  }
-  if (input.booked === 'unbooked') {
-    query = query.is('journal_entry_id', null).is('manually_booked_at', null)
+  if (input.booked && companyReleased) {
+    query = whereWebshopOrderBooked(query, input.booked, companyReleased)
   }
   const { data, error, count } = await query
   if (error) {
     ctx.log.error('failed to list webshop orders', error)
     return { ok: false, code: 'WEBSHOP_ORDER_READ_FAILED' }
   }
-  return { ok: true, data: { orders: (data ?? []) as WebshopOrder[], total: count ?? 0 } }
+  const orders = (data ?? []) as WebshopOrder[]
+  let releasedEntryIds: string[]
+  try {
+    const named = orders.map((order) => order.journal_entry_id)
+    releasedEntryIds = companyReleased
+      ? companyReleased.filter((id) => named.includes(id))
+      : Array.from((await readReleasedWebshopBookings(ctx.supabase, ctx.companyId, named)).keys())
+  } catch (err) {
+    ctx.log.error('failed to read released webshop bookings', err as Error)
+    return { ok: false, code: 'WEBSHOP_ORDER_READ_FAILED' }
+  }
+  return { ok: true, data: { orders, total: count ?? 0, releasedEntryIds } }
 }
 
 // ---------------------------------------------------------------------------
@@ -236,10 +265,27 @@ export async function getWebshopOrder(
   ctx: OperationContext,
   input: { webshop_order_id: string },
 ): Promise<
-  OperationOutcome<{ order: WebshopOrder; suggestion: WebshopOrderSuggestion; warnings: OperationWarning[] }>
+  OperationOutcome<{
+    order: WebshopOrder
+    /** A storno released the order from the verifikat it names (isWebshopBookingReleased). */
+    released: boolean
+    suggestion: WebshopOrderSuggestion
+    warnings: OperationWarning[]
+  }>
 > {
   const order = await loadWebshopOrder(ctx.supabase, ctx.companyId, input.webshop_order_id)
   if (!order) return { ok: false, code: 'WEBSHOP_ORDER_NOT_FOUND', details: { webshop_order_id: input.webshop_order_id } }
+  let released = false
+  if (order.journal_entry_id) {
+    try {
+      released = (await readReleasedWebshopBookings(ctx.supabase, ctx.companyId, [order.journal_entry_id])).has(
+        order.journal_entry_id,
+      )
+    } catch (err) {
+      ctx.log.error('failed to read released webshop bookings', err as Error)
+      return { ok: false, code: 'WEBSHOP_ORDER_READ_FAILED' }
+    }
+  }
   const settings = await loadStoreSettings(ctx, order)
   const payment = resolvePaymentAccount(order, settings)
   const entryDate = defaultEntryDate(order)
@@ -247,6 +293,7 @@ export async function getWebshopOrder(
     ok: true,
     data: {
       order,
+      released,
       suggestion: {
         entry_date: entryDate,
         fiscal_period_id: await findFiscalPeriod(ctx.supabase, ctx.companyId, entryDate),
@@ -312,6 +359,8 @@ async function prepareBooking(
       fiscalPeriodId: string
       entryDate: string
       description: string
+      /** The series the verifikat is drafted in; unset takes the default. */
+      voucherSeries: string | undefined
     }
 > {
   const { supabase, companyId } = ctx
@@ -363,6 +412,22 @@ async function prepareBooking(
     }
   }
 
+  // A released order books again in its reversed verifikat's series and
+  // fiscal year: the commit's own placement, so the dry run refuses it too.
+  let placed: OrderBookingPlacement
+  try {
+    placed = await placeOrderBooking(supabase, companyId, resolved, {
+      fiscal_period_id: fiscalPeriodId,
+      voucher_series: input.voucher_series,
+    })
+  } catch (err) {
+    ctx.log.error('webshop order placement read failed', err as Error)
+    return { ok: false, code: 'WEBSHOP_ORDER_READ_FAILED' }
+  }
+  if (!placed.ok) {
+    return { ok: false, code: placed.failure.code, ...(placed.failure.details ? { details: placed.failure.details } : {}) }
+  }
+
   const unresolvable = (
     await findUnresolvableAccounts(
       supabase,
@@ -378,6 +443,7 @@ async function prepareBooking(
     fiscalPeriodId,
     entryDate,
     description: input.description ?? orderBookingDescription(resolved),
+    voucherSeries: placed.voucherSeries,
   }
 }
 
@@ -417,7 +483,7 @@ export async function bookWebshopOrderWithLines(
 ): Promise<OperationOutcome<BookWebshopOrderResult>> {
   const prepared = await prepareBooking(ctx, input)
   if (!prepared.ok) return prepared
-  const { order, fiscalPeriodId, entryDate, description } = prepared
+  const { order, fiscalPeriodId, entryDate, description, voucherSeries } = prepared
 
   if (options.dryRun) {
     // The bank row the approval links: the same check the commit runs
@@ -458,7 +524,7 @@ export async function bookWebshopOrderWithLines(
           description,
           source_type: 'webshop_order',
           source_id: order.id,
-          voucher_series: input.voucher_series,
+          voucher_series: voucherSeries,
           notes: input.notes,
           lines: input.lines,
         }),

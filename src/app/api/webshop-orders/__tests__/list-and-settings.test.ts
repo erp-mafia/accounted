@@ -7,6 +7,7 @@ import {
   createQueuedMockSupabase,
 } from '@/tests/helpers'
 import { eventBus } from '@/lib/events'
+import { WebshopPlatformSchema } from '@/lib/api/schemas'
 
 const { supabase: mockSupabase, enqueue, reset, findCall, findCalls } =
   createQueuedMockSupabase()
@@ -124,6 +125,7 @@ describe('GET /api/webshop-orders', () => {
   })
 
   it('lists rows with the store facet, one entry per store', async () => {
+    enqueue({ data: [] }) // the company's reversed webshop verifikat: none
     enqueue({
       data: [{ id: 'o1' }, { id: 'o2' }],
       count: 2,
@@ -198,6 +200,77 @@ describe('GET /api/webshop-orders', () => {
         ['journal_entry_id.not.is.null,and(manually_booked_at.not.is.null,manually_voided.is.false)'],
       ]),
     )
+  })
+
+  describe('an order a storno released from its verifikat', () => {
+    // je-rev: a webshop verifikat reversed by a plain storno, no rättelse.
+    const REVERSED = { id: 'je-rev', status: 'reversed', voucher_series: 'L', fiscal_period_id: 'fp-1' }
+    // One single-row read per platform (listWebshopStores), each finding none.
+    const emptyStoreFacet = () => WebshopPlatformSchema.options.forEach(() => enqueue({ data: null }))
+    const releasedReads = () => {
+      enqueue({ data: [REVERSED] }) // the company's reversed webshop verifikat
+      enqueue({ data: [] }) // their rättelser: none
+      enqueue({ data: [{ id: 'o1', journal_entry_id: 'je-rev' }] }) // the orders still naming them
+    }
+
+    it('lists it as unbooked', async () => {
+      releasedReads()
+      enqueue({ data: [{ id: 'o1', journal_entry_id: 'je-rev' }], count: 1 })
+      const { status, body } = await parseJsonResponse<{ data: Array<{ booking_released: boolean }> }>(
+        await listOrders(createMockRequest('/api/webshop-orders?booked=unbooked'), createMockRouteParams({})),
+      )
+      expect(status).toBe(200)
+      expect(findCalls('webshop_orders', 'or')).toEqual([['journal_entry_id.is.null,journal_entry_id.in.(je-rev)']])
+      expect(findCalls('webshop_orders', 'is')).toEqual(expect.arrayContaining([['manually_booked_at', null]]))
+      expect(body.data[0].booking_released).toBe(true)
+    })
+
+    it('keeps it out of the booked rows', async () => {
+      releasedReads()
+      enqueue({ data: [], count: 0 })
+      const response = await listOrders(createMockRequest('/api/webshop-orders?booked=booked'), createMockRouteParams({}))
+      expect(response.status).toBe(200)
+      expect(findCalls('webshop_orders', 'or')).toEqual([
+        [
+          'and(journal_entry_id.not.is.null,journal_entry_id.not.in.(je-rev)),and(manually_booked_at.not.is.null,manually_voided.is.false)',
+        ],
+      ])
+    })
+
+    it('marks the row on an unfiltered page, and leaves a standing booking booked', async () => {
+      enqueue({
+        data: [
+          { id: 'o1', journal_entry_id: 'je-rev' },
+          { id: 'o2', journal_entry_id: 'je-posted' },
+          { id: 'o3', journal_entry_id: null },
+        ],
+        count: 3,
+      })
+      emptyStoreFacet()
+      enqueue({ data: [REVERSED, { id: 'je-posted', status: 'posted', voucher_series: 'L', fiscal_period_id: 'fp-1' }] })
+      enqueue({ data: [] }) // rättelser of je-rev: none
+      const { status, body } = await parseJsonResponse<{ data: Array<{ id: string; booking_released: boolean }> }>(
+        await listOrders(createMockRequest('/api/webshop-orders'), createMockRouteParams({})),
+      )
+      expect(status).toBe(200)
+      expect(body.data.map((row) => [row.id, row.booking_released])).toEqual([
+        ['o1', true],
+        ['o2', false],
+        ['o3', false],
+      ])
+      expect(findCall('journal_entries', 'in')).toEqual(['id', ['je-rev', 'je-posted']])
+    })
+
+    it('reads a reversed verifikat with a rättelse in its place as booked', async () => {
+      enqueue({ data: [{ id: 'o1', journal_entry_id: 'je-rev' }], count: 1 })
+      emptyStoreFacet()
+      enqueue({ data: [REVERSED] })
+      enqueue({ data: [{ correction_of_id: 'je-rev' }] }) // the rättelse that replaced it
+      const { body } = await parseJsonResponse<{ data: Array<{ booking_released: boolean }> }>(
+        await listOrders(createMockRequest('/api/webshop-orders'), createMockRouteParams({})),
+      )
+      expect(body.data[0].booking_released).toBe(false)
+    })
   })
 })
 

@@ -11543,6 +11543,15 @@ const WEBSHOP_ORDERS: Record<string, StructuredErrorEntry> = {
     message_sv: 'Ordern är redan bokförd.',
     message_en: 'The order is already booked.',
   },
+  // placeOrderBooking: an order whose verifikat a storno reversed books again
+  // where the storno is numbered, so the storno can never be deleted beside it.
+  WEBSHOP_ORDER_REBOOK_OTHER_SERIES_OR_YEAR: {
+    httpStatus: 409,
+    message_sv:
+      'Orderns verifikat är makulerat. Ordern bokförs om i samma verifikationsserie och räkenskapsår som det makulerade verifikatet, så att makuleringen inte kan raderas medan den nya bokningen står kvar. Välj ett datum i det räkenskapsåret och samma serie.',
+    message_en:
+      'The order\'s journal entry is reversed. The order is booked again in the same voucher series and fiscal year as the reversed entry, so the reversal cannot be deleted while the new booking stands. Choose a date in that fiscal year and the same series.',
+  },
   WEBSHOP_ORDER_ALREADY_INVOICED: {
     httpStatus: 409,
     message_sv:

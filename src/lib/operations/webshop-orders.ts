@@ -89,7 +89,8 @@ const OrderSummary = z.object({
   remote_changed_after_freeze: z.boolean(),
 })
 
-function orderOut(order: WebshopOrder): z.infer<typeof OrderSummary> {
+/** `released`: a storno released the order from the verifikat it names (isWebshopBookingReleased). */
+function orderOut(order: WebshopOrder, released: boolean): z.infer<typeof OrderSummary> {
   return {
     webshop_order_id: order.id,
     platform: order.platform,
@@ -114,7 +115,7 @@ function orderOut(order: WebshopOrder): z.infer<typeof OrderSummary> {
     payment_method: order.payment_method,
     payment_method_title: order.payment_method_title,
     refunded_total: order.refunded_total,
-    booking_status: webshopOrderBookingStatus(order),
+    booking_status: webshopOrderBookingStatus(order, { released }),
     journal_entry_id: order.journal_entry_id,
     invoice_id: order.invoice_id,
     manually_booked_journal_entry_id: order.manually_booked_journal_entry_id,
@@ -180,6 +181,7 @@ export const webshopOrdersList = defineOperation({
       COUNTRY_PITFALL,
       'booked=unbooked also returns unpaid, invoiced and cancelled rows. A to_book row can be booked. A cancelled row (the store cancelled the order, platform_status cancelled) with refunded_total 0 is left out of the day booking and books only one at a time, when the customer paid and kept no refund; otherwise a person voids it on the Orders page.',
       'voided: marked makulerad on the Orders page after the store cancelled the order. Nothing is booked, and booked=booked leaves it out.',
+      'An order whose verifikat a storno reversed (no rättelse in its place) reads as never booked (booking_status to_book, or cancelled when the store cancelled it) and unbooked while journal_entry_id still names the reversed verifikat; booking it again moves journal_entry_id to the new verifikat, which lands in the reversed one\'s series and fiscal year.',
     ],
     example: { request: { booked: 'unbooked', country: 'DK' }, response: { data: { orders: [EXAMPLE_ORDER], total: 1 }, meta: META } },
   },
@@ -216,9 +218,15 @@ export const webshopOrdersList = defineOperation({
   run: async (ctx, input) => {
     const outcome = await (await service()).listWebshopOrders(ctx, input)
     if (!outcome.ok || outcome.dryRun) return outcome
+    const released = new Set(outcome.data.releasedEntryIds)
     return {
       ok: true,
-      data: { orders: outcome.data.orders.map(orderOut), total: outcome.data.total },
+      data: {
+        orders: outcome.data.orders.map((order) =>
+          orderOut(order, !!order.journal_entry_id && released.has(order.journal_entry_id)),
+        ),
+        total: outcome.data.total,
+      },
     }
   },
 })
@@ -276,7 +284,7 @@ export const webshopOrdersGet = defineOperation({
     }),
     warnings: z.array(Warning),
   }),
-  errorCodes: ['WEBSHOP_ORDER_NOT_FOUND'],
+  errorCodes: ['WEBSHOP_ORDER_NOT_FOUND', 'WEBSHOP_ORDER_READ_FAILED'],
   http: {
     method: 'GET',
     path: '/api/v1/companies/:companyId/webshop-orders/:orderId',
@@ -295,11 +303,11 @@ export const webshopOrdersGet = defineOperation({
   run: async (ctx, input) => {
     const outcome = await (await service()).getWebshopOrder(ctx, input)
     if (!outcome.ok || outcome.dryRun) return outcome
-    const { order, suggestion, warnings } = outcome.data
+    const { order, released, suggestion, warnings } = outcome.data
     return {
       ok: true,
       data: {
-        ...orderOut(order),
+        ...orderOut(order, released),
         line_items: order.line_items,
         suggestion: {
           ...suggestion,
@@ -423,6 +431,8 @@ export const webshopOrdersBook = defineOperation({
     'BANK_BOOKING_CURRENCY_MISMATCH',
     'WEBSHOP_ORDER_TRANSACTION_AMOUNT_MISMATCH',
     'WEBSHOP_ORDER_TRANSACTION_ACCOUNT_MISMATCH',
+    'WEBSHOP_ORDER_REBOOK_OTHER_SERIES_OR_YEAR',
+    'WEBSHOP_ORDER_READ_FAILED',
   ],
   http: {
     method: 'POST',
@@ -551,6 +561,7 @@ export const webshopOrdersBookDay = defineOperation({
     'PERIOD_LOCKED',
     'ACCOUNTS_NOT_IN_CHART',
     'WEBSHOP_DAY_BOOKING_FAILED',
+    'WEBSHOP_ORDER_REBOOK_OTHER_SERIES_OR_YEAR',
   ],
   http: { method: 'POST', path: '/api/v1/companies/:companyId/webshop-orders/book-day' },
   mcp: {

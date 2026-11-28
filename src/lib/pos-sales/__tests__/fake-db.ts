@@ -1,9 +1,10 @@
 /**
  * A small in-memory stand-in for the PostgREST query builder, enough for the
  * POS sales sync and booking: select (column lists ignored), insert, update
- * with eq / neq / is / lt / lte / gte / in filters, maybeSingle / single,
- * order / range / limit as no-ops, and a unique key per table so a racing
- * insert answers 23505 like Postgres.
+ * with eq / neq / is / lt / lte / gte / in filters and an or of `col.is.null`
+ * and `col.in.(a,b)` terms, maybeSingle / single, order / range / limit as
+ * no-ops, and a unique key per table so a racing insert answers 23505 like
+ * Postgres.
  */
 type Row = Record<string, unknown>
 type Filter = (row: Row) => boolean
@@ -17,6 +18,35 @@ export interface FakeDb {
 
 const UNIQUE: Record<string, string[]> = {
   pos_sales_days: ['connection_id', 'business_date'],
+}
+
+/** One term of an or filter: `col.is.null` or `col.in.(a,b)`. */
+function orTerm(term: string): Filter {
+  const isNull = /^(\w+)\.is\.null$/.exec(term)
+  if (isNull) return (row) => (row[isNull[1]] ?? null) === null
+  const inList = /^(\w+)\.in\.\((.*)\)$/.exec(term)
+  if (inList) {
+    const values = inList[2].split(',')
+    return (row) => values.includes(String(row[inList[1]]))
+  }
+  throw new Error(`fake-db: unsupported or term ${term}`)
+}
+
+/** The top-level terms of an or filter, split on the commas outside parentheses. */
+function orTerms(filters: string): string[] {
+  const terms: string[] = []
+  let depth = 0
+  let start = 0
+  for (let i = 0; i < filters.length; i++) {
+    if (filters[i] === '(') depth++
+    else if (filters[i] === ')') depth--
+    else if (filters[i] === ',' && depth === 0) {
+      terms.push(filters.slice(start, i))
+      start = i + 1
+    }
+  }
+  terms.push(filters.slice(start))
+  return terms
 }
 
 function compare(a: unknown, b: unknown): number {
@@ -93,6 +123,11 @@ export function createFakeDb(seed: Record<string, Row[]> = {}): FakeDb {
       },
       in: (col: string, values: unknown[]) => {
         filters.push((row) => values.includes(row[col]))
+        return chain
+      },
+      or: (filterList: string) => {
+        const terms = orTerms(filterList).map(orTerm)
+        filters.push((row) => terms.some((term) => term(row)))
         return chain
       },
       lt: (col: string, value: unknown) => {

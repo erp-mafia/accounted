@@ -653,6 +653,8 @@ describe('POST /api/webshop-orders/bulk-book', () => {
       ],
     })
     enqueue({ data: [] }) // store settings
+    // Order 1's verifikat stands: no storno released the order.
+    enqueue({ data: [{ id: 'je-existing', status: 'posted', voucher_series: 'L', fiscal_period_id: 'fp-1' }] })
     enqueue({ data: [{ id: ORDER_2 }] }) // claim order 2
     const { status, body } = await parseJsonResponse<BulkResponse>(await postBulk())
     expect(status).toBe(200)
@@ -667,6 +669,36 @@ describe('POST /api/webshop-orders/bulk-book', () => {
     const succeeded = body.data.results.find((r) => r.order_id === ORDER_2)
     expect(succeeded?.success).toBe(true)
     expect(mockCommitEntry).toHaveBeenCalledTimes(1)
+  })
+
+  it('books an order a storno released again in its series and year, and refuses one released in another year', async () => {
+    const reversed = (id: string, fiscal_period_id: string) => ({ data: [{ id, status: 'reversed', voucher_series: 'L', fiscal_period_id }] })
+    enqueue({
+      data: [
+        makeOrderRow({ journal_entry_id: 'je-rev' }),
+        makeOrderRow({ id: ORDER_2, order_number: '1002', journal_entry_id: 'je-last-year' }),
+      ],
+    })
+    enqueue({ data: [] }) // store settings
+    enqueue(reversed('je-rev', PERIOD_UUID)) // order 1: the guard reads its verifikat
+    enqueue({ data: [] }) // ...which no rättelse replaced
+    enqueue(reversed('je-rev', PERIOD_UUID)) // order 1: the placement reads it again
+    enqueue({ data: [] })
+    enqueue({ data: [{ id: ORDER_1 }] }) // claim order 1 from je-rev
+    enqueue(reversed('je-last-year', 'fp-2025')) // order 2: the guard
+    enqueue({ data: [] })
+    enqueue(reversed('je-last-year', 'fp-2025')) // order 2: the placement
+    enqueue({ data: [] })
+    const { status, body } = await parseJsonResponse<BulkResponse>(await postBulk())
+    expect(status).toBe(200)
+    expect(body.data.booked_count).toBe(1)
+    expect(mockCreateDraftEntry).toHaveBeenCalledTimes(1)
+    expect(mockCreateDraftEntry.mock.calls[0][3]).toMatchObject({ source_id: ORDER_1, voucher_series: 'L' })
+    expect(findCalls('webshop_orders', 'eq')).toEqual(expect.arrayContaining([['journal_entry_id', 'je-rev']]))
+    const refused = body.data.results.find((r) => r.order_id === ORDER_2)
+    expect(refused?.success).toBe(false)
+    expect(refused?.error?.code).toBe('WEBSHOP_ORDER_REBOOK_OTHER_SERIES_OR_YEAR')
+    expect(refused?.error?.details).toMatchObject({ journal_entry_id: 'je-last-year', fiscal_period_id: 'fp-2025' })
   })
 
   it('refuses an order with no VAT breakdown instead of booking the guessed split', async () => {

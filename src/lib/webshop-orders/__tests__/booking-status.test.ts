@@ -5,7 +5,9 @@ import {
   isCancelledWithoutRefund,
   isVoidable,
   isVoidOutdated,
+  isWebshopBookingReleased,
   webshopOrderBookingStatus,
+  whereWebshopOrderBooked,
 } from '../booking-status'
 
 function row(overrides: Partial<WebshopOrder> = {}): WebshopOrder {
@@ -74,6 +76,20 @@ describe('isVoidOutdated', () => {
   })
 })
 
+describe('isWebshopBookingReleased', () => {
+  it('releases the order from a verifikat a plain storno reversed', () => {
+    expect(isWebshopBookingReleased({ status: 'reversed' }, false)).toBe(true)
+  })
+
+  it('keeps the order booked by a posted verifikat, one a rättelse replaced, and one in flight', () => {
+    expect(isWebshopBookingReleased({ status: 'posted' }, false)).toBe(false)
+    expect(isWebshopBookingReleased({ status: 'reversed' }, true)).toBe(false)
+    expect(isWebshopBookingReleased({ status: 'draft' }, false)).toBe(false)
+    expect(isWebshopBookingReleased({ status: 'cancelled' }, false)).toBe(false)
+    expect(isWebshopBookingReleased(null, false)).toBe(false)
+  })
+})
+
 describe('webshopOrderBookingStatus', () => {
   it.each([
     ['booked', row({ journal_entry_id: 'je-1', status: 'cancelled' }), 'booked'],
@@ -88,5 +104,64 @@ describe('webshopOrderBookingStatus', () => {
     ['a refund row', row({ row_type: 'refund', status: 'refund' }), 'to_book'],
   ] as const)('%s', (_label, order, expected) => {
     expect(webshopOrderBookingStatus(order)).toBe(expected)
+  })
+
+  it('reads a released order as if it had never been booked', () => {
+    expect(webshopOrderBookingStatus(row({ journal_entry_id: 'je-1' }), { released: true })).toBe('to_book')
+    expect(
+      webshopOrderBookingStatus(row({ journal_entry_id: 'je-1', legacy_transaction_id: 'tx-1' }), { released: true }),
+    ).toBe('in_transactions')
+    expect(webshopOrderBookingStatus(row({ journal_entry_id: 'je-1', status: 'cancelled' }), { released: true })).toBe(
+      'cancelled',
+    )
+  })
+})
+
+describe('whereWebshopOrderBooked', () => {
+  interface RecordingQuery {
+    calls: unknown[][]
+    or(filters: string): RecordingQuery
+    is(column: string, value: null): RecordingQuery
+  }
+  const query = (): RecordingQuery => {
+    const q: RecordingQuery = {
+      calls: [],
+      or: (filters) => {
+        q.calls.push(['or', filters])
+        return q
+      },
+      is: (column, value) => {
+        q.calls.push(['is', column, value])
+        return q
+      },
+    }
+    return q
+  }
+
+  it('reads the pointer alone while no verifikat released an order, and leaves a voided row out of booked', () => {
+    const unbooked = whereWebshopOrderBooked(query(), 'unbooked', [])
+    expect(unbooked.calls).toEqual([
+      ['is', 'journal_entry_id', null],
+      ['is', 'manually_booked_at', null],
+    ])
+    const booked = whereWebshopOrderBooked(query(), 'booked', [])
+    expect(booked.calls).toEqual([
+      ['or', 'journal_entry_id.not.is.null,and(manually_booked_at.not.is.null,manually_voided.is.false)'],
+    ])
+  })
+
+  it('moves the orders of a released verifikat from booked to unbooked', () => {
+    const unbooked = whereWebshopOrderBooked(query(), 'unbooked', ['je-a', 'je-b'])
+    expect(unbooked.calls).toEqual([
+      ['or', 'journal_entry_id.is.null,journal_entry_id.in.(je-a,je-b)'],
+      ['is', 'manually_booked_at', null],
+    ])
+    const booked = whereWebshopOrderBooked(query(), 'booked', ['je-a', 'je-b'])
+    expect(booked.calls).toEqual([
+      [
+        'or',
+        'and(journal_entry_id.not.is.null,journal_entry_id.not.in.(je-a,je-b)),and(manually_booked_at.not.is.null,manually_voided.is.false)',
+      ],
+    ])
   })
 })

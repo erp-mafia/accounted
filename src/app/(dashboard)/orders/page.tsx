@@ -49,6 +49,23 @@ const BulkOrderBookingDialog = dynamic(
   { ssr: false },
 )
 
+/** A row of GET /api/webshop-orders: the order and whether a storno released it. */
+type OrderListRow = WebshopOrder & { booking_released?: boolean }
+
+/**
+ * Where a row's verifikat leaves it. A storno releases the order from the
+ * verifikat it names (booking_released, isWebshopBookingReleased): it is not
+ * booked and books again with Bokför, while Skapa faktura, Skapa
+ * kontantfaktura, the mark and the void (isVoidable) stay closed as long as it
+ * names one, since deleting the storno posts that verifikat again.
+ */
+function bookingOf(order: OrderListRow): { booked: boolean; namesVerifikat: boolean } {
+  return {
+    booked: webshopOrderBookingStatus(order, { released: order.booking_released === true }) === 'booked',
+    namesVerifikat: order.journal_entry_id !== null,
+  }
+}
+
 /**
  * A row can join the bulk sweep exactly when its single-row Bokför button
  * would render: unbooked, uninvoiced, not marked as booked outside the
@@ -58,10 +75,10 @@ const BulkOrderBookingDialog = dynamic(
  * without a refund is left out: the sweep refuses it, and its row offers
  * Markera som makulerad instead (Bokför sits in its menu).
  */
-function isBulkBookable(order: WebshopOrder, canWrite: boolean): boolean {
+function isBulkBookable(order: OrderListRow, canWrite: boolean): boolean {
   return (
     canWrite &&
-    order.journal_entry_id === null &&
+    !bookingOf(order).booked &&
     order.invoice_id === null &&
     order.manually_booked_at === null &&
     (order.row_type === 'refund' || order.is_paid) &&
@@ -100,7 +117,7 @@ export default function OrdersPage() {
   const errorLocale = useLocale() as ErrorLocale
   const { canWrite } = useCanWrite()
   const { toast } = useToast()
-  const [rows, setRows] = useState<WebshopOrder[]>([])
+  const [rows, setRows] = useState<OrderListRow[]>([])
   const [stores, setStores] = useState<StoreFacet[]>([])
   const [settings, setSettings] = useState<WebshopStoreSettings[]>([])
   const [count, setCount] = useState(0)
@@ -130,7 +147,7 @@ export default function OrdersPage() {
       )
       if (!res.ok) throw new Error(`list failed: ${res.status}`)
       const json = (await res.json()) as {
-        data: WebshopOrder[]
+        data: OrderListRow[]
         count: number | null
         stores: StoreFacet[]
       }
@@ -540,7 +557,7 @@ function OrderRow({
   onCreateUnderlag,
   t,
 }: {
-  order: WebshopOrder
+  order: OrderListRow
   multiStore: boolean
   canWrite: boolean
   selectable: boolean
@@ -560,7 +577,7 @@ function OrderRow({
   // whether shift was held, for range selection.
   const shiftHeld = useRef(false)
   const isRefund = order.row_type === 'refund'
-  const booked = order.journal_entry_id !== null
+  const { booked, namesVerifikat } = bookingOf(order)
   const invoiced = order.invoice_id !== null
   const manuallyMarked = order.manually_booked_at !== null
   // Cross-marked rows (legacy_transaction_id) keep their action buttons: the
@@ -569,10 +586,10 @@ function OrderRow({
   // Hiding the button would be a dead-end soft guard.
   const bookable =
     canWrite && !booked && !invoiced && !manuallyMarked && (isRefund || order.is_paid)
-  const invoiceable = canWrite && !isRefund && !booked && !invoiced && !manuallyMarked
+  const invoiceable = canWrite && !isRefund && !namesVerifikat && !invoiced && !manuallyMarked
   // Secondary actions live in the overflow menu so the cell keeps one text
   // button (the two-button layout used to overflow the panel width).
-  const markable = canWrite && !booked && !invoiced && !manuallyMarked
+  const markable = canWrite && !namesVerifikat && !invoiced && !manuallyMarked
   const unmarkable = canWrite && manuallyMarked
   // The store cancelled the order and refunded nothing: Markera som
   // makulerad holds the button, and Bokför and Skapa faktura move to the
@@ -688,7 +705,7 @@ function OrderRow({
               {t('action_create_invoice')}
             </Button>
           ) : null}
-          {(bookViaMenu || invoiceViaMenu || markable || unmarkable || booked) && (
+          {(bookViaMenu || invoiceViaMenu || markable || unmarkable || namesVerifikat) && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
@@ -729,16 +746,17 @@ function OrderRow({
                     {order.manually_voided ? t('action_unvoid') : t('action_unmark_booked')}
                   </DropdownMenuItem>
                 )}
-                {/* Booked: the verifikat holds the orderunderlag; the
-                    second item files it when it is missing. */}
-                {booked && (
+                {/* The verifikat the order names (also one a storno
+                    reversed) holds the orderunderlag; the second item files
+                    it when it is missing. */}
+                {namesVerifikat && (
                   <DropdownMenuItem asChild>
                     <Link href={`/bookkeeping/${order.journal_entry_id}`}>
                       {t('action_open_entry')}
                     </Link>
                   </DropdownMenuItem>
                 )}
-                {booked && canWrite && (
+                {namesVerifikat && canWrite && (
                   <DropdownMenuItem onSelect={onCreateUnderlag}>
                     {t('action_create_underlag')}
                   </DropdownMenuItem>
@@ -763,13 +781,13 @@ function OrderStatus({
   order,
   t,
 }: {
-  order: WebshopOrder
+  order: OrderListRow
   t: ReturnType<typeof useTranslations<'webshop_orders'>>
 }) {
   if (order.remote_changed_after_freeze) {
     return <Badge variant="warning">{t('status_remote_changed')}</Badge>
   }
-  switch (webshopOrderBookingStatus(order)) {
+  switch (webshopOrderBookingStatus(order, { released: order.booking_released === true })) {
     case 'booked':
       return <span className="text-xs text-muted-foreground">{t('status_booked')}</span>
     // Marked as handled outside the integration: a normal done state, so

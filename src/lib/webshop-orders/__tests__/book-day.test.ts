@@ -378,4 +378,108 @@ describe('bookWebshopDay', () => {
       warnings: [{ code: 'WEBSHOP_DAY_UNDERLAG_NOT_ARCHIVED' }],
     })
   })
+
+  describe('orders a storno released from their verifikat', () => {
+    // je-rev: an earlier day verifikat of these orders, reversed by a plain
+    // storno in series L of the day's fiscal year.
+    const reversed = (overrides: Record<string, unknown> = {}) => ({
+      id: 'je-rev',
+      company_id: COMPANY,
+      source_type: 'webshop_order',
+      status: 'reversed',
+      voucher_series: 'L',
+      fiscal_period_id: 'fp-2026',
+      correction_of_id: null,
+      ...overrides,
+    })
+    function seedReleased(rows: Record<string, unknown>[], entries: Record<string, unknown>[]) {
+      seed(rows)
+      h.db.tables.journal_entries.push(...entries)
+    }
+
+    it('books them with the day in the reversed verifikat\'s series, moving each pointer to the new verifikat', async () => {
+      const fresh = order()
+      const releasedA = order({ journal_entry_id: 'je-rev' })
+      const releasedB = order({ journal_entry_id: 'je-rev' })
+      seedReleased([fresh, releasedA, releasedB], [reversed()])
+
+      const outcome = await bookWebshopDay(ctx(), INPUT)
+
+      expect(outcome).toMatchObject({ ok: true, data: { journal_entry_id: 'je-1', skipped: [] } })
+      if (!outcome.ok || outcome.dryRun) throw new Error('expected a booking')
+      expect(outcome.data.booked.map((o) => o.webshop_order_id)).toEqual([fresh.id, releasedA.id, releasedB.id])
+      expect(h.createDraftEntry.mock.calls[0][3]).toMatchObject({ voucher_series: 'L', fiscal_period_id: 'fp-2026' })
+      for (const id of [fresh.id, releasedA.id, releasedB.id]) expect(row(id).journal_entry_id).toBe('je-1')
+    })
+
+    it('leaves out a row released in another fiscal year, for the single-order dialog', async () => {
+      const fresh = order()
+      const lastYear = order({ journal_entry_id: 'je-rev' })
+      seedReleased([fresh, lastYear], [reversed({ fiscal_period_id: 'fp-2025' })])
+
+      const outcome = await bookWebshopDay(ctx(), INPUT)
+
+      expect(outcome).toMatchObject({
+        ok: true,
+        data: { skipped: [{ webshop_order_id: lastYear.id, code: 'WEBSHOP_ORDER_REBOOK_OTHER_SERIES_OR_YEAR' }] },
+      })
+      expect(h.createDraftEntry.mock.calls[0][3].voucher_series).toBeUndefined()
+      expect(row(fresh.id).journal_entry_id).toBe('je-1')
+      expect(row(lastYear.id).journal_entry_id).toBe('je-rev')
+    })
+
+    it('leaves out a released row of another series than the day\'s first released row', async () => {
+      const first = order({ journal_entry_id: 'je-rev' })
+      const otherSeries = order({ journal_entry_id: 'je-rev-a' })
+      seedReleased([first, otherSeries], [reversed(), reversed({ id: 'je-rev-a', voucher_series: 'A' })])
+
+      const outcome = await bookWebshopDay(ctx(), INPUT)
+
+      expect(outcome).toMatchObject({
+        ok: true,
+        data: { skipped: [{ webshop_order_id: otherSeries.id, code: 'WEBSHOP_ORDER_REBOOK_OTHER_SERIES_OR_YEAR' }] },
+      })
+      expect(h.createDraftEntry.mock.calls[0][3]).toMatchObject({ voucher_series: 'L' })
+      expect(row(first.id).journal_entry_id).toBe('je-1')
+      expect(row(otherSeries.id).journal_entry_id).toBe('je-rev-a')
+    })
+
+    it('gives a released row its reversed verifikat back, never nothing, when the commit fails', async () => {
+      const fresh = order()
+      const released = order({ journal_entry_id: 'je-rev' })
+      seedReleased([fresh, released], [reversed()])
+      h.commitEntry.mockRejectedValue(new Error('commit failed'))
+
+      const outcome = await bookWebshopDay(ctx(), INPUT)
+
+      expect(outcome).toMatchObject({ ok: false, code: 'WEBSHOP_DAY_BOOKING_FAILED' })
+      expect(row(fresh.id).journal_entry_id).toBeNull()
+      expect(row(released.id).journal_entry_id).toBe('je-rev')
+      expect(h.db.tables.journal_entries.find((e) => e.id === 'je-1')?.status).toBe('cancelled')
+    })
+
+    it('leaves a row out while a rättelse stands in place of its reversed verifikat', async () => {
+      const fresh = order()
+      const corrected = order({ journal_entry_id: 'je-rev' })
+      seedReleased([fresh, corrected], [reversed(), { id: 'je-fix', company_id: COMPANY, status: 'posted', correction_of_id: 'je-rev' }])
+
+      const outcome = await bookWebshopDay(ctx(), INPUT)
+
+      if (!outcome.ok || outcome.dryRun) throw new Error('expected a booking')
+      expect(outcome.data.booked.map((o) => o.webshop_order_id)).toEqual([fresh.id])
+      expect(row(corrected.id).journal_entry_id).toBe('je-rev')
+    })
+
+    it('leaves a row out once the storno is deleted and its verifikat is posted again', async () => {
+      const fresh = order()
+      const postedAgain = order({ journal_entry_id: 'je-rev' })
+      seedReleased([fresh, postedAgain], [reversed({ status: 'posted' })])
+
+      const outcome = await bookWebshopDay(ctx(), INPUT)
+
+      if (!outcome.ok || outcome.dryRun) throw new Error('expected a booking')
+      expect(outcome.data.booked.map((o) => o.webshop_order_id)).toEqual([fresh.id])
+      expect(row(postedAgain.id).journal_entry_id).toBe('je-rev')
+    })
+  })
 })
